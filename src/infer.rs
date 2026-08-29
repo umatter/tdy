@@ -30,7 +30,7 @@ use crate::sample::FileSample;
 use crate::sniff::SniffResult;
 use crate::spec::ParseSpec;
 
-pub const PROMPT_VERSION: &str = "infer-v2";
+pub const PROMPT_VERSION: &str = "infer-v3";
 
 /// Feedback text sent back to the model is capped: parse errors quote the
 /// offending value, and those come from the whole probed head of the file
@@ -71,8 +71,30 @@ pub fn make_inferencer(cfg: &Config) -> Result<Box<dyn SpecInferencer>> {
             base_url: cfg.base_url.trim_end_matches('/').to_string(),
             model: cfg.model.clone(),
             api_key: read_key(&cfg.api_key_env),
+            extra_headers: Vec::new(),
             client: http_client(cfg.http_timeout)?,
         })),
+        Backend::OpenRouter => {
+            let key = read_key(&cfg.api_key_env).ok_or_else(|| {
+                anyhow!(
+                    "environment variable {} is not set (it must hold your OpenRouter \
+                     API key; create one at https://openrouter.ai/keys)",
+                    cfg.api_key_env
+                )
+            })?;
+            Ok(Box::new(OpenAiCompatible {
+                base_url: cfg.base_url.trim_end_matches('/').to_string(),
+                model: cfg.model.clone(),
+                api_key: Some(key),
+                // OpenRouter attributes requests by these; they are optional
+                // and carry no file content.
+                extra_headers: vec![
+                    ("HTTP-Referer", "https://github.com/umatter/tdy".to_string()),
+                    ("X-Title", "tdy".to_string()),
+                ],
+                client: http_client(cfg.http_timeout)?,
+            }))
+        }
         Backend::Anthropic => {
             let key = read_key(&cfg.api_key_env).ok_or_else(|| {
                 anyhow!(
@@ -119,9 +141,10 @@ pub async fn infer_spec(
     let mut feedback: Option<Feedback> = None;
     let mut attempts = 0u32;
 
+    let schema_text = serde_json::to_string(&schema).unwrap_or_default();
     loop {
         attempts += 1;
-        let user = build_user_prompt(sample, draft, hint, feedback.as_ref());
+        let user = build_user_prompt(sample, draft, hint, feedback.as_ref(), &schema_text);
         let raw = complete_with_transport_retries(backend.as_ref(), &system, &user, &schema).await?;
         let json_text = strip_fences(&raw);
 
@@ -233,9 +256,15 @@ promote_header with rows > 1 (blank cells in the upper header rows inherit \
 from the left, then rows are joined). Vertically merged / sparse category \
 columns: fill_down. Repeated subtotal lines inside the body: \
 drop_rows_matching. Wide month/quarter layouts: unpivot.
-- Locale-specific tokens the type parser cannot handle (e.g. German month \
-abbreviations) are fixed with literal `replace` pairs in the column's \
-`parse` — e.g. \"Mär\"->\"Mar\", \"Okt\"->\"Oct\", \"Dez\"->\"Dec\".
+- Locale-specific tokens the date parser cannot handle are fixed with literal \
+`replace` pairs in the column's `parse`. chrono understands English month \
+names only, so a German column needs ALL the abbreviations that differ, not \
+just the one you happened to see in the sample: \"Mär\"->\"Mar\", \
+\"Mai\"->\"May\", \"Okt\"->\"Oct\", \"Dez\"->\"Dec\" (Jan, Feb, Apr, Jun, Jul, \
+Aug, Sep and Nov are already English). French: \"Fév\"->\"Feb\", \
+\"Avr\"->\"Apr\", \"Mai\"->\"May\", \"Juin\"->\"Jun\", \"Juil\"->\"Jul\", \
+\"Aoû\"->\"Aug\", \"Déc\"->\"Dec\". The sample shows you only part of the \
+file: cover every month, not only the visible ones.
 - Separators are checked, not assumed: `thousands_separator` must group the \
 integer part in threes, so `1,5` with thousands_separator=\",\" is an error, \
 not 15. If a comma is the decimal point, set decimal_separator. Currency \
@@ -252,6 +281,7 @@ fn build_user_prompt(
     draft: Option<&SniffResult>,
     hint: Option<&str>,
     feedback: Option<&Feedback>,
+    schema_text: &str,
 ) -> String {
     let mut p = String::new();
     p.push_str(&format!(
@@ -301,6 +331,19 @@ fn build_user_prompt(
             f.problem
         ));
     }
+    // The schema also goes in `response_format`, but only some providers
+    // enforce it — OpenAI's strict mode rejects a schema this shape, and a
+    // non-strict one is advisory. A model that has never seen the contract
+    // invents fields (`locale`) or omits required ones (`pattern`), and
+    // `deny_unknown_fields` then rejects it. So it is stated outright.
+    if !schema_text.is_empty() {
+        p.push_str(
+            "\nThe object you emit MUST validate against this JSON Schema. Every field \
+             name is closed: emit no key that does not appear in it.\n",
+        );
+        p.push_str(schema_text);
+        p.push('\n');
+    }
     p.push_str("\nRespond with the JSON spec only.");
     p
 }
@@ -324,6 +367,9 @@ struct OpenAiCompatible {
     base_url: String,
     model: String,
     api_key: Option<String>,
+    /// Provider-specific headers (OpenRouter's attribution pair). Never
+    /// carries file content.
+    extra_headers: Vec<(&'static str, String)>,
     client: reqwest::Client,
 }
 
@@ -397,6 +443,9 @@ impl OpenAiCompatible {
         let mut req = self.client.post(url).json(body);
         if let Some(k) = &self.api_key {
             req = req.bearer_auth(k);
+        }
+        for (name, value) in &self.extra_headers {
+            req = req.header(*name, value);
         }
         let resp = req.send().await.with_context(|| format!("POST {url}"))?;
         let status = resp.status();
@@ -545,9 +594,14 @@ mod tests {
             sampled_bytes: 8,
             partial: true,
         };
-        let p = build_user_prompt(&sample, None, Some("a hint"), None);
+        let schema = serde_json::to_string(&ParseSpec::json_schema()).unwrap();
+        let p = build_user_prompt(&sample, None, Some("a hint"), None, &schema);
         assert!(p.contains("a,b"));
         assert!(p.contains("a hint"));
         assert!(p.contains("excerpt"));
+        // The contract must be in the prompt, not only in response_format:
+        // most providers do not enforce the latter.
+        assert!(p.contains("promote_header"), "the schema itself must be in the prompt");
+        assert!(p.contains("MUST validate"));
     }
 }

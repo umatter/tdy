@@ -135,7 +135,7 @@ pub fn detect_fixed_width(text: &str) -> Option<Vec<FixedField>> {
     }
 
     let width = lines.iter().map(|l| l.len()).max().unwrap_or(0);
-    if width < 8 || width > 4096 {
+    if !(8..=4096).contains(&width) {
         return None;
     }
     // Reject anything that looks delimited: a fixed-width report has no
@@ -156,8 +156,8 @@ pub fn detect_fixed_width(text: &str) -> Option<Vec<FixedField>> {
     let mut fields: Vec<(usize, usize)> = Vec::new();
     let mut start: Option<usize> = None;
     let mut gutter_run = 0usize;
-    for c in 0..width {
-        if is_gutter[c] {
+    for (c, gutter) in is_gutter.iter().enumerate() {
+        if *gutter {
             gutter_run += 1;
             if gutter_run >= 2 {
                 if let Some(s) = start.take() {

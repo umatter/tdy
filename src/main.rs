@@ -25,7 +25,7 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Inference backend: none | local | anthropic (overrides config/env)
+    /// Inference backend: none | local | anthropic | openrouter (overrides config/env)
     #[arg(long, global = true)]
     backend: Option<String>,
 

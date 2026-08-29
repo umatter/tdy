@@ -83,7 +83,24 @@ either escalates to the model or waits for you to write the extraction by
 hand. It does not guess and call it a result.
 
 Backends: `none` (default — nothing ever leaves your machine), `local` (any
-OpenAI-compatible server: llama.cpp, Ollama, vLLM), `anthropic`.
+OpenAI-compatible server: llama.cpp, Ollama, vLLM), `anthropic`, and
+`openrouter` (one endpoint in front of many models).
+
+`local` is a promise about *where the server is*, so it is checked rather
+than trusted: pointed at a non-loopback `base_url` it counts as remote, and
+tdy prints how many bytes are leaving before they do.
+
+```bash
+export OPENROUTER_API_KEY=...
+tdy sniff umsatz_2025.xlsx --backend openrouter --model google/gemini-2.5-flash
+# note: sending 1169 bytes sampled from umsatz_2025.xlsx to openrouter (...)
+```
+
+The schema goes into the prompt as well as into `response_format`: most
+providers do not actually enforce a schema that shape (OpenAI's strict mode
+rejects it outright), and a model that has never seen the contract invents
+fields. `TDY_MAX_RETRIES` raises the correction budget — each round carries
+the exact failure back, so a hard file often converges given a few more.
 
 ## Commands
 
@@ -105,7 +122,8 @@ tdy config init                                    # sample config + location
 ```
 
 Config: `~/.config/tdy/config.toml`, overridable via `TDY_BACKEND`,
-`TDY_MODEL`, `TDY_BASE_URL`, or `--backend/--model/--base-url`.
+`TDY_MODEL`, `TDY_BASE_URL`, `TDY_MAX_RETRIES`, or
+`--backend/--model/--base-url`.
 
 `tdy validate --stamp` is what makes "edit the sidecar by hand" a real
 workflow: it keeps your spec and re-computes the fingerprint, so a hand-written
@@ -239,7 +257,22 @@ fixtures); and `tests/adversarial.rs`, which sweeps every generated fixture
 and asserts that tdy never panics, never hangs, and that anything it can
 sniff it can also query and reproduce under `--frozen`.
 
-Everything runs with `backend = none`; no test needs a network or a model.
+Everything above runs with `backend = none`; no test needs a network or a
+model. The inference tier has its own suite, skipped unless you ask for it
+because it costs money:
 
-Rust ≥ 1.81 (DataFusion 46). Outputs Parquet/CSV/NDJSON — drop the Parquet
+```bash
+export OPENROUTER_API_KEY=...
+TDY_LIVE_MODEL=google/gemini-2.5-flash cargo test --test live_backend -- --nocapture
+```
+
+It holds the model to the hand-written reference spec: given `umsatz.xlsx` —
+title block, two-row merged header, merged Region cells, a subtotal row, a
+Total footer, Swiss numbers and German month names — the spec it writes must
+produce the same sixteen amounts totalling 21'244.25. The *shape* is left to
+the model (long or wide are both faithful readings); the arithmetic is not.
+`google/gemini-2.5-flash` and `anthropic/claude-sonnet-4.5` pass;
+`openai/gpt-4o-mini` does not.
+
+Rust ≥ 1.85 (DataFusion 46; a transitive dependency needs edition2024). Outputs Parquet/CSV/NDJSON — drop the Parquet
 straight into DuckDB.

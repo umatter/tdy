@@ -22,12 +22,16 @@ python3 gen_fixtures.py 04 --list       # one generator / list them
 cargo run -- sniff testdata/umsatz.xlsx --no-llm
 cargo run -- validate <file> --stamp    # re-fingerprint a hand-edited sidecar
 cargo run -- schema                     # JSON Schema derived from spec.rs
+
+# The inference tier, against a real model (costs money; never runs in CI):
+OPENROUTER_API_KEY=... TDY_LIVE_MODEL=google/gemini-2.5-flash \
+  cargo test --test live_backend -- --nocapture
 ```
 
 Every test runs with `backend = none`; nothing needs a network or a model.
 On this machine plain `cargo test` ends with a spurious doc-test failure (`rustdoc` cannot
 load `libLLVM.so...` — a toolchain install issue, not code); `--lib --tests` avoids it.
-Rust ≥ 1.81 (DataFusion 46). `[profile.dev] debug = false` is deliberate (slow builds) —
+Rust ≥ 1.85 (DataFusion 46; a transitive dependency needs edition2024). `[profile.dev] debug = false` is deliberate (slow builds) —
 flip it locally when you need a debugger, don't commit it.
 
 ## The one rule
@@ -95,7 +99,13 @@ Things that only become clear from reading several modules:
 - **Deliberate omissions:** no drop/rename transforms (the `columns` list is the only
   projection), no locale tables (literal `replace` pairs in the sidecar), no named timezones
   (fixed offsets only — DST cannot be guessed from a value).
-- **`infer.rs`** targets two wire formats with one schema: OpenAI-compatible
+- **`infer.rs`** puts the JSON Schema in the *prompt*, not only in
+  `response_format`. Verified against OpenRouter: OpenAI's strict mode rejects a
+  schema of this shape (12 violations of its subset — optional properties absent
+  from `required`, `oneOf`, nesting depth), and a non-strict schema is advisory,
+  so models invented fields (`locale`) or omitted required ones (`pattern`) until
+  the contract was stated outright. It targets two wire formats with one schema:
+  OpenAI-compatible
   `response_format` with a weakening ladder (`json_schema` → `json_object` → none;
   `strict:false` because the schema uses `$ref`), and an Anthropic forced tool call.
   Transport failures retry the same prompt; *spec* problems go back to the model as text.

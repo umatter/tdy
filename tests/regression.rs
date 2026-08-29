@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use datafusion::arrow::array::{Array, Float64Array, Int64Array, StringArray};
+use datafusion::arrow::array::{Array, Int64Array, StringArray};
 use tempfile::TempDir;
 
 use tdy::config::{Backend, Config, Limits};
@@ -45,11 +45,6 @@ fn sniffed(path: &Path) -> sniff::SniffResult {
 
 async fn query(sql: &str) -> Vec<datafusion::arrow::record_batch::RecordBatch> {
     provider::run_query(sql, &cfg(), false).await.unwrap().1
-}
-
-fn col_f64(b: &datafusion::arrow::record_batch::RecordBatch, i: usize) -> Vec<Option<f64>> {
-    let a = b.column(i).as_any().downcast_ref::<Float64Array>().unwrap();
-    (0..a.len()).map(|i| if a.is_null(i) { None } else { Some(a.value(i)) }).collect()
 }
 
 fn col_i64(b: &datafusion::arrow::record_batch::RecordBatch, i: usize) -> Vec<Option<i64>> {

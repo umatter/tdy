@@ -2,6 +2,9 @@
 name = "tdy"
 version = "0.1.0"
 edition = "2021"
+# A transitive dependency (idna_adapter, via reqwest) requires edition2024,
+# which needs Cargo 1.85. CI checks this rather than trusting it.
+rust-version = "1.85"
 description = "SQL over messy files: heuristic + LLM-inferred parsing specs, DataFusion execution, tidy Arrow/Parquet out"
 license = "MIT"
 

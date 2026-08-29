@@ -918,10 +918,6 @@ pub fn to_record_batches(spec: &ParseSpec, table: &mut RawTable) -> Result<Vec<R
     Ok(out)
 }
 
-fn build_column(col: &ColumnSpec, values: &[&str]) -> Result<(Field, ArrayRef)> {
-    build_column_at(col, values, 0)
-}
-
 /// `row_offset` is the index of `values[0]` within the whole table, so that a
 /// parse error names the row a person would find in their file rather than
 /// its position inside an internal 64k batch.
@@ -1451,9 +1447,9 @@ mod tests {
             nullable: true,
             parse: ValueParsing::default(),
         };
-        assert!(build_column(&col, &["NaN"]).is_err());
-        assert!(build_column(&col, &["Infinity"]).is_err());
-        assert!(build_column(&col, &["1.5"]).is_ok());
+        assert!(build_column_at(&col, &["NaN"], 0).is_err());
+        assert!(build_column_at(&col, &["Infinity"], 0).is_err());
+        assert!(build_column_at(&col, &["1.5"], 0).is_ok());
     }
 
     #[test]
@@ -1465,8 +1461,8 @@ mod tests {
             nullable: true,
             parse: ValueParsing { thousands_separator: Some(','), ..Default::default() },
         };
-        let err = build_column(&col, &["1,5"]).unwrap_err();
+        let err = build_column_at(&col, &["1,5"], 0).unwrap_err();
         assert!(format!("{err:#}").contains("grouped"), "{err:#}");
-        assert!(build_column(&col, &["1,234"]).is_ok());
+        assert!(build_column_at(&col, &["1,234"], 0).is_ok());
     }
 }

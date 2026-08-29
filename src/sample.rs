@@ -180,12 +180,13 @@ pub fn build(path: &Path, max_bytes: usize) -> Result<FileSample> {
     // Judge the encoding on every byte we looked at. Detecting from the head
     // alone and then recording that label because the *tail* was non-ASCII
     // would freeze a guess made from evidence that contained none.
-    let enc_name = if ascii_only || ht.tail.is_none() {
-        decode_text(&ht.head, None).1
-    } else {
-        let mut both = ht.head.clone();
-        both.extend_from_slice(ht.tail.as_ref().unwrap());
-        decode_text(&both, None).1
+    let enc_name = match (&ht.tail, ascii_only) {
+        (Some(tail), false) => {
+            let mut both = ht.head.clone();
+            both.extend_from_slice(tail);
+            decode_text(&both, None).1
+        }
+        _ => decode_text(&ht.head, None).1,
     };
     let (head_text, _) = decode_text(&ht.head, Some(&enc_name));
 
@@ -204,7 +205,7 @@ pub fn build(path: &Path, max_bytes: usize) -> Result<FileSample> {
     if let Some(tail_bytes) = &ht.tail {
         let (tail, _) = decode_text(tail_bytes, Some(&enc_name));
         // Same at the start of the tail.
-        let tail = tail.splitn(2, '\n').nth(1).unwrap_or("").to_string();
+        let tail = tail.split_once('\n').map(|(_, rest)| rest).unwrap_or("").to_string();
         if !tail.trim().is_empty() {
             body.push_str(CONTINUES_MARKER);
             body.push_str(&tail);

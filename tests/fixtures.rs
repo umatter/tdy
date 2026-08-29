@@ -65,16 +65,6 @@ fn ints(b: &RecordBatch, name: &str) -> Vec<Option<i64>> {
     (0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i))).collect()
 }
 
-fn floats(b: &RecordBatch, name: &str) -> Vec<Option<f64>> {
-    let a = b.column(field(b, name)).as_any().downcast_ref::<Float64Array>().unwrap();
-    (0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i))).collect()
-}
-
-fn decs(b: &RecordBatch, name: &str) -> Vec<Option<i128>> {
-    let a = b.column(field(b, name)).as_any().downcast_ref::<Decimal128Array>().unwrap();
-    (0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i))).collect()
-}
-
 fn dtype(spec: &ParseSpec, name: &str) -> DType {
     spec.columns
         .iter()

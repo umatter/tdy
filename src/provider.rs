@@ -202,7 +202,7 @@ pub async fn ensure_sidecar(
     let (spec, method, model) = if draft.confidence >= cfg.confidence_threshold {
         (draft.spec, InferenceMethod::Heuristic, None)
     } else if cfg.backend != Backend::None {
-        if cfg.backend.is_remote() {
+        if cfg.is_remote() {
             eprintln!(
                 "note: sending {} bytes sampled from {} to {} ({}) for spec inference",
                 s.sampled_bytes,

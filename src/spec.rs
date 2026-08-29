@@ -710,10 +710,7 @@ pub fn parse_fixed_offset(tz: &str) -> Option<chrono::FixedOffset> {
     }
     let (sign, rest) = match t.strip_prefix('+') {
         Some(r) => (1i32, r),
-        None => match t.strip_prefix('-') {
-            Some(r) => (-1i32, r),
-            None => return None,
-        },
+        None => (-1i32, t.strip_prefix('-')?),
     };
     let digits: String = rest.chars().filter(|c| c.is_ascii_digit()).collect();
     let (h, m) = match digits.len() {
