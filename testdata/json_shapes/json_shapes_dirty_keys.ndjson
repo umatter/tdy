@@ -1,0 +1,2 @@
+{"Betrag (CHF)": "1'234.50", "user id": 1, "user.id": 2, "\u20ac": "euro sign only", "2024": "starts with digit", "ok": true}
+{"Betrag (CHF)": "2'000.00", "user id": 3, "user.id": 4, "\u20ac": "another", "2024": "also text", "ok": false}

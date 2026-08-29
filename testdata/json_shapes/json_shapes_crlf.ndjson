@@ -1,0 +1,3 @@
+{"id": 1, "text": "line1\nline2", "padded": "  spaces  "}
+{"id": 2, "text": "tab\there", "padded": "x"}
+{"id": 3, "text": "crlf\r\nembedded", "padded": ""}

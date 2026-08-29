@@ -1,0 +1,5 @@
+/target
+# Sidecars generated while testing against the fixtures. Real sidecars for
+# real data files belong in version control — that is the point of them —
+# but the ones tdy writes next to testdata/ during a test run do not.
+/testdata/**/*.tdy.toml

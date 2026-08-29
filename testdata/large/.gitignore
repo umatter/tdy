@@ -1,0 +1,4 @@
+# Generated scale/perf fixtures - regenerable, never committed.
+#   python3 testdata/gen/07_scale.py [--size small|big]
+*
+!.gitignore

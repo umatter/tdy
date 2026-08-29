@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "generated_at": "2026-08-28T10:00:00Z",
+    "source": "erp",
+    "page": 1,
+    "nested": {"note": "a nested object must not be mistaken for the records array"}
+  },
+  "warnings": null,
+  "data": [
+    {"booking_date": "2026-01-31", "region": "Ost", "amount": 1200.5},
+    {"booking_date": "2026-02-28", "region": "West", "amount": 980.25},
+    {"booking_date": "2026-03-31", "region": "Sued", "amount": 1500}
+  ]
+}

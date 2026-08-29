@@ -1,0 +1,24 @@
+2026-02-10 03:14:02,117 INFO  [main] c.a.batch.JobRunner - starting job=nightly-rollup args=[--full --tenant=ch]
+2026-02-10 03:14:03,004 DEBUG [main] c.a.db.Pool - pool created min=4 max=32
+2026-02-10 03:14:05,551 INFO  [http-nio-8080-exec-3] c.a.http.Client - GET /v1/tenants - 200 - 41ms - cached
+2026-02-10 03:14:07,884 WARN  [pool-2-thread-1] c.a.batch.Retry - attempt 1/3 failed for tenant=ch; retrying in 2s
+2026-02-10 03:14:12,003 ERROR [pool-2-thread-1] c.a.batch.JobRunner - job=nightly-rollup failed after 9884 ms
+java.lang.IllegalStateException: connection pool exhausted (active=32, idle=0, waiting=17)
+	at com.acme.db.Pool.borrow(Pool.java:214) ~[app-2026.02.09.jar:2026.02.09]
+	at com.acme.batch.JobRunner.run(JobRunner.java:88) ~[app-2026.02.09.jar:2026.02.09]
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	... 24 common frames omitted
+Caused by: java.net.SocketTimeoutException: connect timed out
+	at java.base/java.net.Socket.connect(Socket.java:633) ~[na:na]
+	... 31 common frames omitted
+2026-02-10 03:15:00,001 INFO  [scheduler-1] c.a.sched.Cron - next fire time 2026-02-11 03:15:00,000 for job=nightly-rollup
+2026-02-10 03:16:20,455 DEBUG [pool-2-thread-3] c.a.db.Sql - executing:
+SELECT kunde, sum(betrag)
+  FROM umsatz
+ WHERE monat = '2026-02'
+ GROUP BY kunde
+2026 rows affected
+2026-02-10 03:16:21,900 INFO  [main] Started AcmeApplication in 4.213 seconds (process running for 4.9)
+2026-02-10 03:16:22,010 TRACE [pool-2-thread-3] c.a.db.Sql - rows=2026 elapsed=1.884s
+2026-02-10 03:17:41,742 FATAL [main] c.a.batch.JobRunner - unrecoverable: shutting down
+2026-02-10 03:17:41,743 INFO  [Thread-4] c.a.Shutdown - bye

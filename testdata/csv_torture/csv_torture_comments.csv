@@ -1,0 +1,10 @@
+# tdy fixture: csv-torture comments
+# exported 2026-08-28, department: controlling, format: csv
+# columns: datum, region, produkt, umsatz
+Datum,Region,Produkt,Umsatz
+2025-01-15,Ost,Widget,1200.50
+2025-02-03,Ost,Gadget,980.25
+2025-03-11,West,Widget,1543.00
+2025-04-27,West,Gadget,2200.75
+2025-05-09,Süd,Ticket #42,175.40
+2025-06-30,Nord,Widget,2999.50

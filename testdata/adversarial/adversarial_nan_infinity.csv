@@ -1,0 +1,7 @@
+nan_all,inf_all,neg_zero,mixed
+NaN,Infinity,-0,NaN
+NaN,Infinity,-0,Infinity
+NaN,-Infinity,-0,-0
+NaN,inf,-0,nan
+NaN,Infinity,-0,-Infinity
+NaN,INFINITY,-0,NaN

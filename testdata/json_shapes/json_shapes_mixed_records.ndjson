@@ -1,0 +1,5 @@
+{"id": 1, "name": "a", "score": 10}
+[1, 2, 3]
+{"id": 2, "name": "b", "score": 20}
+"just a string"
+{"id": 3, "name": "c", "score": 30}

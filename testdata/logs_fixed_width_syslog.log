@@ -1,0 +1,22 @@
+Feb  9 03:12:44 web01 sshd[2411]: Accepted publickey for deploy from 203.0.113.7 port 55012 ssh2
+Feb  9 03:12:44 web01 sshd[2411]: pam_unix(sshd:session): session opened for user deploy(uid=1001)
+Feb 10 03:12:45 web01 kernel: [12345.678901] TCP: request_sock_TCP: Possible SYN flooding on port 443
+Feb 10 03:12:46 web01 systemd[1]: Started Session 42 of user deploy.
+Feb 10 03:12:46 web01 CRON[9911]: (root) CMD (/usr/lib/sysstat/debian-sa1 1 1)
+Feb 10 03:13:01 db01 postgres[1123]: [3-1] user=app,db=prod LOG:  duration: 1234.567 ms  statement: SELECT 1
+Feb 10 03:13:02 web01 rsyslogd: --- last message repeated 3 times ---
+Feb 10 03:13:30 edge-01 nginx-ingress[2]: 203.0.113.9 - - upstream_response_time 0.031
+Feb 10 03:14:00 web01 backup[7788]: Sicherung abgeschlossen — 3 Volumes, 0 Fehler (Größe: 12 GiB)
+Feb 10 03:14:05 web01 backup[7788]: Nächster Lauf: 11.02.2026 03:14
+2026-02-10T03:15:30.412345+01:00 web01 auditd[812]: type=USER_LOGIN msg=audit(1770689730.412:77)
+2026-02-10T03:15:31.004112+01:00 web01 auditd[812]: type=CRED_ACQ msg=audit(1770689731.004:78)
+Feb 10 03:15:0
+Feb 10 03:16:12 web01 sudo[3312]:  deploy : TTY=pts/0 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl restart app
+Feb 10 03:16:13 web01 systemd[1]: Stopping Acme App Server...
+Feb 10 03:16:19 web01 systemd[1]: app.service: Succeeded.
+Feb 10 03:16:19 web01 systemd[1]: Started Acme App Server.
+Feb 10 03:17:02 db01 postgres[1123]: [4-1] user=,db= LOG:  checkpoint complete: wrote 1204 buffers (7.3%)
+Feb 10 03:18:00 web01 kernel: [12456.001122] audit: type=1400 audit(1770689880.001:91): apparmor="DENIED"
+Dec 31 23:59:59 web01 ntpd[555]: kernel time sync status change 2001
+Jan  1 00:00:02 web01 ntpd[555]: kernel time sync status change 0001
+Jan  1 00:00:07 web01 systemd[1]: logrotate.service: Deactivated successfully.

@@ -1,0 +1,7 @@
+{"id": 1, "region": "Ost", "amount": "100.50"}
+{"amount": "200.00", "id": 2, "region": "West"}
+{"region": "Sued", "currency": "CHF", "id": 3, "amount": "300.25"}
+{"id": 4, "amount": "50.00"}
+{"note": "late key", "id": 5, "region": "Nord", "amount": "10.00", "currency": "EUR"}
+{"id": 6, "region": "Ost", "amount": "1.00", "amount": "2.00"}
+{"id": 7, "region": "West", "amount": "7.00", "zz_last": "only in the final record"}

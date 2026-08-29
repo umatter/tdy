@@ -1,0 +1,7 @@
+{
+  "meta": {"note": "the records array key contains a slash"},
+  "data/2024": [
+    {"q": "Q1", "n": 1},
+    {"q": "Q2", "n": 2}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "version": 3,
+  "a": {
+    "b": {
+      "c": [
+        {"sensor": "t1", "celsius": 21.5},
+        {"sensor": "t2", "celsius": -3.25}
+      ]
+    }
+  }
+}

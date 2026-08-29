@@ -1,0 +1,38 @@
+[package]
+name = "tdy"
+version = "0.1.0"
+edition = "2021"
+description = "SQL over messy files: heuristic + LLM-inferred parsing specs, DataFusion execution, tidy Arrow/Parquet out"
+license = "MIT"
+
+[dependencies]
+datafusion = "46"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+async-trait = "0.1"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+schemars = "0.8"
+
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+
+csv = "1.3"
+calamine = { version = "0.26", features = ["dates"] }
+regex = "1"
+chrono = "0.4"
+encoding_rs = "0.8"
+chardetng = "0.1"
+blake3 = "1"
+dirs = "5"
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# One shared vCPU in typical CI-ish environments: skip debuginfo for a much
+# faster and smaller build. Flip to `debug = true` when you need a debugger.
+[profile.dev]
+debug = false

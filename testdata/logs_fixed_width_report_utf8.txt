@@ -1,0 +1,24 @@
+Muster Handels AG                                   Seite 1 von 1
+Umsatzstatistik nach Kunde                          Stand: 10.02.2026
+
+Kunde                   LD   Menge    Betrag CHF  Abweichung   Marge Bemerkung
+--------------------------------------------------------------------------------------------------
+Region Ost
+Müller Transport AG     CH    1234     84'320.57  (1'250.10)   12.5% Rahmenvertrag 2026
+Bäckerei Steiner        CH      96     -8'450.23      310.40    4.0% Rücklieferung 2 Paletten
+Genossenschaft Zentral Ö         8     12'000.99        0.00     n/a Ausschreibung offen
+Zürich Versicherung     CH    4500  1'234'567.89     (12.35)    0.8% Grossbezug — Rabatt 3%
+  Zwischensumme Ost           5838  1'322'439.22
+
+Region West
+Gemüsebau Seeland       CH              2'100.45       45.00   7.25% Menge unbekannt
+Weinhandlung Rüegg      AT      77 *************        5.00   15.0% Betrag ueberlaeuft die Spalte
+Bürgi Elektro GmbH      DE       2         19.95      (0.10)   33.3%
+Schwyzer Kaffeerösterei CH 1500000         -0.05        0.00    0.0% Gutschrift Rundung
+Käser Immobilien AG     LI       1    250'000.11 (99'999.99)  100.0% Objektverkauf
+  Zwischensumme West       1500080    252'120.46
+--------------------------------------------------------------------------------------------------
+GESAMT (alle Länder)       1505918  1'574'559.68
+
+* Werte in CHF. ** (Klammern) = negativ. *** Betrag zu breit fuer die Spalte;
+  die Summen enthalten diese Position nicht.

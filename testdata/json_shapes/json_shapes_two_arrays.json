@@ -1,0 +1,12 @@
+{
+  "meta": {"job": "nightly-export", "page": 1},
+  "records": [
+    {"id": 1, "status": "ok"},
+    {"id": 2, "status": "ok"},
+    {"id": 3, "status": "late"}
+  ],
+  "errors": [
+    {"code": "E1", "line": 7},
+    {"code": "E2", "line": 19}
+  ]
+}

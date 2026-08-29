@@ -1,0 +1,18 @@
+Muster Privatbank AG — Kontoauszug Q1 2026
+Konto 12-345678-9;Währung: CHF/EUR;Stand 31.03.2026
+
+Buchung;Valuta;Text;Betrag CHF;Betrag EUR;Währungskurs;Quote %;Beleg-Nr.
+05.01.2026;07.01.26;Lohnzahlung Januar;CHF 1'200.00;1.234,56 EUR;1,08;12,5%;4001*
+12.01.2026;14.01.26;Bürobedarf Papeterie Müller;CHF 85.50;987,50 EUR;1,5;0,75%;4002
+19.01.2026;21.01.26;"Rückzahlung; Teilbetrag";(CHF 1'234.55);k.A.;0,97;-1,25%;4003
+26.01.2026;28.01.26;Miete März, Büro Zürich-Höngg;CHF 12'000.00;12.000,00 EUR;2,75;n/a;4004**
+02.02.2026;04.02.26;Zinsgutschrift;n/a;-45,20 EUR;1,00;0,00%;4005
+09.02.2026;11.02.26;Spesen Zürich–Genf;CHF 0.05;0,99 EUR;0,05;100,00%;4006
+;;Zwischentotal Jan-Feb;CHF 12'051.00;14.177,85 EUR;;;
+16.02.2026;18.02.26;"Gebühren ""Paket Gold""";(CHF 99.95);#N/A;1,25;3,5%;4007*
+23.02.2026;25.02.26;Überweisung Grossmünster AG;CHF 250'000.00;1.500.000,00 EUR;3,4;-0,5%;4008
+02.03.2026;04.03.26;Rückerstattung MwSt.;-;250,00 EUR;0,5;k.A.;4009
+09.03.2026;11.03.26;Dividende Q4 (Société Générale);CHF 7'777.77;-;1,125;2,25%;4010
+16.03.2026;18.03.26;Umbuchung Fremdwährung;k.A.;n/a;2,0;0,1%;4011***
+31.03.2026;02.04.26;Abschluss Quartal;CHF 1'000'000.00;3.333,33 EUR;0,875;7,75%;4012
+;;Total;CHF 1'269'728.82;1.517.761,18 EUR;;;
