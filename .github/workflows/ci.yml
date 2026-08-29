@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A backtrace on a CI panic is worth more than the noise it costs.
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install openpyxl
+        # The spreadsheet fixtures are generated, not committed by hand.
+        run: pip install --quiet openpyxl
+
+      - name: Regenerate every fixture
+        # Proves the generators still run and still produce what the tests
+        # expect. Byte-equality against the committed files is deliberately
+        # not asserted: an .xlsx is a zip archive and carries timestamps.
+        run: python3 gen_fixtures.py
+
+      - name: Build
+        run: cargo build --locked --all-targets
+
+      - name: Test
+        # --lib --tests rather than a bare `cargo test`: there are no
+        # doc-tests to speak of, and this is the invocation the docs give.
+        run: cargo test --locked --lib --tests
+
+      - name: Clippy
+        # Formatting is deliberately not gated: this codebase has never been
+        # through rustfmt, and adding it would bury the code under a
+        # mechanical reformat. `cargo fmt --all` any time you want it.
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+  msrv:
+    name: minimum supported Rust (1.81)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.81
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      # A check, not a test run: this job exists to keep the README's
+      # "Rust >= 1.81" honest, not to run the suite twice.
+      - run: cargo check --locked --all-targets
+
+  reproducible:
+    name: --frozen is reproducible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pip install --quiet openpyxl
+      - run: python3 gen_fixtures.py
+      - run: cargo build --locked --release
+
+      - name: Same file, same spec, same bytes
+        # The promise a sidecar makes, exercised end to end: infer once, then
+        # run the same query twice in frozen mode and diff the output.
+        run: |
+          set -euo pipefail
+          T=./target/release/tdy
+          F=testdata/csv_torture/csv_torture_bom_crlf.csv
+          "$T" sniff "$F" --no-llm > /dev/null
+          SQL="SELECT * FROM messy('$F') ORDER BY 1"
+          "$T" query "$SQL" -f -o a.csv
+          "$T" query "$SQL" -f -o b.csv
+          diff a.csv b.csv
+          test -s a.csv
+          echo "frozen output is byte-identical across runs"
