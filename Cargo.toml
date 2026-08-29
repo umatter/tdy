@@ -2,9 +2,10 @@
 name = "tdy"
 version = "0.1.0"
 edition = "2021"
-# A transitive dependency (idna_adapter, via reqwest) requires edition2024,
-# which needs Cargo 1.85. CI checks this rather than trusting it.
-rust-version = "1.85"
+# Set by the dependency tree, not by this crate's own code: reqwest pulls in
+# url -> idna -> icu_*, which require 1.88. CI checks this against the
+# committed lockfile rather than trusting it.
+rust-version = "1.88"
 description = "SQL over messy files: heuristic + LLM-inferred parsing specs, DataFusion execution, tidy Arrow/Parquet out"
 license = "MIT"
 

@@ -47,18 +47,18 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
 
   msrv:
-    name: minimum supported Rust (1.85)
+    name: minimum supported Rust (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
       # A check, not a test run: this job exists to keep the declared
       # rust-version honest, not to run the suite twice. It has already
-      # earned its place — the README claimed 1.81 and a transitive
-      # dependency needed 1.85.
+      # earned its place twice over — the README claimed 1.81, and the real
+      # floor turned out to be 1.88 (icu_* via reqwest -> url -> idna).
       - run: cargo check --locked --all-targets
 
   reproducible:

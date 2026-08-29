@@ -31,7 +31,7 @@ OPENROUTER_API_KEY=... TDY_LIVE_MODEL=google/gemini-2.5-flash \
 Every test runs with `backend = none`; nothing needs a network or a model.
 On this machine plain `cargo test` ends with a spurious doc-test failure (`rustdoc` cannot
 load `libLLVM.so...` — a toolchain install issue, not code); `--lib --tests` avoids it.
-Rust ≥ 1.85 (DataFusion 46; a transitive dependency needs edition2024). `[profile.dev] debug = false` is deliberate (slow builds) —
+Rust ≥ 1.88 (DataFusion 46), a floor set by reqwest → url → icu_*, checked in CI. `[profile.dev] debug = false` is deliberate (slow builds) —
 flip it locally when you need a debugger, don't commit it.
 
 ## The one rule

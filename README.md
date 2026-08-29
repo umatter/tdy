@@ -274,5 +274,7 @@ the model (long or wide are both faithful readings); the arithmetic is not.
 `google/gemini-2.5-flash` and `anthropic/claude-sonnet-4.5` pass;
 `openai/gpt-4o-mini` does not.
 
-Rust ≥ 1.85 (DataFusion 46; a transitive dependency needs edition2024). Outputs Parquet/CSV/NDJSON — drop the Parquet
+Rust ≥ 1.88 (DataFusion 46). The floor comes from the dependency tree —
+reqwest → url → icu_* — not from this crate, and CI checks it against the
+committed lockfile. Outputs Parquet/CSV/NDJSON — drop the Parquet
 straight into DuckDB.
