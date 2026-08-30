@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 250 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 252 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -112,7 +112,7 @@ Things that only become clear from reading several modules:
   Bump `PROMPT_VERSION` when changing the prompt — it is recorded in sidecar provenance.
 - **Bounded I/O lives in `fileio`**: head/tail sampling by seek, streaming blake3, atomic
   sidecar writes (temp + rename).
-- **`stream` is the delimited executor; `engine` is the fallback and the reference.** It is
+- **`stream` is the executor for text formats; `engine` is the fallback and the reference.** It is
   plumbing only — where an answer could differ (`promote_header_from`, `build_column_at`) it
   calls the same function `engine` calls, deliberately, so the two cannot drift. It accepts
   only `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down)* [unpivot]?`;
@@ -123,8 +123,10 @@ Things that only become clear from reading several modules:
   uses `ByteRecord` and allocates nothing. Row-local ops run in **spec order** (`RowOp`), not
   a fixed one: fill-then-drop propagates a subtotal label into the rows beneath it and drop-
   then-fill does not, and `tests/streaming.rs` pins that both paths fall into it identically.
-  Measured on 140 MB / 3M rows: 1,676 MB -> 418 MB peak, and slightly faster.
-  `TDY_NO_STREAM=1` forces `engine`.
+  Measured: 140 MB / 3M-row CSV 1,676 -> 418 MB; 190 MB / 2M-line nginx log 1,376 -> 496 MB;
+  both slightly faster too. `TDY_NO_STREAM=1` forces `engine` — that is `stream::enabled()`,
+  kept separate from `can_stream()` so turning streaming off cannot make the shape predicate
+  lie.
 - **`xlguard` bounds a spreadsheet before it is read.** Every other limit is checked against a
   table that already exists — fine for text, useless for a format whose size is a *claim*: a
   899-byte `.ods` was measured at 4.8 GB and SIGABRT, which is the one failure mode the design
@@ -170,7 +172,8 @@ it OOM. If you change extraction, re-measure with `/usr/bin/time -f "wall %es pe
   row counts, dtypes). `adversarial.rs` proves nothing crashes; this proves the answers are
   right, which a parser returning nothing would also satisfy
 - `tests/streaming.rs` — the specification of `stream`: not a list of cases but *equality*
-  with `engine` over every delimited fixture, plus the batch-boundary cases a chunked
+  with `engine` over every text fixture (delimited, `lines`, and `fixed_width` against the
+  committed reports with the character offsets generator 04 documents), plus the batch-boundary cases a chunked
   pipeline gets wrong (a `fill_down` carry crossing 65,536 rows, a `skip_rows` tail the
   reader has not reached yet, `unpivot` making output rows outnumber input ones)
 - `tests/adversarial.rs` — sweeps every fixture in `testdata/`: never panic, never hang, and

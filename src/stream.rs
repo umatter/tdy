@@ -59,7 +59,9 @@ use crate::config::Limits;
 use crate::engine::{
     build_column_at, compile, dedupe_names, promote_header_from, ExtractOpts, BATCH_ROWS,
 };
-use crate::spec::{ColumnSpec, Extraction, ParseSpec, RaggedPolicy, Transform};
+use crate::spec::{
+    ColumnSpec, Extraction, FixedField, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform,
+};
 
 /// Whether [`execute_batches`] can run this spec. See the module docs.
 ///
@@ -67,7 +69,20 @@ use crate::spec::{ColumnSpec, Extraction, ParseSpec, RaggedPolicy, Transform};
 /// separate, policy question — see [`enabled`] — so that turning streaming
 /// off cannot make this predicate lie.
 pub fn can_stream(spec: &ParseSpec) -> bool {
-    if !matches!(spec.extraction, Extraction::Delimited { .. }) {
+    let provides_header = match &spec.extraction {
+        Extraction::Delimited { .. } => false,
+        // Line-oriented sources name their own columns — capture groups, or
+        // the field list — so there is no width to discover and no header to
+        // promote.
+        Extraction::Lines { .. } | Extraction::FixedWidth { .. } => true,
+        _ => return false,
+    };
+    // `promote_header` over a source that already has a header replaces it
+    // with data rows. Legal, rare, and not worth a second code path: fall
+    // back rather than reimplement it.
+    if provides_header
+        && spec.transforms.iter().any(|t| matches!(t, Transform::PromoteHeader { .. }))
+    {
         return false;
     }
     // Walk the transforms as a little state machine over the accepted shape.
@@ -112,6 +127,131 @@ pub fn enabled() -> bool {
     !std::env::var("TDY_NO_STREAM").map(|v| v != "0").unwrap_or(false)
 }
 
+
+/// One row at a time out of the decoded text, per extraction format.
+///
+/// The formats that stream are the ones whose rows are independent: a
+/// delimited record, a log line, a slice of a fixed-width line. JSON is not
+/// here because a document has to be parsed whole before its records exist.
+enum Source<'a> {
+    Delimited { rdr: csv::Reader<&'a [u8]>, rec: csv::StringRecord },
+    Lines {
+        iter: std::str::Lines<'a>,
+        re: regex::Regex,
+        names: Vec<String>,
+        on_no_match: NoMatchPolicy,
+        line_no: usize,
+    },
+    Fixed { iter: std::str::Lines<'a>, fields: Vec<FixedField>, chars: Vec<char> },
+}
+
+impl<'a> Source<'a> {
+    fn new(text: &'a str, extraction: &Extraction) -> Result<(Self, Option<Vec<String>>)> {
+        Ok(match extraction {
+            Extraction::Delimited { .. } => (
+                Source::Delimited {
+                    rdr: reader_for(extraction).from_reader(text.as_bytes()),
+                    rec: csv::StringRecord::new(),
+                },
+                None,
+            ),
+            Extraction::Lines { pattern, on_no_match, .. } => {
+                let re = compile(pattern, "lines pattern")?;
+                let names: Vec<String> =
+                    re.capture_names().flatten().map(|s| s.to_string()).collect();
+                if names.is_empty() {
+                    bail!("lines pattern must contain named capture groups, e.g. (?P<ip>\\S+)");
+                }
+                let header = names.clone();
+                (
+                    Source::Lines {
+                        iter: text.lines(),
+                        re,
+                        names,
+                        on_no_match: *on_no_match,
+                        line_no: 0,
+                    },
+                    Some(header),
+                )
+            }
+            Extraction::FixedWidth { fields, .. } => {
+                let header: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+                (
+                    Source::Fixed {
+                        iter: text.lines(),
+                        fields: fields.clone(),
+                        chars: Vec::new(),
+                    },
+                    Some(header),
+                )
+            }
+            other => bail!("internal: {} is not a streaming source", other.format_name()),
+        })
+    }
+
+    /// The next row, or None at end of input. Rows the format skips (blank
+    /// lines, non-matching lines under `on_no_match = "skip"`) are consumed
+    /// here so the caller only ever sees data.
+    fn next_row(&mut self) -> Result<Option<Vec<String>>> {
+        match self {
+            Source::Delimited { rdr, rec } => match rdr.read_record(rec) {
+                Ok(true) => Ok(Some(rec.iter().map(|s| s.to_string()).collect())),
+                Ok(false) => Ok(None),
+                Err(e) => Err(anyhow!("{e}")),
+            },
+            Source::Lines { iter, re, names, on_no_match, line_no } => {
+                for line in iter.by_ref() {
+                    *line_no += 1;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    match re.captures(line) {
+                        Some(caps) => {
+                            return Ok(Some(
+                                names
+                                    .iter()
+                                    .map(|n| {
+                                        caps.name(n)
+                                            .map(|m| m.as_str().to_string())
+                                            .unwrap_or_default()
+                                    })
+                                    .collect(),
+                            ))
+                        }
+                        None => match on_no_match {
+                            NoMatchPolicy::Skip => continue,
+                            NoMatchPolicy::Error => {
+                                bail!("line {} does not match the pattern: {:?}", line_no, line)
+                            }
+                        },
+                    }
+                }
+                Ok(None)
+            }
+            Source::Fixed { iter, fields, chars } => {
+                for line in iter.by_ref() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    chars.clear();
+                    chars.extend(line.chars());
+                    return Ok(Some(
+                        fields
+                            .iter()
+                            .map(|f| {
+                                let start = (f.start as usize).min(chars.len());
+                                let end = (f.end as usize).min(chars.len());
+                                chars[start..end].iter().collect::<String>().trim().to_string()
+                            })
+                            .collect(),
+                    ));
+                }
+                Ok(None)
+            }
+        }
+    }
+}
+
 /// The delimited reader, configured identically to the materialising path.
 fn reader_for(extraction: &Extraction) -> csv::ReaderBuilder {
     let mut b = csv::ReaderBuilder::new();
@@ -142,47 +282,42 @@ struct Shape {
     uneven: bool,
 }
 
-fn measure(text: &str, extraction: &Extraction, limits: &Limits, path: &Path) -> Result<Shape> {
-    let mut rdr = reader_for(extraction).from_reader(text.as_bytes());
-    // A ByteRecord is reused across reads and borrows its fields, so this
-    // pass allocates nothing per row.
-    let mut rec = csv::ByteRecord::new();
+fn measure(source: &mut Source<'_>, limits: &Limits, path: &Path) -> Result<Shape> {
     let mut widths: HashMap<usize, usize> = HashMap::new();
     let mut rows = 0usize;
     let mut max_width = 0usize;
     let mut cells: u64 = 0;
     loop {
-        match rdr.read_byte_record(&mut rec) {
-            Ok(true) => {
-                let w = rec.len();
-                rows += 1;
-                max_width = max_width.max(w);
-                *widths.entry(w).or_insert(0) += 1;
-                cells += w as u64;
-                if cells > limits.max_cells {
-                    bail!(
-                        "reading {} exceeded the {}-cell limit after {} rows \
-                         (raise [limits].max_cells if this is intended)",
-                        path.display(),
-                        limits.max_cells,
-                        rows
-                    );
-                }
-            }
-            Ok(false) => break,
-            Err(e) => {
-                return Err(anyhow!("{e}"))
-                    .with_context(|| format!("CSV parse error at record {}", rows + 1))
-            }
+        // For a delimited source this still allocates a String per field,
+        // which pass one would rather not do; it is the price of sharing one
+        // row source with the formats whose rows are built by regex or by
+        // slicing. The rows are dropped immediately, so the *peak* — which is
+        // what the limits are about — stays at one row.
+        let Some(r) = source
+            .next_row()
+            .with_context(|| format!("measuring {}", path.display()))?
+        else {
+            break;
+        };
+        let w = r.len();
+        rows += 1;
+        max_width = max_width.max(w);
+        *widths.entry(w).or_insert(0) += 1;
+        cells += w as u64;
+        if cells > limits.max_cells {
+            bail!(
+                "reading {} exceeded the {}-cell limit after {} rows \
+                 (raise [limits].max_cells if this is intended)",
+                path.display(),
+                limits.max_cells,
+                rows
+            );
         }
     }
     // Ties break toward the wider row, exactly as engine::modal_width does,
     // so the two paths agree on a file with no majority arity.
-    let modal_width = widths
-        .iter()
-        .max_by_key(|(w, n)| (**n, **w))
-        .map(|(w, _)| *w)
-        .unwrap_or(0);
+    let modal_width =
+        widths.iter().max_by_key(|(w, n)| (**n, **w)).map(|(w, _)| *w).unwrap_or(0);
     Ok(Shape { rows, max_width, modal_width, uneven: widths.len() > 1 })
 }
 
@@ -213,10 +348,7 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
         bail!("internal: stream::execute_batches called on an unstreamable spec");
     }
     let opts = ExtractOpts::full(limits);
-    let encoding = match &spec.extraction {
-        Extraction::Delimited { encoding, .. } => encoding.as_deref(),
-        _ => None,
-    };
+    let encoding = spec.extraction.encoding();
     let ragged = match &spec.extraction {
         Extraction::Delimited { ragged, .. } => *ragged,
         _ => RaggedPolicy::PadNulls,
@@ -226,50 +358,74 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
     // proportional to the source, but it is 1x rather than the ~8x the
     // Vec<Vec<String>> costs.
     let text = crate::engine::read_text(path, encoding, &opts)?;
-    let shape = measure(&text, &spec.extraction, &limits, path)?;
+    let (mut source, provided_header) = Source::new(&text, &spec.extraction)?;
+
+    let tail = spec
+        .transforms
+        .iter()
+        .find_map(|t| match t {
+            Transform::SkipRows { tail, .. } => Some(*tail as usize),
+            _ => None,
+        })
+        .unwrap_or(0);
+
+    // Pass one exists to learn the width, which only a delimited source
+    // lacks, and the row count, which only a `skip_rows` tail needs. A log
+    // file with neither is read exactly once.
+    let shape = if provided_header.is_none() || tail > 0 {
+        let (mut counting, _) = Source::new(&text, &spec.extraction)?;
+        Some(measure(&mut counting, &limits, path)?)
+    } else {
+        None
+    };
 
     // Mirror RawTable::rectangularize. With no header yet (delimited
     // extraction provides none), PadNulls targets the widest row and
     // TruncateExtra the modal one.
-    let target_width = match ragged {
-        RaggedPolicy::PadNulls => shape.max_width,
-        RaggedPolicy::TruncateExtra => shape.modal_width,
-        RaggedPolicy::Error => {
-            if let Some((pos, w)) =
-                shape.uneven.then(|| first_odd_row(&text, &spec.extraction, shape.modal_width)).flatten()
-            {
-                bail!(
-                    "ragged input: row {} has {} field(s), but most rows have {} \
-                     (set ragged = \"pad_nulls\", or add skip_rows if these are \
-                     title/footer lines)",
-                    pos + 1,
-                    w,
+    let target_width = match &provided_header {
+        Some(h) => h.len(),
+        None => {
+            let shape = shape.as_ref().expect("measured when no header is provided");
+            match ragged {
+                RaggedPolicy::PadNulls => shape.max_width,
+                RaggedPolicy::TruncateExtra => shape.modal_width,
+                RaggedPolicy::Error => {
+                    if let Some((pos, w)) = shape
+                        .uneven
+                        .then(|| first_odd_row(&text, &spec.extraction, shape.modal_width))
+                        .flatten()
+                    {
+                        bail!(
+                            "ragged input: row {} has {} field(s), but most rows have {} \
+                             (set ragged = \"pad_nulls\", or add skip_rows if these are \
+                             title/footer lines)",
+                            pos + 1,
+                            w,
+                            shape.modal_width
+                        );
+                    }
                     shape.modal_width
-                );
+                }
             }
-            shape.modal_width
         }
     };
 
-    let mut plan = Plan::build(spec, target_width, shape.rows)?;
-    let mut rdr = reader_for(&spec.extraction).from_reader(text.as_bytes());
-    let mut rec = csv::StringRecord::new();
+    let total_rows = shape.as_ref().map(|s| s.rows).unwrap_or(usize::MAX);
+    let mut plan = Plan::build(spec, target_width, total_rows)?;
     let mut row_index = 0usize;
 
     // --- the header, from the first rows -----------------------------------
     let mut header_rows: Vec<Vec<String>> = Vec::new();
     while row_index < plan.body_start {
-        match rdr.read_record(&mut rec) {
-            Ok(true) => {
+        match source.next_row()? {
+            Some(mut r) => {
                 if row_index >= plan.skip_head {
-                    let mut r: Vec<String> = rec.iter().map(|s| s.to_string()).collect();
                     fit(&mut r, target_width);
                     header_rows.push(r);
                 }
                 row_index += 1;
             }
-            Ok(false) => break,
-            Err(e) => return Err(anyhow!("{e}")),
+            None => break,
         }
     }
     if plan.header_rows > 0 && header_rows.len() < plan.header_rows {
@@ -279,12 +435,25 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
             header_rows.len()
         );
     }
-    let header = if plan.header_rows > 0 {
-        promote_header_from(header_rows, &plan.header_join)
-    } else {
-        let mut h: Vec<String> = (1..=target_width).map(|i| format!("col_{i}")).collect();
-        dedupe_names(&mut h);
-        h
+    let header = match provided_header {
+        Some(mut h) => {
+            // Same normalisation RawTable::ensure_header applies to names an
+            // extraction supplies: blanks become col_N, duplicates are
+            // disambiguated.
+            for (i, n) in h.iter_mut().enumerate() {
+                if n.trim().is_empty() {
+                    *n = format!("col_{}", i + 1);
+                }
+            }
+            dedupe_names(&mut h);
+            h
+        }
+        None if plan.header_rows > 0 => promote_header_from(header_rows, &plan.header_join),
+        None => {
+            let mut h: Vec<String> = (1..=target_width).map(|i| format!("col_{i}")).collect();
+            dedupe_names(&mut h);
+            h
+        }
     };
     plan.resolve(spec, &header)?;
 
@@ -295,24 +464,20 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
     let mut emitted = 0usize;
 
     while row_index < plan.body_end {
-        match rdr.read_record(&mut rec) {
-            Ok(true) => {
-                row_index += 1;
-                let mut r: Vec<String> = rec.iter().map(|s| s.to_string()).collect();
-                fit(&mut r, target_width);
-                plan.push(r, &mut chunk);
-                while chunk.len() >= BATCH_ROWS {
-                    let rest = chunk.split_off(BATCH_ROWS);
-                    flush(&plan, &chunk, emitted, &mut out, &mut schema)?;
-                    emitted += chunk.len();
-                    chunk = rest;
-                }
-            }
-            Ok(false) => break,
-            Err(e) => {
-                return Err(anyhow!("{e}"))
-                    .with_context(|| format!("CSV parse error at record {}", row_index + 1))
-            }
+        let Some(mut r) = source
+            .next_row()
+            .with_context(|| format!("reading record {} of {}", row_index + 1, path.display()))?
+        else {
+            break;
+        };
+        row_index += 1;
+        fit(&mut r, target_width);
+        plan.push(r, &mut chunk);
+        while chunk.len() >= BATCH_ROWS {
+            let rest = chunk.split_off(BATCH_ROWS);
+            flush(&plan, &chunk, emitted, &mut out, &mut schema)?;
+            emitted += chunk.len();
+            chunk = rest;
         }
     }
     // `..=` in spirit: an empty table still produces one empty batch, because

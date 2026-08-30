@@ -76,7 +76,8 @@ fn delimited_fixtures() -> Vec<PathBuf> {
     v
 }
 
-/// The sweep. Every delimited fixture, sniffed, then run down both paths.
+/// The sweep. Every text fixture, sniffed, then run down both paths —
+/// delimited, log lines and fixed-width reports alike.
 #[test]
 fn both_paths_agree_on_every_delimited_fixture() {
     let files = delimited_fixtures();
@@ -97,6 +98,89 @@ fn both_paths_agree_on_every_delimited_fixture() {
         "only {compared} fixtures were actually streamed — the sweep proves little"
     );
     eprintln!("compared {compared} fixtures down both paths");
+}
+
+/// The line-oriented sources have to stream too: logs are where the genuinely
+/// large files are, and they were the ones still being materialised.
+///
+/// Their headers come from the extraction — capture-group names — so unlike a
+/// delimited file there is no width to discover, and with no `skip_rows` tail
+/// they are read exactly once.
+#[test]
+fn log_fixtures_stream_and_agree() {
+    let mut seen = 0usize;
+    for p in delimited_fixtures() {
+        let Ok(s) = sample::build(&p, 64 * 1024, Limits::default()) else { continue };
+        let Ok(res) = sniff::sniff(&p, &s, Limits::default()) else { continue };
+        if !matches!(res.spec.extraction, Extraction::Lines { .. }) {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            stream::can_stream(&res.spec),
+            "{}: a `lines` spec was not streamable",
+            p.display()
+        );
+        assert_paths_agree(&res.spec, &p, &p.display().to_string());
+    }
+    assert!(seen > 0, "no `lines` fixture was exercised");
+    eprintln!("compared {seen} log fixtures down both paths");
+}
+
+/// Fixed-width, against the committed reports and with the character offsets
+/// `testdata/gen/04_logs_fixedwidth.py` documents.
+///
+/// No fixture sniffs as fixed-width — the decorated reports defeat tier 1, by
+/// design and on the record — so the spec is hand-written here, which is how
+/// a user would reach this extraction anyway. The UTF-8 and windows-1252
+/// reports are the interesting pair: offsets are *character* positions, so an
+/// implementation that sliced bytes would truncate "Müller" mid-sequence and
+/// slide every later field. Both executors must make the same choice.
+#[test]
+fn fixed_width_reports_stream_and_agree() {
+    let fields: Vec<FixedField> = [
+        ("kunde", 0u32, 24u32),
+        ("land", 24, 26),
+        ("menge", 27, 34),
+        ("betrag_chf", 35, 48),
+        ("abweichung", 49, 60),
+        ("marge_pct", 61, 68),
+        ("bemerkung", 69, 9999),
+    ]
+    .into_iter()
+    .map(|(name, start, end)| FixedField { name: name.into(), start, end })
+    .collect();
+
+    let mut seen = 0usize;
+    for (name, encoding) in [
+        ("logs_fixed_width_report_utf8.txt", None),
+        ("logs_fixed_width_report_ascii.txt", None),
+        ("logs_fixed_width_report_cp1252.txt", Some("windows-1252".to_string())),
+    ] {
+        let p = testdata().join(name);
+        if !p.exists() {
+            continue;
+        }
+        let s = ParseSpec {
+            extraction: Extraction::FixedWidth { encoding, fields: fields.clone() },
+            transforms: vec![Transform::DropRowsMatching {
+                pattern: "^(-+|=+)?$".into(),
+                column: None,
+            }],
+            columns: vec![
+                col("kunde", DType::Utf8),
+                col("land", DType::Utf8),
+                col("bemerkung", DType::Utf8),
+            ],
+            confidence: Some(1.0),
+            notes: vec![],
+        };
+        assert!(stream::can_stream(&s), "{name}: fixed_width was not streamable");
+        assert_paths_agree(&s, &p, name);
+        seen += 1;
+    }
+    assert!(seen > 0, "no fixed-width report fixture was found");
+    eprintln!("compared {seen} fixed-width reports down both paths");
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +445,17 @@ fn the_cell_limit_still_applies_when_streaming() {
 /// mis-executed — the caller falls back to the materialising path.
 #[test]
 fn unstreamable_shapes_are_declined_rather_than_guessed() {
-    // Excel is not delimited.
+    // A JSON document has to be parsed whole before its records exist.
+    let json = ParseSpec {
+        extraction: Extraction::Json { lines: false, pointer: None },
+        transforms: vec![],
+        columns: vec![],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    assert!(!stream::can_stream(&json));
+
+    // Excel is materialised by its reader whatever we do.
     let excel = ParseSpec {
         extraction: Extraction::Excel { sheet_name: None, sheet_index: None, range: None },
         transforms: vec![],
@@ -396,4 +490,19 @@ fn unstreamable_shapes_are_declined_rather_than_guessed() {
         vec![],
     );
     assert!(!stream::can_stream(&after_unpivot));
+
+    // A line-oriented source already has a header; promoting one over it
+    // replaces it with data rows, which the driver does not implement.
+    let promote_over_lines = ParseSpec {
+        extraction: Extraction::Lines {
+            pattern: "(?P<a>.+)".into(),
+            encoding: None,
+            on_no_match: NoMatchPolicy::Skip,
+        },
+        transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        columns: vec![],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    assert!(!stream::can_stream(&promote_over_lines));
 }
