@@ -248,6 +248,7 @@ Details worth knowing:
   |---|---|---|
   | 140 MB CSV, 3M rows, `count(*)` | 3.11 s, 1,676 MB | **2.90 s, 418 MB** |
   | 190 MB nginx log, 2M lines | 3.27 s, 1,376 MB | **2.86 s, 496 MB** |
+  | 260 MB CSV, 70M cells | refused: over `max_cells` | **8.95 s, 916 MB** |
 
   Faster as well as smaller: not allocating tens of millions of strings more
   than pays for the extra counting pass. (A log needs no counting pass at all
@@ -265,9 +266,15 @@ Details worth knowing:
 
 `[limits]` in the config caps what a single run will attempt, so a
 pathological file fails with a sentence instead of the OOM killer:
-`max_file_bytes` (default 4 GiB) and `max_cells` (default 50M). Text files
-stream (see Design notes), so expect peak RSS of roughly 3× the source;
-spreadsheets are materialised by their readers and cost more.
+`max_file_bytes` (default 4 GiB), `max_cells` (50M) and `max_streamed_cells`
+(200M).
+
+There are two cell limits because the two paths cost differently, by about a
+factor of seven. Materialised — spreadsheets, JSON, any spec the streaming
+executor declines — a cell runs ~122 bytes; streamed, ~18 on a delimited file
+and ~29 on a log. Both defaults stand for a ceiling of roughly 6 GB, which is
+why the numbers differ: holding streamed text to the materialised one would
+refuse a 260 MB CSV that in fact reads in under a gigabyte.
 
 For spreadsheets the limits are checked against what the file **declares**,
 before its grid is allocated. They have to be: a spreadsheet's size is a
@@ -297,7 +304,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 252 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 253 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

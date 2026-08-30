@@ -436,9 +436,39 @@ fn the_cell_limit_still_applies_when_streaming() {
         vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![col("k", DType::Utf8), col("v", DType::Int64)],
     );
-    let tight = Limits { max_cells: 100, ..Limits::default() };
+    let tight = Limits { max_streamed_cells: 100, ..Limits::default() };
     let err = stream::execute_batches(&s, &p, tight).expect_err("the cell limit did not apply");
-    assert!(format!("{err:#}").contains("max_cells"));
+    assert!(format!("{err:#}").contains("max_streamed_cells"), "{err:#}");
+}
+
+/// The streaming limit must also bite on a source that needs no measuring
+/// pass — a log with no `skip_rows` tail is read exactly once, so a check
+/// that lived only in the counting pass would never run.
+#[test]
+fn the_streaming_limit_applies_to_a_source_with_no_counting_pass() {
+    let dir = TempDir::new().unwrap();
+    let mut body = String::new();
+    for i in 0..500 {
+        body.push_str(&format!("2026-02-10 03:14:0{} INFO thing happened n={i}\n", i % 10));
+    }
+    let p = write(&dir, "app.log", &body);
+    let s = ParseSpec {
+        extraction: Extraction::Lines {
+            pattern: r"^(?P<ts>\S+ \S+) (?P<level>\w+) (?P<msg>.*)$".into(),
+            encoding: None,
+            on_no_match: NoMatchPolicy::Skip,
+        },
+        transforms: vec![],
+        columns: vec![col("level", DType::Utf8)],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    // No tail and a header from the pattern: nothing counted this in advance.
+    assert!(stream::can_stream(&s));
+    let tight = Limits { max_streamed_cells: 30, ..Limits::default() };
+    let err = stream::execute_batches(&s, &p, tight)
+        .expect_err("the streaming limit did not apply without a counting pass");
+    assert!(format!("{err:#}").contains("max_streamed_cells"), "{err:#}");
 }
 
 /// Specs the streaming driver does not implement must be *declined*, not

@@ -304,12 +304,12 @@ fn measure(source: &mut Source<'_>, limits: &Limits, path: &Path) -> Result<Shap
         max_width = max_width.max(w);
         *widths.entry(w).or_insert(0) += 1;
         cells += w as u64;
-        if cells > limits.max_cells {
+        if cells > limits.max_streamed_cells {
             bail!(
-                "reading {} exceeded the {}-cell limit after {} rows \
-                 (raise [limits].max_cells if this is intended)",
+                "reading {} exceeded the {}-cell streaming limit after {} rows \
+                 (raise [limits].max_streamed_cells if this is intended)",
                 path.display(),
-                limits.max_cells,
+                limits.max_streamed_cells,
                 rows
             );
         }
@@ -463,6 +463,10 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
     let mut chunk: Vec<Vec<String>> = Vec::with_capacity(BATCH_ROWS.min(1024));
     let mut emitted = 0usize;
 
+    // A source that needed no measuring pass has not been counted yet, so the
+    // limit is enforced here as well. Both places, because whichever ran
+    // first must be the one that stops.
+    let mut cells: u64 = 0;
     while row_index < plan.body_end {
         let Some(mut r) = source
             .next_row()
@@ -471,6 +475,16 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
             break;
         };
         row_index += 1;
+        cells = cells.saturating_add(r.len() as u64);
+        if cells > limits.max_streamed_cells {
+            bail!(
+                "reading {} exceeded the {}-cell streaming limit after {} rows \
+                 (raise [limits].max_streamed_cells if this is intended)",
+                path.display(),
+                limits.max_streamed_cells,
+                row_index
+            );
+        }
         fit(&mut r, target_width);
         plan.push(r, &mut chunk);
         while chunk.len() >= BATCH_ROWS {

@@ -114,23 +114,35 @@ pub struct Limits {
     /// Refuse a table with more than this many cells (rows x columns) —
     /// checked against what a spreadsheet *declares*, before its grid is
     /// allocated, as well as against the table once built.
+    ///
+    /// This is the bound for work that is *materialised*: spreadsheets, JSON,
+    /// and any spec the streaming executor declines.
     pub max_cells: u64,
+    /// The same bound for the streaming executor, which is a different number
+    /// because it is a different cost. See [`Limits::default`].
+    pub max_streamed_cells: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Limits {
             max_file_bytes: 4 * 1024 * 1024 * 1024, // 4 GiB
-            // Measured, not guessed: end to end a spreadsheet cell costs
-            // ~122 bytes (calamine's Data, then our own String), and a
-            // delimited one ~46. So this is a ceiling of roughly 6 GB on the
-            // expensive path and 2.3 GB on the cheap one.
+            // Both numbers are measured, and both stand for about the same
+            // ceiling — roughly 6 GB — on paths whose per-cell cost differs
+            // by a factor of seven. One knob could not do that honestly.
             //
-            // It was 400_000_000 until a 898-byte .ods was measured at
-            // 4.8 GB — that default meant ~48 GB, which is not a guard rail,
-            // it is a number larger than the machine. The perf reference
-            // (a 3M-row x 8-column CSV, 24M cells) still fits with room.
+            // Materialised, a cell costs ~122 bytes: calamine's Data, then
+            // our own String, then the Arrow array. 50M of them is ~6.1 GB.
+            // (This was 400M until a 898-byte .ods was measured at 4.8 GB —
+            // 400M stood for ~48 GB, which is not a guard rail, it is a
+            // number larger than the machine.)
             max_cells: 50_000_000,
+            // Streamed, the raw strings never accumulate, and a cell costs
+            // ~18 bytes on a delimited file and ~29 on a log, most of it the
+            // decoded text and the Arrow output. 200M is ~3.7 GB of CSV or
+            // ~5.8 GB of log. Holding streamed text to the materialised
+            // number would refuse a 500 MB CSV that needs under a gigabyte.
+            max_streamed_cells: 200_000_000,
         }
     }
 }
@@ -191,6 +203,7 @@ struct FileInference {
 struct FileLimits {
     max_file_bytes: Option<u64>,
     max_cells: Option<u64>,
+    max_streamed_cells: Option<u64>,
 }
 
 /// CLI-level overrides collected by clap.
@@ -295,6 +308,9 @@ pub fn resolve(
         }
         if let Some(v) = fc.limits.max_file_bytes {
             cfg.limits.max_file_bytes = v;
+        }
+        if let Some(v) = fc.limits.max_streamed_cells {
+            cfg.limits.max_streamed_cells = v;
         }
         if let Some(v) = fc.limits.max_cells {
             cfg.limits.max_cells = v;
@@ -420,7 +436,10 @@ fn validate(cfg: &Config, where_: &str) -> Result<()> {
     if cfg.http_timeout.as_secs() == 0 || cfg.http_timeout.as_secs() > 3600 {
         anyhow::bail!("timeout_seconds must be between 1 and 3600");
     }
-    if cfg.limits.max_file_bytes == 0 || cfg.limits.max_cells == 0 {
+    if cfg.limits.max_file_bytes == 0
+        || cfg.limits.max_cells == 0
+        || cfg.limits.max_streamed_cells == 0
+    {
         anyhow::bail!("limits must be greater than zero");
     }
     if matches!(cfg.backend, Backend::Local | Backend::OpenRouter)
@@ -458,11 +477,13 @@ timeout_seconds = 120
 # Guard rails, not policy: a file past these fails with an explanation
 # instead of with the OOM killer. max_file_bytes applies to the uncompressed
 # contents of a zip-based spreadsheet, not to its size on disk.
-# A cell costs ~122 bytes on the spreadsheet path and ~46 on the delimited
-# one, so 50M cells is a ceiling of roughly 6 GB. Raise it if you have the
-# RAM and mean it.
+# Two cell limits because the two paths cost differently: materialised work
+# (spreadsheets, JSON, unusual specs) runs ~122 bytes a cell, streamed text
+# ~18-29. Both defaults stand for a ceiling of roughly 6 GB. Raise them if you
+# have the RAM and mean it.
 max_file_bytes = 4294967296   # 4 GiB
 max_cells = 50000000
+max_streamed_cells = 200000000
 "#;
 
 #[cfg(test)]
