@@ -45,7 +45,7 @@ use crate::spec::{
 /// to build an enormous automaton.
 const REGEX_SIZE_LIMIT: usize = 8 * 1024 * 1024;
 
-fn compile(pattern: &str, what: &str) -> Result<Regex> {
+pub(crate) fn compile(pattern: &str, what: &str) -> Result<Regex> {
     RegexBuilder::new(pattern)
         .size_limit(REGEX_SIZE_LIMIT)
         .dfa_size_limit(REGEX_SIZE_LIMIT)
@@ -230,7 +230,7 @@ impl RawTable {
 /// The most common row width. Ties are broken toward the *wider* row so the
 /// result does not depend on hash iteration order — the same file must parse
 /// the same way on every run.
-fn modal_width(rows: &[Vec<String>]) -> Option<usize> {
+pub(crate) fn modal_width(rows: &[Vec<String>]) -> Option<usize> {
     let mut counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
     for r in rows {
         *counts.entry(r.len()).or_insert(0) += 1;
@@ -317,7 +317,7 @@ const PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 
 /// Decode the text this extraction needs — the whole file for a real run,
 /// a bounded prefix when the caller asked for at most N rows.
-fn read_text(path: &Path, encoding: Option<&str>, opts: &ExtractOpts) -> Result<String> {
+pub(crate) fn read_text(path: &Path, encoding: Option<&str>, opts: &ExtractOpts) -> Result<String> {
     if opts.max_rows.is_none() {
         let bytes = fileio::read_all(path, opts.limits.max_file_bytes)?;
         let (text, used, had_errors) = crate::sample::decode_owned(bytes, encoding);
@@ -710,6 +710,53 @@ fn json_kind(v: &serde_json::Value) -> &'static str {
 // Transforms
 // ---------------------------------------------------------------------------
 
+/// Turn the first `n` rows of a table into one header, as `promote_header`
+/// means it.
+///
+/// Factored out so the streaming executor in `stream` builds headers with
+/// *this* code rather than a copy of it: a header that differed between the
+/// two paths would rename columns, which is the quietest way to return the
+/// wrong data.
+pub(crate) fn promote_header_from(header_rows: Vec<Vec<String>>, join: &str) -> Vec<String> {
+    let width = header_rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let last = header_rows.len().saturating_sub(1);
+    let filled: Vec<Vec<String>> = header_rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut r)| {
+            r.resize(width, String::new());
+            // Fill-right only on rows above the last one: those carry
+            // horizontally merged titles. A blank in the final header row is a
+            // nameless column, and giving it its left neighbour's name would
+            // label one column with another column's meaning.
+            if i < last {
+                let mut carry = String::new();
+                for cell in &mut r {
+                    if cell.trim().is_empty() {
+                        cell.clone_from(&carry);
+                    } else {
+                        carry.clone_from(cell);
+                    }
+                }
+            }
+            r
+        })
+        .collect();
+    let mut header: Vec<String> = (0..width)
+        .map(|c| {
+            let parts: Vec<&str> =
+                filled.iter().map(|r| r[c].trim()).filter(|s| !s.is_empty()).collect();
+            if parts.is_empty() {
+                format!("col_{}", c + 1)
+            } else {
+                parts.join(join)
+            }
+        })
+        .collect();
+    dedupe_names(&mut header);
+    header
+}
+
 pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Result<()> {
     for t in transforms {
         match t {
@@ -738,47 +785,7 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     );
                 }
                 let header_rows: Vec<Vec<String>> = table.rows.drain(..n).collect();
-                let width = header_rows.iter().map(|r| r.len()).max().unwrap_or(0);
-                let last = header_rows.len().saturating_sub(1);
-                let filled: Vec<Vec<String>> = header_rows
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, mut r)| {
-                        r.resize(width, String::new());
-                        // Fill-right only on rows above the last one: those
-                        // carry horizontally merged titles. A blank in the
-                        // final header row is a nameless column, and giving it
-                        // its left neighbour's name would label one column
-                        // with another column's meaning.
-                        if i < last {
-                            let mut carry = String::new();
-                            for cell in &mut r {
-                                if cell.trim().is_empty() {
-                                    cell.clone_from(&carry);
-                                } else {
-                                    carry.clone_from(cell);
-                                }
-                            }
-                        }
-                        r
-                    })
-                    .collect();
-                let mut header: Vec<String> = (0..width)
-                    .map(|c| {
-                        let parts: Vec<&str> = filled
-                            .iter()
-                            .map(|r| r[c].trim())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                        if parts.is_empty() {
-                            format!("col_{}", c + 1)
-                        } else {
-                            parts.join(join)
-                        }
-                    })
-                    .collect();
-                dedupe_names(&mut header);
-                table.header = Some(header);
+                table.header = Some(promote_header_from(header_rows, join));
             }
             Transform::DropRowsMatching { pattern, column } => {
                 let re = compile(pattern, "drop_rows_matching")?;
@@ -866,7 +873,7 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
 
 /// Make every name unique, without inventing a name that is already taken:
 /// `["a", "a", "a_2"]` must not become `["a", "a_2", "a_2"]`.
-fn dedupe_names(names: &mut [String]) {
+pub(crate) fn dedupe_names(names: &mut [String]) {
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     for n in names.iter_mut() {
         if taken.insert(n.clone()) {
@@ -951,7 +958,7 @@ pub fn to_record_batches(spec: &ParseSpec, table: &mut RawTable) -> Result<Vec<R
 /// `row_offset` is the index of `values[0]` within the whole table, so that a
 /// parse error names the row a person would find in their file rather than
 /// its position inside an internal 64k batch.
-fn build_column_at(
+pub(crate) fn build_column_at(
     col: &ColumnSpec,
     values: &[&str],
     row_offset: usize,

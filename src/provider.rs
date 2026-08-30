@@ -32,6 +32,7 @@ use crate::sidecar::{self, ProvenanceInfo, SidecarStatus};
 use crate::sniff;
 use crate::spec::{InferenceMethod, ParseSpec};
 use crate::sqlscan;
+use crate::stream;
 
 // ---------------------------------------------------------------------------
 // The messy() table function
@@ -76,9 +77,19 @@ impl TableFunctionImpl for MessyFunc {
 
         let spec = resolve_spec_sync(&path, self.frozen, self.limits)
             .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?;
-        let batches = engine::execute_batches(&spec, &path, self.limits)
-            .with_context(|| format!("executing parse spec for {}", path.display()))
-            .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?;
+        // Prefer the streaming executor where it applies: it produces the
+        // same batches (tests/streaming.rs is that equality) without ever
+        // materialising the file as a Vec<Vec<String>>, which is what makes
+        // peak memory a multiple of the source rather than of the result.
+        // Anything it declines falls back, so a spec is never refused for
+        // being an unusual shape.
+        let batches = if stream::enabled() && stream::can_stream(&spec) {
+            stream::execute_batches(&spec, &path, self.limits)
+        } else {
+            engine::execute_batches(&spec, &path, self.limits)
+        }
+        .with_context(|| format!("executing parse spec for {}", path.display()))
+        .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?;
         let schema = batches[0].schema();
         let table = Arc::new(MemTable::try_new(schema, partition(batches))?);
         if let Ok(mut c) = self.cache.lock() {

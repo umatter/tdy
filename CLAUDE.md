@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 240 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 250 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -112,6 +112,19 @@ Things that only become clear from reading several modules:
   Bump `PROMPT_VERSION` when changing the prompt — it is recorded in sidecar provenance.
 - **Bounded I/O lives in `fileio`**: head/tail sampling by seek, streaming blake3, atomic
   sidecar writes (temp + rename).
+- **`stream` is the delimited executor; `engine` is the fallback and the reference.** It is
+  plumbing only — where an answer could differ (`promote_header_from`, `build_column_at`) it
+  calls the same function `engine` calls, deliberately, so the two cannot drift. It accepts
+  only `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down)* [unpivot]?`;
+  `can_stream` returns false for anything else and the caller falls back, so an unusual spec
+  is never *refused*, only executed the old way. Two passes are unavoidable: `promote_header`
+  rectangularises first, so the header's width — hence the column names — depends on the
+  widest row in the file, which one pass cannot know before it must name columns. Pass one
+  uses `ByteRecord` and allocates nothing. Row-local ops run in **spec order** (`RowOp`), not
+  a fixed one: fill-then-drop propagates a subtotal label into the rows beneath it and drop-
+  then-fill does not, and `tests/streaming.rs` pins that both paths fall into it identically.
+  Measured on 140 MB / 3M rows: 1,676 MB -> 418 MB peak, and slightly faster.
+  `TDY_NO_STREAM=1` forces `engine`.
 - **`xlguard` bounds a spreadsheet before it is read.** Every other limit is checked against a
   table that already exists — fine for text, useless for a format whose size is a *claim*: a
   899-byte `.ods` was measured at 4.8 GB and SIGABRT, which is the one failure mode the design
@@ -133,9 +146,13 @@ Measured on a 141 MB / 3M-row CSV (release build), before → after the hardenin
 
 | | before | after |
 |---|---|---|
-| `sniff` (needs a 16 KB sample) | 6.04 s, 1.20 GB RSS | **0.24 s, 24 MB** |
-| `count(*)` over the whole file | 6.79 s, 1.40 GB | **4.84 s, 1.10 GB** |
+| `sniff` (needs a 16 KB sample) | 6.04 s, 1.20 GB RSS | **0.13 s, 24 MB** |
+| `count(*)` over the whole file | 6.79 s, 1.40 GB | **2.92 s, 418 MB** |
 | same file referenced twice | 2 full parses | 1 (cached per path) |
+
+The `count(*)` figure is the streaming executor; `TDY_NO_STREAM=1` on the same file is
+3.13 s / 1,676 MB, which is what the materialising path still costs for the formats that
+cannot stream.
 
 Peak RSS is roughly 8× the size of a delimited file; `[limits]` caps it rather than letting
 it OOM. If you change extraction, re-measure with `/usr/bin/time -f "wall %es peak_rss %MkB"`.
@@ -152,6 +169,10 @@ it OOM. If you change extraction, re-measure with `/usr/bin/time -f "wall %es pe
 - `tests/fixtures.rs` — exact values read from the committed hard fixtures (sums, encodings,
   row counts, dtypes). `adversarial.rs` proves nothing crashes; this proves the answers are
   right, which a parser returning nothing would also satisfy
+- `tests/streaming.rs` — the specification of `stream`: not a list of cases but *equality*
+  with `engine` over every delimited fixture, plus the batch-boundary cases a chunked
+  pipeline gets wrong (a `fill_down` carry crossing 65,536 rows, a `skip_rows` tail the
+  reader has not reached yet, `unpivot` making output rows outnumber input ones)
 - `tests/adversarial.rs` — sweeps every fixture in `testdata/`: never panic, never hang, and
   anything sniffable must be queryable and reproducible under `--frozen`. It picks up new
   fixtures automatically. Note it runs the binary with output to *files*, not pipes: a

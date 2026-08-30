@@ -25,5 +25,6 @@ pub mod sample;
 pub mod sidecar;
 pub mod sniff;
 pub mod spec;
+pub mod stream;
 pub mod sqlscan;
 pub mod xlguard;

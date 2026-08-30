@@ -237,13 +237,27 @@ Details worth knowing:
 - **Bounded work**: sampling reads the head and tail of a file, not the file;
   previews and dry runs cap the extraction itself; output is produced in
   64k-row batches spread across partitions so queries use more than one core.
+- **Delimited files stream.** The obvious way to run a spec — read the file
+  into `Vec<Vec<String>>`, transform it, then type it — costs about eight
+  bytes of memory per byte of source, because a five-character field carries a
+  24-byte `String` header and its own allocation. So delimited files instead
+  go row by row into 64k-row Arrow batches and that intermediate never exists:
+  on a 140 MB / 3M-row CSV, peak RSS drops from **1,676 MB to 418 MB** and the
+  query gets slightly *faster*, since not allocating 24 million strings more
+  than pays for the extra counting pass. The streaming path handles the
+  transform shape sniffed specs take; anything else falls back to the
+  materialising one, so no spec is refused for being unusual. The two are held
+  to producing identical batches over every delimited fixture in the tree, and
+  `TDY_NO_STREAM=1` forces the old path if you ever need to check that claim
+  on a file of your own.
 
 ### Limits
 
 `[limits]` in the config caps what a single run will attempt, so a
 pathological file fails with a sentence instead of the OOM killer:
-`max_file_bytes` (default 4 GiB) and `max_cells` (default 50M). Parsing is
-in-memory: expect peak RSS of roughly 8× the size of a delimited file.
+`max_file_bytes` (default 4 GiB) and `max_cells` (default 50M). Delimited
+files stream (see Design notes) so expect peak RSS of roughly 3× the source;
+spreadsheets are materialised by their readers and cost more.
 
 For spreadsheets the limits are checked against what the file **declares**,
 before its grid is allocated. They have to be: a spreadsheet's size is a
@@ -273,7 +287,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 240 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 250 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 
