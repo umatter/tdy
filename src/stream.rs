@@ -60,6 +60,15 @@ use crate::config::Limits;
 use crate::engine::{
     build_column_at, compile, dedupe_names, promote_header_from, ExtractOpts, BATCH_ROWS,
 };
+
+/// Cells per output batch, the bound that actually keeps a batch small.
+///
+/// `BATCH_ROWS` alone does not: a row is as wide as the file, so 65,536 rows
+/// of a 1,000-column file is 65 million strings. At roughly 40 bytes a cell
+/// this is about 40 MB of raw text in flight, and for any file up to 16
+/// columns it works out wider than `BATCH_ROWS`, so the usual case keeps
+/// exactly the batches it had.
+const BATCH_CELLS: usize = 1 << 20;
 use crate::spec::{
     ColumnSpec, Extraction, FixedField, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform,
 };
@@ -700,7 +709,13 @@ pub fn execute_with(
     // --- the body ----------------------------------------------------------
     let mut schema: Option<Arc<Schema>> = None;
     let mut batches_emitted = 0usize;
-    let mut chunk: Vec<Vec<String>> = Vec::with_capacity(BATCH_ROWS.min(1024));
+    // A batch is bounded by *cells*, not rows. 65,536 rows of a 1,000-column
+    // file is 65 million strings — a 134 MB file measured at 4.2 GB before
+    // this, because width was the one dimension nothing bounded. For anything
+    // up to 16 columns this is still exactly BATCH_ROWS, so the common case is
+    // unchanged.
+    let batch_rows = (BATCH_CELLS / target_width.max(1)).clamp(1, BATCH_ROWS);
+    let mut chunk: Vec<Vec<String>> = Vec::with_capacity(batch_rows.min(1024));
     let mut emitted = 0usize;
 
     // A source that needed no measuring pass has not been counted yet, so the
@@ -727,8 +742,8 @@ pub fn execute_with(
         }
         fit(&mut r, target_width);
         plan.push(r, &mut chunk);
-        while chunk.len() >= BATCH_ROWS {
-            let rest = chunk.split_off(BATCH_ROWS);
+        while chunk.len() >= batch_rows {
+            let rest = chunk.split_off(batch_rows);
             flush(&plan, &chunk, emitted, &mut schema, &mut batches_emitted, &mut sink)?;
             emitted += chunk.len();
             chunk = rest;

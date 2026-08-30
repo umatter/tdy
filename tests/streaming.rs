@@ -685,3 +685,52 @@ fn a_limit_stops_the_producer_without_an_error() {
     assert!(text.contains("r0"), "no rows came back:\n{text}");
     assert!(!text.contains("r100"), "LIMIT was not applied:\n{text}");
 }
+
+/// A batch is bounded by cells, not rows, because a row is as wide as the
+/// file. 65,536 rows of a 1,000-column file is 65 million strings — a 134 MB
+/// fixture measured at 4.2 GB before this was fixed, since width was the one
+/// dimension nothing bounded.
+///
+/// Memory cannot be asserted from inside a test, so what is pinned here is
+/// the mechanism: a wide file must come back in many small batches rather
+/// than a few enormous ones, and must still say exactly what a narrow file
+/// says.
+#[test]
+fn a_wide_file_is_cut_into_batches_by_cells_not_rows() {
+    let dir = TempDir::new().unwrap();
+    const COLS: usize = 512;
+    const ROWS: usize = 9_000;
+    let mut body = (0..COLS).map(|i| format!("c{i}")).collect::<Vec<_>>().join(",");
+    body.push('\n');
+    let row = vec!["7"; COLS].join(",");
+    for _ in 0..ROWS {
+        body.push_str(&row);
+        body.push('\n');
+    }
+    let p = write(&dir, "wide.csv", &body);
+
+    let s = spec(
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("c0", DType::Int64), col("c511", DType::Int64)],
+    );
+    let batches = stream::execute_batches(&s, &p, Limits::default()).unwrap();
+
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, ROWS, "rows were lost or duplicated");
+
+    // 9,000 rows is well under BATCH_ROWS, so a row-bounded implementation
+    // would return exactly one batch holding 4.6M cells.
+    assert!(
+        batches.len() > 1,
+        "a {COLS}-column file came back in one batch — the bound is still on rows"
+    );
+    let widest = batches.iter().map(|b| b.num_rows()).max().unwrap_or(0);
+    assert!(
+        widest * COLS <= 1 << 21,
+        "a batch held {} cells, far past the cell bound",
+        widest * COLS
+    );
+
+    // And the values are still right.
+    assert_paths_agree(&s, &p, "a wide file");
+}

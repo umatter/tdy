@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 257 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 258 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -158,9 +158,14 @@ Things that only become clear from reading several modules:
   sequence, never both at once** — holding both kept two decoded copies alive and took a
   987 MB CSV to 2 GB.
 
-  Measured `count(*)`: 140 MB / 3M-row CSV 1,676 -> **87 MB**; 190 MB / 2M-line nginx log
-  1,376 -> **97 MB**; 987 MB / 21M-row CSV refused -> **86 MB**. Memory does not track file
-  size at all any more.
+  Batches are bounded by `BATCH_CELLS`, not `BATCH_ROWS` — a row is as wide as the file, so
+  65,536 rows of a 1,000-column file is 65 million strings, and a 134 MB fixture measured at
+  4.2 GB until this was fixed. Width was the one dimension nothing bounded. Up to 16 columns
+  the two work out the same, so the common case kept exactly the batches it had.
+
+  Measured `count(*)`: 140 MB / 3M-row CSV 1,676 -> **86 MB**; 190 MB / 2M-line nginx log
+  1,376 -> **98 MB**; 987 MB / 21M-row CSV refused -> **88 MB**; 134 MB / 1,000-column CSV
+  4,156 -> **114 MB**. Memory does not track file size or width any more.
 - **`xlguard` bounds a spreadsheet before it is read.** Every other limit is checked against a
   table that already exists — fine for text, useless for a format whose size is a *claim*: a
   899-byte `.ods` was measured at 4.8 GB and SIGABRT, which is the one failure mode the design

@@ -249,13 +249,16 @@ Details worth knowing:
 
   | `count(*)` over | materialising | streaming |
   |---|---|---|
-  | 140 MB CSV, 3M rows | 3.11 s, 1,676 MB | **2.96 s, 87 MB** |
-  | 190 MB nginx log, 2M lines | 3.27 s, 1,376 MB | **2.83 s, 97 MB** |
-  | 987 MB CSV, 21M rows | refused: over `max_cells` | **20.6 s, 86 MB** |
+  | 140 MB CSV, 3M rows | 3.11 s, 1,676 MB | **2.93 s, 86 MB** |
+  | 190 MB nginx log, 2M lines | 3.27 s, 1,376 MB | **2.76 s, 98 MB** |
+  | 987 MB CSV, 21M rows | refused: over `max_cells` | **20.9 s, 88 MB** |
+  | 134 MB CSV, 1,000 columns | refused | **6.4 s, 114 MB** |
 
-  Memory does not move with the file: a 987 MB CSV is read in 86 MB, the same
-  as a 140 MB one. Nothing proportional to the source is ever held — not the
-  rows, not even the decoded text.
+  Memory does not move with the file, in either dimension: a 987 MB CSV is
+  read in 88 MB, the same as a 140 MB one, and a thousand-column file in 114
+  MB. Nothing proportional to the source is ever held — not the rows, not the
+  decoded text, and a batch is bounded by cells rather than rows, since a row
+  is as wide as the file.
 
   Faster as well as smaller: not allocating tens of millions of strings more
   than pays for the extra passes. (A log needs no counting pass at all — its
@@ -327,7 +330,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 257 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 258 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 
