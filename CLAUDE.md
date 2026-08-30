@@ -34,6 +34,20 @@ load `libLLVM.so...` — a toolchain install issue, not code); `--lib --tests` a
 Rust ≥ 1.88 (DataFusion 46), a floor set by reqwest → url → icu_*, checked in CI. `[profile.dev] debug = false` is deliberate (slow builds) —
 flip it locally when you need a debugger, don't commit it.
 
+## Where this is going
+
+`docs/design/2026-08-30-target-schema.md` is the agreed direction: you declare the dataset you
+want in SQL DDL, point tdy at a pile of messy heterogeneous files, and it plans each file onto
+that target by composing operators that already exist — proving `engine::schema_of(spec)`
+equals the declared Arrow schema *before* reading a byte. It inverts today's inference
+(file -> spec becomes target+file -> spec) and it makes the safety property stronger, because
+a declared shape is mechanically provable in a way "did the head parse?" never was. Read it
+before adding anything to `spec.rs`, `sniff.rs` or `provider.rs` — several of its slices land
+there, and its section 3 records which review recommendations were overruled and why.
+`*-review.md` beside it is the long-form design review it came from.
+
+Nothing in it is implemented yet.
+
 ## The one rule
 
 **tdy never silently produces a wrong value.** Ambiguity resolves to the right answer or a
