@@ -51,12 +51,32 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datafusion::arrow::datatypes::{DataType as ArrowType, Field, Schema, TimeUnit};
 use datafusion::sql::sqlparser::ast::{
-    ColumnOption, DataType as SqlType, ExactNumberInfo, Expr, SqlOption, Statement, Value,
+    ColumnOption, DataType as SqlType, ExactNumberInfo, Expr, Ident, SqlOption, Statement, Value,
 };
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 
 use crate::spec::parse_fixed_offset;
+
+/// An identifier's name, folded the way SQL folds it.
+///
+/// Unquoted identifiers are case-insensitive in SQL and DataFusion lowercases
+/// them when planning, and tdy's own output columns are lowercased by
+/// `sniff::sanitize`. So a target written the natural way —
+/// `CREATE TABLE sales (Betrag DECIMAL(14,2))`, copying the spelling off the
+/// spreadsheet — has to fold too, or it could never match a column tdy
+/// produces. A quoted `"Betrag"` keeps its case, which is exactly what quoting
+/// means everywhere else in SQL.
+fn ident_name(i: &Ident) -> String {
+    match i.quote_style {
+        Some(_) => i.value.clone(),
+        None => i.value.to_lowercase(),
+    }
+}
+
+fn first_line(s: &str) -> String {
+    s.lines().next().unwrap_or("").chars().take(80).collect()
+}
 
 /// One declared output column.
 #[derive(Debug, Clone, PartialEq)]
@@ -112,6 +132,13 @@ pub struct Target {
     pub match_mode: MatchMode,
     pub date_order: Option<DateOrder>,
     pub verify: Verify,
+    /// The fixed offset every `TIMESTAMP WITH TIME ZONE` column carries.
+    ///
+    /// The offset is part of the Arrow type, so a target has to be able to say
+    /// it — otherwise a spec that declares one could never conform to anything
+    /// a target is able to express. SQL has no per-column syntax for a
+    /// specific offset, so it is declared once for the dataset.
+    pub timezone: Option<String>,
 }
 
 impl Target {
@@ -126,26 +153,64 @@ impl Target {
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context("the target is not valid SQL")?;
 
-        let mut creates = statements.into_iter().filter_map(|s| match s {
-            Statement::CreateTable(c) => Some(c),
-            _ => None,
-        });
-        let create = creates
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("no CREATE TABLE statement found in the target"))?;
-        if creates.next().is_some() {
+        // Exactly one statement, and it must be the declaration. Anything else
+        // — a second CREATE TABLE, an ALTER, a DROP, a stray SELECT — is
+        // refused rather than skipped. A target file whose second half was
+        // silently ignored is the quietest possible way to query something
+        // other than what the file appears to say.
+        if statements.len() != 1 {
             anyhow::bail!(
-                "a target declares exactly one dataset, but this file has more than one \
-                 CREATE TABLE. Split them into one file each."
+                "a target is exactly one CREATE TABLE statement, but this file has {}. \
+                 tdy does not execute SQL from a target — it only reads the declaration — \
+                 so anything else here would be silently ignored.",
+                statements.len()
+            );
+        }
+        let create = match statements.into_iter().next() {
+            Some(Statement::CreateTable(c)) => c,
+            Some(other) => anyhow::bail!(
+                "a target must be a CREATE TABLE statement; this file starts with:\n  {}",
+                first_line(&other.to_string())
+            ),
+            None => anyhow::bail!("the target file is empty"),
+        };
+
+        // A CTAS or a LIKE/CLONE has no column list of its own to check
+        // against, and executing the query is not something a target does.
+        if create.query.is_some() {
+            anyhow::bail!(
+                "a target declares columns, it does not compute them: \
+                 `CREATE TABLE … AS SELECT` is not a target. Write the column list out."
+            );
+        }
+        if create.like.is_some() || create.clone.is_some() {
+            anyhow::bail!(
+                "`CREATE TABLE … LIKE`/`CLONE` copies a shape tdy cannot see. \
+                 Write the column list out."
+            );
+        }
+        // Table-level constraints land here rather than on a column, and were
+        // being dropped in silence while the identical column-level clause was
+        // refused. Both are promises tdy will not keep, so both are refused.
+        if let Some(c) = create.constraints.first() {
+            anyhow::bail!(
+                "unsupported table constraint `{c}`. A target declares names, types and \
+                 nullability; PRIMARY KEY, UNIQUE, CHECK and FOREIGN KEY are not enforced \
+                 and would be a promise tdy cannot keep."
             );
         }
 
-        let name = create.name.0.last().map(|i| i.value.clone()).unwrap_or_default();
+        let name = create
+            .name
+            .0
+            .last()
+            .map(ident_name)
+            .unwrap_or_default();
 
         let mut columns = Vec::with_capacity(create.columns.len());
         let mut errs: Vec<String> = Vec::new();
         for c in &create.columns {
-            let cname = c.name.value.clone();
+            let cname = ident_name(&c.name);
             // SQL's default is nullable; NOT NULL and an explicit NULL both
             // say so outright.
             let mut nullable = true;
@@ -175,11 +240,56 @@ impl Target {
             match_mode: MatchMode::default(),
             date_order: None,
             verify: Verify::default(),
+            timezone: None,
         };
+        // A target is hand-written and merge-conflict-prone. Two settings of
+        // one option is a contradiction, and last-one-wins would resolve it
+        // silently — the same reason `spec::validate` refuses duplicate column
+        // names. `files` and `exclude` are lists and accumulate by design.
+        let mut seen_opts: Vec<String> = Vec::new();
         for opt in &create.with_options {
+            if let SqlOption::KeyValue { key, .. } = opt {
+                let k = key.value.to_ascii_lowercase();
+                if !matches!(k.as_str(), "files" | "exclude") {
+                    if seen_opts.contains(&k) {
+                        errs.push(format!(
+                            "WITH option `{k}` is set more than once; remove one. \
+                             (`files` and `exclude` may repeat — they are lists.)"
+                        ));
+                        continue;
+                    }
+                    seen_opts.push(k);
+                }
+            }
             if let Err(e) = t.apply_option(opt) {
                 errs.push(e);
             }
+        }
+
+        // Resolve the placeholder left by `TIMESTAMP WITH TIME ZONE`, now that
+        // the whole option list has been read.
+        let zoned = t
+            .columns
+            .iter()
+            .any(|c| matches!(&c.dtype, ArrowType::Timestamp(_, Some(z)) if z.as_ref() == TZ_PLACEHOLDER));
+        match (&t.timezone, zoned) {
+            (Some(tz), _) => {
+                let tz = tz.clone();
+                for c in &mut t.columns {
+                    if let ArrowType::Timestamp(u, Some(z)) = &c.dtype {
+                        if z.as_ref() == TZ_PLACEHOLDER {
+                            c.dtype = ArrowType::Timestamp(*u, Some(tz.clone().into()));
+                        }
+                    }
+                }
+            }
+            (None, true) => errs.push(
+                "a TIMESTAMP WITH TIME ZONE column needs the offset it is in: add \
+                 `WITH (timezone = '+02:00')`. The offset is part of the type, so a target \
+                 that leaves it out is not saying which instant a value means."
+                    .to_string(),
+            ),
+            (None, false) => {}
         }
 
         if !errs.is_empty() {
@@ -228,6 +338,16 @@ impl Target {
                     other => return Err(format!("unknown date_order {other:?}; use 'dmy', 'mdy' or 'ymd'")),
                 })
             }
+            "timezone" => {
+                if parse_fixed_offset(&text).is_none() {
+                    return Err(format!(
+                        "timezone {text:?} is not a fixed offset. Use \"UTC\", \"+02:00\" or \
+                         \"-0500\"; named zones are not resolved because daylight saving \
+                         cannot be guessed from the value alone."
+                    ));
+                }
+                self.timezone = Some(text);
+            }
             "verify" => {
                 self.verify = match text.to_ascii_lowercase().as_str() {
                     "full" => Verify::Full,
@@ -238,7 +358,7 @@ impl Target {
             other => {
                 return Err(format!(
                     "unknown WITH option `{other}`. Known options: files, exclude, match, \
-                     date_order, verify."
+                     date_order, verify, timezone."
                 ))
             }
         }
@@ -302,7 +422,12 @@ impl Target {
                 }
             }
             if let ArrowType::Timestamp(_, Some(tz)) = &c.dtype {
-                if parse_fixed_offset(tz).is_none() {
+                if tz.as_ref() == TZ_PLACEHOLDER {
+                    errs.push(format!(
+                        "column `{}`: TIMESTAMP WITH TIME ZONE needs `WITH (timezone = …)`",
+                        c.name
+                    ));
+                } else if parse_fixed_offset(tz).is_none() {
                     errs.push(format!(
                         "column `{}`: timezone {tz:?} is not a fixed offset. Use \"UTC\", \
                          \"+02:00\" or \"-0500\"; named zones are not resolved because \
@@ -396,16 +521,49 @@ fn literal_string(e: &Expr) -> Option<String> {
 /// later as a conformance mismatch nobody can fix.
 fn arrow_type_of(t: &SqlType) -> std::result::Result<ArrowType, String> {
     Ok(match t {
-        SqlType::Text | SqlType::String(_) | SqlType::Varchar(_) | SqlType::Char(_)
-        | SqlType::CharVarying(_) | SqlType::Nvarchar(_) | SqlType::Clob(_) => ArrowType::Utf8,
+        // Unqualified string types: no promise beyond "text".
+        SqlType::Text | SqlType::String(None) | SqlType::Varchar(None)
+        | SqlType::Nvarchar(None) | SqlType::Clob(None) => ArrowType::Utf8,
+
+        // A declared length is a constraint tdy does not enforce. Accepting it
+        // would put a promise in the contract that nothing checks — the same
+        // reason there is no `unit` keyword.
+        SqlType::String(Some(_)) | SqlType::Varchar(Some(_)) | SqlType::Char(Some(_))
+        | SqlType::CharVarying(Some(_)) | SqlType::Nvarchar(Some(_)) | SqlType::Clob(Some(_)) => {
+            return Err(
+                "a declared length is not enforced — tdy has one string type. Use TEXT."
+                    .to_string(),
+            )
+        }
+        SqlType::Char(None) | SqlType::CharVarying(None) => ArrowType::Utf8,
 
         SqlType::Boolean | SqlType::Bool => ArrowType::Boolean,
 
-        SqlType::BigInt(_) | SqlType::Int64 | SqlType::Int(_) | SqlType::Integer(_)
-        | SqlType::SmallInt(_) | SqlType::TinyInt(_) => ArrowType::Int64,
+        SqlType::BigInt(None) | SqlType::Int64 => ArrowType::Int64,
 
-        SqlType::Double(_) | SqlType::DoublePrecision | SqlType::Float64 | SqlType::Float(_)
-        | SqlType::Real => ArrowType::Float64,
+        // Narrower integers are a range tdy would not enforce: a value of
+        // 3_000_000_000 fits the Int64 it would really produce and violates
+        // the INT that was declared. Silently widening is the failure this
+        // module refuses everywhere else.
+        SqlType::Int(_) | SqlType::Integer(_) | SqlType::SmallInt(_) | SqlType::TinyInt(_)
+        | SqlType::MediumInt(_) | SqlType::BigInt(Some(_)) => {
+            return Err(
+                "tdy has one integer type, 64-bit, and would not enforce a narrower range. \
+                 Use BIGINT."
+                    .to_string(),
+            )
+        }
+
+        SqlType::Double(ExactNumberInfo::None) | SqlType::DoublePrecision | SqlType::Float64 => {
+            ArrowType::Float64
+        }
+        SqlType::Real | SqlType::Float(_) | SqlType::Double(_) => {
+            return Err(
+                "tdy has one floating type, 64-bit. Use DOUBLE — or DECIMAL(p,s) if the \
+                 values are money, which is usually the right answer."
+                    .to_string(),
+            )
+        }
 
         SqlType::Decimal(info) | SqlType::Numeric(info) | SqlType::Dec(info) => {
             let (p, s) = match info {
@@ -437,37 +595,64 @@ fn arrow_type_of(t: &SqlType) -> std::result::Result<ArrowType, String> {
 
         SqlType::Date => ArrowType::Date32,
 
-        SqlType::Timestamp(_, tz) => {
+        SqlType::Timestamp(precision, tz) => {
             use datafusion::sql::sqlparser::ast::TimezoneInfo;
-            let zone = match tz {
-                TimezoneInfo::None | TimezoneInfo::WithoutTimeZone => None,
-                // `WITH TIME ZONE` says the values carry an offset but not
-                // which one. tdy needs the offset itself to convert to UTC, so
-                // this has to be spelled out rather than implied.
-                TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
-                    return Err(
-                        "TIMESTAMP WITH TIME ZONE does not say which offset. Declare it in \
-                         the sidecar's `timezone` instead, or use TIMESTAMP for local \
-                         wall-clock values."
-                            .to_string(),
-                    )
+            // tdy stores microseconds. A declared precision that is not 6
+            // would be a promise about resolution that nothing enforces.
+            if let Some(p) = precision {
+                if *p != 6 {
+                    return Err(format!(
+                        "TIMESTAMP({p}) is not enforced — tdy stores microseconds. \
+                         Use TIMESTAMP, or TIMESTAMP(6)."
+                    ));
                 }
-            };
-            ArrowType::Timestamp(TimeUnit::Microsecond, zone)
+            }
+            match tz {
+                TimezoneInfo::None | TimezoneInfo::WithoutTimeZone => {
+                    ArrowType::Timestamp(TimeUnit::Microsecond, None)
+                }
+                // `WITH TIME ZONE` says the values carry an offset but not
+                // which one, and the offset is part of the Arrow type. The
+                // dataset-level `timezone` option supplies it; without that,
+                // refusing here is the only honest answer, since a spec that
+                // declares an offset could otherwise never conform to
+                // anything a target is able to say.
+                TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
+                    ArrowType::Timestamp(TimeUnit::Microsecond, Some(TZ_PLACEHOLDER.into()))
+                }
+            }
         }
 
         other => {
             return Err(format!(
                 "unsupported type {other}. A target may declare: TEXT, BOOLEAN, BIGINT, \
-                 DOUBLE, DECIMAL(p,s), DATE, TIMESTAMP."
+                 DOUBLE, DECIMAL(p,s), DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE."
             ))
         }
     })
 }
 
+/// Stands in for an offset between parsing a column's type and reading the
+/// dataset-level `timezone` option, which may appear after the column list.
+/// Never survives `Target::parse`: `validate()` refuses it.
+const TZ_PLACEHOLDER: &str = "\u{0}pending";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Result::expect_err` without requiring Target: Debug in the message.
+    trait ExpectErrMsg {
+        fn expect_err_msg(self, msg: &str) -> anyhow::Error;
+    }
+    impl ExpectErrMsg for Result<Target> {
+        fn expect_err_msg(self, msg: &str) -> anyhow::Error {
+            match self {
+                Ok(_) => panic!("{msg}"),
+                Err(e) => e,
+            }
+        }
+    }
 
     fn t(sql: &str) -> Target {
         Target::parse(sql).unwrap_or_else(|e| panic!("{e:#}"))
@@ -549,11 +734,59 @@ mod tests {
         );
     }
 
+    /// The offset is part of the Arrow type, so a target has to be able to
+    /// say it — otherwise a spec that declares one could never conform to
+    /// anything a target can express, and the refusal would point at a dead
+    /// end.
     #[test]
-    fn timestamp_with_time_zone_is_refused_for_not_saying_which() {
-        let e = Target::parse("CREATE TABLE s (a TIMESTAMP WITH TIME ZONE) WITH (files='x')")
-            .unwrap_err();
-        assert!(format!("{e:#}").contains("does not say which offset"));
+    fn a_zoned_timestamp_needs_and_accepts_a_declared_offset() {
+        let e = Target::parse("CREATE TABLE s (a TIMESTAMPTZ) WITH (files='x')").unwrap_err();
+        assert!(format!("{e:#}").contains("timezone = "), "{e:#}");
+
+        let g = t("CREATE TABLE s (a TIMESTAMPTZ) WITH (files='x', timezone='+02:00')");
+        assert_eq!(
+            g.columns[0].dtype,
+            ArrowType::Timestamp(TimeUnit::Microsecond, Some("+02:00".into()))
+        );
+        // …and a named zone is refused here exactly as in a sidecar.
+        let e = Target::parse(
+            "CREATE TABLE s (a TIMESTAMPTZ) WITH (files='x', timezone='Europe/Zurich')",
+        )
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("daylight saving"), "{e:#}");
+    }
+
+    /// A declared precision tdy does not honour is a promise in the contract
+    /// that nothing checks.
+    #[test]
+    fn a_timestamp_precision_other_than_microseconds_is_refused() {
+        assert!(Target::parse("CREATE TABLE s (a TIMESTAMP(3)) WITH (files='x')").is_err());
+        assert!(Target::parse("CREATE TABLE s (a TIMESTAMP(6)) WITH (files='x')").is_ok());
+    }
+
+    /// Silently widening a declared type is the same failure as silently
+    /// widening a value: the contract says one thing and tdy does another.
+    #[test]
+    fn types_tdy_would_not_enforce_are_refused_with_the_spelling_that_works() {
+        for (bad, needle) in [
+            ("SMALLINT", "BIGINT"),
+            ("INT", "BIGINT"),
+            ("INTEGER", "BIGINT"),
+            ("REAL", "DOUBLE"),
+            ("FLOAT(24)", "DOUBLE"),
+            ("VARCHAR(50)", "TEXT"),
+            ("CHAR(3)", "TEXT"),
+        ] {
+            let sql = format!("CREATE TABLE s (a {bad}) WITH (files='x')");
+            let e = Target::parse(&sql)
+                .expect_err_msg(&format!("{bad} was silently accepted"));
+            assert!(format!("{e:#}").contains(needle), "{bad}: {e:#}");
+        }
+        // The unqualified spellings are fine — they promise nothing extra.
+        for good in ["TEXT", "VARCHAR", "BIGINT", "DOUBLE", "DOUBLE PRECISION"] {
+            let sql = format!("CREATE TABLE s (a {good}) WITH (files='x')");
+            assert!(Target::parse(&sql).is_ok(), "{good} was refused");
+        }
     }
 
     #[test]
@@ -613,15 +846,81 @@ mod tests {
         assert!(format!("{e:#}").contains("dmy"));
     }
 
-    /// A file that declared two datasets and had only its first read would be
-    /// the quietest possible way to query the wrong data.
+    /// A target file whose second half was silently ignored is the quietest
+    /// possible way to query something other than what the file says. That
+    /// applies to *any* extra statement, not only a second CREATE TABLE —
+    /// tdy does not execute SQL from a target, so anything else would vanish.
     #[test]
-    fn more_than_one_create_table_is_refused() {
+    fn anything_other_than_the_one_declaration_is_refused() {
+        for extra in [
+            "CREATE TABLE b (y TEXT) WITH (files='2');",
+            "DROP TABLE other;",
+            "ALTER TABLE s ADD COLUMN b TEXT;",
+            "SELECT 1;",
+        ] {
+            let sql = format!("CREATE TABLE s (a TEXT) WITH (files='1'); {extra}");
+            let e = Target::parse(&sql)
+                .expect_err_msg(&format!("a trailing `{extra}` was silently dropped"));
+            assert!(format!("{e:#}").contains("exactly one CREATE TABLE"), "{extra}: {e:#}");
+        }
+        // A statement that is not a declaration at all.
+        let e = Target::parse("SELECT 1;").unwrap_err();
+        assert!(format!("{e:#}").contains("must be a CREATE TABLE"), "{e:#}");
+    }
+
+    /// A table-level constraint was being dropped in silence while the
+    /// identical column-level clause was refused.
+    #[test]
+    fn table_level_constraints_are_refused_like_column_level_ones() {
+        for c in [
+            "UNIQUE (a)",
+            "PRIMARY KEY (a)",
+            "CHECK (a <> '')",
+            "FOREIGN KEY (a) REFERENCES o(z)",
+        ] {
+            let sql = format!("CREATE TABLE s (a TEXT, {c}) WITH (files='x')");
+            let e = Target::parse(&sql)
+                .expect_err_msg(&format!("`{c}` was silently accepted and dropped"));
+            assert!(format!("{e:#}").contains("not enforced"), "{c}: {e:#}");
+        }
+    }
+
+    /// A CTAS body would be computed, not declared, and tdy does not execute
+    /// SQL from a target — so it must not look like it worked.
+    #[test]
+    fn a_computed_table_is_refused() {
         let e = Target::parse(
-            "CREATE TABLE a (x TEXT) WITH (files='1'); CREATE TABLE b (y TEXT) WITH (files='2');",
+            "CREATE TABLE s (a TEXT) WITH (files='x') AS SELECT 1",
+        );
+        // Depending on the dialect this may fail to parse or parse with a
+        // query; either way it must not succeed.
+        assert!(e.is_err(), "a CTAS target was accepted");
+    }
+
+    /// SQL folds unquoted identifiers, and so does tdy's own column naming.
+    /// A target written the natural way — copying the spelling off the
+    /// spreadsheet — has to fold too, or it could never match.
+    #[test]
+    fn unquoted_identifiers_fold_like_sql_and_quoted_ones_do_not() {
+        let g = t("CREATE TABLE Sales (Betrag DECIMAL(14,2), \"Betrag CHF\" TEXT) \
+                   WITH (files='x', match='exact')");
+        assert_eq!(g.name, "sales");
+        assert_eq!(g.columns[0].name, "betrag", "an unquoted identifier kept its case");
+        assert_eq!(g.columns[1].name, "Betrag CHF", "a quoted identifier lost its case");
+    }
+
+    /// A hand-written, merge-conflict-prone file that sets one option twice is
+    /// a contradiction, and last-one-wins would resolve it silently.
+    #[test]
+    fn an_option_set_twice_is_refused_but_lists_may_repeat() {
+        let e = Target::parse(
+            "CREATE TABLE s (a TEXT) WITH (files='x', date_order='dmy', date_order='mdy')",
         )
         .unwrap_err();
-        assert!(format!("{e:#}").contains("exactly one dataset"));
+        assert!(format!("{e:#}").contains("more than once"), "{e:#}");
+
+        let g = t("CREATE TABLE s (a TEXT) WITH (files='a.csv', files='b.csv')");
+        assert_eq!(g.files, vec!["a.csv", "b.csv"]);
     }
 
     #[test]

@@ -43,6 +43,9 @@ pub enum Mismatch {
     Nullability { column: String, want: bool, got: bool },
     /// Both declare the same set of columns, in different orders.
     Order { column: String, want: usize, got: usize },
+    /// The spec's own type could not be built, so it produces no schema to
+    /// compare. Carries the real reason rather than inventing a comparison.
+    Underivable { column: String, reason: String },
 }
 
 impl Mismatch {
@@ -69,6 +72,10 @@ impl Mismatch {
                 let (w, g) = (nn(*want), nn(*got));
                 format!("`{column}`: the target declares {w}, the spec is {g}")
             }
+            Mismatch::Underivable { column, reason } => format!(
+                "`{column}`: the spec's own type cannot be built, so it produces no schema \
+                 to compare — {reason}"
+            ),
             Mismatch::Order { column, want, got } => format!(
                 "`{column}`: the target puts it at position {}, the spec at {}. \
                  Column order is part of the contract, because `SELECT *` and a Parquet \
@@ -109,18 +116,22 @@ fn render(t: &ArrowType) -> String {
 pub fn conforms(spec: &ParseSpec, target: &Target) -> Result<(), Vec<Mismatch>> {
     let produced = match crate::engine::schema_of(spec) {
         Ok(s) => s,
-        // A spec whose own types cannot be built cannot conform to anything.
-        // Reported as a type mismatch on the column that failed rather than
-        // swallowed, so the message still names a column.
-        Err(_) => {
-            return Err(spec
+        // A spec whose own types cannot be built produces no schema, so there
+        // is nothing to compare. Report *that*, with the reason the engine
+        // gave — which already names the offending column. Synthesising a
+        // Missing per spec column, as this first did, printed "the target
+        // declares it" about columns the target may never have mentioned, and
+        // threw away the only sentence that said what was actually wrong.
+        Err(e) => {
+            let reason = format!("{e:#}");
+            let column = spec
                 .columns
                 .iter()
-                .map(|c| Mismatch::Missing {
-                    column: c.name.clone(),
-                    dtype: ArrowType::Null,
-                })
-                .collect())
+                .map(|c| c.name.as_str())
+                .find(|n| reason.contains(*n))
+                .unwrap_or("?")
+                .to_string();
+            return Err(vec![Mismatch::Underivable { column, reason }]);
         }
     };
     compare(&produced, &target.arrow_schema())

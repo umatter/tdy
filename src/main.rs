@@ -143,10 +143,14 @@ fn check_command(target_path: &std::path::Path, files: &[PathBuf]) -> Result<()>
         let sc = tdy::sidecar::sidecar_path(f);
         let (spec, stale) = match tdy::sidecar::load(f) {
             Ok(SidecarStatus::Fresh(s)) => (s.spec, false),
-            // A stale sidecar is still worth checking: the shape it produces
-            // is a property of the spec, not of the file's current bytes. Say
-            // that it is stale and check it anyway, rather than making the
-            // user re-sniff before they can learn their schema is wrong too.
+            // A stale sidecar is still worth *checking* — the shape it
+            // produces is a property of the spec, not of the file's current
+            // bytes — but it must not pass. Every other consumer treats stale
+            // as fatal: `validate` bails, `--frozen` bails, and a non-frozen
+            // query throws the spec away and re-sniffs. So the spec this would
+            // otherwise bless is one no query will ever use, and going green
+            // on it means going green on exactly the drift this gate exists to
+            // catch.
             Ok(SidecarStatus::Stale(s)) => (s.spec, true),
             Ok(SidecarStatus::Absent) => {
                 println!(
@@ -168,12 +172,17 @@ fn check_command(target_path: &std::path::Path, files: &[PathBuf]) -> Result<()>
         // than as a contradiction, which is the honest reading and keeps a
         // sniffed sidecar's ordinary differences from looking like defects.
         let verdict = judge(&spec, &target, false);
-        println!(
-            "\n{}: {}{}",
-            sc.display(),
-            verdict.label(),
-            if stale { "  (sidecar is stale: the file changed since it was written)" } else { "" }
-        );
+        if stale {
+            println!(
+                "\n{}: STALE — the file has changed since this spec was written, so this \
+                 is not the spec a query would use.\n  Re-sniff it, or \
+                 `tdy validate --stamp` if the spec is still right, then check again.",
+                sc.display()
+            );
+            bad += 1;
+        } else {
+            println!("\n{}: {}", sc.display(), verdict.label());
+        }
         for m in verdict.mismatches() {
             println!("  {}", m.message());
         }
@@ -185,7 +194,7 @@ fn check_command(target_path: &std::path::Path, files: &[PathBuf]) -> Result<()>
                 );
             }
         }
-        if !verdict.is_ok() {
+        if !verdict.is_ok() && !stale {
             bad += 1;
         }
     }

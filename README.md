@@ -165,6 +165,14 @@ nothing else. In particular **no date format**, because that is a property of a
 file: twelve monthly exports with twelve different formats all land on one
 `DATE` column, which is the whole point.
 
+Anything a target declares that tdy would not actually enforce is refused
+rather than quietly widened, and the error names the spelling that works:
+`SMALLINT` (tdy has one 64-bit integer type), `VARCHAR(50)` (one string type,
+no length constraint), `TIMESTAMP(3)` (microseconds), `UNIQUE`/`CHECK`
+(constraints are not enforced). A `DECIMAL` without an explicit scale is
+refused too — it means something different in every dialect, and money is the
+wrong place to inherit a default.
+
 What works today is the gate:
 
 ```bash
@@ -389,7 +397,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 298 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 307 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

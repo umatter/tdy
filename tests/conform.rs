@@ -396,7 +396,7 @@ fn a_broken_target_file_fails_with_a_readable_message() {
     let dir = TempDir::new().unwrap();
     for (name, body, needle) in [
         ("bad.tdy.sql", "CREATE TABL sales (a TEXT);", "not valid SQL"),
-        ("empty.tdy.sql", "SELECT 1;", "no CREATE TABLE"),
+        ("empty.tdy.sql", "SELECT 1;", "must be a CREATE TABLE"),
         ("nofiles.tdy.sql", "CREATE TABLE s (a TEXT);", "files"),
     ] {
         let target = dir.path().join(name);
@@ -409,4 +409,129 @@ fn a_broken_target_file_fails_with_a_readable_message() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains(needle), "{name}: expected {needle:?} in:\n{err}");
     }
+}
+
+/// The gate must go RED on drift, and this is the case that matters most: the
+/// file's headers changed completely, so the blessed spec is one no query will
+/// ever use — a non-frozen query re-sniffs and overwrites it, a frozen one
+/// refuses outright. Reporting CONFORMS and exiting 0 here means going green
+/// on exactly the change the gate exists to catch.
+#[test]
+fn a_stale_sidecar_fails_the_gate_rather_than_conforming() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path().join("s.csv");
+    std::fs::write(&p, "month;region;amount\n31.01.2025;Ost;1234\n").unwrap();
+    let target = dir.path().join("t.tdy.sql");
+    std::fs::write(
+        &target,
+        "CREATE TABLE sales (month DATE NULL, region TEXT NULL, amount BIGINT NULL) \
+         WITH (files = 's.csv');",
+    )
+    .unwrap();
+
+    let run = |what: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+            .args([what, p.to_str().unwrap()])
+            .args(if what == "sniff" { vec!["--no-llm"] } else { vec![] })
+            .output()
+            .expect("run tdy")
+    };
+    assert!(run("sniff").status.success());
+
+    let check = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+            .args(["check", target.to_str().unwrap(), "--against", p.to_str().unwrap()])
+            .output()
+            .expect("run tdy")
+    };
+
+    // Fresh: this is the success path, which had no test at all.
+    let ok = check();
+    let text = String::from_utf8_lossy(&ok.stdout);
+    assert!(ok.status.success(), "a conforming sidecar failed the gate:\n{text}");
+    assert!(text.contains("CONFORMS"), "{text}");
+    assert!(text.contains("1 of 1"), "{text}");
+
+    // Now the export drifts: every header is renamed.
+    std::fs::write(&p, "datum;gebiet;betrag\n31.01.2025;Ost;1234\n").unwrap();
+    let drifted = check();
+    let text = String::from_utf8_lossy(&drifted.stdout);
+    assert!(
+        !drifted.status.success(),
+        "the gate went green on a stale sidecar:\n{text}"
+    );
+    assert!(text.contains("STALE"), "{text}");
+    assert!(!text.contains("CONFORMS"), "a stale sidecar was still called conforming:\n{text}");
+}
+
+/// When a spec's own types cannot be built there is no schema to compare, and
+/// saying "the target declares it" about columns the target never mentioned —
+/// while discarding the only sentence that said what was wrong — is worse than
+/// saying nothing.
+#[test]
+fn an_underivable_spec_reports_the_real_reason_not_a_fabricated_comparison() {
+    let target = Target::parse(
+        "CREATE TABLE sales (amount_chf DECIMAL(14,2) NOT NULL) WITH (files = 'x')",
+    )
+    .unwrap();
+
+    // Decimal128 tops out at precision 38; 39 cannot be built.
+    let spec = spec_with(vec![ColumnSpec {
+        name: "amount_chf".into(),
+        source: None,
+        dtype: DType::Decimal { precision: 39, scale: 2 },
+        nullable: false,
+        parse: ValueParsing::default(),
+    }]);
+
+    let errs = conforms(&spec, &target).unwrap_err();
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    let m = errs[0].message();
+    assert!(m.contains("amount_chf"), "{m}");
+    assert!(
+        !m.contains("the target declares it"),
+        "an underivable spec was reported as a missing target column: {m}"
+    );
+    assert!(
+        m.contains("cannot be built"),
+        "the real reason was discarded: {m}"
+    );
+}
+
+/// A target that declares a zoned timestamp must be able to name the offset,
+/// and a spec carrying that offset must conform to it. Before, no target could
+/// express `Timestamp(_, Some(_))` at all, so such a spec could never conform
+/// to anything — and the error pointed at the sidecar, which guaranteed it.
+#[test]
+fn a_zoned_timestamp_can_be_declared_and_conformed_to() {
+    let target = Target::parse(
+        "CREATE TABLE s (ts TIMESTAMP WITH TIME ZONE NOT NULL) \
+         WITH (files = 'x', timezone = '+02:00')",
+    )
+    .unwrap();
+
+    let spec = spec_with(vec![ColumnSpec {
+        name: "ts".into(),
+        source: None,
+        dtype: DType::Timestamp {
+            format: "%Y-%m-%d %H:%M:%S".into(),
+            timezone: Some("+02:00".into()),
+        },
+        nullable: false,
+        parse: ValueParsing::default(),
+    }]);
+
+    assert!(
+        conforms(&spec, &target).is_ok(),
+        "a spec declaring the same offset as the target did not conform: {:?}",
+        conforms(&spec, &target)
+    );
+
+    // And a different offset is a real mismatch, not silently equal.
+    let mut other = spec.clone();
+    other.columns[0].dtype = DType::Timestamp {
+        format: "%Y-%m-%d %H:%M:%S".into(),
+        timezone: Some("+01:00".into()),
+    };
+    assert!(conforms(&other, &target).is_err(), "two different offsets conformed");
 }

@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 298 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 307 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -57,6 +57,14 @@ gate that can disagree with the executor is worse than no gate.
 A target holds its columns as **Arrow** types, not `DType`, and that is load-bearing:
 `DType::Date` carries a per-file strftime format, so comparing `DType`s would force a target
 to pin one, and twelve exports with twelve date formats could never land on one column.
+
+The layer's stance, learned the hard way from its own review: **anything a target declares
+that tdy would not enforce is refused, not widened** — `SMALLINT`, `VARCHAR(n)`,
+`TIMESTAMP(3)`, table-level constraints, a second statement in the file, an option set twice.
+Unquoted identifiers fold to lowercase as SQL folds them (and as `sniff::sanitize` does), or a
+target written the natural way could never match a column tdy produces. A zoned timestamp is
+declarable via `WITH (timezone = '+02:00')`, because the offset is part of the Arrow type and
+a spec carrying one would otherwise be unable to conform to anything a target can say.
 
 Not yet: `tdy fit` (the planner), the lock, globs, `dataset()`.
 
