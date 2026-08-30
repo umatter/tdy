@@ -20,7 +20,13 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::{TableFunctionImpl, TableProvider};
 use datafusion::common::ScalarValue;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::catalog::streaming::StreamingTable;
+use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::datasource::MemTable;
+use datafusion::execution::TaskContext;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::error::{DataFusionError, Result as DfResult};
 use datafusion::prelude::{Expr, SessionContext};
 
@@ -44,7 +50,87 @@ pub struct MessyFunc {
     pub limits: Limits,
     /// One parse per file per query. A self-join over `messy('big.csv')`
     /// otherwise reads and parses the whole file once per reference.
-    cache: Mutex<HashMap<PathBuf, Arc<MemTable>>>,
+    ///
+    /// Holds whichever provider the file earned — a `MemTable` of parsed
+    /// batches for a small one, a lazy `StreamingTable` for a large one, which
+    /// caches only the resolved spec and re-reads on each scan.
+    cache: Mutex<HashMap<PathBuf, Arc<dyn TableProvider>>>,
+}
+
+/// Above this many bytes, a streamable file is read lazily per scan instead
+/// of being parsed into memory once and cached.
+///
+/// The trade is real in both directions. Below the threshold, materialising
+/// wins: the file is parsed once however many times the query names it, so a
+/// self-join costs one read. Above it, holding the whole typed table is the
+/// thing that fails, and re-reading is cheap by comparison — a `count(*)` or
+/// a filtered scan over a file larger than memory only works this way.
+///
+/// `TDY_LAZY_ABOVE_BYTES` overrides it: 0 forces every streamable file down
+/// the lazy path, which is how the tests reach it without writing 64 MB.
+const LAZY_ABOVE_BYTES: u64 = 64 * 1024 * 1024;
+
+fn lazy_above_bytes() -> u64 {
+    std::env::var("TDY_LAZY_ABOVE_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(LAZY_ABOVE_BYTES)
+}
+
+/// One partition of a spec applied to a file, produced on demand.
+///
+/// The parse is synchronous and CPU-bound, so it runs on a blocking task and
+/// hands batches over a bounded channel; the bound is what makes this lazy
+/// rather than merely deferred — the producer stops once two batches are
+/// outstanding, so memory stays at O(batch) however large the file is.
+#[derive(Debug)]
+struct SpecPartition {
+    spec: Arc<ParseSpec>,
+    path: PathBuf,
+    limits: Limits,
+    schema: SchemaRef,
+}
+
+impl PartitionStream for SpecPartition {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let (tx, rx) = tokio::sync::mpsc::channel::<DfResult<RecordBatch>>(2);
+        let (spec, path, limits) = (self.spec.clone(), self.path.clone(), self.limits);
+        let schema = self.schema.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let send = |m: DfResult<RecordBatch>| tx.blocking_send(m).is_ok();
+            let result = stream::execute_with(&spec, &path, limits, |b| {
+                // A closed receiver means the query stopped caring (a LIMIT,
+                // an error upstream). Ending the parse is the right response,
+                // and not an error to report.
+                if send(Ok(b)) {
+                    Ok(())
+                } else {
+                    anyhow::bail!("__tdy_receiver_closed")
+                }
+            });
+            if let Err(e) = result {
+                let msg = format!("{e:#}");
+                if !msg.contains("__tdy_receiver_closed") {
+                    // Must reach the consumer: a parse error that vanished
+                    // here would look like a short file, which is exactly the
+                    // silent wrong answer this project exists to prevent.
+                    send(Err(DataFusionError::External(
+                        format!("executing parse spec for {}: {msg}", path.display()).into(),
+                    )));
+                }
+            }
+        });
+
+        let body = futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|item| (item, rx))
+        });
+        Box::pin(RecordBatchStreamAdapter::new(schema, body))
+    }
 }
 
 impl MessyFunc {
@@ -77,21 +163,42 @@ impl TableFunctionImpl for MessyFunc {
 
         let spec = resolve_spec_sync(&path, self.frozen, self.limits)
             .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?;
-        // Prefer the streaming executor where it applies: it produces the
-        // same batches (tests/streaming.rs is that equality) without ever
-        // materialising the file as a Vec<Vec<String>>, which is what makes
-        // peak memory a multiple of the source rather than of the result.
-        // Anything it declines falls back, so a spec is never refused for
-        // being an unusual shape.
-        let batches = if stream::enabled() && stream::can_stream(&spec) {
-            stream::execute_batches(&spec, &path, self.limits)
+        let streamable = stream::enabled() && stream::can_stream(&spec);
+        let big = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) >= lazy_above_bytes();
+
+        let table: Arc<dyn TableProvider> = if streamable && big {
+            // Lazy: the file is re-read on every scan and no batch outlives
+            // its consumer, so peak memory is a function of the batch size
+            // rather than of the file. This is the only way `count(*)` over a
+            // file larger than memory can work at all.
+            let schema: SchemaRef = Arc::new(
+                engine::schema_of(&spec)
+                    .with_context(|| format!("deriving the schema of {}", path.display()))
+                    .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?,
+            );
+            let part = Arc::new(SpecPartition {
+                spec: Arc::new(spec),
+                path: path.clone(),
+                limits: self.limits,
+                schema: schema.clone(),
+            });
+            Arc::new(StreamingTable::try_new(schema, vec![part])?)
         } else {
-            engine::execute_batches(&spec, &path, self.limits)
-        }
-        .with_context(|| format!("executing parse spec for {}", path.display()))
-        .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?;
-        let schema = batches[0].schema();
-        let table = Arc::new(MemTable::try_new(schema, partition(batches))?);
+            // Materialised: parsed once and cached, so a query naming the
+            // file twice reads it once. Prefer the streaming executor to
+            // build it where the shape allows — it produces the same batches
+            // (tests/streaming.rs is that equality) without ever holding the
+            // file as a Vec<Vec<String>>.
+            let batches = if streamable {
+                stream::execute_batches(&spec, &path, self.limits)
+            } else {
+                engine::execute_batches(&spec, &path, self.limits)
+            }
+            .with_context(|| format!("executing parse spec for {}", path.display()))
+            .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?;
+            let schema = batches[0].schema();
+            Arc::new(MemTable::try_new(schema, partition(batches))?)
+        };
         if let Ok(mut c) = self.cache.lock() {
             c.insert(key, table.clone());
         }

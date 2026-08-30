@@ -901,6 +901,25 @@ pub(crate) fn dedupe_names(names: &mut [String]) {
 /// overflows; chunking also gives DataFusion something to parallelise over.
 pub const BATCH_ROWS: usize = 65_536;
 
+/// The Arrow schema a spec produces, without reading the file.
+///
+/// Derived by building every column over *zero* rows, so it is the same code
+/// that types real data — a hand-written mapping from `DType` to Arrow would
+/// be a second source of truth, and the first thing to drift would be the
+/// timestamp timezone label.
+///
+/// A streaming table provider needs this: DataFusion plans the query before
+/// any batch exists, so the schema cannot come from the data.
+pub fn schema_of(spec: &ParseSpec) -> Result<Schema> {
+    let mut fields = Vec::with_capacity(spec.columns.len());
+    for col in &spec.columns {
+        let (field, _) = build_column_at(col, &[], 0)
+            .with_context(|| format!("deriving the type of column `{}`", col.name))?;
+        fields.push(field);
+    }
+    Ok(Schema::new(fields))
+}
+
 pub fn to_record_batch(spec: &ParseSpec, table: &mut RawTable) -> Result<RecordBatch> {
     let batches = to_record_batches(spec, table)?;
     let schema = batches[0].schema();

@@ -339,13 +339,39 @@ fn first_odd_row(text: &str, extraction: &Extraction, modal: usize) -> Option<(u
     None
 }
 
-/// Run `spec` over `path` without materialising the file.
+/// Run `spec` over `path` without materialising the file, collecting the
+/// batches.
+///
+/// Convenient, and still bounded by the *output*: for a query that does not
+/// need every row in memory at once, prefer [`execute_with`], which hands each
+/// batch over as it is produced and lets the caller drop it.
 ///
 /// Callers must check [`can_stream`] first; this returns an error rather than
 /// guessing if handed a shape it does not implement.
 pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Vec<RecordBatch>> {
+    let mut out = Vec::new();
+    execute_with(spec, path, limits, |b| {
+        out.push(b);
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+/// The driver: calls `sink` with each batch as it is built, and never holds
+/// more than one batch of raw strings plus whatever the sink keeps.
+///
+/// A sink that drops its batch after consuming it makes the whole pipeline
+/// O(batch) in memory rather than O(file) — that is what the streaming table
+/// provider does, and it is the difference between "big files are cheaper"
+/// and "file size stops mattering".
+pub fn execute_with(
+    spec: &ParseSpec,
+    path: &Path,
+    limits: Limits,
+    mut sink: impl FnMut(RecordBatch) -> Result<()>,
+) -> Result<()> {
     if !can_stream(spec) {
-        bail!("internal: stream::execute_batches called on an unstreamable spec");
+        bail!("internal: stream::execute_with called on an unstreamable spec");
     }
     let opts = ExtractOpts::full(limits);
     let encoding = spec.extraction.encoding();
@@ -458,8 +484,8 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
     plan.resolve(spec, &header)?;
 
     // --- the body ----------------------------------------------------------
-    let mut out: Vec<RecordBatch> = Vec::new();
     let mut schema: Option<Arc<Schema>> = None;
+    let mut batches_emitted = 0usize;
     let mut chunk: Vec<Vec<String>> = Vec::with_capacity(BATCH_ROWS.min(1024));
     let mut emitted = 0usize;
 
@@ -489,15 +515,15 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
         plan.push(r, &mut chunk);
         while chunk.len() >= BATCH_ROWS {
             let rest = chunk.split_off(BATCH_ROWS);
-            flush(&plan, &chunk, emitted, &mut out, &mut schema)?;
+            flush(&plan, &chunk, emitted, &mut schema, &mut batches_emitted, &mut sink)?;
             emitted += chunk.len();
             chunk = rest;
         }
     }
     // `..=` in spirit: an empty table still produces one empty batch, because
     // a query over a file with a header and no rows must still have a schema.
-    flush(&plan, &chunk, emitted, &mut out, &mut schema)?;
-    Ok(out)
+    flush(&plan, &chunk, emitted, &mut schema, &mut batches_emitted, &mut sink)?;
+    Ok(())
 }
 
 /// Pad or truncate a row to the table's width, as rectangularize does.
@@ -510,14 +536,16 @@ fn fit(row: &mut Vec<String>, width: usize) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn flush(
     plan: &Plan,
     rows: &[Vec<String>],
     row_offset: usize,
-    out: &mut Vec<RecordBatch>,
     schema: &mut Option<Arc<Schema>>,
+    emitted: &mut usize,
+    sink: &mut impl FnMut(RecordBatch) -> Result<()>,
 ) -> Result<()> {
-    if !rows.is_empty() || out.is_empty() {
+    if !rows.is_empty() || *emitted == 0 {
         let mut fields: Vec<Field> = Vec::with_capacity(plan.resolved.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(plan.resolved.len());
         for (col, idx) in &plan.resolved {
@@ -529,7 +557,8 @@ fn flush(
             arrays.push(array);
         }
         let s = schema.get_or_insert_with(|| Arc::new(Schema::new(fields.clone()))).clone();
-        out.push(RecordBatch::try_new(s, arrays).context("assembling record batch")?);
+        *emitted += 1;
+        sink(RecordBatch::try_new(s, arrays).context("assembling record batch")?)?;
     }
     Ok(())
 }

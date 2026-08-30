@@ -536,3 +536,152 @@ fn unstreamable_shapes_are_declined_rather_than_guessed() {
     };
     assert!(!stream::can_stream(&promote_over_lines));
 }
+
+// ---------------------------------------------------------------------------
+// The lazy table provider
+// ---------------------------------------------------------------------------
+//
+// Above a size threshold `messy()` returns a StreamingTable rather than a
+// MemTable: the file is re-read on each scan and no batch outlives its
+// consumer, so peak memory follows the batch rather than the file. These run
+// with TDY_LAZY_ABOVE_BYTES=0, which forces every streamable file down that
+// path without needing a 64 MB fixture.
+
+fn tdy_env(args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_tdy"));
+    c.args(args);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    c.output().expect("run tdy")
+}
+
+fn sample_file(dir: &TempDir) -> PathBuf {
+    let mut body = String::from("region,menge\n");
+    for i in 0..5000 {
+        body.push_str(&format!("{},{i}\n", ["Ost", "West"][i % 2]));
+    }
+    write(dir, "lazy.csv", &body)
+}
+
+/// The lazy provider must answer exactly what the cached one answers.
+#[test]
+fn the_lazy_provider_gives_the_same_answers_as_the_cached_one() {
+    let dir = TempDir::new().unwrap();
+    let p = sample_file(&dir);
+    let sql = format!(
+        "SELECT region, count(*) n, sum(menge) s FROM messy('{}') GROUP BY region ORDER BY region",
+        p.display()
+    );
+
+    let eager = tdy_env(&["query", &sql], &[("TDY_LAZY_ABOVE_BYTES", "999999999")]);
+    let lazy = tdy_env(&["query", &sql], &[("TDY_LAZY_ABOVE_BYTES", "0")]);
+    assert!(eager.status.success(), "{}", String::from_utf8_lossy(&eager.stderr));
+    assert!(lazy.status.success(), "{}", String::from_utf8_lossy(&lazy.stderr));
+    assert_eq!(
+        String::from_utf8_lossy(&eager.stdout),
+        String::from_utf8_lossy(&lazy.stdout),
+        "the lazy provider disagreed with the cached one"
+    );
+}
+
+/// Row order has to survive being produced by a background task: `--frozen`
+/// promising "same file, same answer" is worth nothing if a scan can reorder.
+#[test]
+fn the_lazy_provider_keeps_file_order() {
+    let dir = TempDir::new().unwrap();
+    let p = sample_file(&dir);
+    let sql = format!("SELECT menge FROM messy('{}')", p.display());
+    let first = tdy_env(&["query", &sql], &[("TDY_LAZY_ABOVE_BYTES", "0")]);
+    assert!(first.status.success());
+    for _ in 0..3 {
+        let again = tdy_env(&["query", &sql], &[("TDY_LAZY_ABOVE_BYTES", "0")]);
+        assert_eq!(first.stdout, again.stdout, "the lazy scan reordered rows between runs");
+    }
+    let eager = tdy_env(&["query", &sql], &[("TDY_LAZY_ABOVE_BYTES", "999999999")]);
+    assert_eq!(first.stdout, eager.stdout, "lazy and cached disagreed on row order");
+}
+
+/// The failure that would be worst: a parse error raised inside the producer
+/// task, after some batches have already been handed over. If it were
+/// swallowed, the query would return the rows read so far and look like a
+/// short file — a silently wrong answer, which is the one thing tdy must not
+/// do. It has to fail loudly instead.
+#[test]
+fn an_error_after_the_first_batch_fails_the_query_rather_than_truncating() {
+    let dir = TempDir::new().unwrap();
+    // Well over one batch, with an unparseable integer far into the file.
+    let mut body = String::from("k,v\n");
+    for i in 0..70_000 {
+        body.push_str(&format!("r{i},{i}\n"));
+    }
+    body.push_str("bad,not-a-number\n");
+    let p = write(&dir, "late_error.csv", &body);
+
+    // A spec that insists v is an integer, so the bad row is fatal.
+    let s = spec(
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("k", DType::Utf8), col("v", DType::Int64)],
+    );
+    let sidecar = p.with_file_name("late_error.csv.tdy.toml");
+    std::fs::write(
+        &sidecar,
+        toml::to_string(&serde_json::json!({
+            "spec_version": 1,
+            "source": { "path": "late_error.csv", "blake3": "0", "bytes": 0 },
+            "provenance": {
+                "method": "manual",
+                "tool_version": "0.1.0",
+                "created_at": "2026-01-01T00:00:00Z"
+            },
+            "spec": serde_json::to_value(&s).unwrap(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let stamp = tdy_env(&["validate", p.to_str().unwrap(), "--stamp"], &[]);
+    assert!(
+        stamp.status.success(),
+        "could not stamp the hand-written spec: {}",
+        String::from_utf8_lossy(&stamp.stderr)
+    );
+
+    let out = tdy_env(
+        &["query", &format!("SELECT count(*) FROM messy('{}')", p.display())],
+        &[("TDY_LAZY_ABOVE_BYTES", "0")],
+    );
+    assert!(
+        !out.status.success(),
+        "a mid-file parse error was swallowed; the query returned:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("not-a-number") || err.contains("row"),
+        "the error does not say what went wrong:\n{err}"
+    );
+}
+
+/// A LIMIT closes the receiver early. The producer must notice and stop
+/// rather than block forever on a full channel or report a spurious failure.
+#[test]
+fn a_limit_stops_the_producer_without_an_error() {
+    let dir = TempDir::new().unwrap();
+    let mut body = String::from("k,v\n");
+    for i in 0..200_000 {
+        body.push_str(&format!("r{i},{i}\n"));
+    }
+    let p = write(&dir, "limited_scan.csv", &body);
+    let out = tdy_env(
+        &["query", &format!("SELECT k FROM messy('{}') LIMIT 3", p.display())],
+        &[("TDY_LAZY_ABOVE_BYTES", "0")],
+    );
+    assert!(
+        out.status.success(),
+        "a LIMIT over the lazy provider failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("r0"), "no rows came back:\n{text}");
+    assert!(!text.contains("r100"), "LIMIT was not applied:\n{text}");
+}

@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 253 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 257 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -112,6 +112,17 @@ Things that only become clear from reading several modules:
   Bump `PROMPT_VERSION` when changing the prompt — it is recorded in sidecar provenance.
 - **Bounded I/O lives in `fileio`**: head/tail sampling by seek, streaming blake3, atomic
   sidecar writes (temp + rename).
+- **Two providers, chosen by size.** Under `LAZY_ABOVE_BYTES` (64 MB, `TDY_LAZY_ABOVE_BYTES`)
+  `messy()` parses once into a cached `MemTable` — right when a query names the file twice.
+  Over it, a `StreamingTable` whose `SpecPartition` runs the parse on a blocking task and
+  feeds batches through a **bounded** channel (capacity 2); the bound is the whole point, as
+  it is what makes memory O(batch) instead of O(file). Two things there are load-bearing and
+  easy to break: a producer error must reach the consumer as an error — swallowing it would
+  return the rows read so far and look like a short file, the exact silent-wrong-answer this
+  project exists to prevent — and a closed receiver (a `LIMIT`) must end the parse quietly
+  rather than report failure. `engine::schema_of` gives DataFusion the schema before any
+  batch exists, derived by building each column over *zero* rows so it cannot drift from the
+  code that types real data.
 - **`stream` is the executor for text formats; `engine` is the fallback and the reference.** It is
   plumbing only — where an answer could differ (`promote_header_from`, `build_column_at`) it
   calls the same function `engine` calls, deliberately, so the two cannot drift. It accepts
@@ -123,8 +134,8 @@ Things that only become clear from reading several modules:
   uses `ByteRecord` and allocates nothing. Row-local ops run in **spec order** (`RowOp`), not
   a fixed one: fill-then-drop propagates a subtotal label into the rows beneath it and drop-
   then-fill does not, and `tests/streaming.rs` pins that both paths fall into it identically.
-  Measured: 140 MB / 3M-row CSV 1,676 -> 418 MB; 190 MB / 2M-line nginx log 1,376 -> 496 MB;
-  both slightly faster too. `TDY_NO_STREAM=1` forces `engine` — that is `stream::enabled()`,
+  Measured `count(*)`: 140 MB / 3M-row CSV 1,676 -> 230 MB; 190 MB / 2M-line nginx log
+  1,376 -> 290 MB; 260 MB / 70M-cell CSV refused -> 400 MB. `TDY_NO_STREAM=1` forces `engine` — that is `stream::enabled()`,
   kept separate from `can_stream()` so turning streaming off cannot make the shape predicate
   lie.
 - **`xlguard` bounds a spreadsheet before it is read.** Every other limit is checked against a

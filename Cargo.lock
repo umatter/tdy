@@ -3017,6 +3017,7 @@ dependencies = [
  "datafusion",
  "dirs",
  "encoding_rs",
+ "futures",
  "quick-xml",
  "regex",
  "reqwest",

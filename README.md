@@ -129,7 +129,10 @@ tdy config init                                    # sample config + location
 
 Config: `~/.config/tdy/config.toml`, overridable via `TDY_BACKEND`,
 `TDY_MODEL`, `TDY_BASE_URL`, `TDY_MAX_RETRIES`, or
-`--backend/--model/--base-url`.
+`--backend/--model/--base-url`. Execution has two more:
+`TDY_NO_STREAM=1` forces the materialising executor, and
+`TDY_LAZY_ABOVE_BYTES` sets the size above which a file is scanned lazily
+rather than parsed into memory once.
 
 `tdy validate --stamp` is what makes "edit the sidecar by hand" a real
 workflow: it keeps your spec and re-computes the fingerprint, so a hand-written
@@ -244,16 +247,23 @@ Details worth knowing:
   fixed-width reports instead go row by row into 64k-row Arrow batches, and
   that intermediate never exists:
 
-  | | materialising | streaming |
+  | `count(*)` over | materialising | streaming |
   |---|---|---|
-  | 140 MB CSV, 3M rows, `count(*)` | 3.11 s, 1,676 MB | **2.90 s, 418 MB** |
-  | 190 MB nginx log, 2M lines | 3.27 s, 1,376 MB | **2.86 s, 496 MB** |
-  | 260 MB CSV, 70M cells | refused: over `max_cells` | **8.95 s, 916 MB** |
+  | 140 MB CSV, 3M rows | 3.11 s, 1,676 MB | **3.46 s, 230 MB** |
+  | 190 MB nginx log, 2M lines | 3.27 s, 1,376 MB | **2.70 s, 290 MB** |
+  | 260 MB CSV, 70M cells | refused: over `max_cells` | **9.45 s, 400 MB** |
 
   Faster as well as smaller: not allocating tens of millions of strings more
   than pays for the extra counting pass. (A log needs no counting pass at all
   — its columns are named by the pattern's capture groups, so there is no
   width to discover — unless a `skip_rows` tail makes the row count matter.)
+
+  Above 64 MB a streamable file also stops being loaded into a table at all:
+  `messy()` returns a lazy provider that re-reads the file on each scan and
+  hands DataFusion one batch at a time over a bounded channel, so no batch
+  outlives the operator consuming it. Below that threshold the file is parsed
+  once and cached instead, which is the better trade when a query names the
+  same file twice. `TDY_LAZY_ABOVE_BYTES` moves the line.
 
   Excel and JSON do not stream: their readers materialise the document before
   any row exists. Neither does an unusual transform order — those fall back to
@@ -304,7 +314,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 253 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 257 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

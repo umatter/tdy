@@ -11,7 +11,9 @@ license = "MIT"
 
 [dependencies]
 datafusion = "46"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+# For the lazy table provider: adapting a producer thread into a RecordBatch stream.
+futures = "0.3"
 async-trait = "0.1"
 
 serde = { version = "1", features = ["derive"] }
