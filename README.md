@@ -123,6 +123,8 @@ tdy validate data/export.csv                       # spec valid? fingerprint fre
                                                     # does it still parse?
 tdy validate data/export.csv --stamp               # re-fingerprint a hand-edited
                                                     # spec against the current file
+tdy check sales.tdy.sql --against exports/*.csv     # do my sidecars still produce
+                                                    # the schema I declared?
 tdy schema                                         # the JSON Schema (the grammar)
 tdy config init                                    # sample config + location
 ```
@@ -137,6 +139,58 @@ rather than parsed into memory once.
 `tdy validate --stamp` is what makes "edit the sidecar by hand" a real
 workflow: it keeps your spec and re-computes the fingerprint, so a hand-written
 extraction survives the next run.
+
+## Declaring the dataset you want
+
+*In progress — the first piece is here, the rest is designed in
+`docs/design/2026-08-30-target-schema.md`.*
+
+Everything above describes a **source**: the shape of a file you have. The
+direction this is going is the opposite — you declare the shape of the data you
+*want*, in SQL, and point tdy at a pile of messy files:
+
+```sql
+-- exports/sales.tdy.sql
+CREATE TABLE sales (
+  month      DATE          NOT NULL,
+  region     TEXT          NOT NULL,
+  amount_chf DECIMAL(14,2) NOT NULL
+)
+WITH (files = '2025-*.csv, 2025-*.xlsx', date_order = 'dmy');
+```
+
+It is real SQL, parsed by the same parser DataFusion uses. What a target may say
+is exactly what reaches the Arrow schema — a name, a type, a nullability — and
+nothing else. In particular **no date format**, because that is a property of a
+file: twelve monthly exports with twelve different formats all land on one
+`DATE` column, which is the whole point.
+
+What works today is the gate:
+
+```bash
+$ tdy check exports/sales.tdy.sql --against exports/2025-01.csv
+exports/sales.tdy.sql: `sales`, 3 column(s)
+
+exports/2025-01.csv.tdy.toml: CONFORMS
+
+1 of 1 file(s) conform to `sales`.
+```
+
+It reads no data. `engine::schema_of` derives a spec's output schema by building
+every column over *zero* rows, so comparing it to a declared schema proves —
+before a byte is read, for every row the spec will ever emit, on both
+executors — that this file produces exactly those columns with exactly those
+types. That is a much stronger contract than "the head parsed", and it makes a
+useful CI gate on its own: *do the sidecars I already have still produce the
+schema my downstream expects?*
+
+Shape is proved; **values are not**. A per-row parse failure, a grouping
+violation, a null in a NOT NULL column — those are still caught per row, loudly,
+naming the row, at execution.
+
+Still to come: `tdy fit`, which plans a spec *onto* a declared target rather
+than describing whatever the file happens to contain, and `dataset()`, which
+reads all twelve files as one relation.
 
 ## The spec language (sidecar body)
 
@@ -335,7 +389,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 261 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 298 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

@@ -15,6 +15,7 @@
 //! - [`config`]   backend configuration resolution
 
 pub mod config;
+pub mod conform;
 pub mod detect;
 pub mod engine;
 pub mod fileio;
@@ -26,5 +27,6 @@ pub mod sidecar;
 pub mod sniff;
 pub mod spec;
 pub mod stream;
+pub mod target;
 pub mod sqlscan;
 pub mod xlguard;

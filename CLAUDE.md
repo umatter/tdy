@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 261 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 298 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -46,7 +46,19 @@ before adding anything to `spec.rs`, `sniff.rs` or `provider.rs` — several of 
 there, and its section 3 records which review recommendations were overruled and why.
 `*-review.md` beside it is the long-form design review it came from.
 
-Nothing in it is implemented yet.
+**Slice 1 is in.** `src/target.rs` parses the SQL DDL (via DataFusion's re-exported
+`sqlparser`, so the type vocabulary is SQL's and costs no dependency); `src/conform.rs`
+proves a spec lands on it by comparing `engine::schema_of(spec)` to `Target::arrow_schema()`
+field for field, with no I/O; `tdy check <TARGET> --against <FILE>` is the CI gate.
+`tests/conform.rs` carries the assertion the whole layer rests on — that `schema_of` is the
+schema execution really produces — swept over 84 fixtures on **both** executors, because a
+gate that can disagree with the executor is worse than no gate.
+
+A target holds its columns as **Arrow** types, not `DType`, and that is load-bearing:
+`DType::Date` carries a per-file strftime format, so comparing `DType`s would force a target
+to pin one, and twelve exports with twelve date formats could never land on one column.
+
+Not yet: `tdy fit` (the planner), the lock, globs, `dataset()`.
 
 ## The one rule
 
