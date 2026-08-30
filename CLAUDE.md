@@ -257,7 +257,12 @@ difference: everything under 64 MB takes the cached path and will not show it.
 `testdata/` is generated, never hand-edited — `python3 gen_fixtures.py`. Each generator in
 `testdata/gen/` owns a disjoint set of files and documents in its docstring what each file
 stresses. `10_declared_size.py` is the odd one out: two of its three files are *meant* to be
-refused, and the third is the control proving the refusal does not catch ordinary documents. `testdata/large/` is gitignored (perf fixtures, generated on demand).
+refused, and the third is the control proving the refusal does not catch ordinary documents.
+`11_drifting_exports.py` is the other: it generates a *pile* rather than a file — twelve
+monthly exports that disagree with each other, plus the target that declares what they should
+all become. It is the corpus `tdy fit` will be judged on, and three of its twelve files
+(Rappen, two-`Betrag`, no-region) exist to be **refused**. Its ground truth is the sum
+57'340.00 over the nine that may join. `testdata/large/` is gitignored (perf fixtures, generated on demand).
 `tests/e2e.rs::umsatz_spec()` is the hand-written reference spec for `umsatz.xlsx`.
 
 Generators need `openpyxl` (xlsx/xlsm), `xlwt` (the only pure-Python BIFF8 writer, for
