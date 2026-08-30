@@ -730,3 +730,34 @@ fn float_with_declared_separators() {
     let b = spec_to_batch(&s, &p).unwrap();
     assert_eq!(floats(&b, 0), vec![Some(1234.56), Some(-99.0)]);
 }
+
+/// What a `number-columns-repeated` run *means*, pinned with a hand-written
+/// spec so the answer does not depend on what tier 1 makes of the file.
+///
+/// LibreOffice writes any run of identical or empty cells as a single
+/// element with a repeat count, so this shape is ordinary rather than
+/// exotic. If the run were ignored instead of expanded, the trailing 5 would
+/// land in column B and every column after the gap would be silently wrong —
+/// a table that still parses and still sums, to the wrong total.
+#[test]
+fn an_ods_repeated_cell_run_expands_to_the_columns_it_claims() {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata")
+        .join("legacy_formats_ods_sparse.ods");
+    assert!(p.exists(), "missing fixture — run `python3 gen_fixtures.py`");
+
+    let s = spec(
+        Extraction::Excel { sheet_name: Some("Sparse".into()), sheet_index: None, range: None },
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        ["a", "b", "c", "d", "e"].into_iter().map(|n| col(n, DType::Utf8)).collect(),
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+
+    assert_eq!(b.num_rows(), 3, "number-rows-repeated did not expand to two rows");
+    // The sparse row: 1, a three-cell empty run, then 5 in column E.
+    assert_eq!(strings(&b, 0), vec!["1", "1", "1"]);
+    assert_eq!(strings(&b, 1), vec!["<null>", "2", "2"]);
+    assert_eq!(strings(&b, 2), vec!["<null>", "3", "3"]);
+    assert_eq!(strings(&b, 3), vec!["<null>", "4", "4"]);
+    assert_eq!(strings(&b, 4), vec!["5", "5", "5"], "the run swallowed column E");
+}

@@ -16,7 +16,9 @@ fn testdata() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata")
 }
 
-/// Extensions the sniffer is expected to be pointed at.
+/// Extensions the sniffer is expected to be pointed at. Keep this in step
+/// with `sample::guess_format` — an extension it routes but this list omits
+/// is a format nothing sweeps for panics.
 fn is_data_file(p: &Path) -> bool {
     let ext = p
         .extension()
@@ -24,7 +26,19 @@ fn is_data_file(p: &Path) -> bool {
         .unwrap_or_default();
     matches!(
         ext.as_str(),
-        "csv" | "tsv" | "txt" | "dat" | "log" | "json" | "ndjson" | "jsonl" | "xlsx" | "xls" | "ods"
+        "csv"
+            | "tsv"
+            | "txt"
+            | "dat"
+            | "log"
+            | "json"
+            | "ndjson"
+            | "jsonl"
+            | "xlsx"
+            | "xlsm"
+            | "xlsb"
+            | "xls"
+            | "ods"
     )
 }
 

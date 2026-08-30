@@ -172,6 +172,7 @@ import csv
 import io
 import random
 import sys
+import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -211,20 +212,33 @@ def write_text(name, text):
     return write_bytes(name, text.encode("utf-8"))
 
 
+MODIFIED_RE = re.compile(rb"(<dcterms:modified[^>]*>)[^<]*(</dcterms:modified>)")
+
+
 def save_workbook(wb, name):
-    """Save an .xlsx reproducibly: fixed doc properties, fixed zip stamps."""
+    """Save an .xlsx reproducibly: fixed doc properties, fixed zip stamps.
+
+    Pinning `wb.properties.modified` is not enough on its own — openpyxl
+    rewrites dcterms:modified from the wall clock at save time — so the XML
+    is patched here too. Without it these files churn on every regeneration
+    and stale every committed sidecar's blake3 fingerprint.
+    """
     wb.properties.created = FIXED_TIME
     wb.properties.modified = FIXED_TIME
     buf = io.BytesIO()
     wb.save(buf)
     src = zipfile.ZipFile(io.BytesIO(buf.getvalue()))
     out = io.BytesIO()
+    stamp = FIXED_TIME.strftime("%Y-%m-%dT%H:%M:%SZ").encode()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
         for info in src.infolist():
             zi = zipfile.ZipInfo(info.filename, date_time=FIXED_TIME.timetuple()[:6])
             zi.compress_type = zipfile.ZIP_DEFLATED
             zi.external_attr = info.external_attr
-            dst.writestr(zi, src.read(info.filename))
+            data = src.read(info.filename)
+            if info.filename == "docProps/core.xml":
+                data = MODIFIED_RE.sub(rb"\g<1>" + stamp + rb"\g<2>", data)
+            dst.writestr(zi, data)
     return write_bytes(name, out.getvalue())
 
 

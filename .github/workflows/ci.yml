@@ -22,15 +22,40 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install openpyxl
+      - name: Install the fixture writers
         # The spreadsheet fixtures are generated, not committed by hand.
-        run: pip install --quiet openpyxl
+        # xlwt is the only pure-Python BIFF8 writer, so it is what gives the
+        # legacy .xls path a fixture; the .ods files need no library.
+        # lxml matters even though nothing imports it: openpyxl serialises
+        # through it when present and through ElementTree when not, and the
+        # two differ (`<tag/>` vs `<tag />`). Without it CI regenerates every
+        # .xlsx to different bytes than the committed ones.
+        run: pip install --quiet openpyxl xlwt lxml
 
       - name: Regenerate every fixture
         # Proves the generators still run and still produce what the tests
-        # expect. Byte-equality against the committed files is deliberately
-        # not asserted: an .xlsx is a zip archive and carries timestamps.
+        # expect. Byte-equality against the *committed* files is deliberately
+        # not asserted: zlib and lxml differ across platforms, and that would
+        # make CI red for reasons that are not defects.
         run: python3 gen_fixtures.py
+
+      - name: Regeneration is idempotent
+        # A generator that stamps a wall clock produces a different file every
+        # run, which stales the blake3 fingerprint in every sidecar pointing
+        # at it. Comparing a run against the run before it catches that
+        # without depending on the platform. Two generators had this bug.
+        run: |
+          set -euo pipefail
+          hash_fixtures() {
+            find testdata -type f ! -name '*.tdy.toml' -print0 \
+              | sort -z | xargs -0 sha256sum
+          }
+          hash_fixtures > /tmp/fixtures.before
+          python3 gen_fixtures.py > /dev/null
+          hash_fixtures > /tmp/fixtures.after
+          diff /tmp/fixtures.before /tmp/fixtures.after \
+            || { echo "::error::fixture generation is not deterministic"; exit 1; }
+          echo "all fixtures regenerate byte-identically"
 
       - name: Build
         run: cargo build --locked --all-targets
@@ -68,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: pip install --quiet openpyxl
+      - run: pip install --quiet openpyxl xlwt lxml
       - run: python3 gen_fixtures.py
       - run: cargo build --locked --release
 

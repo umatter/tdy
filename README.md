@@ -82,6 +82,12 @@ confidence below the threshold, says in `notes` what it could not read, and
 either escalates to the model or waits for you to write the extraction by
 hand. It does not guess and call it a result.
 
+The hardest case measured so far is the decorated fixed-width report
+(`testdata/logs_fixed_width_report_ascii.txt`): ruler lines, group headers and
+an overflowed numeric field defeat tier 1 *and* both models that otherwise
+pass the live suite. Write that extraction by hand — `tdy validate --stamp`
+exists for exactly this.
+
 Backends: `none` (default — nothing ever leaves your machine), `local` (any
 OpenAI-compatible server: llama.cpp, Ollama, vLLM), `anthropic`, and
 `openrouter` (one endpoint in front of many models).
@@ -170,6 +176,12 @@ dtype = { type = "decimal", precision = 12, scale = 2 }
 parse = { thousands_separator = "'", strip = "^CHF\\s*", na_values = ["n/a"] }
 ```
 
+Spreadsheets: `.xlsx`, `.xlsm`, `.xls` (BIFF8) and `.ods` all go through
+`format = "excel"` and are covered by fixtures that assert the same table
+reads identically in every container. `.xlsb` is routed too and calamine
+reads it, but there is no pure-Python writer for it, so it has no generated
+fixture and is the one spreadsheet path this suite does not check.
+
 Types: `utf8 | bool | int64 | float64 | decimal(p,s) | date | timestamp` —
 mapping 1:1 onto Arrow. Typing happens *last*, so transforms never reason
 about types and every cast failure points at an exact row.
@@ -243,8 +255,8 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 217 tests; plain `cargo test` also runs doc-tests
-python3 gen_fixtures.py     # regenerate every fixture under testdata/
+cargo test --lib --tests    # 228 tests; plain `cargo test` also runs doc-tests
+python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 
 The suite is in five parts: unit tests beside the code; `tests/e2e.rs` (the

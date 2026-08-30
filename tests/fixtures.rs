@@ -412,3 +412,100 @@ fn a_java_application_log_skips_its_stack_traces() {
         "a stack-trace line was parsed as a record: {level:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Legacy spreadsheet containers
+// ---------------------------------------------------------------------------
+
+/// `guess_format` routes xlsx, xlsm, xls and ods to the same Excel path, but
+/// behind that one line sit three different calamine readers: OOXML,
+/// BIFF/CFB, and OpenDocument. The claim worth testing is not that each one
+/// parses — it is that they parse the *same*, because a container that
+/// quietly drops an accent or shifts a column still produces a table, and a
+/// wrong number is the one outcome tdy is not allowed to produce.
+///
+/// One logical table, four containers, byte-for-byte equal results.
+#[test]
+fn one_table_in_four_containers_reads_identically() {
+    let mut seen: Option<(Vec<Option<String>>, f64, f64)> = None;
+    for f in [
+        "legacy_formats_same_table.xlsx",
+        "legacy_formats_same_table.xlsm",
+        "legacy_formats_same_table.xls",
+        "legacy_formats_same_table.ods",
+    ] {
+        let (spec, b) = read(f);
+        assert_eq!(b.num_rows(), 3, "{f}");
+
+        // The accented names survive UTF-16LE (BIFF8) and UTF-8 XML alike.
+        let filiale = strs(&b, "filiale");
+        assert_eq!(
+            filiale.iter().map(|v| v.as_deref()).collect::<Vec<_>>(),
+            vec![Some("Zürich"), Some("Genève"), Some("Lugano")],
+            "{f}"
+        );
+
+        // Money is exact, headcount is an integer, and the date cell renders
+        // the same in all three readers.
+        assert!(matches!(dtype(&spec, "umsatz"), DType::Decimal { scale: 2, .. }), "{f}");
+        assert!(matches!(dtype(&spec, "mitarbeitende"), DType::Int64), "{f}");
+        assert!(
+            matches!(dtype(&spec, "eroeffnet"), DType::Date { ref format } if format == "%Y-%m-%d"),
+            "{f}: {:?}",
+            dtype(&spec, "eroeffnet")
+        );
+
+        let umsatz = total(&b, "umsatz");
+        let heads = total(&b, "mitarbeitende");
+        assert!((umsatz - 4721.75).abs() < 1e-6, "{f}: {umsatz}");
+        assert!((heads - 35.0).abs() < 1e-6, "{f}: {heads}");
+
+        let observed = (filiale, umsatz, heads);
+        match &seen {
+            Some(first) => {
+                assert_eq!(&observed, first, "{f} disagrees with the first container")
+            }
+            None => seen = Some(observed),
+        }
+    }
+}
+
+/// The legacy BIFF reader must expose a sheet *list*, not just sheet 0, or
+/// sheet selection silently reads a cover page as if it were the data.
+#[test]
+fn sheet_selection_works_on_the_legacy_xls_reader() {
+    let (spec, b) = read("legacy_formats_xls_cover_sheet.xls");
+    match &spec.extraction {
+        Extraction::Excel { sheet_name, sheet_index, .. } => assert!(
+            sheet_name.as_deref() == Some("Daten") || *sheet_index == Some(1),
+            "picked the prose cover sheet instead of the data: {sheet_name:?} / {sheet_index:?}"
+        ),
+        other => panic!("an .xls was not routed to the Excel reader: {other:?}"),
+    }
+    assert_eq!(b.num_rows(), 4);
+    assert!((total(&b, "betrag") - 6666.00).abs() < 1e-6, "{}", total(&b, "betrag"));
+    assert_eq!(
+        strs(&b, "waehrung").iter().filter(|v| v.as_deref() == Some("EUR")).count(),
+        1
+    );
+    assert_eq!(ints(&b, "beleg")[0], Some(4001));
+}
+
+/// A sparse ODS row is written as a `number-columns-repeated` run, not as
+/// empty cells. If that run were ignored, every value after the gap would
+/// slide left into a neighbouring column — the exact silent-wrong-value
+/// failure the whole design exists to prevent. Tier 1 declines this file
+/// (see the generator's docstring); this asserts the answer is right once a
+/// spec says what to do, and `tests/formats.rs` pins the hand-written spec.
+#[test]
+fn an_ods_repeated_cell_run_keeps_its_column_alignment() {
+    let (_, b) = read("legacy_formats_ods_sparse.ods");
+    assert_eq!(b.num_columns(), 5, "the repeated run changed the column count");
+    // Whatever tier 1 decides to call the columns, each must hold its own
+    // value: two dense rows of 1,2,3,4,5 sum to 2,4,6,8,10 across the five
+    // columns. A dropped run would shift them left and skew every total.
+    let schema = b.schema();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    let sums: Vec<f64> = names.iter().map(|n| total(&b, n)).collect();
+    assert_eq!(sums, vec![2.0, 4.0, 6.0, 8.0, 10.0], "columns slid: {sums:?}");
+}

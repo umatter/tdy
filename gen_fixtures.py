@@ -11,12 +11,17 @@ produce.
     python3 gen_fixtures.py 01 04        # only the generators whose name matches
     python3 gen_fixtures.py --list
 
-Requires openpyxl for the spreadsheet fixtures.
+Requires openpyxl for the spreadsheet fixtures, and xlwt for the legacy .xls
+ones (09 skips those with a notice if it is missing). ODS is written with the
+standard library.
 """
 
 import os
+import re
 import subprocess
 import sys
+import zipfile
+from datetime import datetime
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 GEN_DIR = os.path.join(ROOT, "testdata", "gen")
@@ -28,6 +33,29 @@ def generators():
     return sorted(
         f for f in os.listdir(GEN_DIR) if f.endswith(".py") and not f.startswith("_")
     )
+
+
+_MODIFIED_RE = re.compile(rb"(<dcterms:modified[^>]*>)[^<]*(</dcterms:modified>)")
+
+
+def _repack_deterministic(path):
+    """Rewrite an xlsx zip with pinned entry timestamps and dcterms:modified."""
+    tmp = path + ".tmp"
+    with zipfile.ZipFile(path) as zin:
+        entries = [(i.filename, zin.read(i.filename)) for i in zin.infolist()]
+    entries = [
+        (name, _MODIFIED_RE.sub(rb"\g<1>2026-01-01T00:00:00Z\g<2>", data)
+         if name == "docProps/core.xml" else data)
+        for name, data in entries
+    ]
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
+        for name, data in entries:
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 0
+            info.external_attr = 0o644 << 16
+            zout.writestr(info, data)
+    os.replace(tmp, path)
 
 
 def umsatz():
@@ -69,7 +97,14 @@ def umsatz():
     ws.append(["Total", None, 5051.25, 5250.75, 4590.75, 6351.50])
 
     out = os.path.join(ROOT, "testdata", "umsatz.xlsx")
+    # Pin the document properties and repack the zip with fixed entry stamps,
+    # or this file's bytes change on every run and stale the fingerprint in
+    # every committed sidecar that points at it. openpyxl rewrites
+    # dcterms:modified at save time whatever the properties say, so the XML
+    # is patched as well.
+    wb.properties.created = wb.properties.modified = datetime(2026, 1, 1)
     wb.save(out)
+    _repack_deterministic(out)
     print(f"wrote {os.path.relpath(out, ROOT)}")
 
 

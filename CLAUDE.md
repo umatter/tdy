@@ -13,11 +13,11 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 217 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 228 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
-python3 gen_fixtures.py                 # regenerate all fixtures
+python3 gen_fixtures.py                 # regenerate all fixtures (openpyxl + xlwt)
 python3 gen_fixtures.py 04 --list       # one generator / list them
 cargo run -- sniff testdata/umsatz.xlsx --no-llm
 cargo run -- validate <file> --stamp    # re-fingerprint a hand-edited sidecar
@@ -147,3 +147,16 @@ it OOM. If you change extraction, re-measure with `/usr/bin/time -f "wall %es pe
 `testdata/gen/` owns a disjoint set of files and documents in its docstring what each file
 stresses. `testdata/large/` is gitignored (perf fixtures, generated on demand).
 `tests/e2e.rs::umsatz_spec()` is the hand-written reference spec for `umsatz.xlsx`.
+
+Generators need `openpyxl` (xlsx/xlsm), `xlwt` (the only pure-Python BIFF8 writer, for
+`.xls`) and **`lxml`** — nothing imports lxml, but openpyxl serialises through it when it is
+installed and through ElementTree when it is not, and the two disagree (`<tag/>` vs
+`<tag />`), so its absence silently rewrites every `.xlsx` in the tree. `09_legacy_formats.py`
+skips the `.xls` files with a notice rather than failing if xlwt is absent, and writes its
+`.ods` files with stdlib `zipfile`.
+
+Anything that writes a zip must pin entry timestamps *and* patch `dcterms:modified` —
+openpyxl rewrites that at save time whatever `wb.properties` says. Getting this wrong is not
+cosmetic: it stales the blake3 fingerprint in every sidecar pointing at the file. `umsatz()`
+in `gen_fixtures.py` and `08_adversarial.py` both had it wrong until it was fixed; the check
+is `python3 gen_fixtures.py` twice and `git status` clean.
