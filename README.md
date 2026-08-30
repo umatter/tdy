@@ -292,15 +292,16 @@ Details worth knowing:
 `[limits]` in the config caps what a single run will attempt, so a
 pathological file fails with a sentence instead of the OOM killer:
 `max_file_bytes` (default 4 GiB), `max_cells` (50M) and `max_streamed_cells`
-(200M) — the last of these is a bound on work, not on memory, which no longer
-depends on the file's size.
+(2B).
 
-There are two cell limits because the two paths cost differently, by about a
-factor of seven. Materialised — spreadsheets, JSON, any spec the streaming
-executor declines — a cell runs ~122 bytes; streamed, ~18 on a delimited file
-and ~29 on a log. Both defaults stand for a ceiling of roughly 6 GB, which is
-why the numbers differ: holding streamed text to the materialised one would
-refuse a 260 MB CSV that in fact reads in under a gigabyte.
+`max_cells` is the memory bound, and it applies to work that is
+*materialised*: spreadsheets, JSON, and any spec the streaming executor
+declines. A cell costs about 122 bytes there, so 50M stands for a ceiling of
+roughly 6 GB.
+
+`max_streamed_cells` bounds time rather than memory, because streaming has no
+memory cost that follows the cell count — it holds neither the rows nor the
+decoded text. `max_file_bytes` is normally what stops a long run first.
 
 For spreadsheets the limits are checked against what the file **declares**,
 before its grid is allocated. They have to be: a spreadsheet's size is a

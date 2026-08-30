@@ -118,8 +118,12 @@ pub struct Limits {
     /// This is the bound for work that is *materialised*: spreadsheets, JSON,
     /// and any spec the streaming executor declines.
     pub max_cells: u64,
-    /// The same bound for the streaming executor, which is a different number
-    /// because it is a different cost. See [`Limits::default`].
+    /// A bound on *work* for the streaming executor, not on memory.
+    ///
+    /// Streaming memory does not depend on how many cells a file has — the
+    /// rows are never accumulated and a batch is bounded by cells of its own —
+    /// so this exists only to stop a run that would take unreasonably long.
+    /// `max_file_bytes` is the bound that usually bites first.
     pub max_streamed_cells: u64,
 }
 
@@ -137,12 +141,16 @@ impl Default for Limits {
             // 400M stood for ~48 GB, which is not a guard rail, it is a
             // number larger than the machine.)
             max_cells: 50_000_000,
-            // Streamed, the raw strings never accumulate, and a cell costs
-            // ~18 bytes on a delimited file and ~29 on a log, most of it the
-            // decoded text and the Arrow output. 200M is ~3.7 GB of CSV or
-            // ~5.8 GB of log. Holding streamed text to the materialised
-            // number would refuse a 500 MB CSV that needs under a gigabyte.
-            max_streamed_cells: 200_000_000,
+            // Streaming holds neither the rows nor the decoded text, and its
+            // batches are bounded by cells, so its memory does not depend on
+            // this at all. It is a "this would run for hours" guard, and it is
+            // set high enough that `max_file_bytes` is what normally stops a
+            // run: 4 GiB of an 8-column CSV is only ~690M cells.
+            //
+            // It was 200M briefly, calibrated against a memory cost that the
+            // streaming executor no longer has — which refused a 1.25 GB file
+            // that in fact reads in 88 MB.
+            max_streamed_cells: 2_000_000_000,
         }
     }
 }
@@ -477,13 +485,15 @@ timeout_seconds = 120
 # Guard rails, not policy: a file past these fails with an explanation
 # instead of with the OOM killer. max_file_bytes applies to the uncompressed
 # contents of a zip-based spreadsheet, not to its size on disk.
-# Two cell limits because the two paths cost differently: materialised work
-# (spreadsheets, JSON, unusual specs) runs ~122 bytes a cell, streamed text
-# ~18-29. Both defaults stand for a ceiling of roughly 6 GB. Raise them if you
-# have the RAM and mean it.
+# max_cells bounds materialised work (spreadsheets, JSON, unusual specs) at
+# ~122 bytes a cell, so 50M is a ceiling of roughly 6 GB. Raise it if you have
+# the RAM and mean it.
+# max_streamed_cells bounds *time*, not memory: streaming holds neither the
+# rows nor the decoded text, so its cost does not follow the cell count.
+# max_file_bytes is normally what stops a long run first.
 max_file_bytes = 4294967296   # 4 GiB
 max_cells = 50000000
-max_streamed_cells = 200000000
+max_streamed_cells = 2000000000
 "#;
 
 #[cfg(test)]
