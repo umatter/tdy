@@ -253,6 +253,7 @@ Details worth knowing:
   | 190 MB nginx log, 2M lines | 3.27 s, 1,376 MB | **2.76 s, 98 MB** |
   | 987 MB CSV, 21M rows | refused: over `max_cells` | **20.9 s, 88 MB** |
   | 134 MB CSV, 1,000 columns | refused | **6.4 s, 114 MB** |
+  | 138 MB NDJSON, 1.5M records | 2.9 s, 2,128 MB | **2.9 s, 78 MB** |
 
   Memory does not move with the file, in either dimension: a 987 MB CSV is
   read in 88 MB, the same as a 140 MB one, and a thousand-column file in 114
@@ -280,8 +281,11 @@ Details worth knowing:
   once and cached instead, which is the better trade when a query names the
   same file twice. `TDY_LAZY_ABOVE_BYTES` moves the line.
 
-  Excel and JSON do not stream: their readers materialise the document before
-  any row exists. Neither does an unusual transform order — those fall back to
+  NDJSON streams too, though its header — the union of every record's keys —
+  has to be discovered by a pass over the file first, since a key that appears
+  only in the last record still has to become a column. Excel and a JSON
+  *array* do not stream: each is one document, and no record exists until it
+  has been parsed whole. Neither does an unusual transform order — those fall back to
   the materialising path, so no spec is ever *refused* for being unusual. The
   two executors are held to producing identical batches over every text
   fixture in the tree, and `TDY_NO_STREAM=1` forces the old path if you want
@@ -331,7 +335,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 258 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 261 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

@@ -685,7 +685,7 @@ fn extract_json(
     Ok(RawTable::with_header(header, rows, truncated))
 }
 
-fn json_scalar(v: &serde_json::Value) -> String {
+pub(crate) fn json_scalar(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::Null => String::new(),
         serde_json::Value::String(s) => s.clone(),

@@ -85,6 +85,10 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
         // the field list — so there is no width to discover and no header to
         // promote.
         Extraction::Lines { .. } | Extraction::FixedWidth { .. } => true,
+        // NDJSON records are independent lines, so they stream; a JSON
+        // *array* is one document and has to be parsed whole before any
+        // record exists. A pointer only applies to the array form.
+        Extraction::Json { lines: true, pointer: None } => true,
         _ => return false,
     };
     // `promote_header` over a source that already has a header replaces it
@@ -271,6 +275,10 @@ enum Source {
         line_no: usize,
     },
     Fixed { rdr: Box<dyn BufRead + Send>, buf: Vec<u8>, fields: Vec<FixedField>, chars: Vec<char> },
+    /// NDJSON. `header` comes from [`discover_ndjson`]; a record's values are
+    /// emitted in that order, with a missing key an empty string, exactly as
+    /// the materialising path does it.
+    Ndjson { rdr: Box<dyn BufRead + Send>, buf: Vec<u8>, header: Vec<String>, line_no: usize },
 }
 
 /// Read one line, without its terminator. `Ok(false)` at end of input.
@@ -313,8 +321,86 @@ fn header_of(extraction: &Extraction) -> Result<Option<Vec<String>>> {
         Extraction::FixedWidth { fields, .. } => {
             Some(fields.iter().map(|f| f.name.clone()).collect())
         }
+        // Discovered by a pass over the file, not derivable from the spec.
+        Extraction::Json { .. } => None,
         other => bail!("internal: {} is not a streaming source", other.format_name()),
     })
+}
+
+/// The header of an NDJSON file, and how many records it has.
+///
+/// Mirrors `engine::extract_json`: the union of every record's keys in
+/// first-seen order, and a file that mixes objects with scalars is refused
+/// rather than flattened, because there is no single tabular reading of one.
+/// Finding that out needs a pass over the file — the union is not knowable
+/// from a prefix, and guessing it from one would silently drop a column that
+/// only appears late.
+fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usize)> {
+    let mut rdr = open_input(path, None, opts)?;
+    let mut buf = Vec::with_capacity(4096);
+    let mut header: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut records = 0usize;
+    let mut objects = 0usize;
+    let mut line_no = 0usize;
+
+    while read_line(rdr.as_mut(), &mut buf)? {
+        line_no += 1;
+        let line = text_of(&buf);
+        if line.trim().is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = match serde_json::from_str(line.as_ref()) {
+            Ok(v) => v,
+            Err(e) => {
+                // "Truncated last line" is a different diagnosis from "broken
+                // record", and only knowable once nothing follows it.
+                let last = !any_more_content(rdr.as_mut(), &mut buf)?;
+                if last && e.is_eof() {
+                    bail!(
+                        "line {} is a truncated JSON record — the file looks like it was \
+                         cut mid-write. Complete or remove the last line; tdy will not \
+                         silently drop a partial record.",
+                        line_no
+                    );
+                }
+                bail!("invalid JSON on line {}: {e}", line_no);
+            }
+        };
+        records += 1;
+        if let serde_json::Value::Object(map) = &parsed {
+            objects += 1;
+            for k in map.keys() {
+                if seen.insert(k.clone()) {
+                    header.push(k.clone());
+                }
+            }
+        }
+    }
+
+    if objects > 0 && objects != records {
+        bail!(
+            "{} of {} JSON records are not objects; a records array must be all \
+             objects (or all scalars)",
+            records - objects,
+            records
+        );
+    }
+    if objects == 0 {
+        header = vec!["value".to_string()];
+    }
+    Ok((header, records))
+}
+
+/// Whether any further non-blank line exists. Consumes the rest of the input,
+/// so only call it on the way to an error.
+fn any_more_content(rdr: &mut dyn BufRead, buf: &mut Vec<u8>) -> Result<bool> {
+    while read_line(rdr, buf)? {
+        if !text_of(buf).trim().is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 impl Source {
@@ -322,6 +408,7 @@ impl Source {
         path: &Path,
         extraction: &Extraction,
         opts: &ExtractOpts,
+        discovered: Option<&[String]>,
     ) -> Result<(Self, Option<Vec<String>>)> {
         let input = open_input(path, extraction.encoding(), opts)?;
         Ok(match extraction {
@@ -362,6 +449,21 @@ impl Source {
                         chars: Vec::new(),
                     },
                     Some(header),
+                )
+            }
+            Extraction::Json { .. } => {
+                let header = discovered
+                    .map(|h| h.to_vec())
+                    .ok_or_else(|| anyhow!("internal: NDJSON opened without a header"))?;
+                let names = header.clone();
+                (
+                    Source::Ndjson {
+                        rdr: input,
+                        buf: Vec::with_capacity(4096),
+                        header,
+                        line_no: 0,
+                    },
+                    Some(names),
                 )
             }
             other => bail!("internal: {} is not a streaming source", other.format_name()),
@@ -406,6 +508,15 @@ impl Source {
                         continue;
                     }
                     return Ok(Some(fields.len()));
+                }
+                Ok(None)
+            }
+            Source::Ndjson { rdr, buf, header, .. } => {
+                while read_line(rdr.as_mut(), buf)? {
+                    if text_of(buf).trim().is_empty() {
+                        continue;
+                    }
+                    return Ok(Some(header.len()));
                 }
                 Ok(None)
             }
@@ -470,6 +581,25 @@ impl Source {
                             })
                             .collect(),
                     ));
+                }
+                Ok(None)
+            }
+            Source::Ndjson { rdr, buf, header, line_no } => {
+                while read_line(rdr.as_mut(), buf)? {
+                    *line_no += 1;
+                    let line = text_of(buf);
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let v: serde_json::Value = serde_json::from_str(line.as_ref())
+                        .map_err(|e| anyhow!("invalid JSON on line {}: {e}", line_no))?;
+                    return Ok(Some(match &v {
+                        serde_json::Value::Object(map) => header
+                            .iter()
+                            .map(|k| map.get(k).map(crate::engine::json_scalar).unwrap_or_default())
+                            .collect(),
+                        other => vec![crate::engine::json_scalar(other)],
+                    }));
                 }
                 Ok(None)
             }
@@ -551,7 +681,7 @@ fn first_odd_row(
     opts: &ExtractOpts,
     modal: usize,
 ) -> Option<(usize, usize)> {
-    let (mut src, _) = Source::open(path, extraction, opts).ok()?;
+    let (mut src, _) = Source::open(path, extraction, opts, None).ok()?;
     let mut i = 0usize;
     while let Ok(Some(w)) = src.next_width() {
         if w != modal {
@@ -602,7 +732,15 @@ pub fn execute_with(
         _ => RaggedPolicy::PadNulls,
     };
 
-    let provided_header = header_of(&spec.extraction)?;
+    // NDJSON's header is the union of every record's keys, so it comes from a
+    // pass over the file rather than from the spec.
+    let (provided_header, ndjson_rows) = match &spec.extraction {
+        Extraction::Json { .. } => {
+            let (h, n) = discover_ndjson(path, &opts)?;
+            (Some(h), Some(n))
+        }
+        other => (header_of(other)?, None),
+    };
 
     let tail = spec
         .transforms
@@ -621,7 +759,8 @@ pub fn execute_with(
         // decoded incrementally, its copy of the file — is dropped before the
         // body source is opened. Holding both at once cost a second full copy
         // of the file, which is how a 987 MB CSV reached 2 GB.
-        let (mut counting, _) = Source::open(path, &spec.extraction, &opts)?;
+        let (mut counting, _) =
+            Source::open(path, &spec.extraction, &opts, provided_header.as_deref())?;
         Some(measure(&mut counting, &limits, path)?)
     } else {
         None
@@ -658,9 +797,11 @@ pub fn execute_with(
         }
     };
 
-    let total_rows = shape.as_ref().map(|s| s.rows).unwrap_or(usize::MAX);
+    let total_rows =
+        shape.as_ref().map(|s| s.rows).or(ndjson_rows).unwrap_or(usize::MAX);
     let mut plan = Plan::build(spec, target_width, total_rows)?;
-    let (mut source, _) = Source::open(path, &spec.extraction, &opts)?;
+    let (mut source, _) =
+        Source::open(path, &spec.extraction, &opts, provided_header.as_deref())?;
     let mut row_index = 0usize;
 
     // --- the header, from the first rows -----------------------------------

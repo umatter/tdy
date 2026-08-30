@@ -21,6 +21,8 @@ use tdy::config::Limits;
 use tdy::spec::*;
 use tdy::{engine, sample, sniff, stream};
 
+/// Every text fixture, whatever its extension: the sweep is only worth
+/// something if it actually covers the formats that stream.
 fn testdata() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata")
 }
@@ -64,7 +66,10 @@ fn delimited_fixtures() -> Vec<PathBuf> {
                     .extension()
                     .map(|e| e.to_string_lossy().to_ascii_lowercase())
                     .unwrap_or_default();
-                if matches!(ext.as_str(), "csv" | "tsv" | "txt" | "dat" | "log") {
+                if matches!(
+                    ext.as_str(),
+                    "csv" | "tsv" | "txt" | "dat" | "log" | "ndjson" | "jsonl"
+                ) {
                     out.push(p);
                 }
             }
@@ -733,4 +738,91 @@ fn a_wide_file_is_cut_into_batches_by_cells_not_rows() {
 
     // And the values are still right.
     assert_paths_agree(&s, &p, "a wide file");
+}
+
+/// NDJSON is the last format that streams, and the one with the most
+/// semantics to get wrong: the header is the union of every record's keys in
+/// first-seen order, a missing key is an empty value (not a shifted row), and
+/// a file mixing objects with scalars has no tabular reading and is refused.
+///
+/// None of that is knowable from a prefix, which is why discovery is a real
+/// pass over the file rather than a guess from the first few records — a
+/// column that only appears late must not vanish.
+#[test]
+fn ndjson_streams_with_the_same_semantics_as_the_materialising_path() {
+    let mut seen = 0usize;
+    for p in delimited_fixtures() {
+        let ext = p.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+        if ext != "ndjson" && ext != "jsonl" {
+            continue;
+        }
+        let Ok(s) = sample::build(&p, 64 * 1024, Limits::default()) else { continue };
+        let Ok(res) = sniff::sniff(&p, &s, Limits::default()) else { continue };
+        if !matches!(res.spec.extraction, Extraction::Json { lines: true, .. }) {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            stream::can_stream(&res.spec),
+            "{}: an NDJSON spec was not streamable",
+            p.display()
+        );
+        assert_paths_agree(&res.spec, &p, &p.display().to_string());
+    }
+    assert!(seen >= 3, "only {seen} NDJSON fixtures were exercised");
+    eprintln!("compared {seen} NDJSON fixtures down both paths");
+}
+
+/// A key that appears only in a late record must still become a column, and
+/// records without it must get an empty value rather than a shifted row.
+#[test]
+fn a_late_ndjson_key_still_becomes_a_column() {
+    let dir = TempDir::new().unwrap();
+    let mut body = String::new();
+    for i in 0..5000 {
+        body.push_str(&format!("{{\"a\":{i},\"b\":\"x\"}}\n"));
+    }
+    body.push_str("{\"a\":9999,\"b\":\"y\",\"late\":\"here\"}\n");
+    let p = write(&dir, "late_key.ndjson", &body);
+
+    let s = ParseSpec {
+        extraction: Extraction::Json { lines: true, pointer: None },
+        transforms: vec![],
+        columns: vec![
+            col("a", DType::Int64),
+            col("b", DType::Utf8),
+            col("late", DType::Utf8),
+        ],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    assert!(stream::can_stream(&s));
+    assert_paths_agree(&s, &p, "a late NDJSON key");
+
+    let text = render(&stream::execute_batches(&s, &p, Limits::default()).unwrap());
+    assert!(text.contains("here"), "the late key's value was lost:\n{text}");
+}
+
+/// A JSON *array* is one document: no record exists until it is parsed whole,
+/// so it must be declined rather than streamed badly. Same for a pointer,
+/// which only applies to the array form.
+#[test]
+fn a_json_array_is_not_streamed() {
+    let array = ParseSpec {
+        extraction: Extraction::Json { lines: false, pointer: None },
+        transforms: vec![],
+        columns: vec![],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    assert!(!stream::can_stream(&array));
+
+    let pointed = ParseSpec {
+        extraction: Extraction::Json { lines: true, pointer: Some("/data".into()) },
+        transforms: vec![],
+        columns: vec![],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    assert!(!stream::can_stream(&pointed));
 }

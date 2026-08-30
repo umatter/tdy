@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 258 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 261 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -126,9 +126,11 @@ Things that only become clear from reading several modules:
 - **`stream` is the executor for text formats; `engine` is the fallback and the reference.**
   It is plumbing only — where an answer could differ (`promote_header_from`,
   `build_column_at`) it calls the same function `engine` calls, deliberately, so the two
-  cannot drift. It covers delimited, `lines` and `fixed_width` — everything whose rows are
-  independent — behind a `Source` enum; Excel and JSON cannot stream, their readers
-  materialise the document before a row exists. It accepts only
+  cannot drift. It covers delimited, `lines`, `fixed_width` and NDJSON — everything whose rows are
+  independent — behind a `Source` enum; Excel and a JSON *array* cannot stream, since each
+  is one document with no records until it is parsed whole. NDJSON's header is the union of
+  every record's keys, so `discover_ndjson` makes a real pass rather than guessing from a
+  prefix: a key appearing only in the last record still has to become a column. It accepts only
   `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down)* [unpivot]?`;
   `can_stream` returns false for anything else and the caller falls back, so an unusual spec
   is never *refused*, only executed the old way. `TDY_NO_STREAM=1` forces `engine` — that is
@@ -165,7 +167,8 @@ Things that only become clear from reading several modules:
 
   Measured `count(*)`: 140 MB / 3M-row CSV 1,676 -> **86 MB**; 190 MB / 2M-line nginx log
   1,376 -> **98 MB**; 987 MB / 21M-row CSV refused -> **88 MB**; 134 MB / 1,000-column CSV
-  4,156 -> **114 MB**. Memory does not track file size or width any more.
+  4,156 -> **114 MB**; 138 MB / 1.5M-record NDJSON 2,128 -> **78 MB**. Memory does not track
+  file size or width any more.
 - **`xlguard` bounds a spreadsheet before it is read.** Every other limit is checked against a
   table that already exists — fine for text, useless for a format whose size is a *claim*: a
   899-byte `.ods` was measured at 4.8 GB and SIGABRT, which is the one failure mode the design
