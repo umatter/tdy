@@ -107,9 +107,13 @@ pub struct Config {
 /// you can act on instead of with the OOM killer.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
-    /// Refuse to parse a source file larger than this.
+    /// Refuse to parse a source file larger than this. For a zip-based
+    /// spreadsheet this is applied to the *uncompressed* total, which is
+    /// what has to be held, not to the size on disk.
     pub max_file_bytes: u64,
-    /// Refuse a table with more than this many cells (rows x columns).
+    /// Refuse a table with more than this many cells (rows x columns) —
+    /// checked against what a spreadsheet *declares*, before its grid is
+    /// allocated, as well as against the table once built.
     pub max_cells: u64,
 }
 
@@ -117,7 +121,16 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             max_file_bytes: 4 * 1024 * 1024 * 1024, // 4 GiB
-            max_cells: 400_000_000,
+            // Measured, not guessed: end to end a spreadsheet cell costs
+            // ~122 bytes (calamine's Data, then our own String), and a
+            // delimited one ~46. So this is a ceiling of roughly 6 GB on the
+            // expensive path and 2.3 GB on the cheap one.
+            //
+            // It was 400_000_000 until a 898-byte .ods was measured at
+            // 4.8 GB — that default meant ~48 GB, which is not a guard rail,
+            // it is a number larger than the machine. The perf reference
+            // (a 3M-row x 8-column CSV, 24M cells) still fits with room.
+            max_cells: 50_000_000,
         }
     }
 }
@@ -443,9 +456,13 @@ timeout_seconds = 120
 
 [limits]
 # Guard rails, not policy: a file past these fails with an explanation
-# instead of with the OOM killer.
+# instead of with the OOM killer. max_file_bytes applies to the uncompressed
+# contents of a zip-based spreadsheet, not to its size on disk.
+# A cell costs ~122 bytes on the spreadsheet path and ~46 on the delimited
+# one, so 50M cells is a ceiling of roughly 6 GB. Raise it if you have the
+# RAM and mean it.
 max_file_bytes = 4294967296   # 4 GiB
-max_cells = 400000000
+max_cells = 50000000
 "#;
 
 #[cfg(test)]

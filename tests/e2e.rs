@@ -156,7 +156,7 @@ fn sniff_messy_csv_structure() {
     let path = dir.path().join("kunden.csv");
     fs::write(&path, MESSY_CSV).unwrap();
 
-    let s = sample::build(&path, 16 * 1024).unwrap();
+    let s = sample::build(&path, 16 * 1024, Limits::default()).unwrap();
     let result = sniff::sniff(&path, &s, Limits::default()).unwrap();
     let spec = result.spec;
     spec.validate().unwrap();
@@ -347,7 +347,7 @@ async fn ndjson_sniff_and_query() {
     )
     .unwrap();
 
-    let s = sample::build(&path, 16 * 1024).unwrap();
+    let s = sample::build(&path, 16 * 1024, Limits::default()).unwrap();
     let result = sniff::sniff(&path, &s, Limits::default()).unwrap();
     assert!(matches!(result.spec.extraction, Extraction::Json { lines: true, .. }));
 

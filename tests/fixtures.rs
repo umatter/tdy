@@ -30,7 +30,7 @@ fn fixture(rel: &str) -> PathBuf {
 fn read(rel: &str) -> (ParseSpec, RecordBatch) {
     let p = fixture(rel);
     assert!(p.exists(), "missing fixture {rel} — run `python3 gen_fixtures.py`");
-    let s = sample::build(&p, 16 * 1024).unwrap_or_else(|e| panic!("{rel}: sampling: {e:#}"));
+    let s = sample::build(&p, 16 * 1024, Limits::default()).unwrap_or_else(|e| panic!("{rel}: sampling: {e:#}"));
     let spec = sniff::sniff(&p, &s, Limits::default())
         .unwrap_or_else(|e| panic!("{rel}: sniffing: {e:#}"))
         .spec;
@@ -365,7 +365,7 @@ fn excel_dates_and_padded_ids_are_typed_correctly() {
 #[test]
 fn a_merged_multirow_header_is_reported_as_uncertain() {
     let p = fixture("excel_nightmares_merged_header.xlsx");
-    let s = sample::build(&p, 16 * 1024).unwrap();
+    let s = sample::build(&p, 16 * 1024, Limits::default()).unwrap();
     let r = sniff::sniff(&p, &s, Limits::default()).unwrap();
     assert!(
         r.confidence < 0.8,

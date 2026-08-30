@@ -321,7 +321,7 @@ fn sniff_fixed_width(
 
 fn sniff_excel(path: &Path, sample: &FileSample, limits: Limits) -> Result<SniffResult> {
     let mut doubts = Doubts::default();
-    let sheet = pick_sheet(path, sample);
+    let sheet = pick_sheet(path, sample, limits);
     let extraction = Extraction::Excel {
         sheet_name: sheet.clone(),
         sheet_index: None,
@@ -437,8 +437,8 @@ fn sniff_excel(path: &Path, sample: &FileSample, limits: Limits) -> Result<Sniff
 ///
 /// One workbook open for all sheets: calamine re-parses the whole archive on
 /// every open, so asking sheet by sheet costs a full parse per sheet.
-fn pick_sheet(path: &Path, sample: &FileSample) -> Option<String> {
-    let shapes = engine::excel_sheet_shapes(path).ok()?;
+fn pick_sheet(path: &Path, sample: &FileSample, limits: Limits) -> Option<String> {
+    let shapes = engine::excel_sheet_shapes(path, limits).ok()?;
     // A cover page is prose and a legend is a two-column glossary; the data
     // sheet is the one with quantities in it. Rank by "has numbers at all"
     // first and by size second, and break ties toward the earlier sheet —

@@ -242,8 +242,26 @@ Details worth knowing:
 
 `[limits]` in the config caps what a single run will attempt, so a
 pathological file fails with a sentence instead of the OOM killer:
-`max_file_bytes` (default 4 GiB) and `max_cells` (default 400M). Parsing is
+`max_file_bytes` (default 4 GiB) and `max_cells` (default 50M). Parsing is
 in-memory: expect peak RSS of roughly 8× the size of a delimited file.
+
+For spreadsheets the limits are checked against what the file **declares**,
+before its grid is allocated. They have to be: a spreadsheet's size is a
+claim rather than a consequence, so 899 bytes of `.ods` can ask for a
+billion cells, and a limit applied to the table afterwards is a limit
+applied after the damage. tdy reads the declared geometry first — from
+`content.xml` for `.ods` (whose reader parses eagerly, so this happens
+before the workbook is opened at all) and from `<dimension>` for
+`.xlsx`/`.xlsm` — and refuses in milliseconds. `max_file_bytes` is applied
+to a zip container's *uncompressed* total, which is what has to be held.
+
+The count is of cells that carry a value, not of cells the file mentions:
+LibreOffice pads every sheet out to the full 1,048,576-row grid, so counting
+the claim would reject almost every `.ods` ever written.
+
+`max_cells` is calibrated from measurement — end to end a spreadsheet cell
+costs ~122 bytes and a delimited one ~46 — so 50M is a ceiling of roughly
+6 GB. Raise it if you have the RAM and mean it.
 
 ## Install
 
@@ -255,7 +273,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 228 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 240 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

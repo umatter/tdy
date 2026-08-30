@@ -16,6 +16,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+
+use crate::config::Limits;
 use calamine::{open_workbook_auto, Data, Reader};
 
 use crate::fileio;
@@ -151,7 +153,7 @@ pub fn decode_owned(bytes: Vec<u8>, label: Option<&str>) -> (String, String, boo
     decode_reporting(&bytes, label)
 }
 
-pub fn build(path: &Path, max_bytes: usize) -> Result<FileSample> {
+pub fn build(path: &Path, max_bytes: usize, limits: Limits) -> Result<FileSample> {
     let meta = std::fs::metadata(path)
         .with_context(|| format!("cannot read {}", path.display()))?;
     if meta.is_dir() {
@@ -167,7 +169,7 @@ pub fn build(path: &Path, max_bytes: usize) -> Result<FileSample> {
         .unwrap_or_else(|| path.display().to_string());
 
     if format == FormatGuess::Excel {
-        return build_excel_sample(path, file_name, meta.len(), max_bytes);
+        return build_excel_sample(path, file_name, meta.len(), max_bytes, limits);
     }
 
     let head_budget = (max_bytes * 3 / 4).max(512);
@@ -230,7 +232,11 @@ fn build_excel_sample(
     file_name: String,
     bytes: u64,
     max_bytes: usize,
+    limits: Limits,
 ) -> Result<FileSample> {
+    // Rendering a sample means opening the workbook, and for .ods that alone
+    // allocates the whole grid. Bound it first. See src/xlguard.rs.
+    crate::xlguard::preflight(path, &limits)?;
     let mut wb = open_workbook_auto(path)
         .with_context(|| format!("cannot open workbook {}", path.display()))?;
     let sheets: Vec<String> = wb.sheet_names().to_vec();
@@ -245,7 +251,10 @@ fn build_excel_sample(
             partial = true;
             break;
         }
-        let range = match wb.worksheet_range(name) {
+        // Same check the executor uses: a sheet whose declared extent is
+        // over the limit is skipped, not rendered — the workbook may still
+        // have a sheet worth showing the model.
+        let range = match crate::engine::checked_worksheet_range(&mut wb, name, &limits) {
             Ok(r) => r,
             Err(_) => continue,
         };
@@ -364,7 +373,7 @@ mod tests {
         }
         let p = write(&d, "big.csv", body.as_bytes());
         let total = std::fs::metadata(&p).unwrap().len();
-        let s = build(&p, 16 * 1024).unwrap();
+        let s = build(&p, 16 * 1024, Limits::default()).unwrap();
         assert!(s.partial);
         assert!(
             s.sampled_bytes < 20 * 1024,
@@ -382,7 +391,7 @@ mod tests {
             body.push_str(&format!("{i},aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"));
         }
         let p = write(&d, "lines.csv", body.as_bytes());
-        let s = build(&p, 2048).unwrap();
+        let s = build(&p, 2048, Limits::default()).unwrap();
         let head = s.body.split(CONTINUES_MARKER).next().unwrap();
         assert!(head.ends_with('\n'), "head must not end mid-line: {:?}", &head[head.len().saturating_sub(40)..]);
         for line in head.lines() {
@@ -394,7 +403,7 @@ mod tests {
     fn a_small_file_is_shown_whole() {
         let d = tempfile::TempDir::new().unwrap();
         let p = write(&d, "small.csv", b"a,b\n1,2\n");
-        let s = build(&p, 16 * 1024).unwrap();
+        let s = build(&p, 16 * 1024, Limits::default()).unwrap();
         assert_eq!(s.body, "a,b\n1,2\n");
         assert!(!s.partial);
         assert!(s.ascii_only);
@@ -404,7 +413,7 @@ mod tests {
     fn ascii_only_is_reported() {
         let d = tempfile::TempDir::new().unwrap();
         let p = write(&d, "u.csv", "a\nZürich\n".as_bytes());
-        assert!(!build(&p, 16 * 1024).unwrap().ascii_only);
+        assert!(!build(&p, 16 * 1024, Limits::default()).unwrap().ascii_only);
     }
 
     #[test]
@@ -433,7 +442,7 @@ mod tests {
         }
         let p = d.path().join("cjk.xlsx");
         for budget in [600usize, 601, 602, 603, 1024, 4096] {
-            let s = build(&p, budget).unwrap_or_else(|e| panic!("budget {budget}: {e:#}"));
+            let s = build(&p, budget, Limits::default()).unwrap_or_else(|e| panic!("budget {budget}: {e:#}"));
             assert!(s.body.is_char_boundary(s.body.len()));
         }
     }
@@ -441,7 +450,7 @@ mod tests {
     #[test]
     fn a_directory_is_a_clear_error() {
         let d = tempfile::TempDir::new().unwrap();
-        let err = build(d.path(), 1024).unwrap_err();
+        let err = build(d.path(), 1024, Limits::default()).unwrap_err();
         assert!(format!("{err:#}").contains("directory"));
     }
 
@@ -449,7 +458,7 @@ mod tests {
     fn an_empty_file_samples_to_nothing() {
         let d = tempfile::TempDir::new().unwrap();
         let p = write(&d, "e.csv", b"");
-        let s = build(&p, 1024).unwrap();
+        let s = build(&p, 1024, Limits::default()).unwrap();
         assert!(s.body.is_empty());
         assert_eq!(s.bytes, 0);
     }

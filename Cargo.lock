@@ -3017,6 +3017,7 @@ dependencies = [
  "datafusion",
  "dirs",
  "encoding_rs",
+ "quick-xml",
  "regex",
  "reqwest",
  "schemars",
@@ -3025,6 +3026,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "zip",
 ]
 
 [[package]]

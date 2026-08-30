@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use calamine::{open_workbook_auto, Reader};
+use calamine::{open_workbook_auto, Data, Range, Reader, Sheets};
 use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float64Array, Int64Array, StringArray,
@@ -402,6 +402,35 @@ fn extract_delimited(
     Ok(RawTable::new(rows, ragged, truncated))
 }
 
+/// `worksheet_range`, refusing a sheet whose *declared* extent is over the
+/// cell limit.
+///
+/// xlsx and xlsm are the formats that will tell us before they allocate:
+/// `XlsxCellReader::dimensions()` reads the `<dimension>` the file declares
+/// without building the grid. The other readers do not expose it, and are
+/// bounded by `xlguard::preflight` (ods, xlsb) or by the format itself
+/// (xls, whose 16-bit indices cap a sheet at 65536 x 256).
+pub(crate) fn checked_worksheet_range(
+    wb: &mut Sheets<std::io::BufReader<std::fs::File>>,
+    name: &str,
+    limits: &Limits,
+) -> Result<Range<Data>> {
+    if let Sheets::Xlsx(x) = wb {
+        if let Ok(reader) = x.worksheet_cells_reader(name) {
+            let declared = reader.dimensions().len();
+            if declared > limits.max_cells {
+                bail!(
+                    "sheet {name:?} declares {} cells, above the limit of {} \
+                     (raise [limits].max_cells if this is intended)",
+                    declared,
+                    limits.max_cells
+                );
+            }
+        }
+    }
+    wb.worksheet_range(name).with_context(|| format!("cannot read sheet {name:?}"))
+}
+
 fn extract_excel(
     path: &Path,
     sheet_name: Option<&str>,
@@ -409,6 +438,9 @@ fn extract_excel(
     a1_range: Option<&str>,
     opts: &ExtractOpts,
 ) -> Result<RawTable> {
+    // Bound the container before anything reads it: for .ods, opening the
+    // workbook *is* the allocation. See src/xlguard.rs.
+    crate::xlguard::preflight(path, &opts.limits)?;
     let mut wb = open_workbook_auto(path)
         .with_context(|| format!("cannot open workbook {}", path.display()))?;
     let names = wb.sheet_names().to_vec();
@@ -427,9 +459,7 @@ fn extract_excel(
             .cloned()
             .ok_or_else(|| anyhow!("workbook has no sheets"))?,
     };
-    let full = wb
-        .worksheet_range(&name)
-        .with_context(|| format!("cannot read sheet {name:?}"))?;
+    let full = checked_worksheet_range(&mut wb, &name, &opts.limits)?;
 
     let range = match a1_range {
         Some(spec_str) => {
@@ -1281,13 +1311,17 @@ pub struct SheetShape {
 }
 
 /// One open of a workbook, reporting the shape of every sheet.
-pub fn excel_sheet_shapes(path: &Path) -> Result<Vec<SheetShape>> {
+pub fn excel_sheet_shapes(path: &Path, limits: Limits) -> Result<Vec<SheetShape>> {
+    crate::xlguard::preflight(path, &limits)?;
     let mut wb = open_workbook_auto(path)
         .with_context(|| format!("cannot open workbook {}", path.display()))?;
     let names = wb.sheet_names().to_vec();
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        match wb.worksheet_range(&name) {
+        // A sheet too big to hold is skipped, not fatal: the workbook may
+        // still have a perfectly good sheet next to it, and this function
+        // exists to help *choose* one.
+        match checked_worksheet_range(&mut wb, &name, &limits) {
             Ok(r) => {
                 let populated = r
                     .rows()

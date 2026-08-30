@@ -39,7 +39,7 @@ fn write_bytes(dir: &TempDir, name: &str, body: &[u8]) -> PathBuf {
 }
 
 fn sniffed(path: &Path) -> sniff::SniffResult {
-    let s = sample::build(path, 64 * 1024).unwrap();
+    let s = sample::build(path, 64 * 1024, Limits::default()).unwrap();
     sniff::sniff(path, &s, Limits::default()).unwrap()
 }
 
@@ -228,7 +228,7 @@ fn degenerate_inputs_never_panic() {
         let p = write_bytes(&dir, name, body);
         // Either a spec or an error — never a panic, and never a hang.
         let r = std::panic::catch_unwind(|| {
-            let s = sample::build(&p, 64 * 1024)?;
+            let s = sample::build(&p, 64 * 1024, Limits::default())?;
             sniff::sniff(&p, &s, Limits::default())
         });
         assert!(r.is_ok(), "{name}: sniffing panicked");
@@ -739,4 +739,106 @@ fn parquet_to_stdout_is_refused() {
     ]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("parquet"));
+}
+
+// ---------------------------------------------------------------------------
+// Declared spreadsheet geometry (src/xlguard.rs)
+// ---------------------------------------------------------------------------
+
+fn fixture(rel: &str) -> PathBuf {
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join(rel);
+    assert!(p.exists(), "missing fixture {rel} — run `python3 gen_fixtures.py`");
+    p
+}
+
+/// A spreadsheet declares its geometry, so a few hundred bytes can ask for
+/// tens of gigabytes — and every other limit in tdy is checked against a
+/// table that already exists, which is far too late.
+///
+/// Measured before the guard: this 899-byte file reached 4.8 GB and aborted
+/// the process under a 3 GB cap. An abort is the one failure mode tdy is not
+/// allowed to have. It must be a sentence instead.
+#[test]
+fn a_tiny_ods_declaring_a_huge_grid_is_refused_not_allocated() {
+    let p = fixture("declared_size_ods_declared_grid.ods");
+    assert!(p.metadata().unwrap().len() < 10_000, "fixture is meant to be tiny");
+
+    let err = sample::build(&p, 64 * 1024, Limits::default())
+        .expect_err("a billion-cell sheet was accepted");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("1000000020"), "error does not name the declared size: {msg}");
+    assert!(msg.contains("max_cells"), "error does not say which knob raises it: {msg}");
+}
+
+/// The same for the xlsx reader, which reports `<dimension>` before it
+/// builds the grid. One value in the far corner of a sheet is an ordinary
+/// accident, not an attack, so it has to fail politely rather than abort.
+#[test]
+fn a_phantom_xlsx_range_is_refused_before_the_grid_is_built() {
+    let p = fixture("declared_size_xlsx_phantom_grid.xlsx");
+    let err = sample::build(&p, 64 * 1024, Limits::default())
+        .err()
+        .map(|e| format!("{e:#}"))
+        .or_else(|| {
+            let s = sample::build(&p, 64 * 1024, Limits::default()).ok()?;
+            sniff::sniff(&p, &s, Limits::default()).err().map(|e| format!("{e:#}"))
+        })
+        .expect("a 100M-cell phantom range was accepted");
+    assert!(err.contains("100000000"), "error does not name the declared size: {err}");
+    assert!(err.contains("max_cells"), "error does not say which knob raises it: {err}");
+}
+
+/// THE CONTROL, and the reason the guard counts *valued* cells rather than
+/// declared ones: LibreOffice pads every sheet it writes out to the full
+/// 1,048,576-row grid, so a naive check would refuse almost every .ods in
+/// existence. This file declares over a billion cell positions and contains
+/// three rows of data.
+#[test]
+fn libreoffice_full_grid_padding_is_not_mistaken_for_a_huge_sheet() {
+    let p = fixture("declared_size_ods_padded_like_libreoffice.ods");
+    let s = sample::build(&p, 64 * 1024, Limits::default())
+        .expect("an ordinary padded .ods was refused — the guard is unusable");
+    let spec = sniff::sniff(&p, &s, Limits::default()).unwrap().spec;
+    let b = provider::spec_to_batch(&spec, &p).expect("padded .ods did not execute");
+    assert_eq!(b.num_rows(), 3, "padding leaked into the data");
+
+    let stadt = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+    assert_eq!(
+        (0..stadt.len()).map(|i| stadt.value(i)).collect::<Vec<_>>(),
+        vec!["Bern", "Chur", "Sion"]
+    );
+}
+
+/// The limit has to be a real knob, not just a wall: raising it must let a
+/// file through, and lowering it must stop one that would otherwise pass.
+#[test]
+fn the_cell_limit_is_a_knob_in_both_directions() {
+    let p = fixture("declared_size_ods_padded_like_libreoffice.ods");
+    let tight = Limits { max_cells: 4, ..Limits::default() };
+    assert!(
+        sample::build(&p, 64 * 1024, tight).is_err(),
+        "a 9-cell sheet passed a 4-cell limit"
+    );
+
+    let big = fixture("declared_size_ods_declared_grid.ods");
+    let generous = Limits { max_cells: 2_000_000_000, ..Limits::default() };
+    // Not executed — that would really allocate it. Only the gate is checked.
+    assert!(
+        tdy::xlguard::preflight(&big, &generous).is_ok(),
+        "raising max_cells did not lift the refusal"
+    );
+    assert!(tdy::xlguard::preflight(&big, &Limits::default()).is_err());
+}
+
+/// A zip container is also bounded by what it *decompresses to*, which is
+/// the complementary failure: the geometry scan would see nothing wrong with
+/// a sheet whose sharedStrings.xml is a gigabyte.
+#[test]
+fn a_zip_container_is_bounded_by_its_uncompressed_size() {
+    let p = fixture("declared_size_ods_padded_like_libreoffice.ods");
+    let tiny = Limits { max_file_bytes: 64, ..Limits::default() };
+    let err = tdy::xlguard::preflight(&p, &tiny).expect_err("uncompressed size was not checked");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("expands to"), "unhelpful error: {msg}");
+    assert!(msg.contains("max_file_bytes"), "error does not name the knob: {msg}");
 }

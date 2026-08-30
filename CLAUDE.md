@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 228 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 240 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -112,6 +112,20 @@ Things that only become clear from reading several modules:
   Bump `PROMPT_VERSION` when changing the prompt — it is recorded in sidecar provenance.
 - **Bounded I/O lives in `fileio`**: head/tail sampling by seek, streaming blake3, atomic
   sidecar writes (temp + rename).
+- **`xlguard` bounds a spreadsheet before it is read.** Every other limit is checked against a
+  table that already exists — fine for text, useless for a format whose size is a *claim*: a
+  899-byte `.ods` was measured at 4.8 GB and SIGABRT, which is the one failure mode the design
+  forbids. `preflight()` runs *before* `open_workbook_auto` because calamine's Ods reader
+  parses content.xml eagerly (opening it is already the allocation); xlsx/xlsm are lazy per
+  sheet, so their check rides on `XlsxCellReader::dimensions()` inside
+  `engine::checked_worksheet_range`, which every workbook-touching path must go through —
+  `extract_excel`, `excel_sheet_shapes` *and* `sample::build_excel_sample` (that last one was
+  missed on the first pass and left the whole sniff path exposed). `xls` is bounded by BIFF8's
+  16-bit indices, `xlsb` only by the zip-expansion check. The scan counts cells carrying a
+  *value*: LibreOffice pads every sheet to the full grid, so counting the claim refuses
+  ordinary files — `declared_size_ods_padded_like_libreoffice.ods` is the control that keeps
+  that honest. `max_cells` is calibrated from measured cost (~122 B/cell spreadsheet,
+  ~46 B/cell delimited), not chosen.
 
 ## Performance
 
@@ -128,7 +142,9 @@ it OOM. If you change extraction, re-measure with `/usr/bin/time -f "wall %es pe
 
 ## Test layout
 
-- unit tests beside the code (127) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting
+- unit tests beside the code (139) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+  `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
+  rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end
 - `tests/formats.rs` — what each extraction/transform *means*, with hand-written specs
 - `tests/regression.rs` — one test per defect ever found, written against the **correct**
@@ -145,7 +161,8 @@ it OOM. If you change extraction, re-measure with `/usr/bin/time -f "wall %es pe
 
 `testdata/` is generated, never hand-edited — `python3 gen_fixtures.py`. Each generator in
 `testdata/gen/` owns a disjoint set of files and documents in its docstring what each file
-stresses. `testdata/large/` is gitignored (perf fixtures, generated on demand).
+stresses. `10_declared_size.py` is the odd one out: two of its three files are *meant* to be
+refused, and the third is the control proving the refusal does not catch ordinary documents. `testdata/large/` is gitignored (perf fixtures, generated on demand).
 `tests/e2e.rs::umsatz_spec()` is the hand-written reference spec for `umsatz.xlsx`.
 
 Generators need `openpyxl` (xlsx/xlsm), `xlwt` (the only pure-Python BIFF8 writer, for

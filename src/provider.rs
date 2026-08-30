@@ -132,7 +132,7 @@ fn resolve_spec_sync(path: &Path, frozen: bool, limits: Limits) -> Result<ParseS
             // The pre-pass normally handles this; reaching here means the
             // reference was not visible in the SQL text (a view, a prepared
             // statement). Heuristics only, and nothing is written.
-            let s = sample::build(path, 16 * 1024)?;
+            let s = sample::build(path, 16 * 1024, limits)?;
             let result = sniff::sniff(path, &s, limits)?;
             check_spec(&result.spec, path, limits)?;
             Ok(result.spec)
@@ -195,7 +195,7 @@ pub async fn ensure_sidecar(
         }
     }
 
-    let s = sample::build(path, cfg.sample_bytes)?;
+    let s = sample::build(path, cfg.sample_bytes, cfg.limits)?;
     let draft = sniff::sniff(path, &s, cfg.limits)
         .with_context(|| format!("heuristic sniff of {}", path.display()))?;
 

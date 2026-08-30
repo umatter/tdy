@@ -26,3 +26,4 @@ pub mod sidecar;
 pub mod sniff;
 pub mod spec;
 pub mod sqlscan;
+pub mod xlguard;
