@@ -90,7 +90,7 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static encoding_rs::Encoding {
 
 /// Recognise UTF-16 by its BOM, or by the tell-tale run of NUL bytes in
 /// alternating positions that ASCII text produces in either byte order.
-fn utf16_flavour(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+pub(crate) fn utf16_flavour(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return Some(encoding_rs::UTF_16LE);
     }

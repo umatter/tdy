@@ -47,6 +47,7 @@
 //! twice, and the counting pass is much the cheaper of the two.
 
 use std::collections::HashMap;
+use std::io::BufRead;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -128,30 +129,197 @@ pub fn enabled() -> bool {
 }
 
 
-/// One row at a time out of the decoded text, per extraction format.
+/// Where a streaming source gets its bytes.
+///
+/// A UTF-8 file is read straight off disk through a buffer, which is what
+/// keeps memory independent of its size. Anything else is decoded whole
+/// first, because deciding the encoding correctly needs the whole file — the
+/// `enc_late_1252_byte.csv` fixture is ASCII for 12 KB and then is not, and a
+/// UTF-16 file is only recognisable from its BOM and byte pattern. Those are
+/// legacy exports and small in practice; correctness is worth more there than
+/// a constant factor of memory.
+/// Below this, the extra read that [`streamable_as_utf8`] costs is not worth
+/// the memory it would save, so an undeclared encoding just decodes whole.
+const VALIDATE_ABOVE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Whether the file can be read as UTF-8 incrementally, deciding it exactly
+/// as the whole-file decoder would.
+///
+/// `sample::decode_owned(bytes, None)` treats a file as UTF-8 when it is not
+/// UTF-16 and is valid UTF-8 throughout, and detects an encoding otherwise.
+/// That judgement needs the whole file — a sniffed spec leaves `encoding`
+/// unset precisely because an ASCII-only *sample* proves nothing about the
+/// rest, which is what `enc_late_1252_byte.csv` exists to demonstrate. But it
+/// does not need the whole file *in memory*: this reads it in chunks and
+/// keeps only an incomplete trailing sequence, so it costs one pass and a
+/// fixed buffer.
+fn streamable_as_utf8(path: &Path) -> Result<bool> {
+    use std::io::Read;
+    const CHUNK: usize = 256 * 1024;
+    let mut f = std::fs::File::open(path)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    let mut buf = vec![0u8; CHUNK];
+    let mut pending: Vec<u8> = Vec::with_capacity(CHUNK + 8);
+    let mut first = true;
+    loop {
+        let n = f.read(&mut buf).with_context(|| format!("reading {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        if first {
+            first = false;
+            if crate::sample::utf16_flavour(&buf[..n]).is_some() {
+                return Ok(false);
+            }
+        }
+        pending.extend_from_slice(&buf[..n]);
+        match std::str::from_utf8(&pending) {
+            Ok(_) => pending.clear(),
+            Err(e) => {
+                // A sequence merely cut off by the chunk boundary is fine; a
+                // malformed one is not.
+                if e.error_len().is_some() {
+                    return Ok(false);
+                }
+                let keep = e.valid_up_to();
+                pending.drain(..keep);
+            }
+        }
+    }
+    // Anything left is a sequence the file ended in the middle of.
+    Ok(pending.is_empty())
+}
+
+fn open_input(
+    path: &Path,
+    encoding: Option<&str>,
+    opts: &ExtractOpts,
+) -> Result<Box<dyn BufRead + Send>> {
+    let utf8 = match encoding {
+        Some(l) => encoding_rs::Encoding::for_label(l.as_bytes())
+            .map(|e| e == encoding_rs::UTF_8)
+            .unwrap_or(false),
+        // Unset means "decide from the whole file". Worth a validating pass
+        // only when the file is big enough for the saving to matter.
+        None => {
+            std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) >= VALIDATE_ABOVE_BYTES
+                && streamable_as_utf8(path)?
+        }
+    };
+    if !utf8 {
+        let text = crate::engine::read_text(path, encoding, opts)?;
+        return Ok(Box::new(std::io::Cursor::new(text.into_bytes())));
+    }
+
+    let meta = std::fs::metadata(path)
+        .with_context(|| format!("cannot stat {}", path.display()))?;
+    if meta.len() > opts.limits.max_file_bytes {
+        bail!(
+            "{} is {:.1} GB, above the {:.1} GB limit \
+             (raise [limits].max_file_bytes in the config if you really mean it)",
+            path.display(),
+            meta.len() as f64 / 1e9,
+            opts.limits.max_file_bytes as f64 / 1e9
+        );
+    }
+    let f = std::fs::File::open(path)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    let mut r = std::io::BufReader::with_capacity(256 * 1024, f);
+    // A BOM is not data. The whole-file decoder strips it; so must this, or
+    // the first column comes back named "\u{feff}region".
+    {
+        let head = r.fill_buf().context("reading the start of the file")?;
+        if head.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            r.consume(3);
+        }
+    }
+    Ok(Box::new(r))
+}
+
+/// Bytes to text the way the whole-file decoder does it: invalid sequences
+/// become U+FFFD rather than an error, so a file with one bad byte still
+/// parses and the damage is visible in the value instead of stopping the run.
+///
+/// Borrows when the bytes are already valid UTF-8, which is almost always, so
+/// the common path costs no allocation.
+fn text_of(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    String::from_utf8_lossy(bytes)
+}
+
+/// One row at a time out of the input, per extraction format.
 ///
 /// The formats that stream are the ones whose rows are independent: a
 /// delimited record, a log line, a slice of a fixed-width line. JSON is not
 /// here because a document has to be parsed whole before its records exist.
-enum Source<'a> {
-    Delimited { rdr: csv::Reader<&'a [u8]>, rec: csv::StringRecord },
+enum Source {
+    Delimited { rdr: csv::Reader<Box<dyn BufRead + Send>>, rec: csv::ByteRecord },
     Lines {
-        iter: std::str::Lines<'a>,
+        rdr: Box<dyn BufRead + Send>,
+        buf: Vec<u8>,
         re: regex::Regex,
         names: Vec<String>,
         on_no_match: NoMatchPolicy,
         line_no: usize,
     },
-    Fixed { iter: std::str::Lines<'a>, fields: Vec<FixedField>, chars: Vec<char> },
+    Fixed { rdr: Box<dyn BufRead + Send>, buf: Vec<u8>, fields: Vec<FixedField>, chars: Vec<char> },
 }
 
-impl<'a> Source<'a> {
-    fn new(text: &'a str, extraction: &Extraction) -> Result<(Self, Option<Vec<String>>)> {
+/// Read one line, without its terminator. `Ok(false)` at end of input.
+///
+/// Mirrors `str::lines`: a trailing "\r\n" and a trailing "\n" both end a
+/// line and neither survives into the data.
+fn read_line(rdr: &mut dyn BufRead, buf: &mut Vec<u8>) -> Result<bool> {
+    buf.clear();
+    let n = rdr.read_until(b'\n', buf).context("reading a line")?;
+    if n == 0 {
+        return Ok(false);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    Ok(true)
+}
+
+/// The column names an extraction supplies by itself, if any.
+///
+/// Pure, and separate from opening the file on purpose: the driver needs to
+/// know whether a width has to be discovered *before* it decides how many
+/// sources to open, and opening one to find out held a second decoded copy of
+/// the file alive through the counting pass.
+fn header_of(extraction: &Extraction) -> Result<Option<Vec<String>>> {
+    Ok(match extraction {
+        Extraction::Delimited { .. } => None,
+        Extraction::Lines { pattern, .. } => {
+            let re = compile(pattern, "lines pattern")?;
+            let names: Vec<String> =
+                re.capture_names().flatten().map(|s| s.to_string()).collect();
+            if names.is_empty() {
+                bail!("lines pattern must contain named capture groups, e.g. (?P<ip>\\S+)");
+            }
+            Some(names)
+        }
+        Extraction::FixedWidth { fields, .. } => {
+            Some(fields.iter().map(|f| f.name.clone()).collect())
+        }
+        other => bail!("internal: {} is not a streaming source", other.format_name()),
+    })
+}
+
+impl Source {
+    fn open(
+        path: &Path,
+        extraction: &Extraction,
+        opts: &ExtractOpts,
+    ) -> Result<(Self, Option<Vec<String>>)> {
+        let input = open_input(path, extraction.encoding(), opts)?;
         Ok(match extraction {
             Extraction::Delimited { .. } => (
                 Source::Delimited {
-                    rdr: reader_for(extraction).from_reader(text.as_bytes()),
-                    rec: csv::StringRecord::new(),
+                    rdr: reader_for(extraction).from_reader(input),
+                    rec: csv::ByteRecord::new(),
                 },
                 None,
             ),
@@ -165,7 +333,8 @@ impl<'a> Source<'a> {
                 let header = names.clone();
                 (
                     Source::Lines {
-                        iter: text.lines(),
+                        rdr: input,
+                        buf: Vec::with_capacity(1024),
                         re,
                         names,
                         on_no_match: *on_no_match,
@@ -178,7 +347,8 @@ impl<'a> Source<'a> {
                 let header: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
                 (
                     Source::Fixed {
-                        iter: text.lines(),
+                        rdr: input,
+                        buf: Vec::with_capacity(1024),
                         fields: fields.clone(),
                         chars: Vec::new(),
                     },
@@ -189,23 +359,68 @@ impl<'a> Source<'a> {
         })
     }
 
+    /// The *width* of the next row, without building it.
+    ///
+    /// The counting pass only ever needed the arity, and materialising a
+    /// `Vec<String>` per row to throw it away immediately cost about 100 MB
+    /// of resident memory on a 3M-row file — freed, but not returned to the
+    /// OS, which is the same thing as far as the machine is concerned.
+    fn next_width(&mut self) -> Result<Option<usize>> {
+        match self {
+            Source::Delimited { rdr, rec } => match rdr.read_byte_record(rec) {
+                Ok(true) => Ok(Some(rec.len())),
+                Ok(false) => Ok(None),
+                Err(e) => Err(anyhow!("{e}")),
+            },
+            Source::Lines { rdr, buf, re, names, on_no_match, line_no } => {
+                while read_line(rdr.as_mut(), buf)? {
+                    *line_no += 1;
+                    let line = text_of(buf);
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if re.is_match(line.as_ref()) {
+                        return Ok(Some(names.len()));
+                    }
+                    match on_no_match {
+                        NoMatchPolicy::Skip => continue,
+                        NoMatchPolicy::Error => {
+                            bail!("line {} does not match the pattern: {:?}", line_no, line)
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            Source::Fixed { rdr, buf, fields, .. } => {
+                while read_line(rdr.as_mut(), buf)? {
+                    if text_of(buf).trim().is_empty() {
+                        continue;
+                    }
+                    return Ok(Some(fields.len()));
+                }
+                Ok(None)
+            }
+        }
+    }
+
     /// The next row, or None at end of input. Rows the format skips (blank
     /// lines, non-matching lines under `on_no_match = "skip"`) are consumed
     /// here so the caller only ever sees data.
     fn next_row(&mut self) -> Result<Option<Vec<String>>> {
         match self {
-            Source::Delimited { rdr, rec } => match rdr.read_record(rec) {
-                Ok(true) => Ok(Some(rec.iter().map(|s| s.to_string()).collect())),
+            Source::Delimited { rdr, rec } => match rdr.read_byte_record(rec) {
+                Ok(true) => Ok(Some(rec.iter().map(|b| text_of(b).into_owned()).collect())),
                 Ok(false) => Ok(None),
                 Err(e) => Err(anyhow!("{e}")),
             },
-            Source::Lines { iter, re, names, on_no_match, line_no } => {
-                for line in iter.by_ref() {
+            Source::Lines { rdr, buf, re, names, on_no_match, line_no } => {
+                while read_line(rdr.as_mut(), buf)? {
                     *line_no += 1;
+                    let line = text_of(buf);
                     if line.trim().is_empty() {
                         continue;
                     }
-                    match re.captures(line) {
+                    match re.captures(line.as_ref()) {
                         Some(caps) => {
                             return Ok(Some(
                                 names
@@ -228,8 +443,9 @@ impl<'a> Source<'a> {
                 }
                 Ok(None)
             }
-            Source::Fixed { iter, fields, chars } => {
-                for line in iter.by_ref() {
+            Source::Fixed { rdr, buf, fields, chars } => {
+                while read_line(rdr.as_mut(), buf)? {
+                    let line = text_of(buf);
                     if line.trim().is_empty() {
                         continue;
                     }
@@ -282,24 +498,18 @@ struct Shape {
     uneven: bool,
 }
 
-fn measure(source: &mut Source<'_>, limits: &Limits, path: &Path) -> Result<Shape> {
+fn measure(source: &mut Source, limits: &Limits, path: &Path) -> Result<Shape> {
     let mut widths: HashMap<usize, usize> = HashMap::new();
     let mut rows = 0usize;
     let mut max_width = 0usize;
     let mut cells: u64 = 0;
     loop {
-        // For a delimited source this still allocates a String per field,
-        // which pass one would rather not do; it is the price of sharing one
-        // row source with the formats whose rows are built by regex or by
-        // slicing. The rows are dropped immediately, so the *peak* — which is
-        // what the limits are about — stays at one row.
-        let Some(r) = source
-            .next_row()
+        let Some(w) = source
+            .next_width()
             .with_context(|| format!("measuring {}", path.display()))?
         else {
             break;
         };
-        let w = r.len();
         rows += 1;
         max_width = max_width.max(w);
         *widths.entry(w).or_insert(0) += 1;
@@ -326,13 +536,17 @@ fn measure(source: &mut Source<'_>, limits: &Limits, path: &Path) -> Result<Shap
 /// Only reached when `ragged = "error"` has already decided the file is
 /// wrong, so a third pass over it costs nothing anyone will notice, and it
 /// buys the same "row N has M fields" message the materialising path gives.
-fn first_odd_row(text: &str, extraction: &Extraction, modal: usize) -> Option<(usize, usize)> {
-    let mut rdr = reader_for(extraction).from_reader(text.as_bytes());
-    let mut rec = csv::ByteRecord::new();
+fn first_odd_row(
+    path: &Path,
+    extraction: &Extraction,
+    opts: &ExtractOpts,
+    modal: usize,
+) -> Option<(usize, usize)> {
+    let (mut src, _) = Source::open(path, extraction, opts).ok()?;
     let mut i = 0usize;
-    while let Ok(true) = rdr.read_byte_record(&mut rec) {
-        if rec.len() != modal {
-            return Some((i, rec.len()));
+    while let Ok(Some(w)) = src.next_width() {
+        if w != modal {
+            return Some((i, w));
         }
         i += 1;
     }
@@ -374,17 +588,12 @@ pub fn execute_with(
         bail!("internal: stream::execute_with called on an unstreamable spec");
     }
     let opts = ExtractOpts::full(limits);
-    let encoding = spec.extraction.encoding();
     let ragged = match &spec.extraction {
         Extraction::Delimited { ragged, .. } => *ragged,
         _ => RaggedPolicy::PadNulls,
     };
 
-    // One decode of the file, then no further copies of it. This is still
-    // proportional to the source, but it is 1x rather than the ~8x the
-    // Vec<Vec<String>> costs.
-    let text = crate::engine::read_text(path, encoding, &opts)?;
-    let (mut source, provided_header) = Source::new(&text, &spec.extraction)?;
+    let provided_header = header_of(&spec.extraction)?;
 
     let tail = spec
         .transforms
@@ -399,7 +608,11 @@ pub fn execute_with(
     // lacks, and the row count, which only a `skip_rows` tail needs. A log
     // file with neither is read exactly once.
     let shape = if provided_header.is_none() || tail > 0 {
-        let (mut counting, _) = Source::new(&text, &spec.extraction)?;
+        // Scoped so the counting source — and, for an encoding that cannot be
+        // decoded incrementally, its copy of the file — is dropped before the
+        // body source is opened. Holding both at once cost a second full copy
+        // of the file, which is how a 987 MB CSV reached 2 GB.
+        let (mut counting, _) = Source::open(path, &spec.extraction, &opts)?;
         Some(measure(&mut counting, &limits, path)?)
     } else {
         None
@@ -418,7 +631,7 @@ pub fn execute_with(
                 RaggedPolicy::Error => {
                     if let Some((pos, w)) = shape
                         .uneven
-                        .then(|| first_odd_row(&text, &spec.extraction, shape.modal_width))
+                        .then(|| first_odd_row(path, &spec.extraction, &opts, shape.modal_width))
                         .flatten()
                     {
                         bail!(
@@ -438,6 +651,7 @@ pub fn execute_with(
 
     let total_rows = shape.as_ref().map(|s| s.rows).unwrap_or(usize::MAX);
     let mut plan = Plan::build(spec, target_width, total_rows)?;
+    let (mut source, _) = Source::open(path, &spec.extraction, &opts)?;
     let mut row_index = 0usize;
 
     // --- the header, from the first rows -----------------------------------

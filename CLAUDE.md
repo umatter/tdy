@@ -123,21 +123,44 @@ Things that only become clear from reading several modules:
   rather than report failure. `engine::schema_of` gives DataFusion the schema before any
   batch exists, derived by building each column over *zero* rows so it cannot drift from the
   code that types real data.
-- **`stream` is the executor for text formats; `engine` is the fallback and the reference.** It is
-  plumbing only — where an answer could differ (`promote_header_from`, `build_column_at`) it
-  calls the same function `engine` calls, deliberately, so the two cannot drift. It accepts
-  only `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down)* [unpivot]?`;
+- **`stream` is the executor for text formats; `engine` is the fallback and the reference.**
+  It is plumbing only — where an answer could differ (`promote_header_from`,
+  `build_column_at`) it calls the same function `engine` calls, deliberately, so the two
+  cannot drift. It covers delimited, `lines` and `fixed_width` — everything whose rows are
+  independent — behind a `Source` enum; Excel and JSON cannot stream, their readers
+  materialise the document before a row exists. It accepts only
+  `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down)* [unpivot]?`;
   `can_stream` returns false for anything else and the caller falls back, so an unusual spec
-  is never *refused*, only executed the old way. Two passes are unavoidable: `promote_header`
-  rectangularises first, so the header's width — hence the column names — depends on the
-  widest row in the file, which one pass cannot know before it must name columns. Pass one
-  uses `ByteRecord` and allocates nothing. Row-local ops run in **spec order** (`RowOp`), not
-  a fixed one: fill-then-drop propagates a subtotal label into the rows beneath it and drop-
-  then-fill does not, and `tests/streaming.rs` pins that both paths fall into it identically.
-  Measured `count(*)`: 140 MB / 3M-row CSV 1,676 -> 230 MB; 190 MB / 2M-line nginx log
-  1,376 -> 290 MB; 260 MB / 70M-cell CSV refused -> 400 MB. `TDY_NO_STREAM=1` forces `engine` — that is `stream::enabled()`,
-  kept separate from `can_stream()` so turning streaming off cannot make the shape predicate
-  lie.
+  is never *refused*, only executed the old way. `TDY_NO_STREAM=1` forces `engine` — that is
+  `stream::enabled()`, kept separate from `can_stream()` so turning streaming off cannot make
+  the shape predicate lie.
+
+  Row-local ops run in **spec order** (`RowOp`), not a fixed one: fill-then-drop propagates a
+  subtotal label into the rows beneath it and drop-then-fill does not, and
+  `tests/streaming.rs` pins that both executors fall into that identically.
+
+  A second pass is needed only when the width must be discovered (delimited, because
+  `promote_header` rectangularises first, so the header's width — hence the column names —
+  depends on the widest row in the file) or when a `skip_rows` tail makes the row count
+  matter; a log with neither is read once. Counting goes through `next_width`, which returns
+  an arity without building a row — materialising a `Vec<String>` per row just to drop it
+  cost ~100 MB resident on a 3M-row file.
+
+  `Source` owns a `BufRead`, not a borrowed `&str`, and that is what removed the last term
+  proportional to the file. `open_input` streams raw bytes when the encoding is UTF-8; when a
+  spec leaves `encoding` unset — which sniffing does deliberately, since an ASCII-only
+  *sample* proves nothing about the rest (`enc_late_1252_byte.csv`) — `streamable_as_utf8`
+  answers the same question `decode_owned` would, incrementally, in a fixed buffer. Three
+  traps, all of which bit during the work: the whole-file decoder strips a BOM, so the
+  streaming reader must too; it *replaces* invalid sequences rather than erroring, so the
+  delimited source reads `ByteRecord`s and applies `from_utf8_lossy` instead of letting the
+  csv crate reject them; and the counting source and body source must be opened **in
+  sequence, never both at once** — holding both kept two decoded copies alive and took a
+  987 MB CSV to 2 GB.
+
+  Measured `count(*)`: 140 MB / 3M-row CSV 1,676 -> **87 MB**; 190 MB / 2M-line nginx log
+  1,376 -> **97 MB**; 987 MB / 21M-row CSV refused -> **86 MB**. Memory does not track file
+  size at all any more.
 - **`xlguard` bounds a spreadsheet before it is read.** Every other limit is checked against a
   table that already exists — fine for text, useless for a format whose size is a *claim*: a
   899-byte `.ods` was measured at 4.8 GB and SIGABRT, which is the one failure mode the design
@@ -160,15 +183,18 @@ Measured on a 141 MB / 3M-row CSV (release build), before → after the hardenin
 | | before | after |
 |---|---|---|
 | `sniff` (needs a 16 KB sample) | 6.04 s, 1.20 GB RSS | **0.13 s, 24 MB** |
-| `count(*)` over the whole file | 6.79 s, 1.40 GB | **2.92 s, 418 MB** |
-| same file referenced twice | 2 full parses | 1 (cached per path) |
+| `count(*)` over the whole file | 6.79 s, 1.40 GB | **2.96 s, 87 MB** |
+| same file referenced twice | 2 full parses | 1 (cached, under 64 MB) |
 
 The `count(*)` figure is the streaming executor; `TDY_NO_STREAM=1` on the same file is
 3.13 s / 1,676 MB, which is what the materialising path still costs for the formats that
 cannot stream.
 
-Peak RSS is roughly 8× the size of a delimited file; `[limits]` caps it rather than letting
-it OOM. If you change extraction, re-measure with `/usr/bin/time -f "wall %es peak_rss %MkB"`.
+Peak RSS no longer follows the size of a text file at all — `stream` holds one batch, not the
+rows and not the decoded text. It is still ~8x for the formats that cannot stream (Excel,
+JSON), which is what `[limits]` is calibrated against. If you change extraction, re-measure
+with `/usr/bin/time -f "wall %es peak_rss %MkB"` and on a file large enough to tell the
+difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 

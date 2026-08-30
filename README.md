@@ -249,14 +249,26 @@ Details worth knowing:
 
   | `count(*)` over | materialising | streaming |
   |---|---|---|
-  | 140 MB CSV, 3M rows | 3.11 s, 1,676 MB | **3.46 s, 230 MB** |
-  | 190 MB nginx log, 2M lines | 3.27 s, 1,376 MB | **2.70 s, 290 MB** |
-  | 260 MB CSV, 70M cells | refused: over `max_cells` | **9.45 s, 400 MB** |
+  | 140 MB CSV, 3M rows | 3.11 s, 1,676 MB | **2.96 s, 87 MB** |
+  | 190 MB nginx log, 2M lines | 3.27 s, 1,376 MB | **2.83 s, 97 MB** |
+  | 987 MB CSV, 21M rows | refused: over `max_cells` | **20.6 s, 86 MB** |
+
+  Memory does not move with the file: a 987 MB CSV is read in 86 MB, the same
+  as a 140 MB one. Nothing proportional to the source is ever held — not the
+  rows, not even the decoded text.
 
   Faster as well as smaller: not allocating tens of millions of strings more
-  than pays for the extra counting pass. (A log needs no counting pass at all
-  — its columns are named by the pattern's capture groups, so there is no
-  width to discover — unless a `skip_rows` tail makes the row count matter.)
+  than pays for the extra passes. (A log needs no counting pass at all — its
+  columns are named by the pattern's capture groups, so there is no width to
+  discover — unless a `skip_rows` tail makes the row count matter.)
+
+  A file whose sidecar names a non-UTF-8 encoding is still decoded whole,
+  because choosing an encoding correctly needs the whole file: one of the test
+  fixtures is ASCII for 12 KB and then is not, and a spec deliberately leaves
+  `encoding` unset rather than freeze a guess made from a sample. When it is
+  unset, tdy checks incrementally whether the file is valid UTF-8 throughout —
+  the same question the whole-file decoder asks, answered in a fixed buffer —
+  and streams if it is.
 
   Above 64 MB a streamable file also stops being loaded into a table at all:
   `messy()` returns a lazy provider that re-reads the file on each scan and
@@ -277,7 +289,8 @@ Details worth knowing:
 `[limits]` in the config caps what a single run will attempt, so a
 pathological file fails with a sentence instead of the OOM killer:
 `max_file_bytes` (default 4 GiB), `max_cells` (50M) and `max_streamed_cells`
-(200M).
+(200M) — the last of these is a bound on work, not on memory, which no longer
+depends on the file's size.
 
 There are two cell limits because the two paths cost differently, by about a
 factor of seven. Materialised — spreadsheets, JSON, any spec the streaming
