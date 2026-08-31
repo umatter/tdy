@@ -259,6 +259,16 @@ pub enum Transform {
     /// Propagate the last non-empty value downward: the cure for vertically
     /// merged cells and "category written once" layouts.
     FillDown { columns: Vec<String> },
+    /// Add a column the file does not have, holding `value` in every row.
+    ///
+    /// The empty string is the null fill: `""` reads as missing in every
+    /// type, so a declared-absent column becomes a column of nulls. Never
+    /// inferred — the sniffer cannot know a fact the file does not contain.
+    /// The planner emits it only for a target column declared
+    /// `if_missing = 'null'`, where the declaration itself is the
+    /// authorisation; any other use is hand-written and gated by review,
+    /// because a constant is data tdy is being told, not data it read.
+    Constant { name: String, value: String },
     /// Wide -> long.
     Unpivot {
         id_columns: Vec<String>,
@@ -755,6 +765,22 @@ impl ParseSpec {
                         if !ids.insert(c) {
                             errs.push(format!("unpivot: duplicate id column `{c}`"));
                         }
+                    }
+                }
+                Transform::Constant { name, .. } => {
+                    if name.trim().is_empty() {
+                        errs.push("constant: `name` must not be blank".into());
+                    }
+                    // Two constants by one name would silently resolve to the
+                    // first; the executor also refuses a name the file already
+                    // has, but that needs the header and belongs there.
+                    let dup = self
+                        .transforms
+                        .iter()
+                        .filter(|o| matches!(o, Transform::Constant { name: n, .. } if n == name))
+                        .count();
+                    if dup > 1 {
+                        errs.push(format!("constant: `{name}` is declared twice"));
                     }
                 }
                 Transform::SkipRows { .. } => {}

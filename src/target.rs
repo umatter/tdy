@@ -58,8 +58,14 @@ use datafusion::sql::sqlparser::parser::Parser;
 
 use crate::spec::parse_fixed_offset;
 
+/// What one per-column `OPTIONS(...)` entry said.
+enum ColOpt {
+    Matches(Vec<String>),
+    IfMissingNull,
+}
+
 /// A per-column `OPTIONS(...)` entry.
-fn column_option(o: &SqlOption) -> std::result::Result<Vec<String>, String> {
+fn column_option(o: &SqlOption) -> std::result::Result<ColOpt, String> {
     let (key, value) = match o {
         SqlOption::KeyValue { key, value } => (key.value.to_ascii_lowercase(), value),
         other => return Err(format!("unsupported column option {other}; write `key = 'value'`")),
@@ -67,10 +73,22 @@ fn column_option(o: &SqlOption) -> std::result::Result<Vec<String>, String> {
     let text = literal_string(value)
         .ok_or_else(|| format!("column option `{key}` must be a quoted string"))?;
     match key.as_str() {
-        "matches" => Ok(split_globs(&text)),
+        "matches" => Ok(ColOpt::Matches(split_globs(&text))),
+        "if_missing" => match text.to_ascii_lowercase().as_str() {
+            // Only null. A default *value* would be data the file never
+            // contained, invented at plan time, which is exactly the class of
+            // step this tool gates behind a human; write it in the sidecar as
+            // a `constant` transform instead, where review applies.
+            "null" => Ok(ColOpt::IfMissingNull),
+            other => Err(format!(
+                "if_missing = {other:?} is not supported; the only declarable fallback is \
+                 'null' (a constant value belongs in the sidecar, gated by review)"
+            )),
+        },
         other => Err(format!(
             "unknown column option `{other}`. Known: matches (header cells this column \
-             may be read from)."
+             may be read from), if_missing ('null' to fill the column with nulls in a \
+             file that lacks it)."
         )),
     }
 }
@@ -114,6 +132,16 @@ pub struct TargetColumn {
     /// is common to every file, which is exactly what a contract should hold.
     pub dtype: ArrowType,
     pub nullable: bool,
+    /// `if_missing = 'null'`: a member that has no source for this column
+    /// still fits, with the column null in every row.
+    ///
+    /// This is the *declared-absent* case — one export predates the column —
+    /// and the declaration is what authorises it: the fill is written here,
+    /// versioned and reviewed, so the planner is executing a decision rather
+    /// than making one. Only valid on a nullable column, refused otherwise at
+    /// parse, because a NOT NULL column of nulls could never conform anyway
+    /// and the contradiction should be caught in the file that states it.
+    pub if_missing_null: bool,
 }
 
 /// How a file's header cell is matched to a declared column name.
@@ -247,6 +275,7 @@ impl Target {
             // say so outright.
             let mut nullable = true;
             let mut matches: Vec<String> = Vec::new();
+            let mut if_missing_null = false;
             for opt in &c.options {
                 match &opt.option {
                     ColumnOption::NotNull => nullable = false,
@@ -254,7 +283,8 @@ impl Target {
                     ColumnOption::Options(opts) => {
                         for o in opts {
                             match column_option(o) {
-                                Ok(m) => matches.extend(m),
+                                Ok(ColOpt::Matches(m)) => matches.extend(m),
+                                Ok(ColOpt::IfMissingNull) => if_missing_null = true,
                                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
                             }
                         }
@@ -267,8 +297,21 @@ impl Target {
                     )),
                 }
             }
+            if if_missing_null && !nullable {
+                errs.push(format!(
+                    "column `{cname}`: if_missing = 'null' on a NOT NULL column is a \
+                     contradiction — a file without the column would produce nulls the \
+                     column forbids"
+                ));
+            }
             match arrow_type_of(&c.data_type) {
-                Ok(dtype) => columns.push(TargetColumn { name: cname, matches, dtype, nullable }),
+                Ok(dtype) => columns.push(TargetColumn {
+                    name: cname,
+                    matches,
+                    dtype,
+                    nullable,
+                    if_missing_null,
+                }),
                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
             }
         }

@@ -653,3 +653,98 @@ fn an_exclude_without_a_directory_applies_everywhere() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("1 file(s) match"), "the draft was not excluded:\n{text}");
 }
+
+/// A hand-written constant *value* — "November is all Ticino" — is data the
+/// file does not contain, asserted by a human. It conforms, it parses, and it
+/// still does not join until somebody accepts it, exactly like the Rappen
+/// shift: tdy cannot check a fact about the world.
+#[test]
+fn a_constant_value_needs_a_human_and_then_works() {
+    let dir = staged();
+    let t = dir.path().join("nov.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE nov (\n\
+         \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
+         \x20 region     TEXT          NULL,\n\
+         \x20 amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
+         )\nWITH (files = '2025-11.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+
+    let nov = dir.path().join("2025-11.csv");
+    let sc = tdy::sidecar::sidecar_path(&nov);
+    std::fs::write(
+        &sc,
+        r#"spec_version = 1
+[source]
+path = "2025-11.csv"
+blake3 = "0"
+bytes = 0
+[provenance]
+method = "manual"
+tool_version = "0.1.0"
+created_at = "2026-01-01T00:00:00Z"
+[spec]
+[spec.extraction]
+format = "delimited"
+delimiter = ";"
+quote = '"'
+ragged = "pad_nulls"
+[[spec.transforms]]
+op = "promote_header"
+rows = 1
+join = " "
+[[spec.transforms]]
+op = "constant"
+name = "region"
+value = "Ticino"
+[[spec.columns]]
+name = "month"
+source = "Datum"
+nullable = false
+[spec.columns.dtype]
+type = "date"
+format = "%d.%m.%Y"
+[[spec.columns]]
+name = "region"
+nullable = true
+[spec.columns.dtype]
+type = "utf8"
+[[spec.columns]]
+name = "amount_chf"
+source = "Betrag"
+nullable = false
+[spec.columns.dtype]
+type = "decimal"
+precision = 14
+scale = 2
+[spec.columns.parse]
+thousands_separator = "'"
+decimal_separator = "."
+"#,
+    )
+    .unwrap();
+    assert!(tdy(&["validate", nov.to_str().unwrap(), "--stamp"]).status.success());
+
+    let ts = t.to_str().unwrap();
+    let out = tdy(&["fit", ts]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("REVIEW"), "{text}");
+    assert!(text.contains("Ticino"), "the asserted value must be shown:\n{text}");
+
+    let q = format!(
+        "SELECT region, count(*) FROM dataset('{}') GROUP BY 1",
+        t.display()
+    );
+    let blocked = tdy(&["query", &q]);
+    assert!(!blocked.status.success(), "an unaccepted constant was queried");
+
+    let acc = tdy(&["fit", ts, "--accept", "2025-11.csv"]);
+    assert!(acc.status.success(), "{}", String::from_utf8_lossy(&acc.stderr));
+    let ok = tdy(&["query", &q]);
+    let text = String::from_utf8_lossy(&ok.stdout);
+    assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+    assert!(text.contains("Ticino"), "{text}");
+}

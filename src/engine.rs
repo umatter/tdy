@@ -862,6 +862,23 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     }
                 }
             }
+            Transform::Constant { name, value } => {
+                table.ensure_header()?;
+                let h = table.header.as_mut().expect("ensure_header sets it");
+                if h.iter().any(|c| c == name) {
+                    bail!(
+                        "constant: the file already has a column named {name:?} — a \
+                         constant may only add a column, never shadow one"
+                    );
+                }
+                h.push(name.clone());
+                if let Some(o) = table.header_origin.as_mut() {
+                    o.push(name.clone());
+                }
+                for row in &mut table.rows {
+                    row.push(value.clone());
+                }
+            }
             Transform::Unpivot {
                 id_columns,
                 value_columns,

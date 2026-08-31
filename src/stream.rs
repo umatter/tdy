@@ -115,6 +115,9 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
             Transform::PromoteHeader { .. } => Stage::RowLocal,
             Transform::DropRowsMatching { .. } | Transform::FillDown { .. } => Stage::RowLocal,
             Transform::Unpivot { .. } => Stage::Done,
+            // Streamable in principle (it is row-local), but rare enough that
+            // the fallback executor is the simpler home for it.
+            Transform::Constant { .. } => return false,
         };
         let allowed = match t {
             Transform::SkipRows { .. } => stage == Stage::Skip,
@@ -123,6 +126,7 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
                 stage <= Stage::RowLocal
             }
             Transform::Unpivot { .. } => stage <= Stage::RowLocal,
+            Transform::Constant { .. } => false,
         };
         if !allowed {
             return false;
@@ -1263,6 +1267,9 @@ impl Plan {
                 Transform::FillDown { columns } => p.ops.extend(columns.iter().map(|c| {
                     RowOp::Fill { column: c.clone(), idx: 0, carry: String::new() }
                 })),
+                Transform::Constant { .. } => {
+                    bail!("internal: stream planned a spec with a constant column")
+                }
                 Transform::Unpivot {
                     id_columns,
                     value_columns,

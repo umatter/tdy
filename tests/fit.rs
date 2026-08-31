@@ -714,3 +714,95 @@ fn the_rounding_note_is_not_mistaken_for_a_binding_note() {
          half away from zero"
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Declared-absent columns and constants.
+// ---------------------------------------------------------------------------
+
+/// `if_missing = 'null'` is the declared-absent case: November predates the
+/// `Region` column, and the target says so *in the declaration*, where it is
+/// versioned and reviewed. The planner is then executing a decision, not
+/// making one — which is why this fit carries a note but no review reason.
+#[test]
+fn a_declared_absent_column_is_null_filled_and_needs_no_review() {
+    let t = Target::parse(
+        "CREATE TABLE sales (
+           month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
+           region     TEXT          NULL     OPTIONS(matches = 'Region', if_missing = 'null'),
+           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+         ) WITH (files = '*.csv', date_order = 'dmy')",
+    )
+    .unwrap();
+    let p = corpus().join("2025-11.csv");
+    let fitted = fit(&p, &t, Limits::default()).expect("the declaration makes it fit");
+    assert!(fitted.review.is_none(), "a declared fill is not a judgement: {:?}", fitted.review);
+    assert!(conforms(&fitted.spec, &t).is_ok());
+    assert!(
+        fitted.spec.notes.iter().any(|n| n.contains("if_missing")),
+        "the fill must be said out loud:\n{:#?}",
+        fitted.spec.notes
+    );
+
+    let batch = tdy::provider::spec_to_batch(&fitted.spec, &p).unwrap();
+    assert_eq!(batch.num_columns(), 3);
+    let region = batch.column(1);
+    assert_eq!(region.null_count(), batch.num_rows(), "every region must be null");
+    assert!(batch.num_rows() > 0);
+}
+
+/// …and without the declaration the same file stays refused — the fill is
+/// opt-in per column, never a planner courtesy. (The corpus target has no
+/// `if_missing`, and `a_file_missing_a_declared_column_is_refused_not_null_filled`
+/// pins that half.)
+///
+/// A hand-written constant *value* is a different thing entirely: data the
+/// file does not contain, asserted by a human, and gated exactly like
+/// `decimal_shift`.
+#[test]
+fn a_constant_value_is_a_review_reason_a_null_fill_is_not() {
+    use tdy::spec::Transform;
+    let p = corpus().join("2025-11.csv");
+    let t = Target::parse(
+        "CREATE TABLE sales (
+           month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
+           region     TEXT          NULL     OPTIONS(matches = 'Region', if_missing = 'null'),
+           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+         ) WITH (files = '*.csv', date_order = 'dmy')",
+    )
+    .unwrap();
+    let fitted = fit(&p, &t, Limits::default()).unwrap();
+
+    // The planner's own fill: no review.
+    assert!(tdy::fit::review_reasons(&fitted.spec).is_empty());
+
+    // The same spec with the fill turned into an asserted value: review.
+    let mut spec = fitted.spec.clone();
+    for tr in &mut spec.transforms {
+        if let Transform::Constant { value, .. } = tr {
+            *value = "Ticino".into();
+        }
+    }
+    let reasons = tdy::fit::review_reasons(&spec);
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    assert!(reasons[0].contains("Ticino"), "{}", reasons[0]);
+}
+
+/// The declaration is refused where it contradicts itself or overreaches:
+/// a NOT NULL column cannot be null-filled, and only 'null' is declarable —
+/// a default *value* belongs in the sidecar, behind review.
+#[test]
+fn if_missing_is_refused_on_not_null_and_for_values() {
+    let e = Target::parse(
+        "CREATE TABLE t (region TEXT NOT NULL OPTIONS(if_missing = 'null'))
+         WITH (files = '*.csv')",
+    )
+    .expect_err("NOT NULL + if_missing is a contradiction");
+    assert!(format!("{e:#}").contains("NOT NULL"), "{e:#}");
+
+    let e = Target::parse(
+        "CREATE TABLE t (region TEXT OPTIONS(if_missing = 'Ticino'))
+         WITH (files = '*.csv')",
+    )
+    .expect_err("a default value is not declarable");
+    assert!(format!("{e:#}").contains("review"), "{e:#}");
+}

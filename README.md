@@ -386,6 +386,29 @@ recorded against that file's bytes and that declaration. Re-fitting an untouched
 dataset does not ask again; editing the file expires the acceptance, because it
 was about those bytes.
 
+Two neighbouring cases draw the same line from both sides. A column one export
+simply *lacks* — November predates `Region` — is declarable in the target:
+
+```sql
+region TEXT NULL OPTIONS(matches = 'Region', if_missing = 'null')
+```
+
+and the planner null-fills it with a note and **no** review, because the
+declaration sits in the reviewed `.tdy.sql` — the planner is executing your
+decision, not making one. (`if_missing` is refused on a NOT NULL column, and
+`'null'` is the only declarable fallback.) But a constant *value* — "November
+is all Ticino" — is data the file never contained, so it lives in the sidecar
+as a hand-written transform and gates behind `--accept` like the shift does:
+
+```toml
+[[spec.transforms]]
+op    = "constant"
+name  = "region"
+value = "Ticino"
+```
+
+A `constant` may only add a column, never shadow one the file already has.
+
 If any member cannot be fitted, **no lock is written at all**. A dataset that
 silently omits the months that did not fit is exactly the failure this is
 built to prevent.

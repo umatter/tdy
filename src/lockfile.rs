@@ -102,6 +102,9 @@ pub fn target_hash(t: &Target) -> String {
         h.update(c.name.as_bytes());
         h.update(format!("{:?}", c.dtype).as_bytes());
         h.update(if c.nullable { b"?" } else { b"!" });
+        // A fill declared or retracted changes what queries return for a
+        // member that lacks the column, so it must void the proofs.
+        h.update(if c.if_missing_null { b"~" } else { b"." });
         for m in &c.matches {
             h.update(b"\x1f");
             h.update(m.as_bytes());

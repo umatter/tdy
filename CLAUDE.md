@@ -136,7 +136,16 @@ An acceptance carries over while the member's bytes and the declaration are unch
 the same question every run would train people to answer without reading — and drift expires
 it, because it was about those bytes.
 
-Not yet: the model as frame proposer, `Transform::Constant`, declared-absent columns.
+**Constants and declared-absent columns are in.** `Transform::Constant` adds a column the
+file does not have (`""` = nulls); it may only add, never shadow, and it is never inferred.
+The split that matters: a target column declared `if_missing = 'null'` (nullable only,
+refused otherwise) lets the planner null-fill a file that lacks it with a note and **no
+review** — the declaration in the reviewed `.tdy.sql` is the authorisation — while a
+hand-written constant *value* ("November is all Ticino") is data the file never contained
+and gates behind `--accept` exactly like `decimal_shift`. `if_missing_null` is part of
+`target_hash`, so declaring or retracting a fill voids the proofs.
+
+Not yet: the model as frame proposer.
 
 ## Real data
 

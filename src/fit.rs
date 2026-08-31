@@ -53,7 +53,7 @@ use crate::conform::{conforms, Mismatch};
 use crate::engine::{self, ExtractOpts};
 use crate::numfmt;
 use crate::sniff;
-use crate::spec::{ColumnSpec, DType, ParseSpec, ValueParsing};
+use crate::spec::{ColumnSpec, DType, ParseSpec, ValueParsing, Transform};
 use crate::target::{DateOrder, MatchMode, Target, Verify};
 
 /// A declared column this file cannot supply, and why.
@@ -200,6 +200,22 @@ pub struct Fitted {
 /// against that file's bytes and that declaration.
 pub fn review_reasons(spec: &ParseSpec) -> Vec<String> {
     let mut out = Vec::new();
+    for t in &spec.transforms {
+        if let Transform::Constant { name, value } = t {
+            if value.is_empty() {
+                // A null fill states only that the file lacks the column,
+                // which conformance already proved by failing to bind it; the
+                // planner emits it under the target's own `if_missing =
+                // 'null'`, and a hand-written one asserts nothing a query
+                // could mistake for data.
+                continue;
+            }
+            out.push(format!(
+                "`{name}` is filled with the constant {value:?} in every row — data the \
+                 file does not contain, asserted by whoever wrote the spec"
+            ));
+        }
+    }
     for c in &spec.columns {
         if let Some(shift) = c.parse.decimal_shift {
             if shift != 0 {
@@ -395,6 +411,8 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     // Which declared column claimed each position of the file, so a second
     // claim on the same position is caught rather than duplicated.
     let mut claimed: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    // Declared-absent columns to fill with nulls, as `constant` transforms.
+    let mut null_fills: Vec<String> = Vec::new();
     // The framing's own notes travel with the plan. The sniffer's auto-drop of
     // a repeated header row is recorded there, and a fitted spec that quietly
     // removes rows without saying so is exactly the kind of silence this
@@ -413,6 +431,27 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
         // it, not so a planner can pretend the collision did not happen.
         let candidates = bind(tc, &origin, target.match_mode);
         let source = match candidates.len() {
+            0 if tc.if_missing_null => {
+                // Declared absent: the target says a file without this column
+                // still fits, null-filled. The declaration is the
+                // authorisation — it sits in the reviewed `.tdy.sql`, so the
+                // planner is executing a decision, not making one — which is
+                // why this carries a note but no review reason.
+                null_fills.push(tc.name.clone());
+                notes.push(format!(
+                    "`{}`: no column of this file supplies it; filled with NULL as the \
+                     target declares (if_missing = 'null')",
+                    tc.name
+                ));
+                columns.push(ColumnSpec {
+                    name: tc.name.clone(),
+                    source: None,
+                    dtype: null_fill_dtype(&tc.dtype),
+                    nullable: tc.nullable,
+                    parse: ValueParsing::default(),
+                });
+                continue;
+            }
             0 => {
                 gaps.push(Gap::NoCandidate {
                     column: tc.name.clone(),
@@ -482,9 +521,17 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
         return Err(FitError::Gaps(gaps));
     }
 
+    let mut transforms = draft.transforms;
+    // After every structural transform, so the header the constants extend is
+    // the final one.
+    transforms.extend(
+        null_fills
+            .iter()
+            .map(|n| Transform::Constant { name: n.clone(), value: String::new() }),
+    );
     let spec = ParseSpec {
         extraction: draft.extraction,
-        transforms: draft.transforms,
+        transforms,
         columns,
         // A fitted spec is not a guess, so it carries no confidence: it either
         // passed every gate or it does not exist.
@@ -634,6 +681,30 @@ fn render(t: &ArrowType) -> String {
         ArrowType::Timestamp(_, None) => "TIMESTAMP".into(),
         ArrowType::Timestamp(_, Some(tz)) => format!("TIMESTAMP WITH TIME ZONE {tz}"),
         other => format!("{other}"),
+    }
+}
+
+/// The `DType` for a column that will hold nothing but nulls.
+///
+/// The formats are inert — no value is ever parsed — but a `DType::Date`
+/// must carry *some* format, so it carries the conventional one. What matters
+/// is that `engine::schema_of` maps the result onto exactly the target's
+/// Arrow type, which conformance then checks like any other column.
+fn null_fill_dtype(want: &ArrowType) -> DType {
+    match want {
+        ArrowType::Utf8 => DType::Utf8,
+        ArrowType::Boolean => DType::Bool,
+        ArrowType::Int64 => DType::Int64,
+        ArrowType::Float64 => DType::Float64,
+        ArrowType::Decimal128(p, s) => DType::Decimal { precision: *p, scale: *s },
+        ArrowType::Date32 => DType::Date { format: "%Y-%m-%d".into() },
+        ArrowType::Timestamp(_, tz) => DType::Timestamp {
+            format: "%Y-%m-%d %H:%M:%S".into(),
+            timezone: tz.as_ref().map(|z| z.to_string()),
+        },
+        // `Target::parse` only produces the types above; anything else is a
+        // bug there, and conformance would refuse the spec anyway.
+        other => unreachable!("target declared unplannable type {other:?}"),
     }
 }
 

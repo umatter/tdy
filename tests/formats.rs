@@ -761,3 +761,47 @@ fn an_ods_repeated_cell_run_expands_to_the_columns_it_claims() {
     assert_eq!(strings(&b, 3), vec!["<null>", "4", "4"]);
     assert_eq!(strings(&b, 4), vec!["5", "5", "5"], "the run swallowed column E");
 }
+
+/// `constant` adds a column the file does not have — the value in every row,
+/// or nulls when the value is the empty string. It may only *add*: a name the
+/// file already carries is refused, because shadowing a real column with an
+/// invented one is a silent replacement of data.
+#[test]
+fn constant_adds_a_column_and_refuses_to_shadow_one() {
+    use datafusion::arrow::array::StringArray;
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("nov.csv");
+    std::fs::write(&p, "Datum;Betrag\n30.11.2025;100\n30.11.2025;200\n").unwrap();
+
+    let base = vec![Transform::PromoteHeader { rows: 1, join: " ".into() }];
+    let mut with_constant = base.clone();
+    with_constant.push(Transform::Constant { name: "quelle".into(), value: "export".into() });
+    let s = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        with_constant,
+        vec![col("Datum", DType::Utf8), col("quelle", DType::Utf8)],
+    );
+    s.validate().expect("a constant column is a valid spec");
+    let b = spec_to_batch(&s, &p).unwrap();
+    let q = b.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+    assert!(b.num_rows() > 0);
+    assert!((0..q.len()).all(|i| q.value(i) == "export"));
+
+    // The null fill: an empty value is missing in every row.
+    let mut null_fill = base.clone();
+    null_fill.push(Transform::Constant { name: "quelle".into(), value: String::new() });
+    let s = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        null_fill,
+        vec![col("quelle", DType::Utf8)],
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(b.column(0).null_count(), b.num_rows());
+
+    // Shadowing is refused, loudly.
+    let mut shadow = base;
+    shadow.push(Transform::Constant { name: "Datum".into(), value: "x".into() });
+    let s = spec(delim(';', RaggedPolicy::PadNulls), shadow, vec![col("Datum", DType::Utf8)]);
+    let e = spec_to_batch(&s, &p).unwrap_err();
+    assert!(format!("{e:#}").contains("shadow"), "{e:#}");
+}
