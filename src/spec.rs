@@ -340,6 +340,17 @@ pub enum DType {
 #[serde(deny_unknown_fields)]
 pub struct ValueParsing {
     /// Tokens treated as null, e.g. ["", "n/a", "–", "#N/A"].
+    ///
+    /// Matched **case-insensitively**, so listing `"NA"` also covers `na` and
+    /// `Na`: a null token's casing is not a distinction anybody means, and a
+    /// list that had to spell every one is a list nobody keeps complete.
+    /// `sniff::is_na` folds case when it decides a token is missing, and the
+    /// two must agree — they did not, and a column typed from a sample
+    /// containing `NA` failed on a later `NULL`.
+    ///
+    /// Checked *before* `true_values`/`false_values`, so a token in both would
+    /// read as missing and never as a boolean. `validate` refuses that rather
+    /// than resolving it silently.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub na_values: Vec<String>,
     /// Literal substring replacements applied before parsing. The dumb,
@@ -498,13 +509,33 @@ impl ParseSpec {
                         c.name
                     ));
                 }
-                if matches!(c.dtype, DType::Int64) && shift > 0 {
-                    // Shifting right on an integer column would produce a
-                    // fraction the column cannot hold, which is a silent
-                    // truncation waiting to happen.
+                if matches!(c.dtype, DType::Int64) && shift < 0 {
+                    // The shift moves the point right for a positive value and
+                    // left for a negative one (`engine::shift_decimal_point`
+                    // adds it to the integer part's length), so it is the
+                    // *negative* direction that turns 1234 into 12.34 — a
+                    // fraction an integer column cannot hold. The guard used
+                    // to name the other direction, which both rejected the
+                    // harmless case and let the lossy one through.
                     errs.push(format!(
-                        "column `{}`: a positive decimal_shift on an integer column would \
-                         produce a fraction it cannot hold; declare it as DECIMAL",
+                        "column `{}`: a negative decimal_shift on an integer column produces \
+                         a fraction it cannot hold (shift {shift} turns 1234 into {}); \
+                         declare it as DECIMAL",
+                        c.name,
+                        crate::engine::shift_decimal_point("1234", shift)
+                    ));
+                }
+            }
+            // A token cannot be both "missing" and a value. The executor
+            // checks na_values first, so an overlap silently turns a declared
+            // FALSE into a null — the exact shape of wrong answer a sidecar's
+            // author would never see, since both readings produce a valid
+            // column.
+            for t in c.parse.true_values.iter().chain(c.parse.false_values.iter()) {
+                if c.parse.na_values.iter().any(|na| na.eq_ignore_ascii_case(t)) {
+                    errs.push(format!(
+                        "column `{}`: {t:?} is in both na_values and true_values/false_values \
+                         — it would read as missing, never as a boolean. Remove it from one.",
                         c.name
                     ));
                 }
@@ -786,6 +817,66 @@ pub fn parse_fixed_offset(tz: &str) -> Option<chrono::FixedOffset> {
 
 #[cfg(test)]
 mod tests {
+    /// A token cannot be both "missing" and a value: the executor checks
+    /// na_values first, so an overlap silently turns a declared FALSE into a
+    /// null — a wrong value whose two readings both produce a valid column.
+    #[test]
+    fn a_token_may_not_be_both_missing_and_a_boolean() {
+        let mut spec = minimal_bool_spec();
+        spec.columns[0].parse.false_values = vec!["keine".into()];
+        spec.columns[0].parse.na_values = vec!["KEINE".into(), "n/a".into()];
+        let e = spec.validate().expect_err("the overlap must be refused");
+        let text = format!("{e:?}");
+        assert!(text.contains("keine") || text.contains("KEINE"), "{text}");
+
+        spec.columns[0].parse.na_values = vec!["n/a".into()];
+        spec.validate().expect("no overlap, no complaint");
+    }
+
+    /// `shift_decimal_point` adds the shift to the integer part's length, so a
+    /// *negative* shift is the one that turns 1234 into 12.34. The guard used
+    /// to name the other direction: it rejected the harmless multiply and let
+    /// the lossy divide through.
+    #[test]
+    fn the_integer_decimal_shift_guard_names_the_lossy_direction() {
+        assert_eq!(crate::engine::shift_decimal_point("1234", -2), "12.34");
+        assert_eq!(crate::engine::shift_decimal_point("1234", 2), "123400");
+
+        let mut spec = minimal_int_spec();
+        spec.columns[0].parse.decimal_shift = Some(-2);
+        let e = spec.validate().expect_err("a fraction does not fit in an integer column");
+        assert!(format!("{e:?}").contains("12.34"), "{e:?}");
+
+        spec.columns[0].parse.decimal_shift = Some(2);
+        spec.validate().expect("multiplying an integer keeps it an integer");
+    }
+
+    fn minimal_int_spec() -> ParseSpec {
+        ParseSpec {
+            extraction: Extraction::Lines {
+                pattern: "^(?P<n>.*)$".into(),
+                encoding: None,
+                on_no_match: NoMatchPolicy::default(),
+            },
+            transforms: vec![],
+            columns: vec![ColumnSpec {
+                name: "n".into(),
+                source: None,
+                dtype: DType::Int64,
+                nullable: true,
+                parse: ValueParsing::default(),
+            }],
+            confidence: None,
+            notes: vec![],
+        }
+    }
+
+    fn minimal_bool_spec() -> ParseSpec {
+        let mut s = minimal_int_spec();
+        s.columns[0].dtype = DType::Bool;
+        s
+    }
+
     use super::*;
 
     fn minimal_spec() -> ParseSpec {

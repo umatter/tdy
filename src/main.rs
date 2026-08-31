@@ -196,12 +196,27 @@ fn fit_dataset(
     // changed — drift is what expires them, so re-fitting an untouched
     // dataset must not ask the same question twice.
     let previous = Lock::load(target_path)?;
+    // A member is identified by its path *relative to the target*, so that is
+    // what --accept must name. Matching on the basename accepted the wrong
+    // file when two directories held the same name, and could never accept a
+    // member in a subdirectory at all.
     let accepted_now: Vec<String> = accept
         .iter()
         .map(|a| {
-            a.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            let a = a.strip_prefix(&dir).unwrap_or(a);
+            a.to_string_lossy().replace('\\', "/")
         })
         .collect();
+    for a in &accepted_now {
+        if !rels.contains(a) {
+            anyhow::bail!(
+                "--accept {a:?} is not a member of `{}`. Members are named relative to the \
+                 target: {}",
+                target.name,
+                rels.iter().take(6).map(|r| format!("{r:?}")).collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
 
     let mut members = Vec::new();
     let mut failed = 0usize;
@@ -253,7 +268,14 @@ fn fit_dataset(
                     (Some(_), true) => println!("  {rel:<24} accepted  (hand-written spec)"),
                     (None, _) => println!("  {rel:<24} fits      (hand-written spec)"),
                 }
-                members.push(Member { path: rel.clone(), blake3, bytes, review, accepted: is_accepted });
+                members.push(Member {
+                    path: rel.clone(),
+                    blake3,
+                    bytes,
+                    spec_digest: lockfile::spec_digest(&p),
+                    review,
+                    accepted: is_accepted,
+                });
                 continue;
             }
         }
@@ -293,6 +315,7 @@ fn fit_dataset(
                     path: rel.clone(),
                     blake3,
                     bytes,
+                    spec_digest: lockfile::spec_digest(&p),
                     review: fitted.review.clone(),
                     accepted: is_accepted,
                 });
@@ -390,7 +413,7 @@ fn fit_command(
                     describe(&c.dtype)
                 );
             }
-            for n in fitted.spec.notes.iter().filter(|n| !n.starts_with('`')) {
+            for n in fitted.spec.notes.iter().filter(|n| !tdy::fit::is_binding_note(n)) {
                 println!("  note: {n}");
             }
             if dry_run {
@@ -452,7 +475,11 @@ fn describe(d: &tdy::spec::DType) -> String {
 ///
 /// Exits non-zero if any file's spec does not conform, because a gate that
 /// exits zero when it found a problem is not a gate.
-fn check_command(target_path: &std::path::Path, files: &[PathBuf]) -> Result<()> {
+fn check_command(
+    target_path: &std::path::Path,
+    files: &[PathBuf],
+    limits: tdy::config::Limits,
+) -> Result<()> {
     use tdy::conform::{judge, Verdict};
     use tdy::target::Target;
 
@@ -465,13 +492,31 @@ fn check_command(target_path: &std::path::Path, files: &[PathBuf]) -> Result<()>
     );
 
     if files.is_empty() {
-        // Slice 1 has no lock and does not resolve globs, so there is nothing
-        // to check against yet. Say that, rather than silently succeeding.
-        println!(
-            "\nnothing to check: pass --against <FILE> for each file whose sidecar \
-             should be checked.\ndeclared sources: {}",
-            if target.files.is_empty() { "(none)".into() } else { target.files.join(", ") }
-        );
+        // With a lock, the dataset itself is what CI wants checked, and
+        // `dataset::resolve` runs exactly the checks a query would: drift,
+        // every member's sidecar present and fresh, every member still
+        // conforming, nothing waiting on a human. Reusing it is what keeps
+        // the gate and the query from disagreeing.
+        //
+        // Without a lock there is nothing to check, and saying so beats
+        // exiting zero on a target nobody has fitted.
+        let lock = tdy::lockfile::Lock::load(target_path)?;
+        if lock.is_none() {
+            println!(
+                "\nnothing to check: `{}` has no lock. Run `tdy fit {}` first, or pass \
+                 --against <FILE> to check a single sidecar.\ndeclared sources: {}",
+                target.name,
+                target_path.display(),
+                if target.files.is_empty() { "(none)".into() } else { target.files.join(", ") }
+            );
+            return Ok(());
+        }
+        let resolved = tdy::dataset::resolve(target_path, limits)?;
+        println!("\n{} member(s), all conforming:", resolved.members.len());
+        for m in &resolved.members {
+            println!("  {:<28} OK", m.rel);
+        }
+        println!("\n`{}` is ready to query.", target.name);
         return Ok(());
     }
 
@@ -610,7 +655,8 @@ async fn run() -> Result<()> {
             }
         }
         Command::Check { target, against } => {
-            check_command(&target, &against)?;
+            let cfg = config::load(&overrides)?;
+            check_command(&target, &against, cfg.limits)?;
         }
         Command::Schema => {
             println!(

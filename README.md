@@ -150,7 +150,9 @@ tdy validate data/export.csv --stamp               # re-fingerprint a hand-edite
 tdy fit sales.tdy.sql exports/2025-01.csv          # plan a spec that lands on
                                                     # a declared target
 tdy fit sales.tdy.sql                              # fit every member, write the lock
-tdy check sales.tdy.sql --against exports/*.csv     # do my sidecars still produce
+tdy check sales.tdy.sql                            # CI gate: is the dataset still
+                                                    # exactly what the lock says?
+tdy check sales.tdy.sql --against exports/*.csv     # do these sidecars still produce
                                                     # the schema I declared?
 tdy schema                                         # the JSON Schema (the grammar)
 tdy config init                                    # sample config + location
@@ -286,9 +288,29 @@ types. That is a much stronger contract than "the head parsed", and it makes a
 useful CI gate on its own: *do the sidecars I already have still produce the
 schema my downstream expects?*
 
-Shape is proved; **values are not**. A per-row parse failure, a grouping
-violation, a null in a NOT NULL column — those are still caught per row, loudly,
-naming the row, at execution.
+Shape is proved; **values are not** — by that comparison. What proves the values
+is reading them, and `verify` says how much of the file to read:
+
+```sql
+WITH (files = '2025-*.csv', verify = 'full')   -- the default: every row
+WITH (files = '2025-*.csv', verify = 'head')   -- the bounded prefix only
+```
+
+`verify = 'full'` is the default because the prefix lies. `testdata/late_surprise_*`
+is four files reduced from real exports where it does: a `station_id` that is
+digits for seven hundred rows and then `TA1309000067`, a `children` column that is
+an integer for forty thousand and then `NA`. A plan typed from the head of those
+files is a plan that dies mid-query on a file `fit` called fittable. Proving the
+declared type on every row is what makes "it fits" mean something, and `'head'`
+is there for datasets where that read is too expensive to pay on every fit.
+
+Either way a per-row parse failure, a grouping violation, or a null in a NOT NULL
+column is still caught per row, loudly, naming the row, at execution.
+
+With a lock, `tdy check <TARGET>` needs no `--against`: it runs exactly the
+checks a query runs — drift, every sidecar present and fresh, every member still
+conforming, nothing waiting on a human — and exits non-zero if any of them fail.
+That is the one command to put in CI.
 
 `tdy fit` with no file plans every member and records what the globs resolved
 to, and then the whole pile is one relation:
@@ -304,6 +326,9 @@ wrote sales.tdy.lock
 
 $ tdy query "SELECT region, sum(amount_chf) FROM dataset('sales.tdy.sql') GROUP BY 1"
 ```
+
+A member is named by its path relative to the target — `exports/2025-07.csv`,
+not `2025-07.csv` — and that is the name `--accept` takes.
 
 Membership lives in the lock, and `dataset()` never expands a glob. That is
 the difference between a reproducible dataset and a directory listing: if the

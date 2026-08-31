@@ -96,7 +96,7 @@ pub fn sniff_opts(
         FormatGuess::Delimited | FormatGuess::Unknown => sniff_text(path, sample, limits),
     }?;
     if opts.verify {
-        verify_types(&mut res, path, limits);
+        verify_types(&mut res.spec, path, limits);
     } else {
         // Said in the sidecar rather than only on the terminal, because the
         // sidecar is what a colleague reads six months later and the claim
@@ -138,23 +138,42 @@ pub fn sniff_opts(
 /// This costs a full read of the file. That is affordable only because
 /// extraction streams — before that it would have cost eight times the file in
 /// memory — and it is paid once, when the sidecar is written, not per query.
-fn verify_types(res: &mut SniffResult, path: &Path, limits: Limits) {
+pub fn verify_types(spec: &mut crate::spec::ParseSpec, path: &Path, limits: Limits) {
     // Nothing to check if every column is already text.
-    if res.spec.columns.iter().all(|c| c.dtype == DType::Utf8) {
+    if spec.columns.iter().all(|c| c.dtype == DType::Utf8) {
         return;
     }
-    let mut v = match crate::stream::verify(&res.spec, path, limits) {
+    let mut v = match crate::stream::verify(&spec, path, limits) {
         Ok(v) => v,
-        // A file that cannot be read at all is not this function's problem:
-        // the caller's own execution will report it properly.
-        Err(_) => return,
+        // A file that cannot be read at all is not this function's problem —
+        // the caller's own execution reports it properly. But silence here
+        // reads as "verified, and clean", which is a stronger claim than
+        // "could not check", so say which one happened.
+        Err(e) => {
+            spec.notes.push(format!(
+                "types were NOT checked against the whole file ({e:#}); they rest on the                  sample alone"
+            ));
+            spec.confidence = Some(spec.confidence.unwrap_or(1.0).min(0.6));
+            return;
+        }
     };
 
     // Drop repeated headers first, then re-check the types: a header sitting
     // in the middle of the data is text in every column, so leaving it in
     // would widen every numeric column in the file and hide the real cause.
     if v.repeated_header_rows > 0 {
-        if res.spec.columns.len() > 1 {
+        // Only when the names came from the file. With no header row the
+        // sniffer invents `col_1`, `col_2`, … and a data row that happens to
+        // spell those out is not provably a header — it is a row somebody
+        // would lose.
+        // A header exists only if something promoted one; otherwise the
+        // sniffer invented `col_1`, `col_2`, … and those names are ours, not
+        // the file's.
+        let named_by_the_file = spec
+            .transforms
+            .iter()
+            .any(|t| matches!(t, Transform::PromoteHeader { .. }));
+        if spec.columns.len() > 1 && named_by_the_file {
             // Match the WHOLE row, not its first cell. A pattern anchored on
             // one column deletes every row whose first field happens to equal
             // that header — an `invoice` column containing the literal value
@@ -162,23 +181,22 @@ fn verify_types(res: &mut SniffResult, path: &Path, limits: Limits) {
             // a detection that proved something else entirely. The executor
             // joins a row with tabs when `column` is None, so this matches
             // exactly the rows that were counted.
-            let joined = res
-                .spec
+            let joined = spec
                 .columns
                 .iter()
                 .map(|c| regex::escape(c.source_name()))
                 .collect::<Vec<_>>()
                 .join("\t");
-            res.spec.transforms.push(Transform::DropRowsMatching {
+            spec.transforms.push(Transform::DropRowsMatching {
                 pattern: format!("^{joined}$"),
                 column: None,
             });
-            res.spec.notes.push(format!(
-                "dropped {} row(s) identical to the header — the file looks like several \
+            spec.notes.push(format!(
+                "{DROPPED_NOTE}{} row(s) identical to the header — the file looks like several \
                  exports concatenated together",
                 v.repeated_header_rows
             ));
-            if let Ok(again) = crate::stream::verify(&res.spec, path, limits) {
+            if let Ok(again) = crate::stream::verify(&spec, path, limits) {
                 v = again;
             }
         }
@@ -189,18 +207,26 @@ fn verify_types(res: &mut SniffResult, path: &Path, limits: Limits) {
     }
     let total = v.rows;
     for (i, _why) in v.failing {
-        let Some((_, offenders, count)) = v.offenders.iter().find(|(j, _, _)| *j == i) else {
+        let Some(off) = v.offenders.iter().find(|o| o.column == i) else {
             continue;
         };
-        let shown: Vec<String> = offenders
+        let shown: Vec<String> = off
+            .examples
             .iter()
             .map(|(row, val)| format!("{val:?} (row {row})"))
             .collect();
-        let Some(col) = res.spec.columns.get_mut(i) else { continue };
+        // "at least", once counting stopped — a capped number printed bare
+        // reads as exact.
+        let count = if off.capped {
+            format!("at least {}", off.count)
+        } else {
+            off.count.to_string()
+        };
+        let Some(col) = spec.columns.get_mut(i) else { continue };
         let was = col.dtype.clone();
         col.dtype = DType::Utf8;
         col.parse = ValueParsing::default();
-        res.spec.notes.push(format!(
+        spec.notes.push(format!(
             "column `{}`: kept as text — {} of {} values are not {}: {}. \
              If those are strays rather than data, drop them with a \
              `drop_rows_matching` transform and narrow the type by hand.",
@@ -213,7 +239,7 @@ fn verify_types(res: &mut SniffResult, path: &Path, limits: Limits) {
     }
     // The sniffer was wrong about something, and saying so is the point of
     // having a confidence at all.
-    res.spec.confidence = res.spec.confidence.map(|c| (c - 0.1).max(0.0));
+    spec.confidence = spec.confidence.map(|c| (c - 0.1).max(0.0));
 }
 
 fn type_word(d: &DType) -> &'static str {
@@ -959,6 +985,14 @@ fn looks_scalar(v: &str) -> bool {
     )
 }
 
+/// Prefix of the note the auto-drop writes.
+///
+/// `fit` carries this note into a fitted spec and the CLI prints it, so the
+/// wording is a contract between three files rather than prose. A spec that
+/// silently removes rows is the failure this project exists to prevent, and
+/// the note is the only place it says so.
+pub const DROPPED_NOTE: &str = "dropped ";
+
 pub(crate) const NA_TOKENS: &[&str] = &[
     "", "na", "n/a", "null", "none", "nil", "-", "–", "—", "#n/a", "#na", "nan", "k.a.", "keine",
 ];
@@ -1099,6 +1133,13 @@ fn guess_type(values: &[&str], name: &str) -> TypeGuess {
         // answer the code already gave whenever it happened to look.
         p.na_values = NA_TOKENS.iter().map(|t| t.to_string()).collect();
         p.na_values.retain(|t| !t.is_empty());
+        // ...except where the column's own vocabulary claims the token. Only
+        // booleans have one, and `spec::validate` refuses a spec where the two
+        // overlap, because the executor resolves the tie as "missing" and a
+        // declared FALSE would vanish.
+        p.na_values.retain(|t| {
+            !p.true_values.iter().chain(p.false_values.iter()).any(|b| b.eq_ignore_ascii_case(t))
+        });
         p
     };
     // Kept for the note below: what this file actually contained.

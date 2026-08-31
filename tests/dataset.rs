@@ -441,3 +441,215 @@ scale = 2
     )
     .unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// The lock as an operational contract. Each of these was a way for a gate to
+// pass while the thing it gates was wrong.
+// ---------------------------------------------------------------------------
+
+/// `--accept` names a member — the path the lock records, relative to the
+/// target — not a basename.
+///
+/// Matching on the basename meant `--accept jan.csv` accepted whichever
+/// `jan.csv` came first when two directories held one, and a member inside a
+/// subdirectory could never be accepted at all: its lock entry is `sub/jan.csv`
+/// and no basename ever equals that.
+#[test]
+fn accept_names_a_member_and_refuses_a_stranger() {
+    let dir = staged();
+    let t = target_of(&dir);
+    // A file that is not a member at all.
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "2025-07.csv"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "accepting a non-member must fail");
+    assert!(err.contains("not a member"), "{err}");
+}
+
+/// A member in a subdirectory can be accepted, spelt the way the lock spells
+/// it. This is the case the basename match could not express at all.
+#[test]
+fn a_member_in_a_subdirectory_can_be_accepted() {
+    let dir = staged();
+    let sub = dir.path().join("exports");
+    std::fs::create_dir(&sub).unwrap();
+    let july = sub.join("2025-07.csv");
+    std::fs::copy(dir.path().join("2025-07.csv"), &july).unwrap();
+    std::fs::remove_file(dir.path().join("2025-07.csv")).unwrap();
+    write_rappen_spec(&july);
+    assert!(tdy(&["validate", july.to_str().unwrap(), "--stamp"]).status.success());
+
+    let target = dir.path().join("rappen.tdy.sql");
+    std::fs::write(
+        &target,
+        "CREATE TABLE rappen (
+           month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
+           region     TEXT          NOT NULL OPTIONS(matches = 'Region'),
+           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+         ) WITH (files = 'exports/*.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+
+    let ts = target.to_str().unwrap();
+    let out = tdy(&["fit", ts]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("REVIEW"), "the shift should need a human:\n{text}");
+
+    // The lock's own spelling, which is what --accept must take.
+    let out = tdy(&["fit", ts, "--accept", "exports/2025-07.csv"]);
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let q = tdy(&["query", &format!("SELECT count(*) FROM dataset('{ts}')")]);
+    assert!(q.status.success(), "{}", String::from_utf8_lossy(&q.stderr));
+}
+
+/// An acceptance is a judgement about a *plan*. Editing the plan afterwards
+/// must retract it — the data has not changed, so nothing else would notice.
+#[test]
+fn editing_an_accepted_members_spec_retracts_the_acceptance() {
+    let dir = staged();
+    // 2025-07 is in Rappen and is excluded from sales_ok; give it its own
+    // target so it becomes an accepted member.
+    let july = dir.path().join("2025-07.csv");
+    write_rappen_spec(&july);
+    assert!(tdy(&["validate", july.to_str().unwrap(), "--stamp"]).status.success());
+
+    let target = dir.path().join("rappen.tdy.sql");
+    std::fs::write(
+        &target,
+        "CREATE TABLE rappen (
+           month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
+           region     TEXT          NOT NULL OPTIONS(matches = 'Region'),
+           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+         ) WITH (files = '2025-07.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+    let ts = target.to_str().unwrap();
+    let acc = tdy(&["fit", ts, "--accept", "2025-07.csv"]);
+    assert!(
+        acc.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&acc.stdout),
+        String::from_utf8_lossy(&acc.stderr)
+    );
+    let q = tdy(&["query", &format!("SELECT count(*) FROM dataset('{ts}')")]);
+    assert!(q.status.success(), "{}", String::from_utf8_lossy(&q.stderr));
+
+    // Now change the very thing that was accepted: the shift.
+    let sc = dir.path().join("2025-07.csv.tdy.toml");
+    let text = std::fs::read_to_string(&sc).unwrap();
+    let tampered = text.replace("decimal_shift = -2", "decimal_shift = -3");
+    assert_ne!(tampered, text, "the fixture changed shape; update this test");
+    std::fs::write(&sc, tampered).unwrap();
+    let p = dir.path().join("2025-07.csv");
+    assert!(tdy(&["validate", p.to_str().unwrap(), "--stamp"]).status.success());
+
+    let q = tdy(&["query", &format!("SELECT count(*) FROM dataset('{ts}')")]);
+    let err = String::from_utf8_lossy(&q.stderr);
+    assert!(!q.status.success(), "an edited acceptance was still honoured");
+    assert!(err.contains("2025-07.csv"), "{err}");
+    assert!(err.contains("accepted"), "{err}");
+}
+
+/// `tdy check <TARGET>` with no `--against` is the documented CI gate. Once a
+/// lock exists it must actually check it: it used to print "nothing to check"
+/// and exit zero, so the gate passed on a dataset that could not be queried.
+#[test]
+fn check_with_a_lock_is_a_real_gate() {
+    let dir = staged();
+    fit_all(&dir);
+    let t = target_of(&dir);
+    let ts = t.to_str().unwrap();
+
+    let ok = tdy(&["check", ts]);
+    assert!(
+        ok.status.success(),
+        "a freshly fitted dataset must pass:\n{}{}",
+        String::from_utf8_lossy(&ok.stdout),
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(String::from_utf8_lossy(&ok.stdout).contains("conforming"));
+
+    // Change a member. The gate must now fail, naming it.
+    let f = dir.path().join("2025-01.csv");
+    let mut text = std::fs::read_to_string(&f).unwrap();
+    text.push_str("15.01.2025;Bern;99.00\n");
+    std::fs::write(&f, text).unwrap();
+
+    let bad = tdy(&["check", ts]);
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(!bad.status.success(), "a gate that exits zero on drift is not a gate");
+    assert!(err.contains("2025-01.csv"), "{err}");
+}
+
+/// A target named by its bare filename resolves the same members as one named
+/// by a path. `Path::parent` of `sales.tdy.sql` is `Some("")`, not `None`, and
+/// `read_dir("")` fails — so every drift check passed vacuously.
+#[test]
+fn a_bare_target_filename_resolves_its_members() {
+    let dir = staged();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["fit", "sales_ok.tdy.sql"])
+        .current_dir(dir.path())
+        .output()
+        .expect("run tdy");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("9 file(s) match"), "no members were found:\n{text}");
+}
+
+/// A path listed twice would be read twice: a dataset whose total is silently
+/// doubled for one member.
+#[test]
+fn a_member_listed_twice_is_drift() {
+    let dir = staged();
+    fit_all(&dir);
+    let lock = dir.path().join("sales_ok.tdy.lock");
+    let text = std::fs::read_to_string(&lock).unwrap();
+    // Duplicate the first member block by hand — a merge conflict resolved
+    // badly looks exactly like this.
+    let first = text
+        .split("[[member]]")
+        .nth(1)
+        .expect("the lock must have members")
+        .to_string();
+    let first = first.split("\n[[").next().unwrap().to_string();
+    std::fs::write(&lock, format!("{text}\n[[member]]{first}")).unwrap();
+
+    let out = query(&dir, "SELECT count(*) FROM dataset('@')");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a doubled member was read twice");
+    assert!(err.contains("twice"), "{err}");
+}
+
+/// An `exclude` naming no directory applies in every directory. Requiring it
+/// to repeat the `files=` prefix made it silently do nothing, which is the
+/// worst possible failure for a subtraction.
+#[test]
+fn an_exclude_without_a_directory_applies_everywhere() {
+    let dir = TempDir::new().unwrap();
+    let sub = dir.path().join("exports");
+    std::fs::create_dir(&sub).unwrap();
+    for name in ["jan.csv", "jan-draft.csv"] {
+        std::fs::write(sub.join(name), "Datum;Region\n05.07.2025;Bern\n").unwrap();
+    }
+    let target = dir.path().join("t.tdy.sql");
+    std::fs::write(
+        &target,
+        "CREATE TABLE t (
+           month  DATE NOT NULL OPTIONS(matches = 'Datum'),
+           region TEXT NOT NULL OPTIONS(matches = 'Region')
+         ) WITH (files = 'exports/*.csv', exclude = '*-draft.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+    let out = tdy(&["fit", target.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("1 file(s) match"), "the draft was not excluded:\n{text}");
+}

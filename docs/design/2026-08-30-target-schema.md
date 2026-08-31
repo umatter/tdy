@@ -499,9 +499,15 @@ exists and is tested before the model is allowed near it.
 3. **Positional disambiguation.** For the two-`Betrag` file: `source = "Betrag@3"`
    overloads a name with an index. `{ at = 3, expect = "Betrag" }` is safer — it
    fails loudly if the columns move — and uglier.
-4. **`verify = "full"` as the default at all scales?** It is the honest default
-   and the file is already open, but a first fit over a directory of workbooks is
-   O(total bytes) because a sheet is materialised before any row cap applies.
+4. ~~**`verify = "full"` as the default at all scales?**~~ **Settled: yes, and it
+   is wired.** `fit` now proves the declared type on every row when the target
+   says `verify = 'full'` (the default), and stops at `dry_run`'s bounded prefix
+   when it says `'head'`. The corpus decided it: `testdata/late_surprise_*` is
+   four shapes reduced from real exports where the head lies — a `station_id`
+   that is digits for seven hundred rows and then `TA1309000067`. A plan typed
+   from the prefix of those files is a plan `fit` calls fittable and the query
+   then dies on. The O(total bytes) objection stands and `'head'` is its answer;
+   what it does not justify is making the unsafe reading the default.
 5. **Magnitude threshold.** 10× catches the Rappen class and nothing smaller. A
    partial final month will produce false positives, and the remedy is a
    per-member acceptance rather than a global switch.

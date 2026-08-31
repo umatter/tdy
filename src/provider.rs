@@ -340,7 +340,15 @@ pub async fn ensure_sidecar_opts(
             );
         }
         let inferred = infer::infer_spec(cfg, path, &s, Some(&draft), hint).await?;
-        (inferred.spec, InferenceMethod::Llm, Some(inferred.model))
+        let mut spec = inferred.spec;
+        // The same whole-file type check the heuristic tier gets. Without it
+        // the model's spec was the *less* checked of the two, which is exactly
+        // backwards: a model narrows a type from a sample it was shown, and
+        // `testdata/late_surprise_*` is four files where the sample lies.
+        if opts.verify {
+            sniff::verify_types(&mut spec, path, cfg.limits);
+        }
+        (spec, InferenceMethod::Llm, Some(inferred.model))
     } else {
         eprintln!(
             "warning: heuristics are only {:.0}% confident about {} and no LLM \

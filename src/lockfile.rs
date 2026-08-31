@@ -32,6 +32,15 @@ pub struct Member {
     pub path: String,
     pub blake3: String,
     pub bytes: u64,
+    /// Fingerprint of the *spec*, not the data.
+    ///
+    /// An acceptance is a judgement about a plan, and the plan lives in the
+    /// sidecar. Recording only the file's hash meant a sidecar could be
+    /// hand-edited after acceptance — adding a `decimal_shift`, say — and the
+    /// dataset would keep running it as accepted. The data had not changed, so
+    /// nothing else noticed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spec_digest: String,
     /// Why this member needed a human's judgement, if it did.
     ///
     /// A plan whose acceptance rests on a *semantic* judgement rather than a
@@ -166,6 +175,23 @@ pub enum Drift {
     Changed(String),
     /// The declaration itself changed, so every member's proof is void.
     TargetChanged,
+    /// The same file is listed twice.
+    Duplicated(String),
+    /// The data is unchanged but its spec was edited after it was fitted.
+    SpecEdited(String),
+}
+
+/// Fingerprint of a member's spec, as stored in its sidecar.
+///
+/// Empty when the sidecar cannot be read: a missing spec is reported by the
+/// dataset's own load, and inventing a digest here would turn that into a
+/// confusing drift message instead.
+pub fn spec_digest(data_file: &Path) -> String {
+    let p = crate::sidecar::sidecar_path(data_file);
+    match std::fs::read(&p) {
+        Ok(bytes) => format!("b3:{}", blake3::hash(&bytes).to_hex()),
+        Err(_) => String::new(),
+    }
 }
 
 impl Drift {
@@ -179,6 +205,13 @@ impl Drift {
             ),
             Drift::Changed(p) => format!(
                 "{p} has changed since it was fitted — run `tdy fit` to re-plan it"
+            ),
+            Drift::Duplicated(p) => {
+                format!("{p} is listed twice in the lock — run `tdy fit` to rebuild it")
+            }
+            Drift::SpecEdited(p) => format!(
+                "{p}'s spec was edited after it was accepted — the acceptance was given to \
+                 the plan as it read then. Re-accept it:  tdy fit <TARGET> --accept {p}"
             ),
             Drift::TargetChanged => {
                 "the target declaration changed, so every member must be re-fitted — \
@@ -202,6 +235,17 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
     let on_disk = resolve(target, target_file)?;
     let locked: BTreeSet<&str> = lock.members.iter().map(|m| m.path.as_str()).collect();
 
+    // A path listed twice would be read twice and counted twice — a dataset
+    // whose total is silently doubled for one member.
+    if locked.len() != lock.members.len() {
+        let mut seen = BTreeSet::new();
+        for m in &lock.members {
+            if !seen.insert(m.path.as_str()) {
+                out.push(Drift::Duplicated(m.path.clone()));
+            }
+        }
+    }
+
     for rel in &on_disk {
         if !locked.contains(rel.as_str()) {
             out.push(Drift::Added(rel.clone()));
@@ -216,6 +260,19 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
         let (hash, bytes) = crate::sidecar::hash_file(&p)?;
         if hash != m.blake3 || bytes != m.bytes {
             out.push(Drift::Changed(m.path.clone()));
+            continue;
+        }
+        // The spec is the thing that was reviewed, so it is the thing whose
+        // change must invalidate the review.
+        //
+        // Only for an *accepted* member. A sidecar is a human assertion about
+        // specific bytes and tdy honours it — `fit` keeps a hand-written spec
+        // rather than replanning it — so an edit is not by itself drift, and
+        // conformance plus the dry run still gate it on every load. What an
+        // edit must not survive is an acceptance, because the acceptance was
+        // given to the spec as it read then.
+        if m.accepted && !m.spec_digest.is_empty() && spec_digest(&p) != m.spec_digest {
+            out.push(Drift::SpecEdited(m.path.clone()));
         }
     }
     Ok(out)
@@ -223,7 +280,14 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
 
 /// The directory a target's globs are relative to.
 pub fn target_dir(target_file: &Path) -> PathBuf {
-    target_file.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."))
+    // `Path::parent` of a bare filename is `Some("")`, not `None`, and
+    // `read_dir("")` fails — so `tdy fit sales.tdy.sql` from inside the data
+    // directory resolved to no members at all, which made every drift check
+    // vacuously pass.
+    match target_file.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
 }
 
 /// Files the target's globs match now, relative to the target's directory,
@@ -260,7 +324,12 @@ pub fn resolve(target: &Target, target_file: &Path) -> Result<Vec<String>> {
         let (sub, name_pat) = split_pattern(pat);
         out.retain(|rel| {
             let (rsub, rname) = split_pattern(rel);
-            !(rsub == sub && matches_glob(&name_pat, &rname))
+            // An exclude naming no directory applies to every directory —
+            // `exclude = '*-draft.csv'` should mean what it says, and
+            // requiring it to repeat the files= prefix made it silently do
+            // nothing.
+            let dir_matches = sub.is_empty() || rsub == sub;
+            !(dir_matches && matches_glob(&name_pat, &rname))
         });
     }
 
@@ -279,18 +348,41 @@ fn split_pattern(p: &str) -> (String, String) {
 /// dataset's members live beside its target, and `**` recursion would make
 /// membership depend on a directory tree nobody is looking at.
 fn matches_glob(pat: &str, name: &str) -> bool {
-    fn go(p: &[char], n: &[char]) -> bool {
-        match p.first() {
-            None => n.is_empty(),
-            Some('*') => {
-                // Match the rest here, or consume one char and retry.
-                go(&p[1..], n) || (!n.is_empty() && go(p, &n[1..]))
+    // Iterative, with a single remembered star. The recursive version branched
+    // at every `*` and took exponential time on a pattern like `*a*a*a*a*b`
+    // against a long run of `a`s — a filename nobody would write on purpose,
+    // but `files=` is user input and a glob is not a place to hang. This is the
+    // standard one-star backtrack: O(pattern x name) worst case, linear in
+    // practice, and it cannot overflow the stack.
+    let p: Vec<char> = pat.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    let (mut pi, mut ni) = (0usize, 0usize);
+    // Where to resume if the current star turns out to have eaten too little.
+    let mut star: Option<(usize, usize)> = None;
+
+    loop {
+        if ni < n.len() && pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some((pi, ni));
+            pi += 1;
+        } else if let Some((sp, sn)) = star {
+            // Give the star one more character and try again from there.
+            if sn >= n.len() {
+                return false;
             }
-            Some('?') => !n.is_empty() && go(&p[1..], &n[1..]),
-            Some(c) => n.first() == Some(c) && go(&p[1..], &n[1..]),
+            star = Some((sp, sn + 1));
+            pi = sp + 1;
+            ni = sn + 1;
+        } else {
+            return false;
+        }
+        if ni == n.len() {
+            // Trailing stars match nothing, which is still a match.
+            return p[pi..].iter().all(|c| *c == '*');
         }
     }
-    go(&pat.chars().collect::<Vec<_>>(), &name.chars().collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -312,6 +404,26 @@ mod tests {
         assert!(!matches_glob("*.csv", "a.csv.bak"));
         // A pattern with several stars must not blow up.
         assert!(matches_glob("*-*-*.csv", "a-b-c.csv"));
+    }
+
+    /// The recursive matcher branched at every star and took exponential time
+    /// on this. `files=` is user input, and a glob is not a place to hang.
+    #[test]
+    fn a_pathological_glob_does_not_hang() {
+        let name = "a".repeat(64);
+        let t = std::time::Instant::now();
+        assert!(!matches_glob("*a*a*a*a*a*a*a*b", &name));
+        assert!(matches_glob("*a*a*a*a*a*a*a*a", &name));
+        assert!(t.elapsed() < std::time::Duration::from_millis(100), "{:?}", t.elapsed());
+    }
+
+    /// `Path::parent` of a bare filename is `Some("")`, not `None`, and
+    /// `read_dir("")` fails — so a target named without a directory resolved
+    /// to no members and every drift check passed vacuously.
+    #[test]
+    fn a_bare_target_filename_has_a_usable_directory() {
+        assert_eq!(target_dir(Path::new("sales.tdy.sql")), PathBuf::from("."));
+        assert_eq!(target_dir(Path::new("d/sales.tdy.sql")), PathBuf::from("d"));
     }
 
     #[test]

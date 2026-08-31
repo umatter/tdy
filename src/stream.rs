@@ -728,8 +728,28 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
 /// Memory stays bounded, which is what makes this affordable at all: before
 /// the streaming work a full verification pass would have cost eight times the
 /// file.
+/// Where one column's declared type stopped holding, and how badly.
+#[derive(Debug, Clone)]
+pub struct Offenders {
+    /// Which column, by index into `spec.columns`.
+    pub column: usize,
+    /// A few (1-based row, value) pairs, for the message.
+    pub examples: Vec<(usize, String)>,
+    /// How many failed. Exact unless `capped`.
+    pub count: usize,
+    /// Counting stopped at [`OFFENDER_CAP`]; there may be more.
+    pub capped: bool,
+}
+
+/// How many bad values are worth counting before the answer stops changing.
+///
+/// A column where five hundred values fail is not a column with strays in it,
+/// and scanning the remaining three million rows to turn 500 into 2,900,451
+/// buys a reader nothing they would act on differently.
+pub const OFFENDER_CAP: usize = 500;
+
 /// What a full read of the file says about a guessed spec.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Verification {
     /// (column index, the parse error) for every column whose declared type
     /// does not hold somewhere in the file.
@@ -738,7 +758,11 @@ pub struct Verification {
     /// — at most a few, because the point is to name the problem rather than
     /// to list it. How many there are matters as much as what they are: one
     /// bad value in 40,000 rows is a stray, and thousands are a wrong type.
-    pub offenders: Vec<(usize, Vec<(usize, String)>, usize)>,
+    ///
+    /// The count stops at [`OFFENDER_CAP`]; `Offenders::capped` says whether
+    /// it did, so a reader is told "at least 500" rather than a number that
+    /// looks exact and is not.
+    pub offenders: Vec<Offenders>,
     /// Rows read. The denominator that turns "5 values are not integers" into
     /// either "5 strays in 40,000" or "5 of 5, so it is simply not an integer
     /// column".
@@ -817,8 +841,9 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
     }
 
     let mut failed: Vec<Option<String>> = vec![None; spec.columns.len()];
-    let mut bad: Vec<(Vec<(usize, String)>, usize)> =
-        vec![(Vec::new(), 0); spec.columns.len()];
+    // (examples, count, counting-stopped-at-the-cap)
+    let mut bad: Vec<(Vec<(usize, String)>, usize, bool)> =
+        vec![(Vec::new(), 0, false); spec.columns.len()];
     let mut repeats = 0usize;
     let mut row_base = 0usize;
     // The header cell each column reads from, which is what a repeated header
@@ -871,16 +896,20 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
             // Only now, and only for this column, is it worth paying for a
             // per-row scan: it turns "this column is not an integer" into
             // "these two values are not, and here is where they are".
+            // A column where *everything* fails is a wrong guess, not a set
+            // of strays, so counting stops at the cap — and the flag is what
+            // keeps the message honest about having stopped.
+            if bad[i].2 {
+                continue;
+            }
             for (r, v) in values.iter().enumerate() {
                 if build_column_at(col, std::slice::from_ref(v), row_base + r).is_err() {
                     bad[i].1 += 1;
                     if bad[i].0.len() < 3 {
                         bad[i].0.push((row_base + r + 1, (*v).to_string()));
                     }
-                    // A column where *everything* fails is a wrong guess, not
-                    // a set of strays, and counting every one of a million
-                    // rows adds nothing a reader would use.
-                    if bad[i].1 >= 500 {
+                    if bad[i].1 >= OFFENDER_CAP {
+                        bad[i].2 = true;
                         break;
                     }
                 }
@@ -898,11 +927,11 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
         }
     }
 
-    let offenders = bad
+    let offenders: Vec<Offenders> = bad
         .into_iter()
         .enumerate()
-        .filter(|(_, (v, _))| !v.is_empty())
-        .map(|(i, (v, n))| (i, v, n))
+        .filter(|(_, (v, _, _))| !v.is_empty())
+        .map(|(column, (examples, count, capped))| Offenders { column, examples, count, capped })
         .collect();
     Ok(Verification {
         failing: failed.into_iter().enumerate().filter_map(|(i, e)| e.map(|e| (i, e))).collect(),

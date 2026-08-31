@@ -603,3 +603,114 @@ fn a_fitted_text_column_keeps_values_that_look_like_null_tokens() {
         vec!["NA", "NONE", "NO"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regressions from the review of the planner. Each is a mechanism that was
+// wrong in a way no fixture happened to exercise.
+// ---------------------------------------------------------------------------
+
+/// Two declared columns cannot both take the same column of the file.
+///
+/// tdy has no computed columns, so the two would hold byte-identical values —
+/// a target that asks for `net` and `gross` and silently gets one number twice
+/// is a typo in the target, and reporting it beats obeying it.
+#[test]
+fn two_declared_columns_may_not_bind_the_same_source_column() {
+    let t = Target::parse(
+        "CREATE TABLE twice (
+           betrag  DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag'),
+           amount  DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+         ) WITH (files = '*.csv', date_order = 'dmy')",
+    )
+    .unwrap();
+    let err = fit(&corpus().join("2025-01.csv"), &t, Limits::default())
+        .expect_err("both columns bind `Betrag`; that must not be a plan");
+    let FitError::Gaps(gaps) = err else { panic!("expected gaps") };
+    let collides = gaps
+        .iter()
+        .find(|g| matches!(g, Gap::Collides { .. }))
+        .expect("the collision must be reported as such");
+    let m = collides.message();
+    assert!(m.contains("Betrag"), "{m}");
+    assert!(m.contains("twice") || m.contains("both bind"), "{m}");
+}
+
+/// `verify = 'full'` — the default — proves the declared type on **every**
+/// row, not on the prefix `dry_run` reads.
+///
+/// `late_surprise_id_turns_alphanumeric.csv` is the reduction of a real Divvy
+/// export: `station_id` is digits for seven hundred rows and then
+/// `TA1309000067`. A planner that types from the head lands a plan that dies
+/// mid-query on a file it declared fittable.
+#[test]
+fn a_type_that_breaks_past_the_sample_is_a_gap_not_a_plan() {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata")
+        .join("late_surprise_id_turns_alphanumeric.csv");
+    let t = Target::parse(
+        "CREATE TABLE trips (
+           station_id BIGINT NOT NULL
+         ) WITH (files = '*.csv')",
+    )
+    .unwrap();
+    let err = fit(&file, &t, Limits::default()).expect_err("row 701 is not a number");
+    let FitError::Gaps(gaps) = err else { panic!("expected gaps, got a plan") };
+    let m = gaps[0].message();
+    assert!(m.contains("TA1309000067"), "the offending value must be named:\n{m}");
+    assert!(m.contains("701"), "the row must be named:\n{m}");
+}
+
+/// …and `verify = 'head'` is the documented way to opt out of paying for it.
+/// It must actually change what happens, or the option is decoration.
+#[test]
+fn verify_head_does_not_read_the_whole_file() {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata")
+        .join("late_surprise_id_turns_alphanumeric.csv");
+    let sql = "CREATE TABLE trips (station_id BIGINT NOT NULL) WITH (files = '*.csv', verify = ";
+    let full = Target::parse(&format!("{sql}'full')")).unwrap();
+    let head = Target::parse(&format!("{sql}'head')")).unwrap();
+    assert_eq!(full.verify, tdy::target::Verify::Full);
+    assert_eq!(head.verify, tdy::target::Verify::Head);
+    // The point of the pair: the same file, the same target, two answers —
+    // and the expensive one is the default.
+    assert!(fit(&file, &full, Limits::default()).is_err());
+}
+
+/// A fitted spec that drops rows must say so. The sniffer's auto-drop of a
+/// byte-identical repeated header travels into the plan, and a plan that
+/// removes rows silently is the failure this project is built against.
+#[test]
+fn a_fitted_spec_that_drops_rows_carries_the_note_that_says_so() {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata")
+        .join("late_surprise_repeated_header.csv");
+    let t = Target::parse(
+        "CREATE TABLE inv (
+           invoice BIGINT NOT NULL,
+           amount  BIGINT NOT NULL
+         ) WITH (files = '*.csv')",
+    )
+    .unwrap();
+    let fitted = fit(&file, &t, Limits::default()).expect("the repeat is provably not data");
+    assert!(
+        fitted.spec.notes.iter().any(|n| n.starts_with(tdy::sniff::DROPPED_NOTE)),
+        "the drop was not reported:\n{:#?}",
+        fitted.spec.notes
+    );
+    // And it really dropped exactly the one row.
+    let b = tdy::provider::spec_to_batch(&fitted.spec, &file).unwrap();
+    assert_eq!(b.num_rows(), 1000);
+}
+
+/// The mapping notes are machinery; the rounding note is a message. The CLI
+/// filter used to hide anything starting with a backtick, which hid the one
+/// note in the planner that says a value was changed.
+#[test]
+fn the_rounding_note_is_not_mistaken_for_a_binding_note() {
+    assert!(tdy::fit::is_binding_note(&tdy::fit::binding_note("amount_chf", "Betrag")));
+    assert!(!tdy::fit::is_binding_note(
+        "`amount_chf`: some values carry more than 2 fractional digits and are rounded \
+         half away from zero"
+    ));
+}

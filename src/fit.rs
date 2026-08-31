@@ -54,7 +54,7 @@ use crate::engine::{self, ExtractOpts};
 use crate::numfmt;
 use crate::sniff;
 use crate::spec::{ColumnSpec, DType, ParseSpec, ValueParsing};
-use crate::target::{DateOrder, MatchMode, Target};
+use crate::target::{DateOrder, MatchMode, Target, Verify};
 
 /// A declared column this file cannot supply, and why.
 ///
@@ -98,6 +98,12 @@ pub enum Gap {
         formats: Vec<String>,
         example: String,
     },
+    /// Two declared columns both bind the same column of the file.
+    ///
+    /// tdy has no computed columns, so the two would be byte-identical: a
+    /// target that asks for `net` and `gross` and gets the same numbers twice
+    /// is a target with a typo in it, not a dataset.
+    Collides { column: String, other: String, source: String },
 }
 
 impl Gap {
@@ -107,7 +113,8 @@ impl Gap {
             | Gap::Ambiguous { column, .. }
             | Gap::Untypable { column, .. }
             | Gap::AmbiguousSeparator { column, .. }
-            | Gap::AmbiguousFormat { column, .. } => column,
+            | Gap::AmbiguousFormat { column, .. }
+            | Gap::Collides { column, .. } => column,
         }
     }
 
@@ -159,6 +166,12 @@ impl Gap {
                  {example}\n    \
                  Declare which convention these exports use: WITH (date_order = 'dmy').",
                 formats.iter().map(|f| format!("{f:?}")).collect::<Vec<_>>().join(" and ")
+            ),
+            Gap::Collides { column, other, source } => format!(
+                "`{column}` and `{other}` both bind {source:?} — the same column of the file, \
+                 twice\n    tdy has no computed columns, so both would hold identical \
+                 values.\n    fix: give one of them its own `OPTIONS (matches = '<other \
+                 header>')`, or drop it from the target"
             ),
         }
     }
@@ -290,7 +303,12 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
     let sample = crate::sample::build(path, 16 * 1024, limits)
         .with_context(|| format!("sampling {}", path.display()))
         .map_err(FitError::Unreadable)?;
-    let draft = sniff::sniff(path, &sample, limits)
+    let draft = sniff::sniff_opts(
+        path,
+        &sample,
+        limits,
+        sniff::SniffOpts { verify: target.verify == Verify::Full },
+    )
         .with_context(|| format!("framing {}", path.display()))
         .map_err(FitError::Unreadable)?
         .spec;
@@ -357,7 +375,12 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     let sample = crate::sample::build(path, 16 * 1024, limits)
         .with_context(|| format!("sampling {}", path.display()))
         .map_err(FitError::Unreadable)?;
-    let draft = sniff::sniff(path, &sample, limits)
+    let draft = sniff::sniff_opts(
+        path,
+        &sample,
+        limits,
+        sniff::SniffOpts { verify: target.verify == Verify::Full },
+    )
         .with_context(|| format!("framing {}", path.display()))
         .map_err(FitError::Unreadable)?
         .spec;
@@ -369,7 +392,19 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     //    first — a user fixing a twelve-file dataset wants the whole list.
     let mut columns = Vec::with_capacity(target.columns.len());
     let mut gaps = Vec::new();
-    let mut notes = Vec::new();
+    // Which declared column claimed each position of the file, so a second
+    // claim on the same position is caught rather than duplicated.
+    let mut claimed: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    // The framing's own notes travel with the plan. The sniffer's auto-drop of
+    // a repeated header row is recorded there, and a fitted spec that quietly
+    // removes rows without saying so is exactly the kind of silence this
+    // project is built against.
+    let mut notes: Vec<String> = draft
+        .notes
+        .iter()
+        .filter(|n| n.starts_with(sniff::DROPPED_NOTE))
+        .cloned()
+        .collect();
 
     for tc in &target.columns {
         // Matching is done against the *file's* spelling, so two columns the
@@ -405,6 +440,15 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
         };
 
         let idx = header.iter().position(|h| *h == source).expect("bound to a real header cell");
+        if let Some(other) = claimed.get(&idx) {
+            gaps.push(Gap::Collides {
+                column: tc.name.clone(),
+                other: other.clone(),
+                source: source.clone(),
+            });
+            continue;
+        }
+        claimed.insert(idx, tc.name.clone());
         let values: Vec<&str> =
             rows.iter().map(|r| r.get(idx).map(|s| s.as_str()).unwrap_or("")).collect();
 
@@ -421,7 +465,7 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
                 if let Some(n) = note {
                     notes.push(n);
                 }
-                notes.push(format!("`{}` <- {source:?}", tc.name));
+                notes.push(binding_note(&tc.name, &source));
                 columns.push(ColumnSpec {
                     name: tc.name.clone(),
                     source: Some(source),
@@ -456,6 +500,52 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     }
     engine::dry_run(&spec, path, limits)
         .map_err(FitError::DryRun)?;
+
+    // `verify = 'full'` (the default) is the whole reason a target is worth
+    // declaring: `dry_run` reads a bounded prefix, and the four fixtures in
+    // `testdata/late_surprise_*` exist because the prefix lies — a column that
+    // is an integer for forty thousand rows and then `NA`. Proving the type on
+    // every row is what turns "the plan looked right" into "the plan is
+    // right". `verify = 'head'` opts out, for datasets where that read is too
+    // expensive to pay on every fit.
+    if target.verify == Verify::Full {
+        if let Ok(v) = crate::stream::verify(&spec, path, limits) {
+            let mut late = Vec::new();
+            for (i, why) in &v.failing {
+                let Some(c) = spec.columns.get(*i) else { continue };
+                let Some(tc) = target.columns.iter().find(|t| t.name == c.name) else { continue };
+                let detail = match v.offenders.iter().find(|o| o.column == *i) {
+                    Some(o) => {
+                        let n = if o.capped {
+                            format!("at least {}", o.count)
+                        } else {
+                            o.count.to_string()
+                        };
+                        let shown: Vec<String> = o
+                            .examples
+                            .iter()
+                            .map(|(row, val)| format!("{val:?} (row {row})"))
+                            .collect();
+                        format!(
+                            "{n} of {} value(s) do not parse, past the sample: {}",
+                            v.rows,
+                            shown.join(", ")
+                        )
+                    }
+                    None => why.clone(),
+                };
+                late.push(Gap::Untypable {
+                    column: c.name.clone(),
+                    source: c.source_name().to_string(),
+                    want: render(&tc.dtype),
+                    why: detail,
+                });
+            }
+            if !late.is_empty() {
+                return Err(FitError::Gaps(late));
+            }
+        }
+    }
 
     let review = {
         let rs = review_reasons(&spec);
@@ -545,6 +635,21 @@ fn render(t: &ArrowType) -> String {
         ArrowType::Timestamp(_, Some(tz)) => format!("TIMESTAMP WITH TIME ZONE {tz}"),
         other => format!("{other}"),
     }
+}
+
+/// The note recording which column of the file supplied a declared column.
+///
+/// It is machinery rather than a message — the CLI hides these and prints the
+/// mapping as a table — so both halves live here. The filter used to be
+/// "starts with a backtick", which also swallowed the rounding note, the one
+/// note in the whole planner that says a value was changed.
+pub fn binding_note(column: &str, source: &str) -> String {
+    format!("`{column}` <- {source:?}")
+}
+
+/// Is this note one of `binding_note`'s, and therefore already shown?
+pub fn is_binding_note(n: &str) -> bool {
+    n.starts_with('`') && n.contains("` <- ")
 }
 
 fn na() -> Vec<String> {
