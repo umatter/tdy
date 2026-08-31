@@ -46,11 +46,12 @@ fn mock_backend(content: String) -> String {
 }
 
 fn cfg_for(base_url: String) -> Config {
-    let mut cfg = Config::default();
-    cfg.backend = Backend::Local;
-    cfg.base_url = base_url;
-    cfg.model = "mock-model".into();
-    cfg
+    Config {
+        backend: Backend::Local,
+        base_url,
+        model: "mock-model".into(),
+        ..Config::default()
+    }
 }
 
 /// A log file no delimiter sniff can frame: the model proposes a `lines`
