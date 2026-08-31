@@ -162,14 +162,15 @@ fn print_proposals(
 /// the first (a twelve-file dataset should not be a twelve-round game), writes
 /// a sidecar for each member that fits, and writes the lock only if *all* of
 /// them did. A partial lock would be a dataset that silently omits a month.
-fn fit_dataset(
+async fn fit_dataset(
     target_path: &std::path::Path,
-    limits: tdy::config::Limits,
+    cfg: &tdy::config::Config,
     dry_run: bool,
     accept: &[PathBuf],
     propose: bool,
 ) -> Result<()> {
-    use tdy::fit::{fit, FitError};
+    let limits = cfg.limits;
+    use tdy::fit::FitError;
     use tdy::lockfile::{self, Lock, Member, LOCK_VERSION};
     use tdy::target::Target;
 
@@ -279,22 +280,27 @@ fn fit_dataset(
                 continue;
             }
         }
-        match fit(&p, &target, limits) {
-            Ok(fitted) => {
+        match tdy::fit::plan(&p, &target, cfg).await {
+            Ok(planned) => {
+                let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
                 let sources: Vec<String> = fitted
                     .spec
                     .columns
                     .iter()
                     .map(|c| format!("{}<-{:?}", c.name, c.source_name()))
                     .collect();
-                println!("  {rel:<24} fits    {}", sources.join("  "));
+                let via = match method {
+                    tdy::spec::InferenceMethod::Llm => "fits ~ ",
+                    _ => "fits    ",
+                };
+                println!("  {rel:<24} {via}{}", sources.join("  "));
                 if !dry_run {
                     tdy::sidecar::save(
                         &p,
                         &fitted.spec,
                         tdy::sidecar::ProvenanceInfo {
-                            method: tdy::spec::InferenceMethod::Heuristic,
-                            model: None,
+                            method,
+                            model: model.clone(),
                             prompt_version: None,
                             sampled_bytes: None,
                         },
@@ -308,8 +314,13 @@ fn fit_dataset(
                     .map(|m| m.accepted)
                     .unwrap_or(false);
                 let is_accepted = carried || accepted_now.iter().any(|a| a == rel);
-                if fitted.review.is_some() && !is_accepted {
+                if let (Some(r), false) = (&fitted.review, is_accepted) {
                     needs_review += 1;
+                    println!("      REVIEW: {r}");
+                    println!(
+                        "      Accept:  tdy fit {} --accept {rel}",
+                        target_path.display()
+                    );
                 }
                 members.push(Member {
                     path: rel.clone(),
@@ -391,19 +402,21 @@ fn fit_dataset(
 /// Plans a spec that lands on the declared target, proves it (conformance,
 /// then a dry run), and writes the sidecar. On failure it prints every gap
 /// rather than the first, because a user fixing a pile wants the whole list.
-fn fit_command(
+async fn fit_command(
     target_path: &std::path::Path,
     file: &std::path::Path,
-    limits: tdy::config::Limits,
+    cfg: &tdy::config::Config,
     dry_run: bool,
     propose: bool,
 ) -> Result<()> {
-    use tdy::fit::{fit, FitError};
+    let limits = cfg.limits;
+    use tdy::fit::FitError;
     use tdy::target::Target;
 
     let target = Target::load(target_path)?;
-    match fit(file, &target, limits) {
-        Ok(fitted) => {
+    match tdy::fit::plan(file, &target, cfg).await {
+        Ok(planned) => {
+            let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
             println!("{} fits `{}`:", file.display(), target.name);
             for c in &fitted.spec.columns {
                 println!(
@@ -420,12 +433,15 @@ fn fit_command(
                 println!("\n--dry-run: nothing written.");
                 return Ok(());
             }
+            if let Some(r) = &fitted.review {
+                println!("  REVIEW: {r}");
+            }
             let path = tdy::sidecar::save(
                 file,
                 &fitted.spec,
                 tdy::sidecar::ProvenanceInfo {
-                    method: tdy::spec::InferenceMethod::Heuristic,
-                    model: None,
+                    method,
+                    model,
                     prompt_version: None,
                     sampled_bytes: None,
                 },
@@ -650,8 +666,8 @@ async fn run() -> Result<()> {
         Command::Fit { target, file, accept, dry_run, propose } => {
             let cfg = config::load(&overrides)?;
             match file {
-                Some(f) => fit_command(&target, &f, cfg.limits, dry_run, propose)?,
-                None => fit_dataset(&target, cfg.limits, dry_run, &accept, propose)?,
+                Some(f) => fit_command(&target, &f, &cfg, dry_run, propose).await?,
+                None => fit_dataset(&target, &cfg, dry_run, &accept, propose).await?,
             }
         }
         Command::Check { target, against } => {

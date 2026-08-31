@@ -806,3 +806,69 @@ fn if_missing_is_refused_on_not_null_and_for_values() {
     .expect_err("a default value is not declarable");
     assert!(format!("{e:#}").contains("review"), "{e:#}");
 }
+
+// ---------------------------------------------------------------------------
+// Frame elimination: JSON documents with several record arrays.
+// ---------------------------------------------------------------------------
+
+fn json_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join(name)
+}
+
+const JSON_TARGET: &str = "CREATE TABLE orders (
+    day    DATE          NOT NULL,
+    region TEXT          NOT NULL,
+    amount DECIMAL(14,2) NOT NULL
+) WITH (files = '*.json')";
+
+/// A document with four arrays, one of which produces the declared table.
+/// The sniffer alone can only rank them and say it is unsure; the declaration
+/// turns the ranking into a search whose answer is *proved*: every other
+/// candidate was tried and failed.
+#[test]
+fn a_json_frame_is_proved_by_elimination_when_only_one_array_fits() {
+    let t = Target::parse(JSON_TARGET).unwrap();
+    let p = json_fixture("json_frames_one_fits.json");
+    let fitted = fit(&p, &t, Limits::default()).expect("only /orders fits");
+    assert!(
+        matches!(
+            &fitted.spec.extraction,
+            tdy::spec::Extraction::Json { pointer: Some(ptr), .. } if ptr == "/orders"
+        ),
+        "{:?}",
+        fitted.spec.extraction
+    );
+    assert!(
+        fitted.spec.notes.iter().any(|n| n.contains("elimination")),
+        "the proof must be stated:\n{:#?}",
+        fitted.spec.notes
+    );
+    // Elimination is a proof, not a judgement: nothing to review.
+    assert!(fitted.review.is_none(), "{:?}", fitted.review);
+
+    // And the right numbers come out.
+    let b = tdy::provider::spec_to_batch(&fitted.spec, &p).unwrap();
+    assert_eq!(b.num_rows(), 4);
+    let amounts = b
+        .column(2)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::Decimal128Array>()
+        .unwrap();
+    let total: i128 = (0..amounts.len()).map(|i| amounts.value(i)).sum();
+    assert_eq!(total, 66000, "sum(amount) must be 660.00");
+}
+
+/// Two arrays that BOTH produce the declared table are two complete,
+/// well-typed, different answers — q1 sums to 600.00 and q2 to 1500.00 — and
+/// ranking them would be a guess with a plausible wrong number at the end.
+/// Refused, naming both, with the sidecar remedy.
+#[test]
+fn two_fitting_arrays_are_refused_not_ranked() {
+    let t = Target::parse(JSON_TARGET).unwrap();
+    let p = json_fixture("json_frames_two_fit.json");
+    let err = fit(&p, &t, Limits::default()).expect_err("q1 and q2 both fit");
+    let msg = format!("{err}");
+    assert!(matches!(err, FitError::AmbiguousFrame { .. }), "{msg}");
+    assert!(msg.contains("/q1") && msg.contains("/q2"), "{msg}");
+    assert!(msg.contains("pointer"), "the remedy must be named:\n{msg}");
+}

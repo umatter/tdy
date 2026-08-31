@@ -192,6 +192,12 @@ pub struct Target {
     /// or one thousand two hundred and thirty-four, nothing in the column says
     /// which, and guessing is a thousandfold error nobody would notice.
     pub decimal_separator: Option<char>,
+    /// The declaration as written, verbatim.
+    ///
+    /// Carried for the frame proposer's prompt — the human's own SQL, with
+    /// its comments, is the best statement of intent a model can be shown.
+    /// Never part of `target_hash`, which fingerprints meaning.
+    pub sql: String,
     /// The fixed offset every `TIMESTAMP WITH TIME ZONE` column carries.
     ///
     /// The offset is part of the Arrow type, so a target has to be able to say
@@ -319,6 +325,7 @@ impl Target {
         let mut t = Target {
             name,
             columns,
+            sql: sql.to_string(),
             files: Vec::new(),
             exclude: Vec::new(),
             match_mode: MatchMode::default(),

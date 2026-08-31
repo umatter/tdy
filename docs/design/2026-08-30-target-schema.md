@@ -480,6 +480,18 @@ with coverage reporting.
 projected model schema, `tdy fit --propose`.
 *What you can do:* the awkward layouts tier 1 does not reach start landing.
 
+> **Landed, with one addition the design did not foresee**: a deterministic
+> tier *above* the model. A JSON document with several record arrays has
+> finitely many frames, so the declared table can be tried against every one —
+> exactly one fitting is a **proof by elimination**, no review needed; several
+> fitting is refused as ambiguous, since two well-typed complete answers with
+> different sums is exactly the guess this tool exists to not make. Only when
+> the candidates cannot be enumerated (free-form text, a layout the sniffer
+> cannot frame) is the model asked — for the frame alone, columns discarded as
+> the sniffer's are — and its plan, though fully gated, carries a review
+> reason: nothing proves a model's frame is the only reading, and that is a
+> judgement by the book above. Proven ambiguities never reach the model.
+
 **The model coming last is not an accident of sequencing.** It is this design's
 claim about where correctness lives, made visible in the commit order: a fully
 deterministic tdy already fits most piles, and every gate the model must clear

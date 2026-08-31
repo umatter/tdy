@@ -10,3 +10,4 @@
 # testing, never vendored. `tests/corpus.rs` skips when this is absent, which
 # is what CI sees.
 /corpus/
+__pycache__/

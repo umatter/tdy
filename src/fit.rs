@@ -53,7 +53,7 @@ use crate::conform::{conforms, Mismatch};
 use crate::engine::{self, ExtractOpts};
 use crate::numfmt;
 use crate::sniff;
-use crate::spec::{ColumnSpec, DType, ParseSpec, ValueParsing, Transform};
+use crate::spec::{ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
 use crate::target::{DateOrder, MatchMode, Target, Verify};
 
 /// A declared column this file cannot supply, and why.
@@ -246,6 +246,10 @@ pub enum FitError {
     Rejected(Vec<Mismatch>),
     /// The plan conformed but could not parse the file.
     DryRun(anyhow::Error),
+    /// More than one of the document's record arrays produces the declared
+    /// table, and tdy will not choose between two complete, well-typed,
+    /// different answers.
+    AmbiguousFrame { pointers: Vec<String> },
 }
 
 impl std::fmt::Display for FitError {
@@ -256,6 +260,24 @@ impl std::fmt::Display for FitError {
                 for gap in g {
                     writeln!(f, "  {}", gap.message())?;
                 }
+                Ok(())
+            }
+            FitError::AmbiguousFrame { pointers } => {
+                writeln!(
+                    f,
+                    "  {} record arrays in this document ALL produce the declared table:",
+                    pointers.len()
+                )?;
+                for p in pointers {
+                    writeln!(f, "    pointer = {p:?}")?;
+                }
+                writeln!(
+                    f,
+                    "  Each is a complete, well-typed, different answer, and choosing one \
+                     would be a guess.\n  \
+                     fix: write the pointer you mean into the sidecar ([spec.extraction] \
+                     pointer = \"...\") and mark it method = \"manual\""
+                )?;
                 Ok(())
             }
             FitError::Rejected(m) => {
@@ -401,6 +423,241 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
         .map_err(FitError::Unreadable)?
         .spec;
 
+    // A JSON document with several record arrays has several possible frames,
+    // and the sniffer's ranking of them is a guess. The declared table turns
+    // the guess into a search: try every candidate, and the answer is the one
+    // that fits — provably, if it is alone in doing so.
+    if let Extraction::Json { lines: false, pointer: Some(_) } = &draft.extraction {
+        let pointers = sniff::json_record_pointers(path, limits);
+        if pointers.len() > 1 {
+            return fit_by_elimination(path, target, limits, &draft, &pointers);
+        }
+    }
+
+    fit_framed(path, target, limits, draft, Rigour::Full)
+}
+
+/// A plan and where it came from, for the sidecar's provenance.
+#[derive(Debug)]
+pub struct Planned {
+    pub fitted: Fitted,
+    pub method: crate::spec::InferenceMethod,
+    pub model: Option<String>,
+}
+
+/// Plan `path` onto `target`, escalating to the configured model for the
+/// *frame only* when deterministic planning fails.
+///
+/// The escalation asks the model one question — how is this file laid out? —
+/// and checks everything it answers: the frame is re-planned with
+/// [`fit_framed`], so columns are bound by the declared names, types are
+/// proved with the executor's own functions, and the whole file is verified.
+/// What cannot be checked is whether this frame is the only reading of the
+/// file, which is exactly what elimination proves when the candidates are
+/// enumerable and the model is not consulted. A model-proposed frame is
+/// therefore a *judgement*, and the plan carries a review reason naming the
+/// model and the frame, so `dataset()` refuses it until a human accepts.
+///
+/// Failures a frame cannot cure never reach the model: an ambiguous
+/// separator, date order, binding or frame stays refused until it is
+/// *declared*, because a model resolving a proven ambiguity would be a guess
+/// with better manners.
+pub async fn plan(
+    path: &Path,
+    target: &Target,
+    cfg: &crate::config::Config,
+) -> Result<Planned, FitError> {
+    let heuristic = InferenceMethod::Heuristic;
+    match fit(path, target, cfg.limits) {
+        Ok(fitted) => Ok(Planned { fitted, method: heuristic, model: None }),
+        Err(e) if cfg.backend != crate::config::Backend::None && frame_could_help(&e) => {
+            match fit_with_model(path, target, cfg).await {
+                Ok(planned) => Ok(planned),
+                // The deterministic failure is the representative one: it
+                // names the gaps in the user's own terms, where the model
+                // path's failure is usually "and the model did not help".
+                Err(_) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Could a different reading of the file's *layout* cure this failure?
+fn frame_could_help(e: &FitError) -> bool {
+    match e {
+        // Framing failed outright, or columns were not found / not typable —
+        // both are what a wrong frame looks like from the outside.
+        FitError::Unreadable(_) => true,
+        FitError::Gaps(gaps) => gaps
+            .iter()
+            .all(|g| matches!(g, Gap::NoCandidate { .. } | Gap::Untypable { .. })),
+        // Proven ambiguities are settled by declarations, never by a model.
+        FitError::AmbiguousFrame { .. } => false,
+        FitError::Rejected(_) | FitError::DryRun(_) => false,
+    }
+}
+
+/// Ask the configured model for a frame, and prove everything else.
+async fn fit_with_model(
+    path: &Path,
+    target: &Target,
+    cfg: &crate::config::Config,
+) -> Result<Planned, FitError> {
+    let sample = crate::sample::build(path, 16 * 1024, cfg.limits)
+        .with_context(|| format!("sampling {}", path.display()))
+        .map_err(FitError::Unreadable)?;
+    if cfg.is_remote() {
+        eprintln!(
+            "note: sending {} bytes sampled from {} to {} ({}) to propose a frame",
+            sample.sampled_bytes,
+            path.display(),
+            cfg.backend.label(),
+            cfg.model
+        );
+    }
+    let hint = format!(
+        "This file must land on a DECLARED table. Your job is only the FRAME: the \
+         extraction settings and structural transforms (skip_rows, promote_header, sheet, \
+         pointer, ...) that expose the columns. Do not worry about output types — the \
+         columns you emit will be discarded and re-derived from the declaration below, \
+         but the header your frame exposes must carry the column names it needs:\n\n{}",
+        target.sql
+    );
+    let inferred = crate::infer::infer_spec(cfg, path, &sample, None, Some(&hint))
+        .await
+        .map_err(FitError::Unreadable)?;
+
+    let frame = ParseSpec {
+        extraction: inferred.spec.extraction,
+        transforms: inferred.spec.transforms,
+        columns: Vec::new(),
+        confidence: None,
+        notes: Vec::new(),
+    };
+    let frame_shown = describe_frame(&frame);
+    let mut fitted = fit_framed(path, target, cfg.limits, frame, Rigour::Full)?;
+
+    // Everything below the frame is proved; the frame itself is one model's
+    // reading of the file, and nothing established that it is the only one.
+    let reason = format!(
+        "the frame ({frame_shown}) was proposed by {} and is checked but not proved \
+         unique — confirm it reads the part of the file you mean",
+        inferred.model
+    );
+    fitted.review = Some(match fitted.review.take() {
+        Some(prev) => format!("{prev}; {reason}"),
+        None => reason,
+    });
+    Ok(Planned {
+        fitted,
+        method: InferenceMethod::Llm,
+        model: Some(inferred.model),
+    })
+}
+
+/// One line saying what a frame does, for the review reason.
+fn describe_frame(spec: &ParseSpec) -> String {
+    let mut parts = vec![spec.extraction.format_name().to_string()];
+    if let Extraction::Json { pointer: Some(p), .. } = &spec.extraction {
+        parts.push(format!("pointer {p:?}"));
+    }
+    if let Extraction::Excel { sheet_name: Some(sh), .. } = &spec.extraction {
+        parts.push(format!("sheet {sh:?}"));
+    }
+    for t in &spec.transforms {
+        parts.push(match t {
+            Transform::SkipRows { head, tail } => format!("skip_rows {head}+{tail}"),
+            Transform::PromoteHeader { rows, .. } => format!("promote_header {rows}"),
+            Transform::DropRowsMatching { pattern, .. } => {
+                format!("drop_rows_matching {pattern:?}")
+            }
+            Transform::FillDown { columns } => format!("fill_down {columns:?}"),
+            Transform::Unpivot { .. } => "unpivot".into(),
+            Transform::Constant { name, .. } => format!("constant {name:?}"),
+        });
+    }
+    parts.join(", ")
+}
+
+/// How much of the gate to run.
+#[derive(Clone, Copy, PartialEq)]
+enum Rigour {
+    /// Everything, including the whole-file type verification the target's
+    /// `verify` mode asks for.
+    Full,
+    /// Conformance and the bounded dry run only. Used while *eliminating*
+    /// candidate frames, where most candidates exist to be rejected and the
+    /// full verification is paid once, by the survivor.
+    Gates,
+}
+
+/// Try the declared table against every record array the document holds.
+///
+/// The outcomes and what each means:
+/// * exactly one candidate fits — proved by elimination. The note says so and
+///   nothing needs review: given the declaration, no other reading exists.
+/// * several fit — refused. Two arrays that both produce the declared columns
+///   are two different answers, and ranking them would be a guess with a
+///   plausible wrong number at the end of it.
+/// * none fit — the error for the sniffer's own ranked choice, which is what
+///   the user would have seen anyway, plus how many others were tried.
+fn fit_by_elimination(
+    path: &Path,
+    target: &Target,
+    limits: Limits,
+    draft: &ParseSpec,
+    pointers: &[String],
+) -> Result<Fitted, FitError> {
+    let with_pointer = |ptr: &str| {
+        let mut d = draft.clone();
+        d.extraction = Extraction::Json { lines: false, pointer: Some(ptr.to_string()) };
+        d
+    };
+
+    let mut survivors: Vec<&String> = Vec::new();
+    let mut first_error: Option<FitError> = None;
+    for ptr in pointers {
+        match fit_framed(path, target, limits, with_pointer(ptr), Rigour::Gates) {
+            Ok(_) => survivors.push(ptr),
+            Err(e) => {
+                // The ranked candidate's failure is the representative one.
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+            }
+        }
+    }
+
+    match survivors.as_slice() {
+        [] => Err(first_error.expect("pointers was non-empty")),
+        [only] => {
+            let mut fitted =
+                fit_framed(path, target, limits, with_pointer(only), Rigour::Full)?;
+            fitted.notes.push(format!(
+                "frame proved by elimination: of {} candidate record arrays, only {only:?} \
+                 produces the declared table",
+                pointers.len()
+            ));
+            fitted.spec.notes.push(
+                fitted.notes.last().expect("just pushed").clone(),
+            );
+            Ok(fitted)
+        }
+        several => Err(FitError::AmbiguousFrame {
+            pointers: several.iter().map(|p| (*p).clone()).collect(),
+        }),
+    }
+}
+
+/// Plan a spec onto `target` given the frame to read the file with.
+fn fit_framed(
+    path: &Path,
+    target: &Target,
+    limits: Limits,
+    draft: ParseSpec,
+    rigour: Rigour,
+) -> Result<Fitted, FitError> {
     // 2. The probe: the same table the executor will see, capped.
     let Probe { header, origin, rows } = probe(path, &draft, limits).map_err(FitError::Unreadable)?;
 
@@ -555,7 +812,7 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     // every row is what turns "the plan looked right" into "the plan is
     // right". `verify = 'head'` opts out, for datasets where that read is too
     // expensive to pay on every fit.
-    if target.verify == Verify::Full {
+    if rigour == Rigour::Full && target.verify == Verify::Full {
         if let Ok(v) = crate::stream::verify(&spec, path, limits) {
             let mut late = Vec::new();
             for (i, why) in &v.failing {

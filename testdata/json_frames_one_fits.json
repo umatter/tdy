@@ -1,0 +1,54 @@
+{
+ "audit": [
+  {
+   "at": "2025-08-05T10:00:00",
+   "user": "hr",
+   "what": "export"
+  },
+  {
+   "at": "2025-08-31T16:30:00",
+   "user": "hr",
+   "what": "close"
+  }
+ ],
+ "customers": [
+  {
+   "city": "Bern",
+   "name": "Keller AG"
+  },
+  {
+   "city": "Basel",
+   "name": "Roth GmbH"
+  }
+ ],
+ "meta": {
+  "exported": "2025-09-01",
+  "tags": [
+   "monthly",
+   "chf",
+   "internal"
+  ]
+ },
+ "orders": [
+  {
+   "amount": "150.00",
+   "day": "2025-08-05",
+   "region": "Ost"
+  },
+  {
+   "amount": "160.00",
+   "day": "2025-08-12",
+   "region": "West"
+  },
+  {
+   "amount": "170.00",
+   "day": "2025-08-19",
+   "region": "Nord"
+  },
+  {
+   "amount": "180.00",
+   "day": "2025-08-26",
+   "region": "Sued"
+  }
+ ]
+}

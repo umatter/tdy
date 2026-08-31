@@ -145,7 +145,25 @@ hand-written constant *value* ("November is all Ticino") is data the file never 
 and gates behind `--accept` exactly like `decimal_shift`. `if_missing_null` is part of
 `target_hash`, so declaring or retracting a fill voids the proofs.
 
-Not yet: the model as frame proposer.
+**Slice 5 is in — frames, in two tiers.** The corpus's biggest gap was JSON documents with
+several record arrays ("N candidate record arrays", thousands of files). Tier one is
+deterministic: `fit` tries the declared table against **every** candidate pointer
+(`sniff::json_record_pointers`) — exactly one fits = **proved by elimination** (note, no
+review); several fit = `FitError::AmbiguousFrame` naming them (two well-typed different
+answers; q1 vs q2 in `testdata/json_frames_two_fit.json` differ only in their sums, which is
+the point); none = the ordinary gap report. The elimination pass runs cheap gates only
+(`Rigour::Gates`); the sole survivor pays the whole-file verification once.
+
+Tier two is `fit::plan` (async, what the CLI now calls): when deterministic planning fails
+with something a frame could cure — `Unreadable`, or gaps that are all
+`NoCandidate`/`Untypable` — and a backend is configured, the model is asked for the *frame
+only* (`infer_spec` reused whole; its columns are discarded exactly as the sniffer's are).
+Everything downstream is proved, but nothing proves the model's frame is the only reading,
+so the plan carries a review reason naming the model and the frame, and `dataset()` refuses
+it until `--accept`. A proven ambiguity (`AmbiguousFrame`, ambiguous separator/date) never
+reaches the model: declarations settle those. Provenance records `method = "llm"` and the
+model. `tests/frame_proposer.rs` covers both properties offline against a hand-rolled
+loopback mock; `tests/live_backend.rs` has the paid version.
 
 ## Real data
 

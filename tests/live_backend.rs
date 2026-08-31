@@ -202,3 +202,71 @@ fn a_spec_the_model_gets_wrong_is_never_written() {
         eprintln!("note: {model} did not solve the fixed-width report — reported cleanly");
     }
 }
+
+/// The frame proposer against a real model: a log file no delimiter sniff
+/// can frame, fitted onto a declared table via `tdy fit`. The model's only
+/// contribution is the frame (a `lines` regex); binding, typing, conformance
+/// and the whole-file check are all proved on this side, and the member is
+/// marked for review because a model-chosen frame is a judgement.
+#[test]
+fn a_real_model_can_propose_a_frame_that_the_gates_then_prove() {
+    let Some(model) = live_model() else {
+        eprintln!("skipping: set TDY_LIVE_MODEL to run the live backend tests");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("bookings.log");
+    let mut body = String::new();
+    for (i, (day, region)) in [
+        ("2025-08-05", "Ost"),
+        ("2025-08-12", "West"),
+        ("2025-08-19", "Nord"),
+        ("2025-08-26", "Sued"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        body.push_str(&format!(
+            "[{day} 10:0{i}:00] region={region} amount={}.00 msg=\"booked ok\"\n",
+            150 + 10 * i
+        ));
+    }
+    std::fs::write(&log, body).unwrap();
+    let target = dir.path().join("bookings.tdy.sql");
+    std::fs::write(
+        &target,
+        "CREATE TABLE bookings (\n\
+         \x20 day    DATE          NOT NULL,\n\
+         \x20 region TEXT          NOT NULL,\n\
+         \x20 amount DECIMAL(14,2) NOT NULL\n\
+         )\nWITH (files = '*.log');",
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args([
+            "fit",
+            target.to_str().unwrap(),
+            "--backend",
+            &live_backend(),
+            "--model",
+            &model,
+        ])
+        .env("TDY_MAX_RETRIES", std::env::var("TDY_MAX_RETRIES").unwrap_or_else(|_| "5".into()))
+        .output()
+        .expect("run tdy");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "fit failed:\n{text}{err}");
+    assert!(text.contains("REVIEW"), "a model frame must need review:\n{text}");
+
+    // Accept and query: the numbers, not the shape, are the contract.
+    assert!(tdy(&["fit", target.to_str().unwrap(), "--accept", "bookings.log"])
+        .status
+        .success());
+    let q = format!("SELECT sum(amount) FROM dataset('{}')", target.display());
+    let out = tdy(&["query", &q]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("660.00"), "wrong total:\n{text}");
+}

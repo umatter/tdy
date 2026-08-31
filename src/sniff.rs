@@ -701,11 +701,35 @@ fn escape_pointer_token(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
 }
 
-struct ArrayCandidate {
-    pointer: String,
+pub(crate) struct ArrayCandidate {
+    pub(crate) pointer: String,
     len: usize,
     of_objects: bool,
     depth: usize,
+}
+
+/// Every record-array pointer in the document, best-ranked first.
+///
+/// This is `fit`'s half of the JSON ambiguity story: the sniffer, with no
+/// target, can only rank the candidates and say it is unsure. A *declared*
+/// table changes the problem — each candidate can be tried against it, and
+/// "exactly one produces the declared columns" is a proof by elimination
+/// where "the longest array of objects" was a guess.
+pub(crate) fn json_record_pointers(path: &Path, limits: Limits) -> Vec<String> {
+    let Ok(bytes) = crate::fileio::read_all(path, limits.max_file_bytes) else {
+        return Vec::new();
+    };
+    let (text, _) = crate::sample::decode_text(&bytes, None);
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    if !doc.is_object() {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    find_record_arrays(&doc, &mut String::new(), &mut found, 0);
+    found.sort_by_key(|c| (!c.of_objects, usize::MAX - c.len, c.depth, c.pointer.clone()));
+    found.into_iter().map(|c| c.pointer).collect()
 }
 
 /// Walk the document for arrays that could be the records array.

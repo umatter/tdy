@@ -386,6 +386,25 @@ recorded against that file's bytes and that declaration. Re-fitting an untouched
 dataset does not ask again; editing the file expires the acceptance, because it
 was about those bytes.
 
+A JSON document holding several arrays of records — the single most common
+"unsure" in real data — needs no model and no human once a table is declared:
+`tdy fit` tries the declaration against *every* candidate array. If exactly
+one fits, the frame is **proved by elimination** and the note says so; if
+several fit, the file is refused with each pointer named, because two
+complete, well-typed answers with different totals is a guess this tool
+refuses to make; if none fit, you get the ordinary gap report.
+
+When the layout cannot be enumerated at all — a log line, a report format no
+delimiter sniff can frame — and a backend is configured, `tdy fit` asks the
+model for the **frame only**: extraction and structural transforms. Its
+columns are discarded exactly as the sniffer's are; binding, types,
+conformance, the dry run and the whole-file check are all proved on this
+side. What no gate can prove is that the model's frame is the only reading of
+the file, so the member is marked for review and `dataset()` refuses it until
+`--accept` — and a *proven* ambiguity (two fitting arrays, an ambiguous
+separator or date order) is never sent to a model at all: declarations settle
+those.
+
 Two neighbouring cases draw the same line from both sides. A column one export
 simply *lacks* — November predates `Region` — is declarable in the target:
 
