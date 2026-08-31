@@ -152,3 +152,78 @@ async fn a_model_is_never_asked_to_resolve_a_proven_ambiguity() {
         "{err}"
     );
 }
+
+/// The full CLI loop, and the property the first live run broke: a fresh
+/// model-framed sidecar is REUSED by later fits — re-proved, never replanned.
+/// `--accept` runs with no backend at all: the plan under acceptance is the
+/// recorded one, not whatever a nondeterministic model would say today, and
+/// a settled question is not re-billed.
+#[tokio::test]
+async fn a_model_framed_sidecar_is_reused_not_replanned() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("bookings.log");
+    std::fs::write(
+        &log,
+        "[2025-08-05 10:00:00] region=Ost amount=150.00 msg=\"ok\"\n\
+         [2025-08-12 10:01:00] region=West amount=160.00 msg=\"ok\"\n",
+    )
+    .unwrap();
+    let target = dir.path().join("bookings.tdy.sql");
+    std::fs::write(
+        &target,
+        "CREATE TABLE bookings (\n\
+         \x20 day    DATE          NOT NULL,\n\
+         \x20 region TEXT          NOT NULL,\n\
+         \x20 amount DECIMAL(14,2) NOT NULL\n\
+         )\nWITH (files = '*.log');",
+    )
+    .unwrap();
+
+    let proposed = serde_json::json!({
+        "extraction": {
+            "format": "lines",
+            "pattern": r"^\[(?P<day>\d{4}-\d{2}-\d{2}) [^\]]*\] region=(?P<region>\S+) amount=(?P<amount>\S+) .*$"
+        },
+        "columns": [
+            {"name": "day", "dtype": {"type": "utf8"}},
+            {"name": "region", "dtype": {"type": "utf8"}},
+            {"name": "amount", "dtype": {"type": "utf8"}}
+        ],
+        "confidence": 0.9
+    });
+    let base = mock_backend(proposed.to_string());
+    let ts = target.to_str().unwrap();
+
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+            .args(args)
+            .output()
+            .expect("run tdy")
+    };
+
+    // 1. Plan with the mock model: fits, gated.
+    let out = run(&["fit", ts, "--backend", "local", "--base-url", &base, "--model", "mock-model"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("REVIEW"), "{text}");
+
+    // 2. Accept with NO backend: the recorded plan is what is accepted.
+    let out = run(&["fit", ts, "--accept", "bookings.log"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "accept must not need the model again:\n{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("model-framed"), "{text}");
+
+    // 3. The dataset queries, and a later fit still shows it accepted.
+    let q = format!("SELECT sum(amount) FROM dataset('{}')", target.display());
+    let out = run(&["query", &q]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("310.00"));
+
+    let out = run(&["fit", ts]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("accepted"), "the acceptance must carry over:\n{text}");
+}

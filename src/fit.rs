@@ -474,9 +474,19 @@ pub async fn plan(
             match fit_with_model(path, target, cfg).await {
                 Ok(planned) => Ok(planned),
                 // The deterministic failure is the representative one: it
-                // names the gaps in the user's own terms, where the model
-                // path's failure is usually "and the model did not help".
-                Err(_) => Err(e),
+                // names the gaps in the user's own terms. But the model
+                // path's own failure is still worth a line — "the model was
+                // asked and its frame did not survive the gates" reads very
+                // differently from "no backend was consulted".
+                Err(m) => {
+                    eprintln!(
+                        "note: {} proposed a frame for {} and it did not survive the \
+                         gates: {m}",
+                        cfg.model,
+                        path.display()
+                    );
+                    Err(e)
+                }
             }
         }
         Err(e) => Err(e),
@@ -516,44 +526,91 @@ async fn fit_with_model(
             cfg.model
         );
     }
-    let hint = format!(
+    // The binder matches by name, so the names are part of the contract and
+    // are stated outright: a model that frames the file perfectly but calls
+    // the first capture group `timestamp` when the declaration says `day`
+    // has failed for a reason it was never told about.
+    let required: Vec<String> = target
+        .columns
+        .iter()
+        .map(|c| {
+            if c.matches.is_empty() {
+                format!("`{}`", c.name)
+            } else {
+                format!("`{}` (or one of: {})", c.name, c.matches.join(", "))
+            }
+        })
+        .collect();
+    let base_hint = format!(
         "This file must land on a DECLARED table. Your job is only the FRAME: the \
          extraction settings and structural transforms (skip_rows, promote_header, sheet, \
-         pointer, ...) that expose the columns. Do not worry about output types — the \
-         columns you emit will be discarded and re-derived from the declaration below, \
-         but the header your frame exposes must carry the column names it needs:\n\n{}",
+         pointer, regex with NAMED capture groups, ...) that expose the columns. Do not \
+         worry about output types — the columns you emit will be discarded and re-derived \
+         from the declaration — but the header (or capture-group names) your frame \
+         exposes MUST be exactly these, spelled exactly so: {}.\n\nThe declaration:\n\n{}",
+        required.join(", "),
         target.sql
     );
-    let inferred = crate::infer::infer_spec(cfg, path, &sample, None, Some(&hint))
-        .await
-        .map_err(FitError::Unreadable)?;
 
-    let frame = ParseSpec {
-        extraction: inferred.spec.extraction,
-        transforms: inferred.spec.transforms,
-        columns: Vec::new(),
-        confidence: None,
-        notes: Vec::new(),
-    };
-    let frame_shown = describe_frame(&frame);
-    let mut fitted = fit_framed(path, target, cfg.limits, frame, Rigour::Full)?;
+    // Two rounds: a frame that executes but exposes the wrong header is a
+    // correctable mistake, and the gap report is precisely the correction —
+    // the same shape as infer's own retry loop, one level up.
+    let mut extra = String::new();
+    let mut last: Option<FitError> = None;
+    for _ in 0..2 {
+        let hint = format!("{base_hint}{extra}");
+        let inferred = crate::infer::infer_spec(cfg, path, &sample, None, Some(&hint))
+            .await
+            .map_err(FitError::Unreadable)?;
 
-    // Everything below the frame is proved; the frame itself is one model's
-    // reading of the file, and nothing established that it is the only one.
-    let reason = format!(
-        "the frame ({frame_shown}) was proposed by {} and is checked but not proved \
-         unique — confirm it reads the part of the file you mean",
-        inferred.model
-    );
-    fitted.review = Some(match fitted.review.take() {
-        Some(prev) => format!("{prev}; {reason}"),
-        None => reason,
-    });
-    Ok(Planned {
-        fitted,
-        method: InferenceMethod::Llm,
-        model: Some(inferred.model),
-    })
+        let frame = ParseSpec {
+            extraction: inferred.spec.extraction,
+            transforms: inferred.spec.transforms,
+            columns: Vec::new(),
+            confidence: None,
+            notes: Vec::new(),
+        };
+        match fit_framed(path, target, cfg.limits, frame, Rigour::Full) {
+            Ok(mut fitted) => {
+                // Everything below the frame is proved; the frame itself is
+                // one model's reading of the file, and nothing established
+                // that it is the only one.
+                let reason = llm_frame_reason(&fitted.spec, &inferred.model);
+                fitted.review = Some(match fitted.review.take() {
+                    Some(prev) => format!("{prev}; {reason}"),
+                    None => reason,
+                });
+                return Ok(Planned {
+                    fitted,
+                    method: InferenceMethod::Llm,
+                    model: Some(inferred.model),
+                });
+            }
+            Err(e) => {
+                extra = format!(
+                    "\n\nYour previous frame executed but did not expose the declared \
+                     columns. The planner reported:\n{e}\nFix the frame so the exposed \
+                     names match the declaration exactly."
+                );
+                last = Some(e);
+            }
+        }
+    }
+    Err(last.expect("the loop ran"))
+}
+
+/// The review reason a model-proposed frame carries.
+///
+/// One function, used both when the plan is first made and when a fresh
+/// sidecar with `method = "llm"` is reused on a later `tdy fit` — the
+/// acceptance carryover matches on this text, so two wordings would expire
+/// every acceptance on the second run.
+pub fn llm_frame_reason(spec: &ParseSpec, model: &str) -> String {
+    format!(
+        "the frame ({}) was proposed by {model} and is checked but not proved unique — \
+         confirm it reads the part of the file you mean",
+        describe_frame(spec)
+    )
 }
 
 /// One line saying what a frame does, for the review reason.

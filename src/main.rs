@@ -224,15 +224,27 @@ async fn fit_dataset(
     let mut needs_review = 0usize;
     for rel in &rels {
         let p = dir.join(rel);
-        // A hand-written spec is a human assertion about specific bytes, and
-        // the planner must not overwrite it. It is still proved: conformance
-        // and a dry run apply exactly as they do to a planned one.
+        // A fresh sidecar that still conforms IS the plan, whoever wrote it.
+        // A hand-written one is a human assertion the planner must never
+        // overwrite (a contradiction is an error, not a replan); a
+        // tool-written one is reused because the acceptance machinery is
+        // about *that recorded plan* — replanning on every run would let a
+        // nondeterministic model quietly swap the frame out from under a
+        // review, and it would re-spend money answering a settled question.
+        // Either way it is re-proved: conformance and a dry run, every time.
         if let Ok(tdy::sidecar::SidecarStatus::Fresh(sc)) = tdy::sidecar::load(&p) {
-            if sc.provenance.method == tdy::spec::InferenceMethod::Manual {
+            let manual = sc.provenance.method == tdy::spec::InferenceMethod::Manual;
+            let conforming = tdy::conform::conforms(&sc.spec, &target).is_ok();
+            if manual || conforming {
                 let spec = sc.spec;
+                let label = match sc.provenance.method {
+                    tdy::spec::InferenceMethod::Manual => "(hand-written spec)",
+                    tdy::spec::InferenceMethod::Llm => "(model-framed spec)",
+                    tdy::spec::InferenceMethod::Heuristic => "(existing spec)",
+                };
                 if let Err(m) = tdy::conform::conforms(&spec, &target) {
                     failed += 1;
-                    println!("  {rel:<24} CONTRADICTS  (hand-written spec)");
+                    println!("  {rel:<24} CONTRADICTS  {label}");
                     for x in &m {
                         println!("      {}", x.message());
                     }
@@ -240,11 +252,20 @@ async fn fit_dataset(
                 }
                 if let Err(e) = tdy::engine::dry_run(&spec, &p, limits) {
                     failed += 1;
-                    println!("  {rel:<24} ERROR  (hand-written spec): {e:#}");
+                    println!("  {rel:<24} ERROR  {label}: {e:#}");
                     continue;
                 }
                 let review = {
-                    let rs = tdy::fit::review_reasons(&spec);
+                    let mut rs = tdy::fit::review_reasons(&spec);
+                    // A model-framed plan's judgement is recorded in its
+                    // provenance, not in the spec: reconstruct it, or the
+                    // review gate would evaporate on the second `tdy fit`.
+                    if sc.provenance.method == tdy::spec::InferenceMethod::Llm {
+                        rs.push(tdy::fit::llm_frame_reason(
+                            &spec,
+                            sc.provenance.model.as_deref().unwrap_or("a model"),
+                        ));
+                    }
                     (!rs.is_empty()).then(|| rs.join("; "))
                 };
                 let (blake3, bytes) = tdy::sidecar::hash_file(&p)?;
@@ -258,7 +279,7 @@ async fn fit_dataset(
                 match (&review, is_accepted) {
                     (Some(r), false) => {
                         needs_review += 1;
-                        println!("  {rel:<24} REVIEW  (hand-written spec)");
+                        println!("  {rel:<24} REVIEW  {label}");
                         println!("      {r}");
                         println!(
                             "      tdy does not accept a value-changing step on its own \
@@ -266,8 +287,8 @@ async fn fit_dataset(
                         );
                         println!("      Accept:  tdy fit {} --accept {rel}", target_path.display());
                     }
-                    (Some(_), true) => println!("  {rel:<24} accepted  (hand-written spec)"),
-                    (None, _) => println!("  {rel:<24} fits      (hand-written spec)"),
+                    (Some(_), true) => println!("  {rel:<24} accepted  {label}"),
+                    (None, _) => println!("  {rel:<24} fits      {label}"),
                 }
                 members.push(Member {
                     path: rel.clone(),
