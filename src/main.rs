@@ -96,6 +96,11 @@ enum Command {
         /// Print the plan without writing a sidecar
         #[arg(long)]
         dry_run: bool,
+        /// For columns nothing binds, suggest which of the file's columns
+        /// could produce them, as pasteable SQL. Suggestions only — a
+        /// type-compatible column is not necessarily the right one.
+        #[arg(long)]
+        propose: bool,
     },
     /// Check sidecars against a declared target schema.
     ///
@@ -124,6 +129,27 @@ enum ConfigAction {
     Init,
 }
 
+/// Suggestions for columns nothing bound, as pasteable SQL.
+fn print_proposals(
+    file: &std::path::Path,
+    target: &tdy::target::Target,
+    limits: tdy::config::Limits,
+) {
+    let Ok(proposals) = tdy::fit::propose(file, target, limits) else { return };
+    for p in &proposals {
+        let existing: Vec<String> = target
+            .columns
+            .iter()
+            .find(|c| c.name == p.column)
+            .map(|c| std::iter::once(c.name.clone()).chain(c.matches.iter().cloned()).collect())
+            .unwrap_or_default();
+        println!("    `{}` ({}):", p.column, p.want);
+        for line in p.message(&existing).lines() {
+            println!("      {line}");
+        }
+    }
+}
+
 /// `tdy fit <TARGET>` — fit every member and record what they resolved to.
 ///
 /// Plans every file the globs match, prints every gap rather than stopping at
@@ -135,6 +161,7 @@ fn fit_dataset(
     limits: tdy::config::Limits,
     dry_run: bool,
     accept: &[PathBuf],
+    propose: bool,
 ) -> Result<()> {
     use tdy::fit::{fit, FitError};
     use tdy::lockfile::{self, Lock, Member, LOCK_VERSION};
@@ -272,6 +299,9 @@ fn fit_dataset(
                         println!("      {line}");
                     }
                 }
+                if propose {
+                    print_proposals(&p, &target, limits);
+                }
             }
             Err(e) => {
                 failed += 1;
@@ -337,6 +367,7 @@ fn fit_command(
     file: &std::path::Path,
     limits: tdy::config::Limits,
     dry_run: bool,
+    propose: bool,
 ) -> Result<()> {
     use tdy::fit::{fit, FitError};
     use tdy::target::Target;
@@ -376,6 +407,10 @@ fn fit_command(
         Err(FitError::Gaps(gaps)) => {
             println!("{} cannot reach `{}`:\n", file.display(), target.name);
             print!("{}", FitError::Gaps(gaps));
+            if propose {
+                println!("  suggestions:");
+                print_proposals(file, &target, limits);
+            }
             anyhow::bail!("no plan reaches the declared schema")
         }
         Err(e) => {
@@ -561,11 +596,11 @@ async fn run() -> Result<()> {
             let cfg = config::load(&overrides)?;
             provider::validate_command(&file, &cfg, stamp)?;
         }
-        Command::Fit { target, file, accept, dry_run } => {
+        Command::Fit { target, file, accept, dry_run, propose } => {
             let cfg = config::load(&overrides)?;
             match file {
-                Some(f) => fit_command(&target, &f, cfg.limits, dry_run)?,
-                None => fit_dataset(&target, cfg.limits, dry_run, &accept)?,
+                Some(f) => fit_command(&target, &f, cfg.limits, dry_run, propose)?,
+                None => fit_dataset(&target, cfg.limits, dry_run, &accept, propose)?,
             }
         }
         Command::Check { target, against } => {

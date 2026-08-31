@@ -391,3 +391,96 @@ fn a_refused_file_gets_no_sidecar() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("region"), "{text}");
 }
+
+// ---------------------------------------------------------------------------
+// --propose
+// ---------------------------------------------------------------------------
+
+/// The friction the alias list creates is real: a target names what you want,
+/// the files are somebody else's exports, and somebody has to bridge that
+/// once. `propose` does the mechanical half — which of this file's unbound
+/// columns *could* produce the declared type — and stops there.
+///
+/// It deliberately does not choose. A discount column parses as money exactly
+/// as well as an amount does, and picking between them is the judgement this
+/// tool does not make.
+#[test]
+fn propose_offers_type_compatible_columns_without_choosing() {
+    let t = target();
+    let props = tdy::fit::propose(&corpus().join("2025-07.csv"), &t, Limits::default())
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    assert_eq!(props.len(), 1, "{props:?}");
+    let p = &props[0];
+    assert_eq!(p.column, "amount_chf");
+    assert_eq!(p.candidates.len(), 1, "{:?}", p.candidates);
+    assert_eq!(p.candidates[0].0, "Betrag Rp.");
+
+    // The remedy is pasteable, keeps the declared aliases, and does not repeat
+    // the column's own name (the binder always tries that first).
+    let existing = vec!["amount_chf".to_string(), "Betrag".to_string()];
+    let m = p.message(&existing);
+    assert!(m.contains("OPTIONS(matches = 'Betrag, Betrag Rp.')"), "{m}");
+    assert!(m.contains("not the same as correct"), "the caveat is missing:\n{m}");
+}
+
+/// A column another declared column already binds is not a candidate: the
+/// proposal is about what is *free*, not about every column that happens to
+/// parse.
+#[test]
+fn propose_ignores_columns_another_declared_column_already_binds() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let p = dir.path().join("t.csv");
+    // `menge` and `betrag` both parse as DECIMAL; `menge` is spoken for.
+    std::fs::write(&p, "datum;menge;betrag\n31.01.2025;5;1234.50\n").unwrap();
+
+    let t = Target::parse(
+        "CREATE TABLE t (
+           menge      DECIMAL(14,2) NOT NULL,
+           amount_chf DECIMAL(14,2) NOT NULL,
+           datum      DATE          NOT NULL
+         ) WITH (files = 't.csv', date_order = 'dmy')",
+    )
+    .unwrap();
+
+    let props = tdy::fit::propose(&p, &t, Limits::default()).unwrap();
+    assert_eq!(props.len(), 1, "{props:?}");
+    assert_eq!(props[0].column, "amount_chf");
+    let names: Vec<&str> = props[0].candidates.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["betrag"], "a column already bound was offered: {names:?}");
+}
+
+/// Nothing to propose when nothing is unbound.
+#[test]
+fn propose_is_empty_when_the_file_already_fits() {
+    let t = target();
+    let props = tdy::fit::propose(&corpus().join("2025-01.csv"), &t, Limits::default()).unwrap();
+    assert!(props.is_empty(), "{props:?}");
+}
+
+/// The suggestion actually works: pasting it in makes the file fit.
+#[test]
+fn the_proposed_alias_makes_the_file_fit() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let p = dir.path().join("2025-07.csv");
+    std::fs::copy(corpus().join("2025-07.csv"), &p).unwrap();
+
+    // The Rappen file's amount column, declared. It fits — and reads the raw
+    // integers, which is why a decimal_shift and a human are still needed
+    // before it may join a dataset (see tests/dataset.rs).
+    let t = Target::parse(
+        "CREATE TABLE t (
+           month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
+           region     TEXT          NOT NULL OPTIONS(matches = 'Region'),
+           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag Rp.')
+         ) WITH (files = '2025-07.csv', date_order = 'dmy')",
+    )
+    .unwrap();
+
+    let fitted = fit(&p, &t, Limits::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(fitted.spec.columns[2].source_name(), "Betrag Rp.");
+    // …and nothing about it is flagged for review, because the plan itself
+    // changes no value. The unit problem is not visible to the planner, which
+    // is exactly why the alias is a human's to declare.
+    assert!(fitted.review.is_none(), "{:?}", fitted.review);
+}

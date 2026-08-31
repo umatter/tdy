@@ -224,6 +224,106 @@ impl std::fmt::Display for FitError {
     }
 }
 
+/// A source column that *could* supply a declared column, offered for a human
+/// to accept or reject.
+#[derive(Debug, Clone)]
+pub struct Proposal {
+    pub column: String,
+    pub want: String,
+    /// (the file's spelling, why it is a candidate)
+    pub candidates: Vec<(String, String)>,
+}
+
+impl Proposal {
+    /// Pasteable SQL, because the remedy should be copyable rather than
+    /// described.
+    ///
+    /// `existing` is the column's already-declared match list; the column's
+    /// own name is not included, since the binder always tries that first.
+    pub fn message(&self, existing: &[String]) -> String {
+        let mut names: Vec<String> = existing.iter().filter(|n| **n != self.column).cloned().collect();
+        for (src, _) in &self.candidates {
+            if !names.contains(src) {
+                names.push(src.clone());
+            }
+        }
+        let mut out = format!("could be supplied by:");
+        for (src, why) in &self.candidates {
+            out.push_str(&format!("\n  {src:?}  — {why}"));
+        }
+        out.push_str(&format!(
+            "\nType-compatible is not the same as correct — a discount column parses as \
+             money too.\nIf one of them is right, say so:\n  {} {} OPTIONS(matches = '{}')",
+            self.column,
+            self.want,
+            names.join(", ")
+        ));
+        out
+    }
+}
+
+/// For each declared column nothing bound, which of the file's *unbound*
+/// columns could produce its type.
+///
+/// Mechanical and deliberately modest. It says a column's values parse as the
+/// declared type — never that it means the right thing. A `Rabatt` column
+/// parses as `DECIMAL(14,2)` exactly as well as a `Betrag` does, and choosing
+/// between them is the judgement this tool does not make.
+pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Proposal>, FitError> {
+    let sample = crate::sample::build(path, 16 * 1024, limits)
+        .with_context(|| format!("sampling {}", path.display()))
+        .map_err(FitError::Unreadable)?;
+    let draft = sniff::sniff(path, &sample, limits)
+        .with_context(|| format!("framing {}", path.display()))
+        .map_err(FitError::Unreadable)?
+        .spec;
+    let Probe { header, origin, rows } =
+        probe(path, &draft, limits).map_err(FitError::Unreadable)?;
+
+    // Anything already spoken for is not a candidate for something else.
+    let taken: Vec<usize> = target
+        .columns
+        .iter()
+        .filter_map(|tc| {
+            let c = bind(tc, &origin, target.match_mode);
+            (c.len() == 1).then(|| c[0].0)
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    for tc in &target.columns {
+        if !bind(tc, &origin, target.match_mode).is_empty() {
+            continue;
+        }
+        let mut candidates = Vec::new();
+        for (i, name) in origin.iter().enumerate() {
+            if taken.contains(&i) {
+                continue;
+            }
+            let values: Vec<&str> =
+                rows.iter().map(|r| r.get(i).map(|s| s.as_str()).unwrap_or("")).collect();
+            let addressable = header.get(i).cloned().unwrap_or_else(|| name.clone());
+            if type_for(&tc.name, &addressable, &tc.dtype, tc.nullable, &values, target.date_order)
+                .is_ok()
+            {
+                let n = values.iter().filter(|v| !sniff::is_na(v)).count();
+                candidates.push((
+                    name.clone(),
+                    format!("all {n} sampled value(s) parse as {}", render(&tc.dtype)),
+                ));
+            }
+        }
+        if !candidates.is_empty() {
+            out.push(Proposal {
+                column: tc.name.clone(),
+                want: render(&tc.dtype),
+                candidates,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Plan a spec for `path` that lands on `target`.
 pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitError> {
     // 1. The frame. What the sniffer knows about this file's *shape* is about

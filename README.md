@@ -199,7 +199,22 @@ amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount'
 ```
 
 Those are declared, in the open, in a diff — because a planner guessing at
-synonyms is exactly what this tool does not do.
+synonyms is exactly what this tool does not do. `--propose` does the mechanical
+half for you:
+
+```
+$ tdy fit sales.tdy.sql 2025-07.csv --propose
+  suggestions:
+    `amount_chf` (DECIMAL(14,2)):
+      could be supplied by:
+        "Betrag Rp."  — all 4 sampled value(s) parse as DECIMAL(14,2)
+      Type-compatible is not the same as correct — a discount column parses as money too.
+      If one of them is right, say so:
+        amount_chf DECIMAL(14,2) OPTIONS(matches = 'Betrag, Betrag CHF, Betrag Rp.')
+```
+
+It says a column's values *parse* as the declared type. It never says they mean
+the right thing, and it never edits your target.
 
 **What it refuses is the point.** Of the twelve exports in
 `testdata/drifting_exports/`, three cannot be fitted and each is a different
@@ -529,7 +544,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 342 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 346 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 
