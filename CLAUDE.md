@@ -318,8 +318,15 @@ Measured on a 141 MB / 3M-row CSV (release build), before → after the hardenin
 | | before | after |
 |---|---|---|
 | `sniff` (16 KB sample + a whole-file type check) | 6.04 s, 1.20 GB RSS | **5.9 s, 55 MB** |
+| `sniff --quick` (sample only, no type check) | — | **0.22 s, 24 MB** |
 | `count(*)` over the whole file | 6.79 s, 1.40 GB | **2.96 s, 87 MB** |
 | same file referenced twice | 2 full parses | 1 (cached, under 64 MB) |
+
+The type check is a full read, which is the point of it — the sample lies (see
+`testdata/late_surprise_*`). It costs ~0.3 s on top of the parse when nothing fails.
+When something *does* fail, `stream::analyse` locates the offending rows by halving
+rather than by asking once per row: a 22 MB export with a few bad cells in several
+columns went from 21 s to 0.86 s, with identical rows and counts in the message.
 
 The `count(*)` figure is the streaming executor; `TDY_NO_STREAM=1` on the same file is
 3.13 s / 1,676 MB, which is what the materialising path still costs for the formats that

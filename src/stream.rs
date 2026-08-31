@@ -827,6 +827,40 @@ pub fn verify(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verificat
     analyse(spec, path, limits)
 }
 
+/// Which values of `values` fail, found by halving rather than by asking once
+/// per row.
+///
+/// It has to be `build_column_at` that answers — the whole claim of this module
+/// is that a verification failure is a failure the executor would also have —
+/// but calling it per value builds one Arrow array per row, and on a 22 MB
+/// export with a few bad cells in each of several columns that was 21 seconds
+/// against 0.6 for the same file with `--quick`. A slice that parses clean
+/// needs no further questions, so the scan costs O(failures x log rows) array
+/// builds instead of O(rows), with the same function giving the same answers.
+fn locate_failures(
+    col: &crate::spec::ColumnSpec,
+    values: &[&str],
+    row_base: usize,
+    out: &mut (Vec<(usize, String)>, usize, bool),
+) {
+    if out.2 || values.is_empty() || build_column_at(col, values, row_base).is_ok() {
+        return;
+    }
+    if values.len() == 1 {
+        out.1 += 1;
+        if out.0.len() < 3 {
+            out.0.push((row_base + 1, values[0].to_string()));
+        }
+        if out.1 >= OFFENDER_CAP {
+            out.2 = true;
+        }
+        return;
+    }
+    let mid = values.len() / 2;
+    locate_failures(col, &values[..mid], row_base, out);
+    locate_failures(col, &values[mid..], row_base + mid, out);
+}
+
 /// The slow path: which columns are wrong, and which values made them so.
 fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification> {
     use datafusion::arrow::array::{Array, StringArray};
@@ -902,18 +936,7 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
             if bad[i].2 {
                 continue;
             }
-            for (r, v) in values.iter().enumerate() {
-                if build_column_at(col, std::slice::from_ref(v), row_base + r).is_err() {
-                    bad[i].1 += 1;
-                    if bad[i].0.len() < 3 {
-                        bad[i].0.push((row_base + r + 1, (*v).to_string()));
-                    }
-                    if bad[i].1 >= OFFENDER_CAP {
-                        bad[i].2 = true;
-                        break;
-                    }
-                }
-            }
+            locate_failures(col, &values, row_base, &mut bad[i]);
         }
         row_base += batch.num_rows();
         Ok(())
