@@ -332,6 +332,12 @@ The `count(*)` figure is the streaming executor; `TDY_NO_STREAM=1` on the same f
 3.13 s / 1,676 MB, which is what the materialising path still costs for the formats that
 cannot stream.
 
+**Known and unfixed: extraction cost scales badly with width.** The 3M-row / 5-column
+fixture above extracts at ~3M cells/s; `tidytuesday/2021-08-24/lemur_data.csv` (82k rows,
+54 columns, 22 MB) manages ~0.55M cells/s, and the whole 8 s is extraction — an all-`utf8`
+spec with no `na_values` and no typing costs the same. Measured, not fixed; if you profile
+extraction, that file is the one to profile against.
+
 Peak RSS no longer follows the size of a text file at all — `stream` holds one batch, not the
 rows and not the decoded text. It is still ~8x for the formats that cannot stream (Excel,
 JSON), which is what `[limits]` is calibrated against. If you change extraction, re-measure
