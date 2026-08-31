@@ -748,3 +748,111 @@ decimal_separator = "."
     assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
     assert!(text.contains("Ticino"), "{text}");
 }
+
+/// The two-`Betrag` file, resolved the way the design settled it: the planner
+/// refuses to choose between two columns with one name (tests/fit.rs pins
+/// that), and the human's remedy is the sidecar, which can address the second
+/// occurrence by its deduped name `Betrag_2`.
+///
+/// "Second column named Betrag" sounds positional and fragile, but the
+/// acceptance is recorded against the file's blake3: if a regenerated export
+/// reorders its columns, that is drift, the acceptance expires, and the spec
+/// is re-proved — so the name cannot silently come to mean a different column.
+/// This is why no `Betrag@3` / `{at, expect}` syntax exists: the fingerprint
+/// already pins what position-addressing would try to.
+#[test]
+fn the_two_betrag_file_joins_via_a_sidecar_naming_the_deduped_column() {
+    let dir = staged();
+    let t = dir.path().join("aug.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE aug (\n\
+         \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
+         \x20 region     TEXT          NOT NULL,\n\
+         \x20 amount_chf DECIMAL(14,2) NOT NULL\n\
+         )\nWITH (files = '2025-08.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+
+    let aug = dir.path().join("2025-08.csv");
+    let sc = tdy::sidecar::sidecar_path(&aug);
+    std::fs::write(
+        &sc,
+        r#"spec_version = 1
+[source]
+path = "2025-08.csv"
+blake3 = "0"
+bytes = 0
+[provenance]
+method = "manual"
+tool_version = "0.1.0"
+created_at = "2026-01-01T00:00:00Z"
+[spec]
+[spec.extraction]
+format = "delimited"
+delimiter = ";"
+quote = '"'
+encoding = "windows-1252"
+ragged = "pad_nulls"
+[[spec.transforms]]
+op = "promote_header"
+rows = 1
+join = " "
+[[spec.columns]]
+name = "month"
+source = "Datum"
+nullable = false
+[spec.columns.dtype]
+type = "date"
+format = "%d.%m.%Y"
+[[spec.columns]]
+name = "region"
+source = "Region"
+nullable = false
+[spec.columns.dtype]
+type = "utf8"
+[[spec.columns]]
+name = "amount_chf"
+source = "Betrag"
+nullable = false
+[spec.columns.dtype]
+type = "decimal"
+precision = 14
+scale = 2
+[spec.columns.parse]
+thousands_separator = "'"
+decimal_separator = "."
+"#,
+    )
+    .unwrap();
+    assert!(tdy(&["validate", aug.to_str().unwrap(), "--stamp"]).status.success());
+
+    let ts = t.to_str().unwrap();
+    let out = tdy(&["fit", ts]);
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // `source = "Betrag"` reads the FIRST Betrag — net. The generator's
+    // August net total is 7'260.00; the gross column would be 7'848.06, so a
+    // wrong binding is visible in the sum, not just the shape.
+    let q = format!("SELECT sum(amount_chf) FROM dataset('{}')", t.display());
+    let ok = tdy(&["query", &q]);
+    let text = String::from_utf8_lossy(&ok.stdout);
+    assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+    assert!(text.contains("7260.00"), "wrong column bound:\n{text}");
+
+    // …and `Betrag_2` reaches the SECOND one — gross, 7'848.06 — because a
+    // remedy that can only ever address the first occurrence is no remedy.
+    let text2 = std::fs::read_to_string(&sc).unwrap();
+    std::fs::write(&sc, text2.replace("source = \"Betrag\"", "source = \"Betrag_2\"")).unwrap();
+    assert!(tdy(&["validate", aug.to_str().unwrap(), "--stamp"]).status.success());
+    assert!(tdy(&["fit", ts]).status.success());
+    let ok = tdy(&["query", &q]);
+    let text = String::from_utf8_lossy(&ok.stdout);
+    assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+    assert!(text.contains("7848.06"), "Betrag_2 must be the gross column:\n{text}");
+}

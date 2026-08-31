@@ -155,7 +155,9 @@ impl Lock {
             "# Written by `tdy fit`. Reviewed in git, never hand-edited.\n\
              # Membership is recorded here rather than expanded from the target's globs at\n\
              # query time, so the same query over the same files gives the same answer and a\n\
-             # new export is drift rather than a silently different number.\n\n{}",
+             # new export is drift rather than a silently different number.\n\
+             # On a merge conflict, do not hand-merge: this file is derived state, and\n\
+             # `tdy fit <TARGET>` regenerates it from the declaration and the files on disk.\n\n{}",
             toml::to_string_pretty(self).context("serialising the lock")?
         );
         crate::fileio::atomic_write(&p, &body)?;

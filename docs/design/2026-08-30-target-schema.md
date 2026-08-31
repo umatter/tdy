@@ -496,9 +496,15 @@ exists and is tested before the model is allowed near it.
    decimals is silently rounded on every row. This design gates it behind one
    acceptance per file; the invariant-focused reviewers argued for a hard error
    with an opt-in per-column `round` policy. The difference matters for money.
-3. **Positional disambiguation.** For the two-`Betrag` file: `source = "Betrag@3"`
-   overloads a name with an index. `{ at = 3, expect = "Betrag" }` is safer — it
-   fails loudly if the columns move — and uglier.
+3. ~~**Positional disambiguation.**~~ **Settled: no new syntax.** The sidecar can
+   already address the second `Betrag` as `Betrag_2` (`dedupe_names` exists so a
+   spec can name a duplicate), and the worry that "second column named Betrag"
+   silently comes to mean a different column is unfounded: the acceptance is
+   recorded against the file's blake3, so a regenerated export with reordered
+   columns is *drift* — the acceptance expires and the spec is re-proved. The
+   fingerprint already pins everything `{ at = 3, expect = "Betrag" }` would.
+   `tests/dataset.rs::the_two_betrag_file_joins_via_a_sidecar_naming_the_deduped_column`
+   is the proof, with net and gross distinguished by their sums.
 4. ~~**`verify = "full"` as the default at all scales?**~~ **Settled: yes, and it
    is wired.** `fit` now proves the declared type on every row when the target
    says `verify = 'full'` (the default), and stops at `dry_run`'s bounded prefix
@@ -511,6 +517,11 @@ exists and is tested before the model is allowed near it.
 5. **Magnitude threshold.** 10× catches the Rappen class and nothing smaller. A
    partial final month will produce false positives, and the remedy is a
    per-member acceptance rather than a global switch.
-6. **Lock merge conflicts.** Twelve months added one at a time will conflict in
-   one lock file. A per-member directory removes the conflict class at the cost
-   of a less diffable whole.
+6. ~~**Lock merge conflicts.**~~ **Settled: one file, conflicts resolved by
+   regeneration.** The lock is derived state — every byte of it is a function of
+   the target and the members on disk — so the resolution for *any* merge
+   conflict is `tdy fit <TARGET>`, one command, never a hand-merge. A per-member
+   directory would remove the conflict marker but not the underlying question
+   ("which membership is right?"), and it would cost the single-file diff that
+   makes a lock reviewable. The lock's header comment says this where the
+   conflict happens.
