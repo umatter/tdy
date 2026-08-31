@@ -383,6 +383,17 @@ fn na() -> Vec<String> {
     sniff::NA_TOKENS.iter().map(|s| s.to_string()).collect()
 }
 
+/// Everything the type-checker needs about one column, so the functions that
+/// pass it around stay readable (and inside clippy's argument limit).
+struct Ctx<'a> {
+    column: &'a str,
+    source: &'a str,
+    nullable: bool,
+    values: &'a [&'a str],
+    base: ValueParsing,
+    date_order: Option<DateOrder>,
+}
+
 /// Can these values produce the declared type, and how?
 ///
 /// Nothing here *infers* a type — the target already said what it wants. Each
@@ -405,13 +416,21 @@ fn type_for(
 
     // Every candidate carries the NA vocabulary: a blank cell is a null, not
     // an unparseable value, in every type.
-    let base = ValueParsing { na_values: na(), ..ValueParsing::default() };
+    let ctx = Ctx {
+        column,
+        source,
+        nullable,
+        values,
+        base: ValueParsing { na_values: na(), ..ValueParsing::default() },
+        date_order,
+    };
+    let base = ctx.base.clone();
 
     match want {
         // Anything is text. No candidate can fail, so there is nothing to check.
         ArrowType::Utf8 => Ok((DType::Utf8, base, None)),
 
-        ArrowType::Boolean => check_one(column, source, DType::Bool, base, nullable, values)
+        ArrowType::Boolean => check_one(&ctx, DType::Bool, base)
             .map(|(d, p)| (d, p, None))
             .map_err(untypable),
 
@@ -424,19 +443,18 @@ fn type_for(
                     cands.push(ValueParsing { thousands_separator: f.thousands, ..base.clone() });
                 }
             }
-            first_ok(column, source, DType::Int64, cands, nullable, values).map_err(untypable)
+            first_ok(&ctx, DType::Int64, cands).map_err(untypable)
         }
 
         ArrowType::Float64 => {
             let cands = numeric_candidates(&base, values);
-            first_ok(column, source, DType::Float64, cands, nullable, values).map_err(untypable)
+            first_ok(&ctx, DType::Float64, cands).map_err(untypable)
         }
 
         ArrowType::Decimal128(p, s) => {
             let cands = numeric_candidates(&base, values);
             let dtype = DType::Decimal { precision: *p, scale: *s };
-            let (d, parse, _) =
-                first_ok(column, source, dtype, cands, nullable, values).map_err(untypable)?;
+            let (d, parse, _) = first_ok(&ctx, dtype, cands).map_err(untypable)?;
             // Rounding is a value change, so it is said out loud rather than
             // discovered later in a total that is off by a rappen.
             let over = values
@@ -452,17 +470,16 @@ fn type_for(
             Ok((d, parse, note))
         }
 
-        ArrowType::Date32 => pick_format(
-            column, source, sniff::DATE_FORMATS, nullable, values, &base, date_order,
-            |f| DType::Date { format: f.to_string() },
-        ),
+        ArrowType::Date32 => {
+            pick_format(&ctx, sniff::DATE_FORMATS, |f| DType::Date { format: f.to_string() })
+        }
 
         ArrowType::Timestamp(_, tz) => {
             let zone = tz.as_ref().map(|z| z.to_string());
-            pick_format(
-                column, source, sniff::TS_FORMATS, nullable, values, &base, date_order,
-                move |f| DType::Timestamp { format: f.to_string(), timezone: zone.clone() },
-            )
+            pick_format(&ctx, sniff::TS_FORMATS, move |f| DType::Timestamp {
+                format: f.to_string(),
+                timezone: zone.clone(),
+            })
         }
 
         other => Err(untypable(format!("tdy cannot produce {other}"))),
@@ -530,18 +547,16 @@ fn field_order(f: &str) -> Option<DateOrder> {
 /// containing `03.04.2025`, and are not a gap on one where every day-of-month
 /// is over twelve — because there, they mean the same thing.
 fn pick_format<F>(
-    column: &str,
-    source: &str,
+    ctx: &Ctx<'_>,
     formats: &[&'static str],
-    nullable: bool,
-    values: &[&str],
-    base: &ValueParsing,
-    date_order: Option<DateOrder>,
     make: F,
 ) -> Result<(DType, ValueParsing, Option<String>), Gap>
 where
     F: Fn(&str) -> DType,
 {
+    let (column, source, values, base) = (ctx.column, ctx.source, ctx.values, &ctx.base);
+    let nullable = ctx.nullable;
+    let date_order = ctx.date_order;
     let mut ok: Vec<(&'static str, ArrayRef)> = Vec::new();
     let mut last_err = String::new();
     for f in formats {
@@ -617,37 +632,31 @@ where
 
 /// Build one candidate and report whether the executor accepts it.
 fn check_one(
-    column: &str,
-    _source: &str,
+    ctx: &Ctx<'_>,
     dtype: DType,
     parse: ValueParsing,
-    nullable: bool,
-    values: &[&str],
 ) -> Result<(DType, ValueParsing), String> {
     let col = ColumnSpec {
-        name: column.to_string(),
+        name: ctx.column.to_string(),
         source: None,
         dtype: dtype.clone(),
-        nullable,
+        nullable: ctx.nullable,
         parse: parse.clone(),
     };
-    match engine::build_column_at(&col, values, 0) {
+    match engine::build_column_at(&col, ctx.values, 0) {
         Ok(_) => Ok((dtype, parse)),
         Err(e) => Err(format!("{e:#}")),
     }
 }
 
 fn first_ok(
-    column: &str,
-    source: &str,
+    ctx: &Ctx<'_>,
     dtype: DType,
     candidates: Vec<ValueParsing>,
-    nullable: bool,
-    values: &[&str],
 ) -> Result<(DType, ValueParsing, Option<String>), String> {
     let mut last = String::new();
     for parse in candidates {
-        match check_one(column, source, dtype.clone(), parse, nullable, values) {
+        match check_one(ctx, dtype.clone(), parse) {
             Ok((d, p)) => return Ok((d, p, None)),
             Err(e) => last = e,
         }

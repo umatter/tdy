@@ -21,6 +21,7 @@ pub mod engine;
 pub mod fileio;
 pub mod fit;
 pub mod infer;
+pub mod lockfile;
 pub mod numfmt;
 pub mod provider;
 pub mod sample;

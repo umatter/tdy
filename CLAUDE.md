@@ -29,6 +29,12 @@ OPENROUTER_API_KEY=... TDY_LIVE_MODEL=google/gemini-2.5-flash \
 ```
 
 Every test runs with `backend = none`; nothing needs a network or a model.
+**CI runs `cargo clippy --all-targets -- -D warnings`, and clippy is not installed here** (no
+rustup on this machine), so its lints are found by CI rather than locally. The one that has
+actually bitten: `too_many_arguments` fires at 8, and `src/engine.rs::extract_delimited`
+carries an explicit `#[allow]` for it. Group parameters into a context struct rather than
+adding the allow — that is what `fit::Ctx` is.
+
 On this machine plain `cargo test` ends with a spurious doc-test failure (`rustdoc` cannot
 load `libLLVM.so...` — a toolchain install issue, not code); `--lib --tests` avoids it.
 Rust ≥ 1.88 (DataFusion 46), a floor set by reqwest → url → icu_*, checked in CI. `[profile.dev] debug = false` is deliberate (slow builds) —
