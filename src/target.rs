@@ -157,6 +157,13 @@ pub struct Target {
     pub match_mode: MatchMode,
     pub date_order: Option<DateOrder>,
     pub verify: Verify,
+    /// Which character is the decimal point in these files.
+    ///
+    /// Not part of the Arrow type — like `date_order`, it constrains only the
+    /// planner. It exists for the same reason: `1.234` is either one-point-two
+    /// or one thousand two hundred and thirty-four, nothing in the column says
+    /// which, and guessing is a thousandfold error nobody would notice.
+    pub decimal_separator: Option<char>,
     /// The fixed offset every `TIMESTAMP WITH TIME ZONE` column carries.
     ///
     /// The offset is part of the Arrow type, so a target has to be able to say
@@ -275,6 +282,7 @@ impl Target {
             date_order: None,
             verify: Verify::default(),
             timezone: None,
+            decimal_separator: None,
         };
         // A target is hand-written and merge-conflict-prone. Two settings of
         // one option is a contradiction, and last-one-wins would resolve it
@@ -372,6 +380,17 @@ impl Target {
                     other => return Err(format!("unknown date_order {other:?}; use 'dmy', 'mdy' or 'ymd'")),
                 })
             }
+            "decimal_separator" => {
+                let mut cs = text.chars();
+                match (cs.next(), cs.next()) {
+                    (Some(c @ ('.' | ',')), None) => self.decimal_separator = Some(c),
+                    _ => {
+                        return Err(format!(
+                            "decimal_separator must be '.' or ',', not {text:?}"
+                        ))
+                    }
+                }
+            }
             "timezone" => {
                 if parse_fixed_offset(&text).is_none() {
                     return Err(format!(
@@ -392,7 +411,7 @@ impl Target {
             other => {
                 return Err(format!(
                     "unknown WITH option `{other}`. Known options: files, exclude, match, \
-                     date_order, verify, timezone."
+                     date_order, verify, timezone, decimal_separator."
                 ))
             }
         }

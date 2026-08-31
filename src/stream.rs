@@ -824,20 +824,28 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
     // The header cell each column reads from, which is what a repeated header
     // row would contain.
     let sources: Vec<String> =
-        spec.columns.iter().map(|c| c.source_name().trim().to_string()).collect();
+        spec.columns.iter().map(|c| c.source_name().to_string()).collect();
 
     let mut check = |batch: RecordBatch| -> Result<()> {
         let cols: Vec<Option<&StringArray>> = (0..batch.num_columns())
             .map(|i| batch.column(i).as_any().downcast_ref::<StringArray>())
             .collect();
 
-        // A row is a repeated header when *every* column holds its own name.
-        // Requiring all of them, rather than one, is what keeps a `name`
-        // column containing the value "name" from being mistaken for one.
+        // A row is a repeated header when *every* column holds its own name,
+        // byte for byte. Two rules, and both matter:
+        //
+        // Every column, not one — a `name` column containing the value "name"
+        // must not look like a header row.
+        //
+        // Byte for byte, not trimmed — because the caller turns this count
+        // into a transform that deletes rows, and a detection that is more
+        // permissive than the deletion (or vice versa) means deleting
+        // something nobody proved was a header. Whatever is counted here must
+        // be exactly what the emitted pattern matches.
         if spec.columns.len() > 1 {
             for r in 0..batch.num_rows() {
                 let all = cols.iter().enumerate().all(|(i, a)| {
-                    a.map(|a| !a.is_null(r) && a.value(r).trim() == sources[i]).unwrap_or(false)
+                    a.map(|a| !a.is_null(r) && a.value(r) == sources[i]).unwrap_or(false)
                 });
                 if all {
                     repeats += 1;

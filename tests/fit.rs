@@ -295,7 +295,10 @@ fn a_column_that_cannot_produce_the_declared_type_is_a_gap() {
 fn rounding_to_the_declared_scale_is_reported() {
     let dir = tempfile::TempDir::new().unwrap();
     let p = dir.path().join("r.csv");
-    std::fs::write(&p, "id;amount\n1;1.005\n2;2.994\n").unwrap();
+    // Four fractional digits, so the separator cannot be a thousands group
+    // and the column is unambiguously decimal — see the test below for what
+    // happens when it is not.
+    std::fs::write(&p, "id;amount\n1;1.0056\n2;2.9942\n").unwrap();
 
     let t = Target::parse(
         "CREATE TABLE t (id BIGINT NOT NULL, amount DECIMAL(14,2) NOT NULL) \
@@ -483,4 +486,120 @@ fn the_proposed_alias_makes_the_file_fit() {
     // changes no value. The unit problem is not visible to the planner, which
     // is exactly why the alias is a human's to declare.
     assert!(fitted.review.is_none(), "{:?}", fitted.review);
+}
+
+/// The numeric twin of `a_genuinely_ambiguous_date_is_refused_…`, and it was
+/// missing — which is how the planner came to accept a German column of
+/// thousands as a column of units, silently, a thousandfold wrong.
+///
+/// `numfmt::infer` reports `ambiguous` when nothing in the column settles
+/// which character is the decimal point. That verdict is the statement that
+/// the answer is unknown, and it has to be honoured rather than stepped
+/// around: `1.234` is either one-and-a-bit or one thousand two hundred and
+/// thirty-four, and no proof in the file distinguishes them.
+#[test]
+fn an_ambiguous_decimal_separator_is_refused_until_the_convention_is_declared() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let p = dir.path().join("de.csv");
+    // German thousands: 1234, 2750, 12500, 9100. Read the Anglo way they are
+    // a thousand times smaller, and every value still parses.
+    std::fs::write(&p, "region;betrag\nNord;1.234\nSued;2.750\nOst;12.500\nWest;9.100\n")
+        .unwrap();
+
+    let undeclared = Target::parse(
+        "CREATE TABLE t (region TEXT NOT NULL, betrag DECIMAL(14,2) NOT NULL) \
+         WITH (files = 'de.csv')",
+    )
+    .unwrap();
+    match fit(&p, &undeclared, Limits::default()) {
+        Err(FitError::Gaps(g)) => {
+            assert_eq!(g.len(), 1, "{g:?}");
+            match &g[0] {
+                Gap::AmbiguousSeparator { column, separator, .. } => {
+                    assert_eq!(column, "betrag");
+                    assert_eq!(*separator, '.');
+                }
+                other => panic!("expected AmbiguousSeparator, got {other:?}"),
+            }
+            assert!(g[0].message().contains("decimal_separator"), "{}", g[0].message());
+        }
+        Ok(f) => panic!(
+            "an ambiguous separator was silently resolved: {:?}",
+            f.spec.columns[1].parse
+        ),
+        Err(e) => panic!("{e}"),
+    }
+
+    // Declared, it fits — and reads the German values, not the Anglo ones.
+    let declared = Target::parse(
+        "CREATE TABLE t (region TEXT NOT NULL, betrag DECIMAL(14,2) NOT NULL) \
+         WITH (files = 'de.csv', decimal_separator = ',')",
+    )
+    .unwrap();
+    let f = fit(&p, &declared, Limits::default()).unwrap_or_else(|e| panic!("{e}"));
+    let batch = tdy::provider::spec_to_batch(&f.spec, &p).unwrap();
+    let col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::Decimal128Array>()
+        .unwrap();
+    let total: i128 = (0..col.len()).map(|i| col.value(i)).sum();
+    // 1234 + 2750 + 12500 + 9100 = 25584, at scale 2.
+    assert_eq!(total, 2_558_400, "the German reading was not used");
+}
+
+/// An unambiguous separator still works without any declaration — the
+/// refusal above must not become "tdy cannot read decimals".
+#[test]
+fn an_unambiguous_separator_needs_no_declaration() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let p = dir.path().join("en.csv");
+    // Two fractional digits and a value whose integer part is four digits:
+    // nothing here reads as thousands grouping.
+    std::fs::write(&p, "region;betrag\nNord;1234.50\nSued;2750.25\n").unwrap();
+    let t = Target::parse(
+        "CREATE TABLE t (region TEXT NOT NULL, betrag DECIMAL(14,2) NOT NULL) \
+         WITH (files = 'en.csv')",
+    )
+    .unwrap();
+    let f = fit(&p, &t, Limits::default()).unwrap_or_else(|e| panic!("{e}"));
+    let batch = tdy::provider::spec_to_batch(&f.spec, &p).unwrap();
+    let col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::Decimal128Array>()
+        .unwrap();
+    let total: i128 = (0..col.len()).map(|i| col.value(i)).sum();
+    assert_eq!(total, 398_475);
+}
+
+/// A text column must not carry the missing-value vocabulary. "NA" is
+/// Namibia, "NONE" is an answer, and nulling a real string is data loss no
+/// later step can undo — the same reason `sniff` refuses to do it.
+#[test]
+fn a_fitted_text_column_keeps_values_that_look_like_null_tokens() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let p = dir.path().join("c.csv");
+    std::fs::write(&p, "country,code\nNamibia,NA\nNone of the above,NONE\nNorway,NO\n")
+        .unwrap();
+    let t = Target::parse(
+        "CREATE TABLE c (country TEXT NOT NULL, code TEXT NOT NULL) WITH (files = 'c.csv')",
+    )
+    .unwrap();
+    let f = fit(&p, &t, Limits::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        f.spec.columns.iter().all(|c| c.parse.na_values.is_empty()),
+        "a text column was given null tokens: {:?}",
+        f.spec.columns
+    );
+    let batch = tdy::provider::spec_to_batch(&f.spec, &p).unwrap();
+    let codes = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::StringArray>()
+        .unwrap();
+    assert_eq!(
+        (0..codes.len()).map(|i| codes.value(i)).collect::<Vec<_>>(),
+        vec!["NA", "NONE", "NO"]
+    );
 }

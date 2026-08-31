@@ -106,7 +106,13 @@ pub fn target_hash(t: &Target) -> String {
         h.update(b"\x1fx");
         h.update(f.as_bytes());
     }
-    h.update(format!("{:?}{:?}{:?}{:?}", t.match_mode, t.date_order, t.verify, t.timezone).as_bytes());
+    h.update(
+        format!(
+            "{:?}{:?}{:?}{:?}{:?}",
+            t.match_mode, t.date_order, t.verify, t.timezone, t.decimal_separator
+        )
+        .as_bytes(),
+    );
     format!("b3:{}", h.finalize().to_hex())
 }
 

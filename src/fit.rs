@@ -83,6 +83,14 @@ pub enum Gap {
         want: String,
         why: String,
     },
+    /// A separator character could be a decimal point or a thousands
+    /// separator, and nothing in the column settles it.
+    AmbiguousSeparator {
+        column: String,
+        source: String,
+        separator: char,
+        example: String,
+    },
     /// Several formats parse every value and disagree about what they mean.
     AmbiguousFormat {
         column: String,
@@ -98,6 +106,7 @@ impl Gap {
             Gap::NoCandidate { column, .. }
             | Gap::Ambiguous { column, .. }
             | Gap::Untypable { column, .. }
+            | Gap::AmbiguousSeparator { column, .. }
             | Gap::AmbiguousFormat { column, .. } => column,
         }
     }
@@ -135,6 +144,14 @@ impl Gap {
             Gap::Untypable { column, source, want, why } => format!(
                 "`{column}` ({want}): reads {source:?}, whose values cannot produce that type\n    \
                  {why}"
+            ),
+            Gap::AmbiguousSeparator { column, source, separator, example } => format!(
+                "`{column}`: in {source:?}, {separator:?} could be a decimal point or a \
+                 thousands separator, and nothing in the column settles it\n    \
+                 {example} means two numbers a thousand apart\n    \
+                 Declare which convention these exports use: \
+                 WITH (decimal_separator = '{}').",
+                if *separator == ',' { '.' } else { ',' }
             ),
             Gap::AmbiguousFormat { column, source, formats, example } => format!(
                 "`{column}`: {source:?} parses under more than one format, and they disagree\n    \
@@ -303,8 +320,16 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
             let values: Vec<&str> =
                 rows.iter().map(|r| r.get(i).map(|s| s.as_str()).unwrap_or("")).collect();
             let addressable = header.get(i).cloned().unwrap_or_else(|| name.clone());
-            if type_for(&tc.name, &addressable, &tc.dtype, tc.nullable, &values, target.date_order)
-                .is_ok()
+            if type_for(
+                &tc.name,
+                &addressable,
+                &tc.dtype,
+                tc.nullable,
+                &values,
+                target.date_order,
+                target.decimal_separator,
+            )
+            .is_ok()
             {
                 let n = values.iter().filter(|v| !sniff::is_na(v)).count();
                 candidates.push((
@@ -383,7 +408,15 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
         let values: Vec<&str> =
             rows.iter().map(|r| r.get(idx).map(|s| s.as_str()).unwrap_or("")).collect();
 
-        match type_for(&tc.name, &source, &tc.dtype, tc.nullable, &values, target.date_order) {
+        match type_for(
+            &tc.name,
+            &source,
+            &tc.dtype,
+            tc.nullable,
+            &values,
+            target.date_order,
+            target.decimal_separator,
+        ) {
             Ok((dtype, parse, note)) => {
                 if let Some(n) = note {
                     notes.push(n);
@@ -527,6 +560,7 @@ struct Ctx<'a> {
     values: &'a [&'a str],
     base: ValueParsing,
     date_order: Option<DateOrder>,
+    decimal_separator: Option<char>,
 }
 
 /// Can these values produce the declared type, and how?
@@ -541,6 +575,7 @@ fn type_for(
     nullable: bool,
     values: &[&str],
     date_order: Option<DateOrder>,
+    decimal_separator: Option<char>,
 ) -> Result<(DType, ValueParsing, Option<String>), Gap> {
     let untypable = |why: String| Gap::Untypable {
         column: column.to_string(),
@@ -551,15 +586,26 @@ fn type_for(
 
     // Every candidate carries the NA vocabulary: a blank cell is a null, not
     // an unparseable value, in every type.
+    // Typed columns carry the NA vocabulary, because there those tokens
+    // cannot be values. A **text** column gets none, for exactly the reason
+    // `sniff` gives where it makes the same choice: "NA" is Namibia, "-" is a
+    // valid label, and nulling a real string is data loss no later step can
+    // undo. This carried the vocabulary onto every type at first, which
+    // quietly emptied text cells reading `NA`, `none` or `nil`.
+    let base = if matches!(want, ArrowType::Utf8) {
+        ValueParsing::default()
+    } else {
+        ValueParsing { na_values: na(), ..ValueParsing::default() }
+    };
     let ctx = Ctx {
         column,
         source,
         nullable,
         values,
-        base: ValueParsing { na_values: na(), ..ValueParsing::default() },
+        base: base.clone(),
         date_order,
+        decimal_separator,
     };
-    let base = ctx.base.clone();
 
     match want {
         // Anything is text. No candidate can fail, so there is nothing to check.
@@ -582,12 +628,12 @@ fn type_for(
         }
 
         ArrowType::Float64 => {
-            let cands = numeric_candidates(&base, values);
+            let cands = numeric_candidates(&ctx)?;
             first_ok(&ctx, DType::Float64, cands).map_err(untypable)
         }
 
         ArrowType::Decimal128(p, s) => {
-            let cands = numeric_candidates(&base, values);
+            let cands = numeric_candidates(&ctx)?;
             let dtype = DType::Decimal { precision: *p, scale: *s };
             let (d, parse, _) = first_ok(&ctx, dtype, cands).map_err(untypable)?;
             // Rounding is a value change, so it is said out loud rather than
@@ -621,24 +667,65 @@ fn type_for(
     }
 }
 
-/// Separator conventions worth trying, informed by the column's own shape.
+/// Separator conventions worth trying, or a refusal.
 ///
 /// `numfmt::infer` decides by shape rather than by trial — it is what stops
-/// `1,5` becoming `15` — so its answer leads. A plain candidate follows for
-/// the ordinary case where no separator is involved.
-fn numeric_candidates(base: &ValueParsing, values: &[&str]) -> Vec<ValueParsing> {
+/// `1,5` becoming `15` — and it reports `ambiguous` when *nothing in the
+/// column settles which character is the decimal point*. That verdict has to
+/// be honoured, not stepped around.
+///
+/// It was stepped around, and the consequence was the worst class of bug this
+/// project has: a German column of thousands (`1.234`, `2.750`, `12.500`) was
+/// accepted with no gap, no note and no review flag, and read a thousand times
+/// too small — a plausible, stable, repeatable wrong number. The plain
+/// candidate was pushed unconditionally after the inferred one was dropped, so
+/// the dot `infer` had explicitly refused to classify was silently read as a
+/// decimal point. The sniffer flags exactly this file at confidence 0.70; the
+/// planner said "fits".
+///
+/// So ambiguity is a gap, exactly as it is for dates in `pick_format`, and a
+/// dataset-level `decimal_separator` resolves it the way `date_order` resolves
+/// a date — a human saying which convention their exports use.
+fn numeric_candidates(ctx: &Ctx<'_>) -> Result<Vec<ValueParsing>, Gap> {
     let mut out = Vec::new();
-    if let Some(f) = numfmt::infer(values) {
-        if !f.ambiguous && (f.decimal.is_some() || f.thousands.is_some()) {
+    if let Some(f) = numfmt::infer(ctx.values) {
+        if f.ambiguous {
+            // Declared? Then it is settled, and both readings are offered in
+            // the declared order.
+            if let Some(dec) = ctx.decimal_separator {
+                let thousands = if dec == ',' { Some('.') } else { Some(',') };
+                out.push(ValueParsing {
+                    decimal_separator: Some(dec),
+                    thousands_separator: thousands,
+                    ..ctx.base.clone()
+                });
+                out.push(ValueParsing { decimal_separator: Some(dec), ..ctx.base.clone() });
+                return Ok(out);
+            }
+            let sep = f.decimal.or(f.thousands).unwrap_or('.');
+            let example = ctx
+                .values
+                .iter()
+                .find(|v| v.contains(sep))
+                .map(|v| format!("e.g. {v:?}"))
+                .unwrap_or_default();
+            return Err(Gap::AmbiguousSeparator {
+                column: ctx.column.to_string(),
+                source: ctx.source.to_string(),
+                separator: sep,
+                example,
+            });
+        }
+        if f.decimal.is_some() || f.thousands.is_some() {
             out.push(ValueParsing {
                 decimal_separator: f.decimal,
                 thousands_separator: f.thousands,
-                ..base.clone()
+                ..ctx.base.clone()
             });
         }
     }
-    out.push(base.clone());
-    out
+    out.push(ctx.base.clone());
+    Ok(out)
 }
 
 fn frac_digits(v: &str, p: &ValueParsing) -> usize {

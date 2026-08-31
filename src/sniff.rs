@@ -154,11 +154,24 @@ fn verify_types(res: &mut SniffResult, path: &Path, limits: Limits) {
     // in the middle of the data is text in every column, so leaving it in
     // would widen every numeric column in the file and hide the real cause.
     if v.repeated_header_rows > 0 {
-        if let Some(first) = res.spec.columns.first() {
-            let pattern = format!("^{}$", regex::escape(first.source_name().trim()));
+        if res.spec.columns.len() > 1 {
+            // Match the WHOLE row, not its first cell. A pattern anchored on
+            // one column deletes every row whose first field happens to equal
+            // that header — an `invoice` column containing the literal value
+            // "invoice", say — which is real data destroyed on the strength of
+            // a detection that proved something else entirely. The executor
+            // joins a row with tabs when `column` is None, so this matches
+            // exactly the rows that were counted.
+            let joined = res
+                .spec
+                .columns
+                .iter()
+                .map(|c| regex::escape(c.source_name()))
+                .collect::<Vec<_>>()
+                .join("\t");
             res.spec.transforms.push(Transform::DropRowsMatching {
-                pattern,
-                column: Some(first.source_name().to_string()),
+                pattern: format!("^{joined}$"),
+                column: None,
             });
             res.spec.notes.push(format!(
                 "dropped {} row(s) identical to the header — the file looks like several \
