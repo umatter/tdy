@@ -84,6 +84,16 @@ enum Command {
         #[arg(long)]
         stamp: bool,
     },
+    /// Draft a target declaration from a pile of files.
+    ///
+    /// Sniffs every file and prints a CREATE TABLE covering what it measured:
+    /// column names in every spelling seen, merged types, which files carry
+    /// which columns. A scaffold to edit, not an answer — the header comment
+    /// lists exactly which judgements are left to you.
+    Draft {
+        /// The files the dataset should cover.
+        files: Vec<PathBuf>,
+    },
     /// Plan a spec for a file that lands on a declared target schema.
     ///
     /// The inverse of `sniff`: instead of describing whatever the file
@@ -683,6 +693,10 @@ async fn run() -> Result<()> {
         Command::Validate { file, stamp } => {
             let cfg = config::load(&overrides)?;
             provider::validate_command(&file, &cfg, stamp)?;
+        }
+        Command::Draft { files } => {
+            let cfg = config::load(&overrides)?;
+            print!("{}", tdy::draft::draft_target(&files, cfg.limits)?);
         }
         Command::Fit { target, file, accept, dry_run, propose } => {
             let cfg = config::load(&overrides)?;

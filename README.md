@@ -147,6 +147,8 @@ tdy validate data/export.csv                       # spec valid? fingerprint fre
                                                     # does it still parse?
 tdy validate data/export.csv --stamp               # re-fingerprint a hand-edited
                                                     # spec against the current file
+tdy draft exports/*.csv > sales.tdy.sql            # scaffold a target from the
+                                                    # pile, for you to edit
 tdy fit sales.tdy.sql exports/2025-01.csv          # plan a spec that lands on
                                                     # a declared target
 tdy fit sales.tdy.sql                              # fit every member, write the lock
@@ -385,6 +387,21 @@ mechanically checked, and none of it can establish that a column of integers is
 recorded against that file's bytes and that declaration. Re-fitting an untouched
 dataset does not ask again; editing the file expires the acceptance, because it
 was about those bytes.
+
+And when you *don't* yet know the data well enough to declare it, the
+declaration doesn't have to start from a blank page:
+
+```bash
+tdy draft exports/*.csv exports/*.xlsx > sales.tdy.sql
+```
+
+sniffs the pile and prints a CREATE TABLE covering what it measured — every
+column name in every spelling seen (as `matches`), merged types, and which
+files carry which columns. It is a scaffold, not an answer, and its header
+comment lists exactly the judgements left to you: which names are synonyms,
+which columns should be NOT NULL, whether an absence is a mistake or a fact.
+Nothing in the draft is trusted — you edit it, and `tdy fit` proves it like
+any other declaration.
 
 A file with several possible *frames* — a JSON document holding several
 arrays of records (the single most common "unsure" in real data), a workbook

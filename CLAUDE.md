@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 389 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 393 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -144,6 +144,15 @@ review** — the declaration in the reviewed `.tdy.sql` is the authorisation —
 hand-written constant *value* ("November is all Ticino") is data the file never contained
 and gates behind `--accept` exactly like `decimal_shift`. `if_missing_null` is part of
 `target_hash`, so declaring or retracting a fill voids the proofs.
+
+**`tdy draft` scaffolds a target from a pile** (`src/draft.rs`): sniffs every file, groups
+columns by sanitized name, carries verbatim spellings as `matches`, merges types by widening
+(Int+Decimal → DECIMAL, anything+Utf8 → TEXT with the conflict named), counts per-file
+presence, and hints `date_order`. It deliberately does NOT merge synonyms (`datum`/`date`
+stay two visible columns) — the declaration is where a human states intent, so the draft
+makes each remaining judgement a one-line edit instead of making it. The emitted SQL always
+parses (`Target::parse`), and `tests/draft.rs` pins the round trip: over a pile with one
+vocabulary, the *unedited* draft fits every file it was drawn from.
 
 **Slice 5 is in — frames, in two tiers.** The corpus's biggest gap was JSON documents with
 several record arrays ("N candidate record arrays", thousands of files). Tier one is

@@ -18,6 +18,7 @@ pub mod config;
 pub mod conform;
 pub mod dataset;
 pub mod detect;
+pub mod draft;
 pub mod engine;
 pub mod fileio;
 pub mod fit;
