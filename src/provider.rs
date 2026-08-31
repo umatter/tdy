@@ -414,7 +414,32 @@ impl OutputFormat {
 pub fn session(cfg: &Config, frozen: bool) -> SessionContext {
     let ctx = SessionContext::new();
     ctx.register_udtf("messy", Arc::new(MessyFunc::new(frozen, cfg.limits)));
+    ctx.register_udtf("dataset", Arc::new(DatasetFunc { limits: cfg.limits }));
     ctx
+}
+
+/// `dataset('sales.tdy.sql')` — the members of a declared dataset, as one
+/// relation.
+///
+/// Unlike `messy()`, this never plans and never writes, in frozen mode or out
+/// of it. A query is a question; planning spends time, can spend money, and
+/// mutates committed files. If the dataset is not ready, this says which file
+/// and which command settles it.
+#[derive(Debug)]
+pub struct DatasetFunc {
+    limits: Limits,
+}
+
+impl TableFunctionImpl for DatasetFunc {
+    fn call(&self, args: &[Expr]) -> DfResult<Arc<dyn TableProvider>> {
+        let path = literal_str(args.first()).ok_or_else(|| {
+            DataFusionError::Plan(
+                "dataset() takes a path to a target file, e.g. dataset('sales.tdy.sql')".into(),
+            )
+        })?;
+        crate::dataset::provider(std::path::Path::new(&path), self.limits)
+            .map_err(|e| DataFusionError::External(format!("{e:#}").into()))
+    }
 }
 
 pub async fn run_query(

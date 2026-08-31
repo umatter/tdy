@@ -171,7 +171,7 @@ pub fn stamp(file: &Path, method: InferenceMethod) -> Result<PathBuf> {
 
 /// RFC 3339 UTC timestamp without pulling in a clock-formatting dependency
 /// beyond chrono, which we already have.
-fn now_rfc3339() -> String {
+pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 

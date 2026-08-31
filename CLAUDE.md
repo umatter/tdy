@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 320 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 337 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -96,7 +96,29 @@ The corpus is `testdata/drifting_exports/`: nine files fit, three are refused, a
 `tests/fit.rs` asserts the total (57'340.00 over 36 rows), because a planner that bound the
 wrong column would still conform and still execute.
 
-Not yet: the lock, globs, `dataset()`, the model as frame proposer.
+**Slice 3 is in.** `src/lockfile.rs` records what the globs resolved to (members, hashes) and
+computes `drift`; `src/dataset.rs` is the `dataset('t.tdy.sql')` provider. Two things there
+are the whole point:
+
+- **Membership comes from the lock; `dataset()` never expands a glob.** A glob at query time
+  makes the answer depend on the directory, so the same query returns a different number the
+  morning after an export lands, with nothing to diff. New/edited/removed member and a changed
+  declaration are all *drift*: the query fails naming the file, and `tdy fit` settles it.
+- **`target_hash` fingerprints meaning, not bytes** — name, columns, types, nullability,
+  matches, options. A comment edit must not void twelve proofs, or people learn to ignore the
+  invalidation.
+
+`tdy fit <TARGET>` with no file fits every member and writes the lock — **only if all of them
+fit**. A partial lock would make "a dataset silently missing a month" the default outcome of a
+bad afternoon.
+
+The union is one partition read in lock order: conformance already proved every member has an
+identical schema, so it is a concatenation with nothing to coerce (an ordinary `UNION ALL`
+would let DataFusion widen Int64+Utf8 to Utf8 in silence), and a single partition keeps row
+order deterministic for `--frozen`. A member's sidecar is re-proved against the target on
+every query, because a sidecar is hand-editable and that check costs no I/O.
+
+Not yet: the model as frame proposer, the review gate, `decimal_shift`.
 
 ## The one rule
 

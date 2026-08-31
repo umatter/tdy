@@ -286,11 +286,30 @@ WITH (
 """
 
 
+# The same dataset with the three unfittable months excluded, so there is a
+# target in the tree that actually resolves to a lock and a queryable relation.
+# Excluding a file is one of the three *declared* softenings: it is written
+# down, versioned, and visible in a diff — not a flag someone passed once.
+SALES_OK_SQL = TARGET_SQL.replace(
+    "CREATE TABLE sales (", "CREATE TABLE sales_ok ("
+).replace(
+    "  files      = '2025-*.csv, 2025-*.xlsx',",
+    "  files      = '2025-*.csv, 2025-*.xlsx',\n"
+    "  -- 07 is in Rappen, 08 has two columns called Betrag, 11 has no region.\n"
+    "  exclude    = '2025-07.csv, 2025-08.csv, 2025-11.csv',",
+)
+
+
 def build_target():
     p = os.path.join(OUT, "sales.tdy.sql")
     with open(p, "w", encoding="utf-8") as f:
         f.write(TARGET_SQL)
-    note(p, "the declared target")
+    note(p, "the declared target; three of the twelve cannot reach it")
+
+    p = os.path.join(OUT, "sales_ok.tdy.sql")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(SALES_OK_SQL)
+    note(p, "the same, with the three unfittable months excluded")
 
 
 def main():

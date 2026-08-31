@@ -125,6 +125,7 @@ tdy validate data/export.csv --stamp               # re-fingerprint a hand-edite
                                                     # spec against the current file
 tdy fit sales.tdy.sql exports/2025-01.csv          # plan a spec that lands on
                                                     # a declared target
+tdy fit sales.tdy.sql                              # fit every member, write the lock
 tdy check sales.tdy.sql --against exports/*.csv     # do my sidecars still produce
                                                     # the schema I declared?
 tdy schema                                         # the JSON Schema (the grammar)
@@ -250,8 +251,48 @@ Shape is proved; **values are not**. A per-row parse failure, a grouping
 violation, a null in a NOT NULL column — those are still caught per row, loudly,
 naming the row, at execution.
 
-Still to come: `dataset()`, which reads all the members as one relation, and a
-lock recording which files belong to it.
+`tdy fit` with no file plans every member and records what the globs resolved
+to, and then the whole pile is one relation:
+
+```bash
+$ tdy fit sales.tdy.sql
+sales: 9 file(s) match, 3 declared column(s)
+  2025-01.csv    fits    month<-"Datum"  region<-"Region"  amount_chf<-"Betrag"
+  …
+  2025-10.xlsx   fits    month<-"Date"   region<-"Region"  amount_chf<-"Amount"
+9 of 9 file(s) fit `sales`.
+wrote sales.tdy.lock
+
+$ tdy query "SELECT region, sum(amount_chf) FROM dataset('sales.tdy.sql') GROUP BY 1"
+```
+
+Membership lives in the lock, and `dataset()` never expands a glob. That is
+the difference between a reproducible dataset and a directory listing: if the
+glob were evaluated at query time, the same query over the same declaration
+would return a different number the morning after an export landed, with
+nothing to point at and nothing to diff.
+
+So a new file is **drift** — the query stops and names it:
+
+```
+Error: dataset `sales` is out of date:
+  2025-13.csv matches this dataset and is not in the lock — run `tdy fit` to plan it
+```
+
+The same for an edited member, a removed one, or a change to the declaration
+itself. A comment in the target does *not* invalidate anything: the lock
+fingerprints what the declaration **means**, not its bytes, because the point
+of writing it in SQL is that it reads like documentation.
+
+If any member cannot be fitted, **no lock is written at all**. A dataset that
+silently omits the months that did not fit is exactly the failure this is
+built to prevent.
+
+Members are read in lock order in a single partition, so row order is
+deterministic and `--frozen` keeps meaning "same files, same answer". Because
+conformance already proved every member has an identical schema, the union is
+a concatenation — there is nothing to coerce, and no chance of the silent
+Int64-plus-Utf8-becomes-Utf8 widening an ordinary `UNION ALL` would do.
 
 ## The spec language (sidecar body)
 
@@ -450,7 +491,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 320 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 337 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

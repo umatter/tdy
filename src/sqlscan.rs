@@ -138,6 +138,30 @@ fn tokenize(sql: &str) -> Vec<Tok> {
 
 /// Every `messy('path'[, 'hint'])` call in `sql`, in order of appearance,
 /// de-duplicated by path (the first hint for a path wins).
+/// Paths passed as the first argument to `dataset('…')`.
+///
+/// Same tokenizer, same reason: a `dataset()` inside a comment or a string
+/// literal is not a reference to anything.
+pub fn find_dataset_refs(sql: &str) -> Vec<String> {
+    let toks = tokenize(sql);
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < toks.len() {
+        let is_it = matches!(&toks[i], Tok::Ident(id) if id.eq_ignore_ascii_case("dataset"));
+        if !is_it || toks.get(i + 1) != Some(&Tok::Punct('(')) {
+            i += 1;
+            continue;
+        }
+        if let Some(Tok::Str(p)) = toks.get(i + 2) {
+            if !out.contains(p) {
+                out.push(p.clone());
+            }
+        }
+        i += 3;
+    }
+    out
+}
+
 pub fn find_messy_refs(sql: &str) -> Vec<MessyRef> {
     let toks = tokenize(sql);
     let mut out: Vec<MessyRef> = Vec::new();

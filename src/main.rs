@@ -86,8 +86,9 @@ enum Command {
     Fit {
         /// Path to the target .tdy.sql file
         target: PathBuf,
-        /// The data file to fit
-        file: PathBuf,
+        /// The data file to fit. Omit to fit every member the target's globs
+        /// match, and write the lock.
+        file: Option<PathBuf>,
         /// Print the plan without writing a sidecar
         #[arg(long)]
         dry_run: bool,
@@ -117,6 +118,125 @@ enum Command {
 enum ConfigAction {
     /// Print a sample config and its expected location.
     Init,
+}
+
+/// `tdy fit <TARGET>` — fit every member and record what they resolved to.
+///
+/// Plans every file the globs match, prints every gap rather than stopping at
+/// the first (a twelve-file dataset should not be a twelve-round game), writes
+/// a sidecar for each member that fits, and writes the lock only if *all* of
+/// them did. A partial lock would be a dataset that silently omits a month.
+fn fit_dataset(
+    target_path: &std::path::Path,
+    limits: tdy::config::Limits,
+    dry_run: bool,
+) -> Result<()> {
+    use tdy::fit::{fit, FitError};
+    use tdy::lockfile::{self, Lock, Member, LOCK_VERSION};
+    use tdy::target::Target;
+
+    let target = Target::load(target_path)?;
+    let dir = lockfile::target_dir(target_path);
+    let rels = lockfile::resolve(&target, target_path)?;
+
+    if rels.is_empty() {
+        anyhow::bail!(
+            "no files matched {:?} beside {}",
+            target.files,
+            target_path.display()
+        );
+    }
+
+    println!(
+        "{}: {} file(s) match, {} declared column(s)\n",
+        target.name,
+        rels.len(),
+        target.columns.len()
+    );
+
+    let mut members = Vec::new();
+    let mut failed = 0usize;
+    for rel in &rels {
+        let p = dir.join(rel);
+        match fit(&p, &target, limits) {
+            Ok(fitted) => {
+                let sources: Vec<String> = fitted
+                    .spec
+                    .columns
+                    .iter()
+                    .map(|c| format!("{}<-{:?}", c.name, c.source_name()))
+                    .collect();
+                println!("  {rel:<24} fits    {}", sources.join("  "));
+                if !dry_run {
+                    tdy::sidecar::save(
+                        &p,
+                        &fitted.spec,
+                        tdy::sidecar::ProvenanceInfo {
+                            method: tdy::spec::InferenceMethod::Heuristic,
+                            model: None,
+                            prompt_version: None,
+                            sampled_bytes: None,
+                        },
+                    )?;
+                }
+                let (blake3, bytes) = tdy::sidecar::hash_file(&p)?;
+                members.push(Member { path: rel.clone(), blake3, bytes });
+            }
+            Err(FitError::Gaps(gaps)) => {
+                failed += 1;
+                println!("  {rel:<24} GAP");
+                for g in &gaps {
+                    for line in g.message().lines() {
+                        println!("      {line}");
+                    }
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                println!("  {rel:<24} ERROR");
+                for line in format!("{e}").lines() {
+                    println!("      {line}");
+                }
+            }
+        }
+    }
+
+    println!(
+        "\n{} of {} file(s) fit `{}`.",
+        members.len(),
+        rels.len(),
+        target.name
+    );
+
+    if failed > 0 {
+        // No partial lock. A dataset missing a month is the failure this
+        // whole design refuses, and writing one here would make it the
+        // default outcome of a bad afternoon.
+        anyhow::bail!(
+            "{failed} file(s) cannot reach the declared schema; no lock written. \
+             Fix them, exclude them, or widen the target."
+        );
+    }
+    if dry_run {
+        println!("--dry-run: no sidecars and no lock written.");
+        return Ok(());
+    }
+
+    let lock = Lock {
+        lock_version: LOCK_VERSION,
+        target: target.name.clone(),
+        target_hash: lockfile::target_hash(&target),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        created_at: tdy::sidecar::now_rfc3339(),
+        members,
+    };
+    let p = lock.save(target_path)?;
+    println!("wrote {}", p.display());
+    println!(
+        "\nQuery it:  tdy query \"SELECT * FROM dataset('{}')\"",
+        target_path.display()
+    );
+    Ok(())
 }
 
 /// `tdy fit <TARGET> <FILE>`
@@ -355,7 +475,10 @@ async fn run() -> Result<()> {
         }
         Command::Fit { target, file, dry_run } => {
             let cfg = config::load(&overrides)?;
-            fit_command(&target, &file, cfg.limits, dry_run)?;
+            match file {
+                Some(f) => fit_command(&target, &f, cfg.limits, dry_run)?,
+                None => fit_dataset(&target, cfg.limits, dry_run)?,
+            }
         }
         Command::Check { target, against } => {
             check_command(&target, &against)?;
