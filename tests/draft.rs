@@ -96,3 +96,27 @@ fn the_cli_prints_a_scaffold_and_refuses_an_unreadable_pile() {
         .expect("run tdy");
     assert!(!out.status.success(), "an undraftable pile must fail loudly");
 }
+
+/// A directory is not a dataset. When the pile's files share almost no
+/// columns, the union target would refuse everything — mechanically correct,
+/// humanly useless — so the draft says what it can see: this is several
+/// shapes, and names the groups.
+#[test]
+fn a_pile_of_unrelated_files_is_called_out_as_several_datasets() {
+    let dir = tempfile::tempdir().unwrap();
+    let cars = dir.path().join("cars.csv");
+    let movies = dir.path().join("movies.csv");
+    let more_cars = dir.path().join("cars2.csv");
+    std::fs::write(&cars, "car_id,make,ps\n1,VW,110\n2,BMW,190\n").unwrap();
+    std::fs::write(&more_cars, "car_id,make,ps\n3,Opel,90\n").unwrap();
+    std::fs::write(&movies, "title,rating\nHeat,9\nTaxi Driver,10\n").unwrap();
+    let sql = tdy::draft::draft_target(&[cars, more_cars, movies], Limits::default()).unwrap();
+    Target::parse(&sql).unwrap_or_else(|e| panic!("draft must still parse:\n{sql}\n{e:#}"));
+    assert!(sql.contains("do not look like ONE dataset"), "{sql}");
+    assert!(sql.contains("group 1: cars.csv, cars2.csv"), "{sql}");
+    assert!(sql.contains("group 2: movies.csv"), "{sql}");
+
+    // And a homogeneous pile carries no such note.
+    let sql = draft_of(&["2025-01.csv", "2025-02.csv"]);
+    assert!(!sql.contains("do not look like ONE dataset"), "{sql}");
+}

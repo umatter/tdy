@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 393 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 394 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -153,6 +153,16 @@ stay two visible columns) — the declaration is where a human states intent, so
 makes each remaining judgement a one-line edit instead of making it. The emitted SQL always
 parses (`Target::parse`), and `tests/draft.rs` pins the round trip: over a pile with one
 vocabulary, the *unedited* draft fits every file it was drawn from.
+
+Swept against the real corpus (draft → fit, scratch copies, 170 CSV piles + 31 multi-sheet
+workbooks): every identical-header pile fit unedited (6/6); every overlapping-header pile
+needed exactly the declared-absent/exclude edits the comments point at (12/12); and the
+152 heterogeneous piles (unrelated files sharing a directory) now get a **grouping note** —
+draft clusters files by column-name overlap (Jaccard ≥ 0.5, greedy) and says "these look
+like N datasets, draft each group separately" (fires on 147/170 piles, silent on the 23
+plausible datasets). Real multi-sheet workbooks: 15/31 fit unedited, 16/31 refused as
+ambiguous frames — correctly, they are one-sheet-per-year/state books where many sheets
+produce the drafted table. No crashes, no wrong answers, in either sweep.
 
 **Slice 5 is in — frames, in two tiers.** The corpus's biggest gap was JSON documents with
 several record arrays ("N candidate record arrays", thousands of files). Tier one is

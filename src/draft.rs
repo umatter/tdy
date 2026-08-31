@@ -40,6 +40,9 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
 
     let mut columns: Vec<DraftColumn> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
+    // Per file, its sanitized column names — the raw material for noticing
+    // that a pile is not one dataset.
+    let mut file_sets: Vec<(String, BTreeSet<String>)> = Vec::new();
     let mut day_first = false;
     let mut month_first = false;
     let mut sniffed = 0usize;
@@ -56,6 +59,10 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
             }
         };
         sniffed += 1;
+        file_sets.push((
+            label.clone(),
+            spec.columns.iter().map(|c| c.name.clone()).collect(),
+        ));
         for c in &spec.columns {
             match &c.dtype {
                 DType::Date { format } | DType::Timestamp { format, .. } => {
@@ -119,6 +126,22 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
          --   * a column absent from some files is either a mistake in those files or a\n\
          --     fact about them — declare `if_missing = 'null'` only if it is a fact\n"
     ));
+    // A directory is not a dataset. When the files' column sets barely
+    // overlap, the union target below would demand every column of every
+    // file and refuse the whole pile — mechanically correct and humanly
+    // useless. The draft can see the grouping, so it says it, and leaves
+    // the union in place for the case where the sparse overlap really is
+    // one drifting dataset.
+    let groups = group_by_vocabulary(&file_sets);
+    if groups.len() > 1 {
+        out.push_str("--\n-- NOTE: these files do not look like ONE dataset. By shared column\n");
+        out.push_str(&format!("-- names they group as {} distinct shapes:\n", groups.len()));
+        for (i, g) in groups.iter().enumerate() {
+            out.push_str(&format!("--   group {}: {}\n", i + 1, g.join(", ")));
+        }
+        out.push_str("-- A target declares one dataset. If these are really several, draft each\n");
+        out.push_str("-- group separately:  tdy draft <group's files> > <its own>.tdy.sql\n");
+    }
     if !failures.is_empty() {
         out.push_str("--\n-- Files that could not be sniffed (excluded from this draft):\n");
         for (f, why) in &failures {
@@ -144,7 +167,7 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
         })
         .collect();
     for (i, (line, c)) in rendered.iter().zip(&columns).enumerate() {
-        out.push_str(line);
+        out.push_str(line.trim_end());
         if i + 1 < rendered.len() {
             out.push(',');
         }
@@ -173,6 +196,27 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
     }
     out.push_str("\n);\n");
     Ok(out)
+}
+
+/// Files clustered by column-name overlap (Jaccard >= 0.5, greedy, in input
+/// order). One group = one plausible dataset; several = several.
+fn group_by_vocabulary(file_sets: &[(String, BTreeSet<String>)]) -> Vec<Vec<String>> {
+    let mut groups: Vec<(BTreeSet<String>, Vec<String>)> = Vec::new();
+    for (file, set) in file_sets {
+        let found = groups.iter_mut().find(|(u, _)| {
+            let inter = u.intersection(set).count();
+            let union = u.union(set).count();
+            union > 0 && (inter as f64) / (union as f64) >= 0.5
+        });
+        match found {
+            Some((u, files)) => {
+                u.extend(set.iter().cloned());
+                files.push(file.clone());
+            }
+            None => groups.push((set.clone(), vec![file.clone()])),
+        }
+    }
+    groups.into_iter().map(|(_, files)| files).collect()
 }
 
 /// Widen two sniffed types to one a target could declare over both files.
