@@ -19,6 +19,7 @@ pub mod conform;
 pub mod detect;
 pub mod engine;
 pub mod fileio;
+pub mod fit;
 pub mod infer;
 pub mod numfmt;
 pub mod provider;

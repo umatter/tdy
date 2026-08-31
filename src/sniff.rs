@@ -32,9 +32,9 @@ use crate::spec::{
 
 /// How many rows the sniffer reads to make its decisions. Everything past
 /// this is the executor's business, not the sniffer's.
-const PROBE_ROWS: usize = 2000;
+pub(crate) const PROBE_ROWS: usize = 2000;
 /// How many body rows inform a column's type guess.
-const TYPE_SAMPLE: usize = 500;
+pub(crate) const TYPE_SAMPLE: usize = 500;
 
 pub struct SniffResult {
     pub spec: ParseSpec,
@@ -800,11 +800,11 @@ fn looks_scalar(v: &str) -> bool {
     )
 }
 
-const NA_TOKENS: &[&str] = &[
+pub(crate) const NA_TOKENS: &[&str] = &[
     "", "na", "n/a", "null", "none", "nil", "-", "–", "—", "#n/a", "#na", "nan", "k.a.", "keine",
 ];
 
-fn is_na(v: &str) -> bool {
+pub(crate) fn is_na(v: &str) -> bool {
     NA_TOKENS.contains(&v.trim().to_ascii_lowercase().as_str())
 }
 
@@ -813,7 +813,7 @@ fn is_na(v: &str) -> bool {
 /// genuinely ambiguous `03/04/2025` is far more often the fourth of March
 /// than the third of April outside the United States — and either way the
 /// ambiguity is reported rather than hidden.
-const DATE_FORMATS: &[&str] = &[
+pub(crate) const DATE_FORMATS: &[&str] = &[
     "%Y-%m-%d",
     "%d.%m.%Y",
     "%Y/%m/%d",
@@ -823,7 +823,7 @@ const DATE_FORMATS: &[&str] = &[
     "%Y%m%d",
 ];
 
-const TS_FORMATS: &[&str] = &[
+pub(crate) const TS_FORMATS: &[&str] = &[
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%dT%H:%M:%S",
     "%Y-%m-%d %H:%M:%S%.f",
@@ -1107,7 +1107,7 @@ fn four_digit_year_ok(v: &str, format: &str) -> bool {
         .any(|run| run.len() == 4)
 }
 
-fn sanitize(name: &str) -> String {
+pub(crate) fn sanitize(name: &str) -> String {
     let mut out = String::new();
     let mut prev_us = false;
     for ch in name.trim().chars() {

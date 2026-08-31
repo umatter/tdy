@@ -123,6 +123,8 @@ tdy validate data/export.csv                       # spec valid? fingerprint fre
                                                     # does it still parse?
 tdy validate data/export.csv --stamp               # re-fingerprint a hand-edited
                                                     # spec against the current file
+tdy fit sales.tdy.sql exports/2025-01.csv          # plan a spec that lands on
+                                                    # a declared target
 tdy check sales.tdy.sql --against exports/*.csv     # do my sidecars still produce
                                                     # the schema I declared?
 tdy schema                                         # the JSON Schema (the grammar)
@@ -173,7 +175,59 @@ no length constraint), `TIMESTAMP(3)` (microseconds), `UNIQUE`/`CHECK`
 refused too — it means something different in every dialect, and money is the
 wrong place to inherit a default.
 
-What works today is the gate:
+`tdy fit` plans a spec for each file that provably lands on that target:
+
+```bash
+$ tdy fit sales.tdy.sql 2025-09.xlsx
+2025-09.xlsx fits `sales`:
+  month            <- "Datum"                  DATE  (%d.%m.%Y)
+  region           <- "Region"                 TEXT
+  amount_chf       <- "Betrag CHF"             DECIMAL(14,2)
+```
+
+That workbook has a title row and a merged band above the real header, its
+amount column is spelt differently from every other month's, and its dates are
+day-first — none of which you had to say. An English export in the same folder,
+with `Date`/`Amount` and ISO dates, lands on the same three columns.
+
+Because a target names what you *want* and the files are somebody else's
+exports, a column may declare the header cells it can be read from:
+
+```sql
+amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount')
+```
+
+Those are declared, in the open, in a diff — because a planner guessing at
+synonyms is exactly what this tool does not do.
+
+**What it refuses is the point.** Of the twelve exports in
+`testdata/drifting_exports/`, three cannot be fitted and each is a different
+way to be quietly wrong:
+
+```
+2025-07.csv   `amount_chf`: no column of this file binds
+                looked for "amount_chf", "Betrag", "Betrag CHF", "Amount"
+                the file has ["Datum", "Region", "Betrag Rp."]
+
+2025-08.csv   `amount_chf`: 2 columns of this file match, which is ambiguous
+                column 3 named "Betrag" and column 4 named "Betrag"
+                tdy will not choose between them
+
+2025-11.csv   `region`: no column of this file binds
+```
+
+The first holds integer Rappen — it parses, it type-checks, and binding it
+would be out by a factor of a hundred with the error invisible in any single
+row. The second has a net and a gross column with the same name; taking the
+first is right half the time and silent about it. The third is short a column,
+and a null-filled `region` would make an aggregate quietly short a month.
+
+Ambiguous dates are refused the same way. `03/04/2025` is March or April and
+the file does not say, so it is a gap until the dataset declares
+`date_order = 'dmy'`. The test is exact rather than nervous: two formats are
+ambiguous only if they **disagree about a value actually in this file**.
+
+The gate underneath:
 
 ```bash
 $ tdy check exports/sales.tdy.sql --against exports/2025-01.csv
@@ -196,9 +250,8 @@ Shape is proved; **values are not**. A per-row parse failure, a grouping
 violation, a null in a NOT NULL column — those are still caught per row, loudly,
 naming the row, at execution.
 
-Still to come: `tdy fit`, which plans a spec *onto* a declared target rather
-than describing whatever the file happens to contain, and `dataset()`, which
-reads all twelve files as one relation.
+Still to come: `dataset()`, which reads all the members as one relation, and a
+lock recording which files belong to it.
 
 ## The spec language (sidecar body)
 
@@ -397,7 +450,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 307 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 320 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

@@ -58,6 +58,23 @@ use datafusion::sql::sqlparser::parser::Parser;
 
 use crate::spec::parse_fixed_offset;
 
+/// A per-column `OPTIONS(...)` entry.
+fn column_option(o: &SqlOption) -> std::result::Result<Vec<String>, String> {
+    let (key, value) = match o {
+        SqlOption::KeyValue { key, value } => (key.value.to_ascii_lowercase(), value),
+        other => return Err(format!("unsupported column option {other}; write `key = 'value'`")),
+    };
+    let text = literal_string(value)
+        .ok_or_else(|| format!("column option `{key}` must be a quoted string"))?;
+    match key.as_str() {
+        "matches" => Ok(split_globs(&text)),
+        other => Err(format!(
+            "unknown column option `{other}`. Known: matches (header cells this column \
+             may be read from)."
+        )),
+    }
+}
+
 /// An identifier's name, folded the way SQL folds it.
 ///
 /// Unquoted identifiers are case-insensitive in SQL and DataFusion lowercases
@@ -82,6 +99,14 @@ fn first_line(s: &str) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TargetColumn {
     pub name: String,
+    /// Header cells this column may be read from, beyond its own name.
+    ///
+    /// Needed because a target names what you *want* — `amount_chf` — while
+    /// the files are somebody else's exports and say `Betrag`, `Betrag CHF`,
+    /// `Amount`. No amount of normalising bridges that; only a human saying
+    /// so does. They are declared, versioned and reviewable, which is the
+    /// point: the alternative is a planner guessing at synonyms.
+    pub matches: Vec<String>,
     /// The Arrow type this column must have. Held as Arrow rather than as
     /// [`crate::spec::DType`] on purpose: `DType::Date` carries a per-file
     /// strftime format that a target must not pin, so comparing `DType`s would
@@ -214,10 +239,19 @@ impl Target {
             // SQL's default is nullable; NOT NULL and an explicit NULL both
             // say so outright.
             let mut nullable = true;
+            let mut matches: Vec<String> = Vec::new();
             for opt in &c.options {
-                match opt.option {
+                match &opt.option {
                     ColumnOption::NotNull => nullable = false,
                     ColumnOption::Null => nullable = true,
+                    ColumnOption::Options(opts) => {
+                        for o in opts {
+                            match column_option(o) {
+                                Ok(m) => matches.extend(m),
+                                Err(e) => errs.push(format!("column `{cname}`: {e}")),
+                            }
+                        }
+                    }
                     _ => errs.push(format!(
                         "column `{cname}`: unsupported column option {}. A target declares a \
                          name, a type and a nullability; constraints are not enforced and \
@@ -227,7 +261,7 @@ impl Target {
                 }
             }
             match arrow_type_of(&c.data_type) {
-                Ok(dtype) => columns.push(TargetColumn { name: cname, dtype, nullable }),
+                Ok(dtype) => columns.push(TargetColumn { name: cname, matches, dtype, nullable }),
                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
             }
         }

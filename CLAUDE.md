@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 307 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 320 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -66,7 +66,31 @@ target written the natural way could never match a column tdy produces. A zoned 
 declarable via `WITH (timezone = '+02:00')`, because the offset is part of the Arrow type and
 a spec carrying one would otherwise be unable to conform to anything a target can say.
 
-Not yet: `tdy fit` (the planner), the lock, globs, `dataset()`.
+**Slice 2 is in.** `src/fit.rs` is the inversion itself: `sniff` reads a file and emits
+whatever columns fall out; `fit` is handed the columns you want and finds, per column, a
+source that produces them — or a `Gap` saying why not. It reuses the sniffer for the *frame*
+(delimiter, encoding, sheet, title rows, header rows — facts about the file) and throws away
+only its columns. Types are **checked, not inferred**: the target already said what it wants,
+so each candidate is built with `engine::build_column_at`, the executor's own function, and
+one that type-checks here cannot fail differently there.
+
+Two rules in there are load-bearing and were both got wrong first:
+
+- **Match against `RawTable::header_origin`, not `header`.** `dedupe_names` renames the second
+  `Betrag` to `Betrag_2` so a spec can address it; matching on that would find exactly one
+  candidate and bind it silently, when the file has two columns by that name and does not say
+  which is meant. `header_origin` keeps the file's own spelling so the collision stays visible.
+- **`date_order` resolves a conflict; it does not prune candidates.** Pruning threw away
+  `%Y-%m-%d` on a dataset declared `dmy` and made an ordinary ISO export unfittable, though an
+  ISO date could never be confused with a day-first one. Ambiguity is detected exactly — two
+  formats conflict only if they **disagree on a value in this file** — and only then does the
+  declared order choose.
+
+The corpus is `testdata/drifting_exports/`: nine files fit, three are refused, and
+`tests/fit.rs` asserts the total (57'340.00 over 36 rows), because a planner that bound the
+wrong column would still conform and still execute.
+
+Not yet: the lock, globs, `dataset()`, the model as frame proposer.
 
 ## The one rule
 

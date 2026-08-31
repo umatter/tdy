@@ -84,6 +84,16 @@ pub struct RawTable {
     pub header: Option<Vec<String>>,
     pub rows: Vec<Vec<String>>,
     ragged: RaggedPolicy,
+    /// The header as the *file* spelt it, before duplicate names were
+    /// disambiguated.
+    ///
+    /// `dedupe_names` renames the second `Betrag` to `Betrag_2` so a spec can
+    /// address it at all. That is right for addressing and wrong for
+    /// *matching*: a planner looking for `Betrag` would find one candidate and
+    /// bind it silently, when the honest answer is that the file has two
+    /// columns by that name and does not say which is meant. Keeping the
+    /// original spelling is what lets the collision still be seen.
+    pub header_origin: Option<Vec<String>>,
     /// True when extraction stopped at `max_rows` before the end of the file.
     /// Anything that reasons about the *end* of the data (a trailing total
     /// row) must not trust a truncated table.
@@ -92,11 +102,17 @@ pub struct RawTable {
 
 impl RawTable {
     fn new(rows: Vec<Vec<String>>, ragged: RaggedPolicy, truncated: bool) -> Self {
-        RawTable { header: None, rows, ragged, truncated }
+        RawTable { header: None, header_origin: None, rows, ragged, truncated }
     }
 
     fn with_header(header: Vec<String>, rows: Vec<Vec<String>>, truncated: bool) -> Self {
-        RawTable { header: Some(header), rows, ragged: RaggedPolicy::PadNulls, truncated }
+        RawTable {
+            header_origin: Some(header.clone()),
+            header: Some(header),
+            rows,
+            ragged: RaggedPolicy::PadNulls,
+            truncated,
+        }
     }
 
     pub fn width(&self) -> usize {
@@ -166,6 +182,9 @@ impl RawTable {
                 if n.trim().is_empty() {
                     *n = format!("col_{}", i + 1);
                 }
+            }
+            if self.header_origin.is_none() {
+                self.header_origin = Some(h.clone());
             }
             dedupe_names(&mut h);
             self.header = Some(h);
@@ -718,6 +737,15 @@ fn json_kind(v: &serde_json::Value) -> &'static str {
 /// two paths would rename columns, which is the quietest way to return the
 /// wrong data.
 pub(crate) fn promote_header_from(header_rows: Vec<Vec<String>>, join: &str) -> Vec<String> {
+    promote_header_recording(header_rows, join).0
+}
+
+/// As [`promote_header_from`], but also returning the header **before**
+/// duplicate names were disambiguated — see `RawTable::header_origin`.
+pub(crate) fn promote_header_recording(
+    header_rows: Vec<Vec<String>>,
+    join: &str,
+) -> (Vec<String>, Vec<String>) {
     let width = header_rows.iter().map(|r| r.len()).max().unwrap_or(0);
     let last = header_rows.len().saturating_sub(1);
     let filled: Vec<Vec<String>> = header_rows
@@ -753,8 +781,9 @@ pub(crate) fn promote_header_from(header_rows: Vec<Vec<String>>, join: &str) -> 
             }
         })
         .collect();
+    let origin = header.clone();
     dedupe_names(&mut header);
-    header
+    (header, origin)
 }
 
 pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Result<()> {
@@ -785,7 +814,9 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     );
                 }
                 let header_rows: Vec<Vec<String>> = table.rows.drain(..n).collect();
-                table.header = Some(promote_header_from(header_rows, join));
+                let (header, origin) = promote_header_recording(header_rows, join);
+                table.header_origin = Some(origin);
+                table.header = Some(header);
             }
             Transform::DropRowsMatching { pattern, column } => {
                 let re = compile(pattern, "drop_rows_matching")?;

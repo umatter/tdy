@@ -78,6 +78,20 @@ enum Command {
         #[arg(long)]
         stamp: bool,
     },
+    /// Plan a spec for a file that lands on a declared target schema.
+    ///
+    /// The inverse of `sniff`: instead of describing whatever the file
+    /// contains, this is handed the columns you want and finds, for each one,
+    /// a column of this file that produces it — or says why it cannot.
+    Fit {
+        /// Path to the target .tdy.sql file
+        target: PathBuf,
+        /// The data file to fit
+        file: PathBuf,
+        /// Print the plan without writing a sidecar
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Check sidecars against a declared target schema.
     ///
     /// The target is a SQL CREATE TABLE statement declaring the dataset you
@@ -103,6 +117,81 @@ enum Command {
 enum ConfigAction {
     /// Print a sample config and its expected location.
     Init,
+}
+
+/// `tdy fit <TARGET> <FILE>`
+///
+/// Plans a spec that lands on the declared target, proves it (conformance,
+/// then a dry run), and writes the sidecar. On failure it prints every gap
+/// rather than the first, because a user fixing a pile wants the whole list.
+fn fit_command(
+    target_path: &std::path::Path,
+    file: &std::path::Path,
+    limits: tdy::config::Limits,
+    dry_run: bool,
+) -> Result<()> {
+    use tdy::fit::{fit, FitError};
+    use tdy::target::Target;
+
+    let target = Target::load(target_path)?;
+    match fit(file, &target, limits) {
+        Ok(fitted) => {
+            println!("{} fits `{}`:", file.display(), target.name);
+            for c in &fitted.spec.columns {
+                println!(
+                    "  {:<16} <- {:<24} {}",
+                    c.name,
+                    format!("{:?}", c.source_name()),
+                    describe(&c.dtype)
+                );
+            }
+            for n in fitted.spec.notes.iter().filter(|n| !n.starts_with('`')) {
+                println!("  note: {n}");
+            }
+            if dry_run {
+                println!("\n--dry-run: nothing written.");
+                return Ok(());
+            }
+            let path = tdy::sidecar::save(
+                file,
+                &fitted.spec,
+                tdy::sidecar::ProvenanceInfo {
+                    method: tdy::spec::InferenceMethod::Heuristic,
+                    model: None,
+                    prompt_version: None,
+                    sampled_bytes: None,
+                },
+            )?;
+            println!("\nwrote {}", path.display());
+            Ok(())
+        }
+        Err(FitError::Gaps(gaps)) => {
+            println!("{} cannot reach `{}`:\n", file.display(), target.name);
+            print!("{}", FitError::Gaps(gaps));
+            anyhow::bail!("no plan reaches the declared schema")
+        }
+        Err(e) => {
+            print!("{e}");
+            anyhow::bail!("could not fit {}", file.display())
+        }
+    }
+}
+
+/// A column's type, in the language the target is written in.
+fn describe(d: &tdy::spec::DType) -> String {
+    use tdy::spec::DType;
+    match d {
+        DType::Utf8 => "TEXT".into(),
+        DType::Bool => "BOOLEAN".into(),
+        DType::Int64 => "BIGINT".into(),
+        DType::Float64 => "DOUBLE".into(),
+        DType::Decimal { precision, scale } => format!("DECIMAL({precision},{scale})"),
+        DType::Date { format } => format!("DATE  ({format})"),
+        DType::Timestamp { format, timezone } => match timezone {
+            Some(tz) => format!("TIMESTAMP  ({format}, {tz})"),
+            None => format!("TIMESTAMP  ({format})"),
+        },
+    }
 }
 
 /// `tdy check <TARGET> --against <FILE>…`
@@ -263,6 +352,10 @@ async fn run() -> Result<()> {
         Command::Validate { file, stamp } => {
             let cfg = config::load(&overrides)?;
             provider::validate_command(&file, &cfg, stamp)?;
+        }
+        Command::Fit { target, file, dry_run } => {
+            let cfg = config::load(&overrides)?;
+            fit_command(&target, &file, cfg.limits, dry_run)?;
         }
         Command::Check { target, against } => {
             check_command(&target, &against)?;
