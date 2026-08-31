@@ -523,7 +523,7 @@ fn sniff_excel(path: &Path, sample: &FileSample, limits: Limits) -> Result<Sniff
 /// workbook has several — each sheet gets its own framing, because "the data
 /// starts on row 4 under a merged band" is a fact about a sheet, not about
 /// the file.
-pub(crate) fn sniff_excel_sheet(
+fn sniff_excel_sheet(
     path: &Path,
     sheet: Option<String>,
     limits: Limits,
