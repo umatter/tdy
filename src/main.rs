@@ -33,6 +33,10 @@ struct Cli {
     #[arg(long, global = true)]
     model: Option<String>,
 
+    /// Emit machine-readable JSON instead of text (sniff, fit, check)
+    #[arg(long, global = true)]
+    json: bool,
+
     /// Base URL for the local (OpenAI-compatible) backend
     #[arg(long, global = true)]
     base_url: Option<String>,
@@ -83,6 +87,20 @@ enum Command {
         /// changed).
         #[arg(long)]
         stamp: bool,
+    },
+    /// Serve tdy's tools over the Model Context Protocol (stdio).
+    ///
+    /// For AI agents: the same sniff/draft/fit/check/query/validate surface,
+    /// with structured results. Every path is confined to --root. Acceptance
+    /// of review-gated members is DISABLED unless --allow-accept is given,
+    /// because a review reason is a judgement tdy reserves for a human.
+    Mcp {
+        /// Directory the server may read; every path must resolve inside it.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Let the connected agent accept review-gated members itself.
+        #[arg(long)]
+        allow_accept: bool,
     },
     /// Draft a target declaration from a pile of files.
     ///
@@ -166,265 +184,121 @@ fn print_proposals(
     }
 }
 
+/// `tdy check --json`: the same gate, as one object a machine can act on.
+fn check_json(
+    target_path: &std::path::Path,
+    target: &tdy::target::Target,
+    files: &[PathBuf],
+    limits: tdy::config::Limits,
+) -> Result<()> {
+    use tdy::conform::judge;
+    if files.is_empty() {
+        let val = if tdy::lockfile::Lock::load(target_path)?.is_none() {
+            serde_json::json!({
+                "target": target.name, "ready": false,
+                "reason": format!("no lock — run `tdy fit {}` first", target_path.display()),
+            })
+        } else {
+            match tdy::dataset::resolve(target_path, limits) {
+                Ok(resolved) => serde_json::json!({
+                    "target": target.name, "ready": true,
+                    "members": resolved.members.iter().map(|m| m.rel.clone()).collect::<Vec<_>>(),
+                }),
+                Err(e) => serde_json::json!({
+                    "target": target.name, "ready": false, "reason": format!("{e:#}"),
+                }),
+            }
+        };
+        let ready = val["ready"].as_bool().unwrap_or(false);
+        println!("{}", serde_json::to_string_pretty(&val)?);
+        if !ready {
+            anyhow::bail!("dataset `{}` is not ready", target.name);
+        }
+        return Ok(());
+    }
+
+    let mut out = Vec::new();
+    let mut bad = 0usize;
+    for f in files {
+        use tdy::sidecar::SidecarStatus;
+        let entry = match tdy::sidecar::load(f) {
+            Ok(SidecarStatus::Fresh(sc)) => {
+                let v = judge(&sc.spec, target, false);
+                let mismatches: Vec<String> =
+                    v.mismatches().iter().map(|m| m.message()).collect();
+                if !mismatches.is_empty() {
+                    bad += 1;
+                }
+                serde_json::json!({
+                    "path": f.display().to_string(),
+                    "verdict": v.label().to_ascii_lowercase(),
+                    "mismatches": mismatches,
+                })
+            }
+            Ok(SidecarStatus::Stale(_)) => {
+                bad += 1;
+                serde_json::json!({"path": f.display().to_string(), "verdict": "stale"})
+            }
+            Ok(SidecarStatus::Absent) => {
+                bad += 1;
+                serde_json::json!({"path": f.display().to_string(), "verdict": "no_sidecar"})
+            }
+            Err(e) => {
+                bad += 1;
+                serde_json::json!({
+                    "path": f.display().to_string(),
+                    "verdict": "unreadable",
+                    "error": format!("{e:#}"),
+                })
+            }
+        };
+        out.push(entry);
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "target": target.name, "files": out, "failing": bad,
+        }))?
+    );
+    if bad > 0 {
+        anyhow::bail!("{bad} file(s) do not conform to `{}`", target.name);
+    }
+    Ok(())
+}
+
 /// `tdy fit <TARGET>` — fit every member and record what they resolved to.
 ///
-/// Plans every file the globs match, prints every gap rather than stopping at
-/// the first (a twelve-file dataset should not be a twelve-round game), writes
-/// a sidecar for each member that fits, and writes the lock only if *all* of
-/// them did. A partial lock would be a dataset that silently omits a month.
+/// The orchestration lives in `report::fit_pile`; this renders its report as
+/// text (or JSON with `--json`) and turns "any member failed" into a nonzero
+/// exit, because a gate that exits zero when it found a problem is not a gate.
 async fn fit_dataset(
     target_path: &std::path::Path,
     cfg: &tdy::config::Config,
     dry_run: bool,
     accept: &[PathBuf],
     propose: bool,
+    json: bool,
 ) -> Result<()> {
-    let limits = cfg.limits;
-    use tdy::fit::FitError;
-    use tdy::lockfile::{self, Lock, Member, LOCK_VERSION};
-    use tdy::target::Target;
-
-    let target = Target::load(target_path)?;
-    let dir = lockfile::target_dir(target_path);
-    let rels = lockfile::resolve(&target, target_path)?;
-
-    if rels.is_empty() {
-        anyhow::bail!(
-            "no files matched {:?} beside {}",
-            target.files,
-            target_path.display()
-        );
+    let r = tdy::report::fit_pile(
+        target_path,
+        cfg,
+        tdy::report::FitOpts { dry_run, accept, propose },
+    )
+    .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r)?);
+    } else {
+        print!("{}", tdy::report::render_pile_text(&r));
     }
-
-    println!(
-        "{}: {} file(s) match, {} declared column(s)\n",
-        target.name,
-        rels.len(),
-        target.columns.len()
-    );
-
-    // A previous lock's acceptances carry over for entries that have not
-    // changed — drift is what expires them, so re-fitting an untouched
-    // dataset must not ask the same question twice.
-    let previous = Lock::load(target_path)?;
-    // A member is identified by its path *relative to the target*, so that is
-    // what --accept must name. Matching on the basename accepted the wrong
-    // file when two directories held the same name, and could never accept a
-    // member in a subdirectory at all.
-    let accepted_now: Vec<String> = accept
-        .iter()
-        .map(|a| {
-            let a = a.strip_prefix(&dir).unwrap_or(a);
-            a.to_string_lossy().replace('\\', "/")
-        })
-        .collect();
-    for a in &accepted_now {
-        if !rels.contains(a) {
-            anyhow::bail!(
-                "--accept {a:?} is not a member of `{}`. Members are named relative to the \
-                 target: {}",
-                target.name,
-                rels.iter().take(6).map(|r| format!("{r:?}")).collect::<Vec<_>>().join(", ")
-            );
-        }
-    }
-
-    let mut members = Vec::new();
-    let mut failed = 0usize;
-    let mut needs_review = 0usize;
-    for rel in &rels {
-        let p = dir.join(rel);
-        // A fresh sidecar that still conforms IS the plan, whoever wrote it.
-        // A hand-written one is a human assertion the planner must never
-        // overwrite (a contradiction is an error, not a replan); a
-        // tool-written one is reused because the acceptance machinery is
-        // about *that recorded plan* — replanning on every run would let a
-        // nondeterministic model quietly swap the frame out from under a
-        // review, and it would re-spend money answering a settled question.
-        // Either way it is re-proved: conformance and a dry run, every time.
-        if let Ok(tdy::sidecar::SidecarStatus::Fresh(sc)) = tdy::sidecar::load(&p) {
-            let manual = sc.provenance.method == tdy::spec::InferenceMethod::Manual;
-            let conforming = tdy::conform::conforms(&sc.spec, &target).is_ok();
-            if manual || conforming {
-                let spec = sc.spec;
-                let label = match sc.provenance.method {
-                    tdy::spec::InferenceMethod::Manual => "(hand-written spec)",
-                    tdy::spec::InferenceMethod::Llm => "(model-framed spec)",
-                    tdy::spec::InferenceMethod::Heuristic => "(existing spec)",
-                };
-                if let Err(m) = tdy::conform::conforms(&spec, &target) {
-                    failed += 1;
-                    println!("  {rel:<24} CONTRADICTS  {label}");
-                    for x in &m {
-                        println!("      {}", x.message());
-                    }
-                    continue;
-                }
-                if let Err(e) = tdy::engine::dry_run(&spec, &p, limits) {
-                    failed += 1;
-                    println!("  {rel:<24} ERROR  {label}: {e:#}");
-                    continue;
-                }
-                let review = {
-                    let mut rs = tdy::fit::review_reasons(&spec);
-                    // A model-framed plan's judgement is recorded in its
-                    // provenance, not in the spec: reconstruct it, or the
-                    // review gate would evaporate on the second `tdy fit`.
-                    if sc.provenance.method == tdy::spec::InferenceMethod::Llm {
-                        rs.push(tdy::fit::llm_frame_reason(
-                            &spec,
-                            sc.provenance.model.as_deref().unwrap_or("a model"),
-                        ));
-                    }
-                    (!rs.is_empty()).then(|| rs.join("; "))
-                };
-                let (blake3, bytes) = tdy::sidecar::hash_file(&p)?;
-                let carried = previous
-                    .as_ref()
-                    .and_then(|l| l.member(rel))
-                    .filter(|m| m.blake3 == blake3 && m.review == review)
-                    .map(|m| m.accepted)
-                    .unwrap_or(false);
-                let is_accepted = carried || accepted_now.iter().any(|a| a == rel);
-                match (&review, is_accepted) {
-                    (Some(r), false) => {
-                        needs_review += 1;
-                        println!("  {rel:<24} REVIEW  {label}");
-                        println!("      {r}");
-                        println!(
-                            "      tdy does not accept a value-changing step on its own \
-                             judgement."
-                        );
-                        println!("      Accept:  tdy fit {} --accept {rel}", target_path.display());
-                    }
-                    (Some(_), true) => println!("  {rel:<24} accepted  {label}"),
-                    (None, _) => println!("  {rel:<24} fits      {label}"),
-                }
-                members.push(Member {
-                    path: rel.clone(),
-                    blake3,
-                    bytes,
-                    spec_digest: lockfile::spec_digest(&p),
-                    review,
-                    accepted: is_accepted,
-                });
-                continue;
-            }
-        }
-        match tdy::fit::plan(&p, &target, cfg).await {
-            Ok(planned) => {
-                let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
-                let sources: Vec<String> = fitted
-                    .spec
-                    .columns
-                    .iter()
-                    .map(|c| format!("{}<-{:?}", c.name, c.source_name()))
-                    .collect();
-                let via = match method {
-                    tdy::spec::InferenceMethod::Llm => "fits ~ ",
-                    _ => "fits    ",
-                };
-                println!("  {rel:<24} {via}{}", sources.join("  "));
-                if !dry_run {
-                    tdy::sidecar::save(
-                        &p,
-                        &fitted.spec,
-                        tdy::sidecar::ProvenanceInfo {
-                            method,
-                            model: model.clone(),
-                            prompt_version: None,
-                            sampled_bytes: None,
-                        },
-                    )?;
-                }
-                let (blake3, bytes) = tdy::sidecar::hash_file(&p)?;
-                let carried = previous
-                    .as_ref()
-                    .and_then(|l| l.member(rel))
-                    .filter(|m| m.blake3 == blake3 && m.review == fitted.review)
-                    .map(|m| m.accepted)
-                    .unwrap_or(false);
-                let is_accepted = carried || accepted_now.iter().any(|a| a == rel);
-                if let (Some(r), false) = (&fitted.review, is_accepted) {
-                    needs_review += 1;
-                    println!("      REVIEW: {r}");
-                    println!(
-                        "      Accept:  tdy fit {} --accept {rel}",
-                        target_path.display()
-                    );
-                }
-                members.push(Member {
-                    path: rel.clone(),
-                    blake3,
-                    bytes,
-                    spec_digest: lockfile::spec_digest(&p),
-                    review: fitted.review.clone(),
-                    accepted: is_accepted,
-                });
-            }
-            Err(FitError::Gaps(gaps)) => {
-                failed += 1;
-                println!("  {rel:<24} GAP");
-                for g in &gaps {
-                    for line in g.message().lines() {
-                        println!("      {line}");
-                    }
-                }
-                if propose {
-                    print_proposals(&p, &target, limits);
-                }
-            }
-            Err(e) => {
-                failed += 1;
-                println!("  {rel:<24} ERROR");
-                for line in format!("{e}").lines() {
-                    println!("      {line}");
-                }
-            }
-        }
-    }
-
-    println!(
-        "\n{} of {} file(s) fit `{}`.",
-        members.len(),
-        rels.len(),
-        target.name
-    );
-
-    if needs_review > 0 {
-        println!(
-            "{needs_review} member(s) need a human before they can join. \
-             Nothing is wrong with them mechanically — that is the point."
-        );
-    }
-    if failed > 0 {
+    if r.failed > 0 {
         // No partial lock. A dataset missing a month is the failure this
-        // whole design refuses, and writing one here would make it the
-        // default outcome of a bad afternoon.
+        // whole design refuses.
         anyhow::bail!(
-            "{failed} file(s) cannot reach the declared schema; no lock written. \
-             Fix them, exclude them, or widen the target."
+            "{} file(s) cannot reach the declared schema; no lock written. \
+             Fix them, exclude them, or widen the target.",
+            r.failed
         );
     }
-    if dry_run {
-        println!("--dry-run: no sidecars and no lock written.");
-        return Ok(());
-    }
-
-    let lock = Lock {
-        lock_version: LOCK_VERSION,
-        target: target.name.clone(),
-        target_hash: lockfile::target_hash(&target),
-        tool_version: env!("CARGO_PKG_VERSION").to_string(),
-        created_at: tdy::sidecar::now_rfc3339(),
-        members,
-    };
-    let p = lock.save(target_path)?;
-    println!("wrote {}", p.display());
-    println!(
-        "\nQuery it:  tdy query \"SELECT * FROM dataset('{}')\"",
-        target_path.display()
-    );
     Ok(())
 }
 
@@ -439,6 +313,7 @@ async fn fit_command(
     cfg: &tdy::config::Config,
     dry_run: bool,
     propose: bool,
+    json: bool,
 ) -> Result<()> {
     let limits = cfg.limits;
     use tdy::fit::FitError;
@@ -448,6 +323,37 @@ async fn fit_command(
     match tdy::fit::plan(file, &target, cfg).await {
         Ok(planned) => {
             let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
+            if json {
+                let report = serde_json::json!({
+                    "path": file.display().to_string(),
+                    "status": if fitted.review.is_some() { "needs_review" } else { "fits" },
+                    "via": match method {
+                        tdy::spec::InferenceMethod::Llm => "llm",
+                        tdy::spec::InferenceMethod::Manual => "manual",
+                        tdy::spec::InferenceMethod::Heuristic => "heuristic",
+                    },
+                    "sources": fitted.spec.columns.iter().map(|c| serde_json::json!({
+                        "column": c.name, "source": c.source_name(),
+                    })).collect::<Vec<_>>(),
+                    "review": fitted.review,
+                    "notes": fitted.spec.notes,
+                    "dry_run": dry_run,
+                });
+                if !dry_run {
+                    tdy::sidecar::save(
+                        file,
+                        &fitted.spec,
+                        tdy::sidecar::ProvenanceInfo {
+                            method,
+                            model,
+                            prompt_version: None,
+                            sampled_bytes: None,
+                        },
+                    )?;
+                }
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                return Ok(());
+            }
             println!("{} fits `{}`:", file.display(), target.name);
             for c in &fitted.spec.columns {
                 println!(
@@ -481,6 +387,18 @@ async fn fit_command(
             Ok(())
         }
         Err(FitError::Gaps(gaps)) => {
+            if json {
+                let e = FitError::Gaps(gaps);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "path": file.display().to_string(),
+                        "status": "gaps",
+                        "problems": tdy::report::problems_json(&e),
+                    }))?
+                );
+                anyhow::bail!("no plan reaches the declared schema")
+            }
             println!("{} cannot reach `{}`:\n", file.display(), target.name);
             print!("{}", FitError::Gaps(gaps));
             if propose {
@@ -526,11 +444,15 @@ fn check_command(
     target_path: &std::path::Path,
     files: &[PathBuf],
     limits: tdy::config::Limits,
+    json: bool,
 ) -> Result<()> {
     use tdy::conform::{judge, Verdict};
     use tdy::target::Target;
 
     let target = Target::load(target_path)?;
+    if json {
+        return check_json(target_path, &target, files, limits);
+    }
     println!(
         "{}: `{}`, {} column(s)",
         target_path.display(),
@@ -688,11 +610,26 @@ async fn run() -> Result<()> {
         }
         Command::Sniff { file, hint, force, no_llm, quick } => {
             let cfg = config::load(&overrides)?;
-            provider::sniff_command(&file, &cfg, hint.as_deref(), force, no_llm, quick).await?;
+            provider::sniff_command(
+                &file,
+                &cfg,
+                provider::SniffCli {
+                    hint: hint.as_deref(),
+                    force,
+                    no_llm,
+                    quick,
+                    json: cli.json,
+                },
+            )
+            .await?;
         }
         Command::Validate { file, stamp } => {
             let cfg = config::load(&overrides)?;
             provider::validate_command(&file, &cfg, stamp)?;
+        }
+        Command::Mcp { root, allow_accept } => {
+            let cfg = config::load(&overrides)?;
+            tdy::mcp::serve(cfg, root, allow_accept).await?;
         }
         Command::Draft { files } => {
             let cfg = config::load(&overrides)?;
@@ -701,13 +638,15 @@ async fn run() -> Result<()> {
         Command::Fit { target, file, accept, dry_run, propose } => {
             let cfg = config::load(&overrides)?;
             match file {
-                Some(f) => fit_command(&target, &f, &cfg, dry_run, propose).await?,
-                None => fit_dataset(&target, &cfg, dry_run, &accept, propose).await?,
+                Some(f) => fit_command(&target, &f, &cfg, dry_run, propose, cli.json).await?,
+                None => {
+                    fit_dataset(&target, &cfg, dry_run, &accept, propose, cli.json).await?
+                }
             }
         }
         Command::Check { target, against } => {
             let cfg = config::load(&overrides)?;
-            check_command(&target, &against, cfg.limits)?;
+            check_command(&target, &against, cfg.limits, cli.json)?;
         }
         Command::Schema => {
             println!(

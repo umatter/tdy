@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 394 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 400 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -187,6 +187,20 @@ it until `--accept`. A proven ambiguity (`AmbiguousFrame`, ambiguous separator/d
 reaches the model: declarations settle those. Provenance records `method = "llm"` and the
 model. `tests/frame_proposer.rs` covers both properties offline against a hand-rolled
 loopback mock; `tests/live_backend.rs` has the paid version.
+
+**The pile as data: `src/report.rs` + `--json` + `tdy mcp`.** The fit-the-pile orchestration
+(sidecar reuse, acceptance carryover, all-or-nothing lock) lives in `report::fit_pile`,
+returning a serializable `PileReport`; the CLI's text is `render_pile_text` over it —
+line-compatible with the old output because tests read it — and `--json` (global flag; also
+on sniff/check) prints it raw. Each refused member carries `Problem`s with machine-usable
+fields (kind, column, want, tried, the file's header, the remedy in `message`).
+`src/mcp.rs` serves the same surface over MCP stdio (`tdy mcp --root DIR`): hand-rolled
+newline-delimited JSON-RPC (a page of protocol; an SDK would cost a dependency tree and an
+MSRV negotiation), handlers call only the non-printing lib functions (stdout is protocol),
+every path — tool args and refs inside SQL — is confined to `--root` via canonicalisation,
+and **acceptance is refused unless the server was started with `--allow-accept`**: the
+review gate's whole meaning is that a human judges, so delegation to an agent is the
+operator's explicit act, never a default. `tests/mcp.rs` drives it as a subprocess.
 
 ## Real data
 

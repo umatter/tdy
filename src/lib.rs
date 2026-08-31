@@ -19,6 +19,8 @@ pub mod conform;
 pub mod dataset;
 pub mod detect;
 pub mod draft;
+pub mod mcp;
+pub mod report;
 pub mod engine;
 pub mod fileio;
 pub mod fit;

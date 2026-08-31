@@ -158,7 +158,14 @@ tdy check sales.tdy.sql --against exports/*.csv     # do these sidecars still pr
                                                     # the schema I declared?
 tdy schema                                         # the JSON Schema (the grammar)
 tdy config init                                    # sample config + location
+tdy mcp --root exports/                            # serve the tools over MCP
+                                                    # for AI agents (stdio)
 ```
+
+`sniff`, `fit` and `check` take a global `--json` for machine-readable output:
+the same facts as the text, structured — a gap comes back with the column, the
+names that were tried, the file's own header, and the remedy, so a script or
+an agent can act on it instead of re-parsing prose.
 
 Config: `~/.config/tdy/config.toml`, overridable via `TDY_BACKEND`,
 `TDY_MODEL`, `TDY_BASE_URL`, `TDY_MAX_RETRIES`, or
@@ -457,6 +464,31 @@ deterministic and `--frozen` keeps meaning "same files, same answer". Because
 conformance already proved every member has an identical schema, the union is
 a concatenation — there is nothing to coerce, and no chance of the silent
 Int64-plus-Utf8-becomes-Utf8 widening an ordinary `UNION ALL` would do.
+
+## For AI agents: `tdy mcp`
+
+```bash
+tdy mcp --root ./exports          # stdio MCP server, confined to ./exports
+```
+
+The same surface — `sniff`, `draft`, `fit`, `check`, `query`, `validate` — as
+MCP tools with structured results, for agents that do data work. The pitch is
+the one this whole tool makes, sharpened: an agent gets parsing where a wrong
+value is structurally prevented, and failure comes back as an object it can
+act on rather than prose to re-parse.
+
+Two properties are deliberate:
+
+- **Every path is confined to `--root`** — tool arguments and the file
+  references inside SQL alike, checked on canonicalised paths.
+- **The review gate survives the agent.** By default the agent can *see*
+  every review reason, structured, but cannot accept one: acceptance is a
+  human judgement, and the refusal tells the agent to relay the question to
+  its user. Starting the server with `--allow-accept` is the operator's
+  explicit statement that this agent may take those judgements.
+
+Query results are row-capped (default 200, max 10,000) with the truncation
+declared, so a curious agent gets a preview and a `row_count`, not a flood.
 
 ## The spec language (sidecar body)
 

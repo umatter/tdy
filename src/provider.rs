@@ -282,6 +282,25 @@ pub struct PreparedFile {
     pub notes: Vec<String>,
 }
 
+/// What one sniffed file looks like to a machine caller.
+pub fn sniff_json_value(path: &Path, prepared: &PreparedFile) -> Result<serde_json::Value> {
+    let spec = sidecar::load(path)?
+        .fresh_spec()
+        .ok_or_else(|| anyhow!("internal: sidecar not fresh right after writing it"))?;
+    Ok(serde_json::json!({
+        "path": path.display().to_string(),
+        "sidecar": sidecar::sidecar_path(path).display().to_string(),
+        "method": match prepared.method {
+            InferenceMethod::Heuristic => "heuristic",
+            InferenceMethod::Llm => "llm",
+            InferenceMethod::Manual => "manual",
+        },
+        "confidence": prepared.confidence,
+        "notes": prepared.notes,
+        "spec": spec,
+    }))
+}
+
 pub async fn prepare_specs(sql: &str, cfg: &Config) -> Result<Vec<PreparedFile>> {
     let mut prepared = Vec::new();
     for r in sqlscan::find_messy_refs(sql) {
@@ -606,14 +625,20 @@ fn writer_for(out: Option<&Path>) -> Result<Box<dyn Write>> {
 // Commands
 // ---------------------------------------------------------------------------
 
-pub async fn sniff_command(
-    path: &Path,
-    cfg: &Config,
-    hint: Option<&str>,
-    force: bool,
-    no_llm: bool,
-    quick: bool,
-) -> Result<()> {
+/// How `tdy sniff` was asked to run.
+#[derive(Default)]
+pub struct SniffCli<'a> {
+    pub hint: Option<&'a str>,
+    pub force: bool,
+    pub no_llm: bool,
+    pub quick: bool,
+    pub json: bool,
+}
+
+/// `tdy sniff`, optionally as JSON: the sidecar's content plus what the run
+/// concluded, one object, machine-readable — the shape the MCP tier returns.
+pub async fn sniff_command(path: &Path, cfg: &Config, opts: SniffCli<'_>) -> Result<()> {
+    let SniffCli { hint, force, no_llm, quick, json } = opts;
     let cfg = if no_llm {
         let mut c = cfg.clone();
         c.backend = Backend::None;
@@ -623,6 +648,10 @@ pub async fn sniff_command(
     };
     let prepared = ensure_sidecar_opts(path, &cfg, hint, force, sniff::SniffOpts { verify: !quick })
         .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&sniff_json_value(path, &prepared)?)?);
+        return Ok(());
+    }
     let sc_path = sidecar::sidecar_path(path);
     let text = std::fs::read_to_string(&sc_path)?;
     println!("# {}", sc_path.display());
@@ -654,6 +683,23 @@ pub async fn sniff_command(
 /// file. Optionally re-stamp the fingerprint for a hand-edited sidecar.
 pub fn validate_command(path: &Path, cfg: &Config, restamp: bool) -> Result<()> {
     let sc_path = sidecar::sidecar_path(path);
+    let notes = validate_quiet(path, cfg, restamp)?;
+    if restamp {
+        println!("re-fingerprinted {} (method = manual)", sc_path.display());
+    }
+    println!("{}: ok", sc_path.display());
+    for n in &notes {
+        println!("  note: {n}");
+    }
+    Ok(())
+}
+
+/// The proof behind `tdy validate`, with the outcome as a value: the spec is
+/// valid, the fingerprint fresh (stamped first if asked — checked against the
+/// file BEFORE being stamped), and the file still parses. Returns the spec's
+/// notes. No printing, so the MCP tier can speak it.
+pub fn validate_quiet(path: &Path, cfg: &Config, restamp: bool) -> Result<Vec<String>> {
+    let sc_path = sidecar::sidecar_path(path);
     if !sc_path.exists() {
         bail!(
             "no sidecar at {}; run `tdy sniff {}` first",
@@ -684,7 +730,6 @@ pub fn validate_command(path: &Path, cfg: &Config, restamp: bool) -> Result<()> 
             )
         })?;
         sidecar::stamp(path, InferenceMethod::Manual)?;
-        println!("re-fingerprinted {} (method = manual)", sc_path.display());
     }
     match sidecar::load(path)? {
         SidecarStatus::Absent => bail!("no sidecar at {}", sc_path.display()),
@@ -698,22 +743,8 @@ pub fn validate_command(path: &Path, cfg: &Config, restamp: bool) -> Result<()> 
             path.display()
         ),
         SidecarStatus::Fresh(sc) => {
-            let batch = engine::preview(&sc.spec, path, cfg.limits, 200)?;
-            println!(
-                "{}: ok — {} column(s), spec {} by {}",
-                sc_path.display(),
-                batch.num_columns(),
-                match sc.provenance.method {
-                    InferenceMethod::Heuristic => "inferred",
-                    InferenceMethod::Llm => "modelled",
-                    InferenceMethod::Manual => "written",
-                },
-                sc.provenance.tool_version
-            );
-            for n in &sc.spec.notes {
-                println!("  note: {n}");
-            }
-            Ok(())
+            engine::preview(&sc.spec, path, cfg.limits, 200)?;
+            Ok(sc.spec.notes.clone())
         }
     }
 }
