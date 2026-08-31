@@ -110,19 +110,17 @@ fn evidence_windows(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
     let mut spent = 0usize;
     let mut pos = 0usize;
     std::iter::from_fn(move || {
-        while spent < BUDGET && pos < bytes.len() {
-            // memchr-style scan: find the next byte that is evidence.
-            let Some(off) = bytes[pos..].iter().position(|b| !b.is_ascii()) else {
-                return None;
-            };
-            let hit = pos + off;
-            let start = hit.saturating_sub(MARGIN).max(pos);
-            let end = (start + WINDOW).min(bytes.len());
-            pos = end;
-            spent += end - start;
-            return Some(&bytes[start..end]);
+        if spent >= BUDGET || pos >= bytes.len() {
+            return None;
         }
-        None
+        // memchr-style scan: find the next byte that is evidence.
+        let off = bytes[pos..].iter().position(|b| !b.is_ascii())?;
+        let hit = pos + off;
+        let start = hit.saturating_sub(MARGIN).max(pos);
+        let end = (start + WINDOW).min(bytes.len());
+        pos = end;
+        spent += end - start;
+        Some(&bytes[start..end])
     })
 }
 
