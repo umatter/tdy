@@ -507,11 +507,6 @@ fn sniff_fixed_width(
 fn sniff_excel(path: &Path, sample: &FileSample, limits: Limits) -> Result<SniffResult> {
     let mut doubts = Doubts::default();
     let sheet = pick_sheet(path, sample, limits);
-    let extraction = Extraction::Excel {
-        sheet_name: sheet.clone(),
-        sheet_index: None,
-        range: None,
-    };
     if sample.sheets.len() > 1 {
         doubts.note(format!(
             "workbook has {} sheets; reading {:?}",
@@ -519,6 +514,26 @@ fn sniff_excel(path: &Path, sample: &FileSample, limits: Limits) -> Result<Sniff
             sheet.as_deref().unwrap_or("the first")
         ));
     }
+    sniff_excel_sheet(path, sheet, limits, doubts)
+}
+
+/// Frame one sheet of a workbook: title rows, footer, header promotion.
+///
+/// Split out of [`sniff_excel`] so `fit` can frame *every* sheet when the
+/// workbook has several — each sheet gets its own framing, because "the data
+/// starts on row 4 under a merged band" is a fact about a sheet, not about
+/// the file.
+pub(crate) fn sniff_excel_sheet(
+    path: &Path,
+    sheet: Option<String>,
+    limits: Limits,
+    mut doubts: Doubts,
+) -> Result<SniffResult> {
+    let extraction = Extraction::Excel {
+        sheet_name: sheet,
+        sheet_index: None,
+        range: None,
+    };
 
     // No row cap here, unlike the text formats: calamine materialises the
     // whole sheet to answer any question about it, so capping saves nothing
@@ -616,6 +631,18 @@ fn sniff_excel(path: &Path, sample: &FileSample, limits: Limits) -> Result<Sniff
     }
 
     finish(extraction, transforms, table, 0.9, doubts)
+}
+
+/// Frame one named sheet, for `fit`'s sheet elimination. The doubts a
+/// sniff would record are irrelevant there — the declared table either
+/// binds or it does not — so they start empty.
+pub(crate) fn frame_excel_sheet(
+    path: &Path,
+    sheet: &str,
+    limits: Limits,
+) -> Result<crate::spec::ParseSpec> {
+    sniff_excel_sheet(path, Some(sheet.to_string()), limits, Doubts::default())
+        .map(|r| r.spec)
 }
 
 /// Prefer the first sheet that actually holds a table over a cover sheet.

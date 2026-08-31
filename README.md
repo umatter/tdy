@@ -386,13 +386,16 @@ recorded against that file's bytes and that declaration. Re-fitting an untouched
 dataset does not ask again; editing the file expires the acceptance, because it
 was about those bytes.
 
-A JSON document holding several arrays of records — the single most common
-"unsure" in real data — needs no model and no human once a table is declared:
-`tdy fit` tries the declaration against *every* candidate array. If exactly
-one fits, the frame is **proved by elimination** and the note says so; if
-several fit, the file is refused with each pointer named, because two
-complete, well-typed answers with different totals is a guess this tool
-refuses to make; if none fit, you get the ordinary gap report.
+A file with several possible *frames* — a JSON document holding several
+arrays of records (the single most common "unsure" in real data), a workbook
+holding a cover page, a legend and a data sheet — needs no model and no human
+once a table is declared: `tdy fit` frames every candidate (each sheet gets
+its own framing — its own title rows, its own footer) and tries the
+declaration against each. If exactly one fits, the frame is **proved by
+elimination** and the note says so; if several fit, the file is refused with
+each candidate named, because two complete, well-typed answers with different
+totals is a guess this tool refuses to make; if none fit, you get the
+ordinary gap report.
 
 When the layout cannot be enumerated at all — a log line, a report format no
 delimiter sniff can frame — and a backend is configured, `tdy fit` asks the

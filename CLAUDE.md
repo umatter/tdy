@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 387 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 389 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -147,12 +147,16 @@ and gates behind `--accept` exactly like `decimal_shift`. `if_missing_null` is p
 
 **Slice 5 is in — frames, in two tiers.** The corpus's biggest gap was JSON documents with
 several record arrays ("N candidate record arrays", thousands of files). Tier one is
-deterministic: `fit` tries the declared table against **every** candidate pointer
-(`sniff::json_record_pointers`) — exactly one fits = **proved by elimination** (note, no
-review); several fit = `FitError::AmbiguousFrame` naming them (two well-typed different
-answers; q1 vs q2 in `testdata/json_frames_two_fit.json` differ only in their sums, which is
-the point); none = the ordinary gap report. The elimination pass runs cheap gates only
-(`Rigour::Gates`); the sole survivor pays the whole-file verification once.
+deterministic elimination over **enumerable frames**, in two domains: JSON record arrays
+(`sniff::json_record_pointers`) and workbook sheets (`sniff::frame_excel_sheet` — each sheet
+framed independently, because a title row is a fact about a sheet, and the cover page in
+`sheet_frames_one_fits.xlsx` is deliberately the *biggest* sheet so ranking alone cannot
+settle it). `fit` tries the declared table against every candidate — exactly one fits =
+**proved by elimination** (note, no review); several fit = `FitError::AmbiguousFrame` naming
+them and the sidecar field that settles it (two well-typed different answers; the `two_fit`
+fixtures differ only in their sums, which is the point); none = the ordinary gap report for
+the ranked candidate. The elimination pass runs cheap gates only (`Rigour::Gates`); the sole
+survivor pays the whole-file verification once.
 
 Tier two is `fit::plan` (async, what the CLI now calls): when deterministic planning fails
 with something a frame could cure — `Unreadable`, or gaps that are all

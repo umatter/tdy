@@ -811,7 +811,7 @@ fn if_missing_is_refused_on_not_null_and_for_values() {
 // Frame elimination: JSON documents with several record arrays.
 // ---------------------------------------------------------------------------
 
-fn json_fixture(name: &str) -> PathBuf {
+fn frames_fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join(name)
 }
 
@@ -828,7 +828,7 @@ const JSON_TARGET: &str = "CREATE TABLE orders (
 #[test]
 fn a_json_frame_is_proved_by_elimination_when_only_one_array_fits() {
     let t = Target::parse(JSON_TARGET).unwrap();
-    let p = json_fixture("json_frames_one_fits.json");
+    let p = frames_fixture("json_frames_one_fits.json");
     let fitted = fit(&p, &t, Limits::default()).expect("only /orders fits");
     assert!(
         matches!(
@@ -865,10 +865,70 @@ fn a_json_frame_is_proved_by_elimination_when_only_one_array_fits() {
 #[test]
 fn two_fitting_arrays_are_refused_not_ranked() {
     let t = Target::parse(JSON_TARGET).unwrap();
-    let p = json_fixture("json_frames_two_fit.json");
+    let p = frames_fixture("json_frames_two_fit.json");
     let err = fit(&p, &t, Limits::default()).expect_err("q1 and q2 both fit");
     let msg = format!("{err}");
     assert!(matches!(err, FitError::AmbiguousFrame { .. }), "{msg}");
     assert!(msg.contains("/q1") && msg.contains("/q2"), "{msg}");
     assert!(msg.contains("pointer"), "the remedy must be named:\n{msg}");
+}
+
+// ---------------------------------------------------------------------------
+// Frame elimination, second domain: workbooks with several sheets.
+// ---------------------------------------------------------------------------
+
+const SHEET_TARGET: &str = "CREATE TABLE monat (
+    month  DATE          NOT NULL OPTIONS(matches = 'Datum'),
+    region TEXT          NOT NULL OPTIONS(matches = 'Region'),
+    amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+) WITH (files = '*.xlsx', date_order = 'dmy')";
+
+/// A cover page, a data sheet behind a title row, and a legend. The cover
+/// page is deliberately the *biggest* sheet, so the sniffer's ranking alone
+/// would not settle it — elimination does: each sheet is framed on its own
+/// (the title row above `Daten`'s header is a fact about that sheet), the
+/// declaration is tried against each, and only one survives.
+#[test]
+fn an_excel_frame_is_proved_by_elimination_when_only_one_sheet_fits() {
+    let t = Target::parse(SHEET_TARGET).unwrap();
+    let p = frames_fixture("sheet_frames_one_fits.xlsx");
+    let fitted = fit(&p, &t, Limits::default()).expect("only 'Daten' fits");
+    assert!(
+        matches!(
+            &fitted.spec.extraction,
+            tdy::spec::Extraction::Excel { sheet_name: Some(sh), .. } if sh == "Daten"
+        ),
+        "{:?}",
+        fitted.spec.extraction
+    );
+    assert!(
+        fitted.spec.notes.iter().any(|n| n.contains("elimination")),
+        "{:#?}",
+        fitted.spec.notes
+    );
+    assert!(fitted.review.is_none(), "elimination is a proof: {:?}", fitted.review);
+
+    let b = tdy::provider::spec_to_batch(&fitted.spec, &p).unwrap();
+    assert_eq!(b.num_rows(), 4);
+    let amounts = b
+        .column(2)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::Decimal128Array>()
+        .unwrap();
+    let total: i128 = (0..amounts.len()).map(|i| amounts.value(i)).sum();
+    assert_eq!(total, 109000, "sum(amount) must be 1090.00");
+}
+
+/// Q1 and Q2 both produce the declared table with different totals (600.00
+/// vs 1500.00): two complete, well-typed, different answers. Refused, both
+/// sheets named, with the sidecar remedy.
+#[test]
+fn two_fitting_sheets_are_refused_not_ranked() {
+    let t = Target::parse(SHEET_TARGET).unwrap();
+    let p = frames_fixture("sheet_frames_two_fit.xlsx");
+    let err = fit(&p, &t, Limits::default()).expect_err("Q1 and Q2 both fit");
+    let msg = format!("{err}");
+    assert!(matches!(err, FitError::AmbiguousFrame { .. }), "{msg}");
+    assert!(msg.contains("Q1") && msg.contains("Q2"), "{msg}");
+    assert!(msg.contains("sheet_name"), "the remedy must be named:\n{msg}");
 }

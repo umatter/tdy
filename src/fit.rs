@@ -246,10 +246,10 @@ pub enum FitError {
     Rejected(Vec<Mismatch>),
     /// The plan conformed but could not parse the file.
     DryRun(anyhow::Error),
-    /// More than one of the document's record arrays produces the declared
-    /// table, and tdy will not choose between two complete, well-typed,
-    /// different answers.
-    AmbiguousFrame { pointers: Vec<String> },
+    /// More than one of the file's frames — record arrays, sheets — produces
+    /// the declared table, and tdy will not choose between two complete,
+    /// well-typed, different answers.
+    AmbiguousFrame { what: String, field: String, choices: Vec<String> },
 }
 
 impl std::fmt::Display for FitError {
@@ -262,21 +262,21 @@ impl std::fmt::Display for FitError {
                 }
                 Ok(())
             }
-            FitError::AmbiguousFrame { pointers } => {
+            FitError::AmbiguousFrame { what, field, choices } => {
                 writeln!(
                     f,
-                    "  {} record arrays in this document ALL produce the declared table:",
-                    pointers.len()
+                    "  {} {what} in this file ALL produce the declared table:",
+                    choices.len()
                 )?;
-                for p in pointers {
-                    writeln!(f, "    pointer = {p:?}")?;
+                for c in choices {
+                    writeln!(f, "    {field} = {c:?}")?;
                 }
                 writeln!(
                     f,
                     "  Each is a complete, well-typed, different answer, and choosing one \
                      would be a guess.\n  \
-                     fix: write the pointer you mean into the sidecar ([spec.extraction] \
-                     pointer = \"...\") and mark it method = \"manual\""
+                     fix: write the {field} you mean into the sidecar ([spec.extraction] \
+                     {field} = \"...\") and mark it method = \"manual\""
                 )?;
                 Ok(())
             }
@@ -423,18 +423,92 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
         .map_err(FitError::Unreadable)?
         .spec;
 
-    // A JSON document with several record arrays has several possible frames,
-    // and the sniffer's ranking of them is a guess. The declared table turns
-    // the guess into a search: try every candidate, and the answer is the one
-    // that fits — provably, if it is alone in doing so.
-    if let Extraction::Json { lines: false, pointer: Some(_) } = &draft.extraction {
-        let pointers = sniff::json_record_pointers(path, limits);
-        if pointers.len() > 1 {
-            return fit_by_elimination(path, target, limits, &draft, &pointers);
+    // A file with several possible frames — a JSON document with several
+    // record arrays, a workbook with several sheets — makes the sniffer's
+    // ranking of them a guess. The declared table turns the guess into a
+    // search: try every candidate, and the answer is the one that fits —
+    // provably, if it is alone in doing so.
+    match &draft.extraction {
+        Extraction::Json { lines: false, pointer: Some(_) } => {
+            let pointers = sniff::json_record_pointers(path, limits);
+            if pointers.len() > 1 {
+                let candidates = pointers
+                    .iter()
+                    .map(|ptr| {
+                        let mut d = draft.clone();
+                        d.extraction =
+                            Extraction::Json { lines: false, pointer: Some(ptr.clone()) };
+                        (ptr.clone(), d)
+                    })
+                    .collect();
+                return fit_by_elimination(
+                    path,
+                    target,
+                    limits,
+                    FrameCandidates {
+                        what: "record arrays",
+                        field: "pointer",
+                        total: pointers.len(),
+                        candidates,
+                    },
+                );
+            }
         }
+        Extraction::Excel { sheet_name, .. } => {
+            let shapes =
+                crate::engine::excel_sheet_shapes(path, limits).unwrap_or_default();
+            if shapes.len() > 1 {
+                // The sniffer's pick goes first so that when nothing fits,
+                // the error the user reads is about the sheet they would
+                // have been shown anyway.
+                let mut names: Vec<String> = Vec::with_capacity(shapes.len());
+                if let Some(picked) = sheet_name {
+                    names.push(picked.clone());
+                }
+                for sh in &shapes {
+                    if !names.contains(&sh.name) {
+                        names.push(sh.name.clone());
+                    }
+                }
+                // A sheet that cannot even be framed (empty, say) is already
+                // eliminated; `total` still counts it, because "of 3 sheets,
+                // only one produces the declared table" is the true claim.
+                let candidates: Vec<(String, ParseSpec)> = names
+                    .iter()
+                    .filter_map(|n| {
+                        sniff::frame_excel_sheet(path, n, limits).ok().map(|d| (n.clone(), d))
+                    })
+                    .collect();
+                if !candidates.is_empty() {
+                    return fit_by_elimination(
+                        path,
+                        target,
+                        limits,
+                        FrameCandidates {
+                            what: "sheets",
+                            field: "sheet_name",
+                            total: names.len(),
+                            candidates,
+                        },
+                    );
+                }
+            }
+        }
+        _ => {}
     }
 
     fit_framed(path, target, limits, draft, Rigour::Full)
+}
+
+/// The enumerable frames of one file, labelled for the messages.
+struct FrameCandidates {
+    /// What kind of thing is being chosen between: "record arrays", "sheets".
+    what: &'static str,
+    /// The sidecar field that would settle it by hand.
+    field: &'static str,
+    /// How many frames exist, counting ones already eliminated at framing.
+    total: usize,
+    candidates: Vec<(String, ParseSpec)>,
 }
 
 /// A plan and where it came from, for the sidecar's provenance.
@@ -649,34 +723,27 @@ enum Rigour {
     Gates,
 }
 
-/// Try the declared table against every record array the document holds.
+/// Try the declared table against every candidate frame the file holds.
 ///
 /// The outcomes and what each means:
 /// * exactly one candidate fits — proved by elimination. The note says so and
 ///   nothing needs review: given the declaration, no other reading exists.
-/// * several fit — refused. Two arrays that both produce the declared columns
+/// * several fit — refused. Two frames that both produce the declared columns
 ///   are two different answers, and ranking them would be a guess with a
 ///   plausible wrong number at the end of it.
 /// * none fit — the error for the sniffer's own ranked choice, which is what
-///   the user would have seen anyway, plus how many others were tried.
+///   the user would have seen anyway.
 fn fit_by_elimination(
     path: &Path,
     target: &Target,
     limits: Limits,
-    draft: &ParseSpec,
-    pointers: &[String],
+    fc: FrameCandidates,
 ) -> Result<Fitted, FitError> {
-    let with_pointer = |ptr: &str| {
-        let mut d = draft.clone();
-        d.extraction = Extraction::Json { lines: false, pointer: Some(ptr.to_string()) };
-        d
-    };
-
-    let mut survivors: Vec<&String> = Vec::new();
+    let mut survivors: Vec<&(String, ParseSpec)> = Vec::new();
     let mut first_error: Option<FitError> = None;
-    for ptr in pointers {
-        match fit_framed(path, target, limits, with_pointer(ptr), Rigour::Gates) {
-            Ok(_) => survivors.push(ptr),
+    for cand in &fc.candidates {
+        match fit_framed(path, target, limits, cand.1.clone(), Rigour::Gates) {
+            Ok(_) => survivors.push(cand),
             Err(e) => {
                 // The ranked candidate's failure is the representative one.
                 if first_error.is_none() {
@@ -687,14 +754,13 @@ fn fit_by_elimination(
     }
 
     match survivors.as_slice() {
-        [] => Err(first_error.expect("pointers was non-empty")),
-        [only] => {
-            let mut fitted =
-                fit_framed(path, target, limits, with_pointer(only), Rigour::Full)?;
+        [] => Err(first_error.expect("candidates was non-empty")),
+        [(label, d)] => {
+            let mut fitted = fit_framed(path, target, limits, d.clone(), Rigour::Full)?;
             fitted.notes.push(format!(
-                "frame proved by elimination: of {} candidate record arrays, only {only:?} \
-                 produces the declared table",
-                pointers.len()
+                "frame proved by elimination: of {} candidate {}, only {label:?} produces \
+                 the declared table",
+                fc.total, fc.what
             ));
             fitted.spec.notes.push(
                 fitted.notes.last().expect("just pushed").clone(),
@@ -702,7 +768,9 @@ fn fit_by_elimination(
             Ok(fitted)
         }
         several => Err(FitError::AmbiguousFrame {
-            pointers: several.iter().map(|p| (*p).clone()).collect(),
+            what: fc.what.into(),
+            field: fc.field.into(),
+            choices: several.iter().map(|(l, _)| l.clone()).collect(),
         }),
     }
 }
