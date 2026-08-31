@@ -92,6 +92,32 @@ pub fn resolve(target_file: &Path, limits: Limits) -> Result<Resolved> {
         );
     }
 
+    // A plan whose acceptance rests on a judgement rather than a proof does
+    // not run until somebody has made that judgement. Checked before any
+    // member is read, and reported for all of them at once.
+    let unreviewed: Vec<&lockfile::Member> =
+        lock.members.iter().filter(|m| m.review.is_some() && !m.accepted).collect();
+    if !unreviewed.is_empty() {
+        let mut msg = format!(
+            "dataset `{}` has {} member(s) waiting on a human:",
+            target.name,
+            unreviewed.len()
+        );
+        for m in &unreviewed {
+            msg.push_str(&format!(
+                "\n  {}: {}",
+                m.path,
+                m.review.as_deref().unwrap_or("")
+            ));
+        }
+        msg.push_str(&format!(
+            "\n\nNothing is wrong with them mechanically — that is why nobody but you can \
+             settle it.\nAccept:  tdy fit {} --accept <FILE>",
+            target_file.display()
+        ));
+        anyhow::bail!("{msg}");
+    }
+
     let dir = lockfile::target_dir(target_file);
     let mut members = Vec::with_capacity(lock.members.len());
     for m in &lock.members {

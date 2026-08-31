@@ -86,6 +86,10 @@ enum Command {
     Fit {
         /// Path to the target .tdy.sql file
         target: PathBuf,
+        /// Accept a member whose plan changes values (see the REVIEW line in
+        /// `tdy fit`'s output). Repeatable.
+        #[arg(long = "accept", value_name = "FILE")]
+        accept: Vec<PathBuf>,
         /// The data file to fit. Omit to fit every member the target's globs
         /// match, and write the lock.
         file: Option<PathBuf>,
@@ -130,6 +134,7 @@ fn fit_dataset(
     target_path: &std::path::Path,
     limits: tdy::config::Limits,
     dry_run: bool,
+    accept: &[PathBuf],
 ) -> Result<()> {
     use tdy::fit::{fit, FitError};
     use tdy::lockfile::{self, Lock, Member, LOCK_VERSION};
@@ -154,10 +159,71 @@ fn fit_dataset(
         target.columns.len()
     );
 
+    // A previous lock's acceptances carry over for entries that have not
+    // changed — drift is what expires them, so re-fitting an untouched
+    // dataset must not ask the same question twice.
+    let previous = Lock::load(target_path)?;
+    let accepted_now: Vec<String> = accept
+        .iter()
+        .map(|a| {
+            a.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+        })
+        .collect();
+
     let mut members = Vec::new();
     let mut failed = 0usize;
+    let mut needs_review = 0usize;
     for rel in &rels {
         let p = dir.join(rel);
+        // A hand-written spec is a human assertion about specific bytes, and
+        // the planner must not overwrite it. It is still proved: conformance
+        // and a dry run apply exactly as they do to a planned one.
+        if let Ok(tdy::sidecar::SidecarStatus::Fresh(sc)) = tdy::sidecar::load(&p) {
+            if sc.provenance.method == tdy::spec::InferenceMethod::Manual {
+                let spec = sc.spec;
+                if let Err(m) = tdy::conform::conforms(&spec, &target) {
+                    failed += 1;
+                    println!("  {rel:<24} CONTRADICTS  (hand-written spec)");
+                    for x in &m {
+                        println!("      {}", x.message());
+                    }
+                    continue;
+                }
+                if let Err(e) = tdy::engine::dry_run(&spec, &p, limits) {
+                    failed += 1;
+                    println!("  {rel:<24} ERROR  (hand-written spec): {e:#}");
+                    continue;
+                }
+                let review = {
+                    let rs = tdy::fit::review_reasons(&spec);
+                    (!rs.is_empty()).then(|| rs.join("; "))
+                };
+                let (blake3, bytes) = tdy::sidecar::hash_file(&p)?;
+                let carried = previous
+                    .as_ref()
+                    .and_then(|l| l.member(rel))
+                    .filter(|m| m.blake3 == blake3 && m.review == review)
+                    .map(|m| m.accepted)
+                    .unwrap_or(false);
+                let is_accepted = carried || accepted_now.iter().any(|a| a == rel);
+                match (&review, is_accepted) {
+                    (Some(r), false) => {
+                        needs_review += 1;
+                        println!("  {rel:<24} REVIEW  (hand-written spec)");
+                        println!("      {r}");
+                        println!(
+                            "      tdy does not accept a value-changing step on its own \
+                             judgement."
+                        );
+                        println!("      Accept:  tdy fit {} --accept {rel}", target_path.display());
+                    }
+                    (Some(_), true) => println!("  {rel:<24} accepted  (hand-written spec)"),
+                    (None, _) => println!("  {rel:<24} fits      (hand-written spec)"),
+                }
+                members.push(Member { path: rel.clone(), blake3, bytes, review, accepted: is_accepted });
+                continue;
+            }
+        }
         match fit(&p, &target, limits) {
             Ok(fitted) => {
                 let sources: Vec<String> = fitted
@@ -180,7 +246,23 @@ fn fit_dataset(
                     )?;
                 }
                 let (blake3, bytes) = tdy::sidecar::hash_file(&p)?;
-                members.push(Member { path: rel.clone(), blake3, bytes });
+                let carried = previous
+                    .as_ref()
+                    .and_then(|l| l.member(rel))
+                    .filter(|m| m.blake3 == blake3 && m.review == fitted.review)
+                    .map(|m| m.accepted)
+                    .unwrap_or(false);
+                let is_accepted = carried || accepted_now.iter().any(|a| a == rel);
+                if fitted.review.is_some() && !is_accepted {
+                    needs_review += 1;
+                }
+                members.push(Member {
+                    path: rel.clone(),
+                    blake3,
+                    bytes,
+                    review: fitted.review.clone(),
+                    accepted: is_accepted,
+                });
             }
             Err(FitError::Gaps(gaps)) => {
                 failed += 1;
@@ -208,6 +290,12 @@ fn fit_dataset(
         target.name
     );
 
+    if needs_review > 0 {
+        println!(
+            "{needs_review} member(s) need a human before they can join. \
+             Nothing is wrong with them mechanically — that is the point."
+        );
+    }
     if failed > 0 {
         // No partial lock. A dataset missing a month is the failure this
         // whole design refuses, and writing one here would make it the
@@ -473,11 +561,11 @@ async fn run() -> Result<()> {
             let cfg = config::load(&overrides)?;
             provider::validate_command(&file, &cfg, stamp)?;
         }
-        Command::Fit { target, file, dry_run } => {
+        Command::Fit { target, file, accept, dry_run } => {
             let cfg = config::load(&overrides)?;
             match file {
                 Some(f) => fit_command(&target, &f, cfg.limits, dry_run)?,
-                None => fit_dataset(&target, cfg.limits, dry_run)?,
+                None => fit_dataset(&target, cfg.limits, dry_run, &accept)?,
             }
         }
         Command::Check { target, against } => {

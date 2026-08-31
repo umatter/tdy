@@ -358,6 +358,20 @@ pub struct ValueParsing {
     /// error, not a silently rewritten number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thousands_separator: Option<char>,
+    /// Move the decimal point by this many places before parsing: `-2` turns
+    /// integer Rappen (`123450`) into francs (`1234.50`).
+    ///
+    /// **This changes the value**, which is why it exists as a declaration and
+    /// is never inferred. A column of integer minor units parses perfectly and
+    /// type-checks perfectly and is wrong by a factor of a hundred, and the
+    /// error is invisible in any single row — so tdy will not decide this, and
+    /// a spec that carries it needs a human's acceptance before it joins a
+    /// dataset.
+    ///
+    /// It is an exact decimal-point move on the digit string, not a
+    /// multiplication: no float is involved and nothing is rounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decimal_shift: Option<i8>,
     /// For Bool columns: e.g. ["ja", "yes", "1"] / ["nein", "no", "0"].
     /// Matched case-insensitively.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -464,6 +478,35 @@ impl ParseSpec {
             if let Some(pat) = &c.parse.strip {
                 if let Err(e) = regex::Regex::new(pat) {
                     errs.push(format!("column `{}`: `strip` is not a valid regex: {e}", c.name));
+                }
+            }
+            // Moving a decimal point means nothing outside a number, and a
+            // shift big enough to be a typo is more likely one than a
+            // deliberate 40-place move.
+            if let Some(shift) = c.parse.decimal_shift {
+                if !matches!(c.dtype, DType::Decimal { .. } | DType::Float64 | DType::Int64) {
+                    errs.push(format!(
+                        "column `{}`: decimal_shift moves a decimal point, which means \
+                         nothing for a {} column",
+                        c.name,
+                        dtype_name(&c.dtype)
+                    ));
+                }
+                if !(-30..=30).contains(&shift) {
+                    errs.push(format!(
+                        "column `{}`: decimal_shift {shift} is out of range (-30..=30)",
+                        c.name
+                    ));
+                }
+                if matches!(c.dtype, DType::Int64) && shift > 0 {
+                    // Shifting right on an integer column would produce a
+                    // fraction the column cannot hold, which is a silent
+                    // truncation waiting to happen.
+                    errs.push(format!(
+                        "column `{}`: a positive decimal_shift on an integer column would \
+                         produce a fraction it cannot hold; declare it as DECIMAL",
+                        c.name
+                    ));
                 }
             }
             match &c.dtype {
@@ -702,6 +745,19 @@ impl ParseSpec {
 }
 
 /// Parse the fixed offsets we accept in `DType::Timestamp::timezone`.
+/// The type's name, for a message.
+fn dtype_name(d: &DType) -> &'static str {
+    match d {
+        DType::Utf8 => "text",
+        DType::Bool => "boolean",
+        DType::Int64 => "integer",
+        DType::Float64 => "float",
+        DType::Decimal { .. } => "decimal",
+        DType::Date { .. } => "date",
+        DType::Timestamp { .. } => "timestamp",
+    }
+}
+
 pub fn parse_fixed_offset(tz: &str) -> Option<chrono::FixedOffset> {
     let t = tz.trim();
     if t.eq_ignore_ascii_case("utc") || t.eq_ignore_ascii_case("z") || t.eq_ignore_ascii_case("gmt")

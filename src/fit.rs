@@ -154,6 +154,37 @@ pub struct Fitted {
     /// Per-column notes: what was bound to what, and anything a reviewer
     /// should look at. Recorded so the mapping is auditable after the fact.
     pub notes: Vec<String>,
+    /// Why this plan needs a human before it runs, if it does. See
+    /// [`review_reasons`].
+    pub review: Option<String>,
+}
+
+/// What in a spec rests on a judgement rather than a proof.
+///
+/// The line this draws is the sharpest one in the design. Everything the
+/// planner does is mechanically checked — the binding was unambiguous, the
+/// schema conforms, the values parse — and none of that can establish that a
+/// column of integers is *francs* rather than *Rappen*. A `decimal_shift` is
+/// exact, lossless and self-evidencing, and it is still somebody's claim
+/// about what a file means. So it is accepted by a person, once, recorded
+/// against that file's bytes and that declaration.
+pub fn review_reasons(spec: &ParseSpec) -> Vec<String> {
+    let mut out = Vec::new();
+    for c in &spec.columns {
+        if let Some(shift) = c.parse.decimal_shift {
+            if shift != 0 {
+                out.push(format!(
+                    "`{}` applies decimal_shift = {shift}, which changes every value in the \
+                     column (a factor of {})",
+                    c.name,
+                    if shift < 0 { "10^-".to_string() + &(-shift).to_string() } else {
+                        "10^".to_string() + &shift.to_string()
+                    }
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// Why a fit failed. Gaps are the interesting case; the rest are errors about
@@ -293,7 +324,11 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     engine::dry_run(&spec, path, limits)
         .map_err(FitError::DryRun)?;
 
-    Ok(Fitted { spec, notes })
+    let review = {
+        let rs = review_reasons(&spec);
+        (!rs.is_empty()).then(|| rs.join("; "))
+    };
+    Ok(Fitted { spec, notes, review })
 }
 
 /// The post-transform header and body the executor will see, capped.

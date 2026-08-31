@@ -264,3 +264,180 @@ fn a_dataset_reference_in_a_comment_is_not_a_reference() {
         vec!["a.tdy.sql".to_string()]
     );
 }
+
+// ---------------------------------------------------------------------------
+// The review gate
+// ---------------------------------------------------------------------------
+//
+// The sharpest line in the design: a plan whose acceptance rests on a
+// *semantic* judgement rather than a mechanical proof does not run until a
+// human makes that judgement. `decimal_shift = -2` is exact, lossless and
+// self-evidencing, and it is still somebody's claim that this file's numbers
+// mean something other than what they say. No proof settles that.
+
+/// July's amounts are integer Rappen. A hand-written spec says so with
+/// `decimal_shift = -2`. It conforms, it parses, every value is exact — and it
+/// still does not join until somebody accepts it, because "these integers are
+/// really hundredths" is a claim about the world, not about the bytes.
+#[test]
+fn a_value_changing_step_needs_a_human_and_then_works() {
+    let dir = staged();
+    // A target the Rappen file could otherwise never satisfy: nothing declares
+    // `Betrag Rp.`, so the planner refuses it (see tests/fit.rs).
+    let t = dir.path().join("rappen.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE rappen (\n\
+         \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
+         \x20 region     TEXT          NOT NULL OPTIONS(matches = 'Region'),\n\
+         \x20 amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
+         )\nWITH (files = '2025-07.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+
+    let july = dir.path().join("2025-07.csv");
+    write_rappen_spec(&july);
+    assert!(tdy(&["validate", july.to_str().unwrap(), "--stamp"]).status.success());
+
+    // Fitting records the review and writes the lock, but does not accept.
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("REVIEW"), "{text}");
+    assert!(text.contains("decimal_shift"), "{text}");
+    assert!(text.contains("--accept"), "no remedy offered:\n{text}");
+
+    // …and the query refuses until somebody does.
+    let q = format!("SELECT sum(amount_chf) FROM dataset('{}')", t.display());
+    let blocked = tdy(&["query", &q]);
+    let err = String::from_utf8_lossy(&blocked.stderr);
+    assert!(!blocked.status.success(), "an unaccepted value change was queried");
+    assert!(err.contains("waiting on a human"), "{err}");
+    assert!(err.contains("2025-07.csv"), "{err}");
+
+    // Accept, and it joins — at the right magnitude, not a hundred times out.
+    let acc = tdy(&["fit", t.to_str().unwrap(), "--accept", "2025-07.csv"]);
+    assert!(acc.status.success(), "{}", String::from_utf8_lossy(&acc.stderr));
+    let ok = tdy(&["query", &q]);
+    let text = String::from_utf8_lossy(&ok.stdout);
+    assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+    // July: 1700 + 1710 + 1720 + 1730 = 6860.00, in francs.
+    assert!(text.contains("6860.00"), "wrong magnitude — check the shift:\n{text}");
+}
+
+/// Asking the same question every run would train people to answer it without
+/// reading, so an acceptance carries over while nothing has changed.
+#[test]
+fn an_acceptance_carries_over_but_expires_when_the_file_changes() {
+    let dir = staged();
+    let t = dir.path().join("rappen.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE rappen (\n\
+         \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
+         \x20 region     TEXT          NOT NULL OPTIONS(matches = 'Region'),\n\
+         \x20 amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
+         )\nWITH (files = '2025-07.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+    let july = dir.path().join("2025-07.csv");
+    write_rappen_spec(&july);
+    assert!(tdy(&["validate", july.to_str().unwrap(), "--stamp"]).status.success());
+    assert!(tdy(&["fit", t.to_str().unwrap()]).status.success());
+    assert!(tdy(&["fit", t.to_str().unwrap(), "--accept", "2025-07.csv"]).status.success());
+
+    // Re-fitting an untouched dataset must not ask again.
+    let again = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&again.stdout);
+    assert!(text.contains("accepted"), "the acceptance was not carried over:\n{text}");
+    assert!(!text.contains("REVIEW"), "{text}");
+
+    // Change the file: the acceptance was about *those* bytes.
+    let mut body = std::fs::read(&july).unwrap();
+    body.extend_from_slice("31.07.2025;Ost;999900\n".as_bytes());
+    std::fs::write(&july, body).unwrap();
+    assert!(tdy(&["validate", july.to_str().unwrap(), "--stamp"]).status.success());
+
+    let after = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&after.stdout);
+    assert!(text.contains("REVIEW"), "the acceptance survived an edit:\n{text}");
+}
+
+/// A hand-written spec is a human assertion about specific bytes; the planner
+/// must not overwrite it — but it is proved exactly as a planned one is.
+#[test]
+fn a_manual_spec_is_kept_but_still_proved() {
+    let dir = staged();
+    let t = target_of(&dir);
+    fit_all(&dir);
+
+    // Replace a fitted sidecar with a hand-written one that does NOT conform.
+    let p = dir.path().join("2025-01.csv");
+    let sc = tdy::sidecar::sidecar_path(&p);
+    let text = std::fs::read_to_string(&sc).unwrap();
+    let manual = text
+        .replace("method = \"heuristic\"", "method = \"manual\"")
+        .replace("name = \"region\"", "name = \"gebiet\"");
+    std::fs::write(&sc, manual).unwrap();
+    assert!(tdy(&["validate", p.to_str().unwrap(), "--stamp"]).status.success());
+
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "a non-conforming manual spec was accepted:\n{text}");
+    assert!(text.contains("CONTRADICTS"), "{text}");
+    assert!(text.contains("hand-written"), "{text}");
+}
+
+/// A hand-written spec for `2025-07.csv`: reads `Betrag Rp.` and shifts the
+/// decimal point two places left, turning integer Rappen into francs.
+fn write_rappen_spec(csv: &Path) {
+    let sc = tdy::sidecar::sidecar_path(csv);
+    std::fs::write(
+        &sc,
+        r#"spec_version = 1
+[source]
+path = "2025-07.csv"
+blake3 = "0"
+bytes = 0
+[provenance]
+method = "manual"
+tool_version = "0.1.0"
+created_at = "2026-01-01T00:00:00Z"
+[spec]
+[spec.extraction]
+format = "delimited"
+delimiter = ";"
+quote = '"'
+encoding = "windows-1252"
+ragged = "pad_nulls"
+[[spec.transforms]]
+op = "promote_header"
+rows = 1
+join = " "
+[[spec.columns]]
+name = "month"
+source = "Datum"
+nullable = false
+[spec.columns.dtype]
+type = "date"
+format = "%d.%m.%Y"
+[[spec.columns]]
+name = "region"
+source = "Region"
+nullable = false
+[spec.columns.dtype]
+type = "utf8"
+[[spec.columns]]
+name = "amount_chf"
+source = "Betrag Rp."
+nullable = false
+[spec.columns.parse]
+decimal_shift = -2
+[spec.columns.dtype]
+type = "decimal"
+precision = 14
+scale = 2
+"#,
+    )
+    .unwrap();
+}

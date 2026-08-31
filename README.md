@@ -284,6 +284,44 @@ itself. A comment in the target does *not* invalidate anything: the lock
 fingerprints what the declaration **means**, not its bytes, because the point
 of writing it in SQL is that it reads like documentation.
 
+### When a file needs a human
+
+Some things no proof can settle. `2025-07.csv` holds integer Rappen: it parses,
+it type-checks, and reading it as francs is wrong by a factor of a hundred with
+the error invisible in any single row. Nothing declares that column, so the
+planner refuses it — and you write its spec by hand, in its sidecar, where all
+the other structural cleaning lives:
+
+```toml
+[[spec.columns]]
+name   = "amount_chf"
+source = "Betrag Rp."
+[spec.columns.parse]
+decimal_shift = -2          # exact: 123450 -> 1234.50, no float involved
+```
+
+`decimal_shift` moves the decimal point on the digit string, so nothing is
+rounded and no float is introduced — which matters, because the only reason it
+exists is money. A hand-written spec is marked `method = "manual"` and the
+planner will not overwrite it, but it is proved exactly as a planned one is:
+conformance, then a dry run.
+
+And then it still does not run:
+
+```
+2025-07.csv   REVIEW  (hand-written spec)
+    `amount_chf` applies decimal_shift = -2, which changes every value
+    tdy does not accept a value-changing step on its own judgement.
+    Accept:  tdy fit sales.tdy.sql --accept 2025-07.csv
+```
+
+That is the sharpest line in the design. Everything the planner does is
+mechanically checked, and none of it can establish that a column of integers is
+*francs* rather than *Rappen* — so a person says so, once, and the acceptance is
+recorded against that file's bytes and that declaration. Re-fitting an untouched
+dataset does not ask again; editing the file expires the acceptance, because it
+was about those bytes.
+
 If any member cannot be fitted, **no lock is written at all**. A dataset that
 silently omits the months that did not fit is exactly the failure this is
 built to prevent.
@@ -491,7 +529,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 337 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 342 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

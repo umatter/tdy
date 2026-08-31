@@ -32,6 +32,20 @@ pub struct Member {
     pub path: String,
     pub blake3: String,
     pub bytes: u64,
+    /// Why this member needed a human's judgement, if it did.
+    ///
+    /// A plan whose acceptance rests on a *semantic* judgement rather than a
+    /// mechanical proof does not run until somebody accepts it. The classic
+    /// case is a unit shift: `decimal_shift = -2` is exact, lossless and
+    /// self-evidencing, and it is still a claim that this file's numbers mean
+    /// something other than what they say. No proof can settle that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<String>,
+    /// Set by `tdy fit --accept`. Expires on its own: the acceptance lives in
+    /// this entry, and drift replaces the entry whenever the file's bytes or
+    /// the declaration change.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub accepted: bool,
 }
 
 /// The resolved membership of a dataset.

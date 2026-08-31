@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 337 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 342 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -118,7 +118,25 @@ would let DataFusion widen Int64+Utf8 to Utf8 in silence), and a single partitio
 order deterministic for `--frozen`. A member's sidecar is re-proved against the target on
 every query, because a sidecar is hand-editable and that check costs no I/O.
 
-Not yet: the model as frame proposer, the review gate, `decimal_shift`.
+**Slice 4 is in.** `ValueParsing::decimal_shift` moves the decimal point on the *digit string*
+(`engine::shift_decimal_point`) — never `* 0.01`, because the only reason it exists is money
+and a float would reintroduce the error `decimal` was chosen to avoid. `validate()` refuses it
+on non-numeric columns and refuses a positive shift on an integer one (it would produce a
+fraction the column cannot hold).
+
+It is never inferred. The planner refuses the Rappen file; a human writes that spec by hand in
+the sidecar and marks it `method = "manual"`, which `tdy fit` then leaves alone — but still
+proves, with conformance and a dry run, exactly as it proves a planned one.
+
+**The review gate** is the sharpest line here: `fit::review_reasons` finds steps whose
+acceptance rests on a *judgement* rather than a proof, `Member { review, accepted }` records
+them, and `dataset()` refuses an unaccepted one. Everything the planner does is mechanically
+checked and none of it can establish that a column of integers is francs rather than Rappen.
+An acceptance carries over while the member's bytes and the declaration are unchanged — asking
+the same question every run would train people to answer without reading — and drift expires
+it, because it was about those bytes.
+
+Not yet: the model as frame proposer, `Transform::Constant`, declared-absent columns.
 
 ## The one rule
 

@@ -1076,6 +1076,13 @@ pub(crate) fn build_column_at(
                 s = Cow::Owned(s.replace(d, "."));
             }
         }
+        // Applied last, on a canonical number, so it moves the point the user
+        // sees rather than interacting with a separator convention.
+        if let Some(shift) = p.decimal_shift {
+            if shift != 0 {
+                s = Cow::Owned(shift_decimal_point(&s, shift));
+            }
+        }
         Ok(s.into_owned())
     };
 
@@ -1164,6 +1171,46 @@ pub(crate) fn build_column_at(
     };
 
     Ok((Field::new(&col.name, arrow_type, col.nullable), array))
+}
+
+/// Move a decimal number's point by `shift` places, exactly.
+///
+/// String surgery on the digits rather than arithmetic: `123450` shifted by
+/// -2 is `1234.50`, with no float involved and nothing rounded. That matters
+/// because the whole reason this exists is money, and a `* 0.01` would
+/// introduce exactly the representation error `decimal` was chosen to avoid.
+pub(crate) fn shift_decimal_point(v: &str, shift: i8) -> String {
+    let v = v.trim();
+    let (sign, rest) = match v.strip_prefix('-') {
+        Some(r) => ("-", r),
+        None => ("", v.strip_prefix('+').unwrap_or(v)),
+    };
+    let (int_part, frac_part) = match rest.split_once('.') {
+        Some((i, f)) => (i.to_string(), f.to_string()),
+        None => (rest.to_string(), String::new()),
+    };
+    let mut digits: Vec<u8> = int_part.bytes().chain(frac_part.bytes()).collect();
+    // Where the point currently sits, counted from the left of `digits`.
+    let mut point = int_part.len() as i64 + shift as i64;
+
+    // Pad so the point lands inside the digit string.
+    while point < 0 {
+        digits.insert(0, b'0');
+        point += 1;
+    }
+    while point > digits.len() as i64 {
+        digits.push(b'0');
+    }
+
+    let (lhs, rhs) = digits.split_at(point as usize);
+    let lhs = String::from_utf8_lossy(lhs);
+    let rhs = String::from_utf8_lossy(rhs);
+    let lhs = if lhs.is_empty() { "0" } else { &lhs };
+    if rhs.is_empty() {
+        format!("{sign}{lhs}")
+    } else {
+        format!("{sign}{lhs}.{rhs}")
+    }
 }
 
 fn parse_bool(s: &str, p: &ValueParsing) -> Result<bool> {
@@ -1555,5 +1602,35 @@ mod tests {
         let err = build_column_at(&col, &["1,5"], 0).unwrap_err();
         assert!(format!("{err:#}").contains("grouped"), "{err:#}");
         assert!(build_column_at(&col, &["1,234"], 0).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod shift_tests {
+    use super::shift_decimal_point as sh;
+
+    /// Exact string surgery, not arithmetic — the whole reason this exists is
+    /// money, and a `* 0.01` would reintroduce the representation error
+    /// `decimal` was chosen to avoid.
+    #[test]
+    fn moving_the_point_is_exact_in_both_directions() {
+        assert_eq!(sh("123450", -2), "1234.50");
+        assert_eq!(sh("1", -2), "0.01");
+        assert_eq!(sh("0", -2), "0.00");
+        assert_eq!(sh("12", -4), "0.0012");
+        assert_eq!(sh("1234.5", -2), "12.345");
+        assert_eq!(sh("1234.50", 2), "123450", "a trailing point must be elided");
+        assert_eq!(sh("-123450", -2), "-1234.50");
+        assert_eq!(sh("+50", -2), "0.50");
+        assert_eq!(sh("7", 3), "7000");
+        assert_eq!(sh("123450", 0), "123450");
+    }
+
+    /// A shift that leaves nothing to the left of the point must still be a
+    /// number, not ".01".
+    #[test]
+    fn a_shift_past_the_leading_digit_keeps_a_zero() {
+        assert_eq!(sh("5", -1), "0.5");
+        assert_eq!(sh("5", -3), "0.005");
     }
 }
