@@ -212,29 +212,28 @@ impl PartitionStream for MembersPartition {
             for m in &members {
                 let send = |msg: DfResult<RecordBatch>| tx.blocking_send(msg).is_ok();
                 let mut alive = true;
-                let result = crate::stream::enabled()
-                    .then(|| crate::stream::can_stream(&m.spec))
-                    .unwrap_or(false)
-                    .then(|| {
-                        crate::stream::execute_with(&m.spec, &m.path, limits, |b| {
-                            if send(Ok(b)) {
-                                Ok(())
-                            } else {
-                                alive = false;
-                                anyhow::bail!("__tdy_receiver_closed")
-                            }
-                        })
+                // Same choice the single-file provider makes: stream where the
+                // shape allows, materialise otherwise. Both produce identical
+                // batches (tests/streaming.rs is that equality).
+                let result = if crate::stream::enabled() && crate::stream::can_stream(&m.spec) {
+                    crate::stream::execute_with(&m.spec, &m.path, limits, |b| {
+                        if send(Ok(b)) {
+                            Ok(())
+                        } else {
+                            alive = false;
+                            anyhow::bail!("__tdy_receiver_closed")
+                        }
                     })
-                    .unwrap_or_else(|| {
-                        crate::engine::execute_batches(&m.spec, &m.path, limits).map(|bs| {
-                            for b in bs {
-                                if !send(Ok(b)) {
-                                    alive = false;
-                                    break;
-                                }
+                } else {
+                    crate::engine::execute_batches(&m.spec, &m.path, limits).map(|batches| {
+                        for b in batches {
+                            if !send(Ok(b)) {
+                                alive = false;
+                                break;
                             }
-                        })
-                    });
+                        }
+                    })
+                };
 
                 if let Err(e) = result {
                     let msg = format!("{e:#}");
