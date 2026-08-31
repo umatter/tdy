@@ -84,8 +84,46 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static encoding_rs::Encoding {
         return encoding_rs::UTF_8;
     }
     let mut det = chardetng::EncodingDetector::new();
-    det.feed(bytes, true);
+    for w in evidence_windows(bytes) {
+        det.feed(w, false);
+    }
+    det.feed(b"", true);
     det.guess(None, true)
+}
+
+/// Bounded slices of `bytes` that carry the encoding evidence.
+///
+/// chardetng costs real time per byte — measured at ~0.15 s/MB, which turned
+/// one 22 MB latin-1 CSV into 3.4 s of detection per read, twice per query on
+/// the streaming path — and ASCII bytes tell it nothing. So instead of
+/// feeding the whole file, feed windows around the non-ASCII bytes: each
+/// window opens a little early (so the multi-byte sequence around its trigger
+/// is intact) and the total is capped. A file whose evidence all fits is
+/// detected from exactly what the full scan would have used; a pathological
+/// one loses only the evidence past the cap, where the full scan's extra
+/// bytes were overwhelmingly ASCII anyway.
+fn evidence_windows(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    const WINDOW: usize = 4096;
+    const MARGIN: usize = 64;
+    const BUDGET: usize = 256 * 1024;
+
+    let mut spent = 0usize;
+    let mut pos = 0usize;
+    std::iter::from_fn(move || {
+        while spent < BUDGET && pos < bytes.len() {
+            // memchr-style scan: find the next byte that is evidence.
+            let Some(off) = bytes[pos..].iter().position(|b| !b.is_ascii()) else {
+                return None;
+            };
+            let hit = pos + off;
+            let start = hit.saturating_sub(MARGIN).max(pos);
+            let end = (start + WINDOW).min(bytes.len());
+            pos = end;
+            spent += end - start;
+            return Some(&bytes[start..end]);
+        }
+        None
+    })
 }
 
 /// Recognise UTF-16 by its BOM, or by the tell-tale run of NUL bytes in
@@ -355,6 +393,34 @@ mod tests {
         assert_eq!(detect_encoding("Zürich".as_bytes()).name(), "UTF-8");
         // Not valid UTF-8: fall back to the statistical guesser.
         assert_ne!(detect_encoding(b"M\xfcller").name(), "UTF-8");
+    }
+
+    /// The regression behind `evidence_windows`: a 22 MB CSV whose only
+    /// non-ASCII byte sits megabytes in fed the whole file to chardetng and
+    /// cost 3.4 s per read. Detection must see the evidence — wherever it is —
+    /// while feeding the detector a bounded number of bytes.
+    #[test]
+    fn detection_evidence_is_found_late_and_stays_bounded() {
+        // 2 MB of ASCII with one windows-1252 ö near the end.
+        let mut bytes = b"taxon,name,weight\n".repeat(120_000);
+        let at = bytes.len() - 100;
+        bytes[at] = 0xF6;
+        assert_eq!(detect_encoding(&bytes).name(), "windows-1252");
+
+        let fed: usize = evidence_windows(&bytes).map(|w| w.len()).sum();
+        assert!(fed <= 256 * 1024, "fed {fed} bytes; the budget is the point");
+        // …and the window actually contains the evidence.
+        assert!(evidence_windows(&bytes).any(|w| w.contains(&0xF6)));
+
+        // Scattered evidence: every window is picked up until the budget.
+        let mut scattered = vec![b'a'; 1 << 20];
+        for i in (0..scattered.len()).step_by(100_000) {
+            scattered[i] = 0xE9; // é in windows-1252
+        }
+        let hits = evidence_windows(&scattered)
+            .map(|w| w.iter().filter(|b| !b.is_ascii()).count())
+            .sum::<usize>();
+        assert!(hits >= 10, "only {hits} of the 11 evidence bytes were seen");
     }
 
     #[test]

@@ -341,11 +341,14 @@ The `count(*)` figure is the streaming executor; `TDY_NO_STREAM=1` on the same f
 3.13 s / 1,676 MB, which is what the materialising path still costs for the formats that
 cannot stream.
 
-**Known and unfixed: extraction cost scales badly with width.** The 3M-row / 5-column
-fixture above extracts at ~3M cells/s; `tidytuesday/2021-08-24/lemur_data.csv` (82k rows,
-54 columns, 22 MB) manages ~0.55M cells/s, and the whole 8 s is extraction — an all-`utf8`
-spec with no `na_values` and no typing costs the same. Measured, not fixed; if you profile
-extraction, that file is the one to profile against.
+**The "width" cost was encoding detection, and it is fixed.** `lemur_data.csv` (82k rows,
+54 columns, 22 MB) read at ~0.55M cells/s while the same-shape synthetic read at 3M, and
+the difference was one latin-1 `ö` at byte 7432: not valid UTF-8, no declared encoding, so
+`detect_encoding` fed all 22 MB to chardetng (~0.15 s/MB) — twice on the streaming path
+(count pass + body pass). `sample::evidence_windows` now feeds the detector bounded windows
+around the non-ASCII bytes instead (the ASCII in between tells it nothing): 8.6 s → 0.96 s,
+with every `enc_*` fixture detecting identically. If a file is mysteriously slow, check
+whether it is barely-non-UTF-8 before blaming the parser.
 
 Peak RSS no longer follows the size of a text file at all — `stream` holds one batch, not the
 rows and not the decoded text. It is still ~8x for the formats that cannot stream (Excel,
