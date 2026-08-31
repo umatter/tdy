@@ -62,13 +62,159 @@ impl Doubts {
     }
 }
 
+/// How much work the sniffer should do before it answers.
+#[derive(Debug, Clone, Copy)]
+pub struct SniffOpts {
+    /// Check every inferred type against the whole file. See [`verify_types`].
+    ///
+    /// On by default, because a type guessed from 500 rows is a guess about
+    /// all the others and getting it wrong means a spec that dies mid-query.
+    /// It costs a full read: about 6 s for a 141 MB CSV, 40 s for 987 MB,
+    /// paid once when the sidecar is written rather than per query.
+    pub verify: bool,
+}
+
+impl Default for SniffOpts {
+    fn default() -> Self {
+        SniffOpts { verify: true }
+    }
+}
+
 pub fn sniff(path: &Path, sample: &FileSample, limits: Limits) -> Result<SniffResult> {
-    match sample.format {
+    sniff_opts(path, sample, limits, SniffOpts::default())
+}
+
+pub fn sniff_opts(
+    path: &Path,
+    sample: &FileSample,
+    limits: Limits,
+    opts: SniffOpts,
+) -> Result<SniffResult> {
+    let mut res = match sample.format {
         FormatGuess::Excel => sniff_excel(path, sample, limits),
         FormatGuess::Json => sniff_json(path, limits),
         FormatGuess::Delimited | FormatGuess::Unknown => sniff_text(path, sample, limits),
+    }?;
+    if opts.verify {
+        verify_types(&mut res, path, limits);
+    } else {
+        // Said in the sidecar rather than only on the terminal, because the
+        // sidecar is what a colleague reads six months later and the claim
+        // "these are the types" is weaker here than it looks.
+        res.spec.notes.push(
+            "types were inferred from a sample and NOT checked against the whole file \
+             (--quick): a value further in may not fit, and the query will say so when it \
+             reaches one. Re-run `tdy sniff` without --quick to check."
+                .to_string(),
+        );
+    }
+    Ok(res)
+}
+
+/// Check every inferred type against the **whole file**, and widen the ones
+/// that do not hold.
+///
+/// A type inferred from the first 500 rows is a guess about all the others,
+/// and real exports break it as a matter of course. Three files from a corpus
+/// of twenty-six public data-wrangling repositories, none of them contrived:
+///
+/// * `hotels.csv` — `children` is an integer for 40,600 rows and then `NA`;
+/// * `202306-divvy-tripdata.csv` — `start_station_id` is digits until row 708
+///   and `TA1309000067` after it;
+/// * `animalRescue.csv` — `incidentnumber` gains a `-18112015` suffix at row
+///   4067.
+///
+/// Every one of those produced a spec that validated, sniffed confidently, and
+/// then died mid-query naming a row. Erroring was correct — the alternative is
+/// a wrong number — but it was avoidable, and "correct refusal" is not the
+/// same as working.
+///
+/// So the guess is checked and, where it fails, widened to text. Text always
+/// holds, so this terminates; and widening loses no information, because the
+/// value was already going to be unreadable as the guessed type. The note says
+/// which column and why, so a user who wants the narrow type knows exactly
+/// what to fix.
+///
+/// This costs a full read of the file. That is affordable only because
+/// extraction streams — before that it would have cost eight times the file in
+/// memory — and it is paid once, when the sidecar is written, not per query.
+fn verify_types(res: &mut SniffResult, path: &Path, limits: Limits) {
+    // Nothing to check if every column is already text.
+    if res.spec.columns.iter().all(|c| c.dtype == DType::Utf8) {
+        return;
+    }
+    let mut v = match crate::stream::verify(&res.spec, path, limits) {
+        Ok(v) => v,
+        // A file that cannot be read at all is not this function's problem:
+        // the caller's own execution will report it properly.
+        Err(_) => return,
+    };
+
+    // Drop repeated headers first, then re-check the types: a header sitting
+    // in the middle of the data is text in every column, so leaving it in
+    // would widen every numeric column in the file and hide the real cause.
+    if v.repeated_header_rows > 0 {
+        if let Some(first) = res.spec.columns.first() {
+            let pattern = format!("^{}$", regex::escape(first.source_name().trim()));
+            res.spec.transforms.push(Transform::DropRowsMatching {
+                pattern,
+                column: Some(first.source_name().to_string()),
+            });
+            res.spec.notes.push(format!(
+                "dropped {} row(s) identical to the header — the file looks like several \
+                 exports concatenated together",
+                v.repeated_header_rows
+            ));
+            if let Ok(again) = crate::stream::verify(&res.spec, path, limits) {
+                v = again;
+            }
+        }
+    }
+
+    if v.failing.is_empty() {
+        return;
+    }
+    let total = v.rows;
+    for (i, _why) in v.failing {
+        let Some((_, offenders, count)) = v.offenders.iter().find(|(j, _, _)| *j == i) else {
+            continue;
+        };
+        let shown: Vec<String> = offenders
+            .iter()
+            .map(|(row, val)| format!("{val:?} (row {row})"))
+            .collect();
+        let Some(col) = res.spec.columns.get_mut(i) else { continue };
+        let was = col.dtype.clone();
+        col.dtype = DType::Utf8;
+        col.parse = ValueParsing::default();
+        res.spec.notes.push(format!(
+            "column `{}`: kept as text — {} of {} values are not {}: {}. \
+             If those are strays rather than data, drop them with a \
+             `drop_rows_matching` transform and narrow the type by hand.",
+            col.name,
+            count,
+            total,
+            type_word(&was),
+            shown.join(", ")
+        ));
+    }
+    // The sniffer was wrong about something, and saying so is the point of
+    // having a confidence at all.
+    res.spec.confidence = res.spec.confidence.map(|c| (c - 0.1).max(0.0));
+}
+
+fn type_word(d: &DType) -> &'static str {
+    match d {
+        DType::Utf8 => "text",
+        DType::Bool => "a boolean",
+        DType::Int64 => "an integer",
+        DType::Float64 => "a number",
+        DType::Decimal { .. } => "a decimal",
+        DType::Date { .. } => "a date",
+        DType::Timestamp { .. } => "a timestamp",
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // Text: log lines, then delimited, then fixed width
@@ -927,9 +1073,23 @@ fn guess_type(values: &[&str], name: &str) -> TypeGuess {
         return text(None, 0.0);
     }
     let with_na = |mut p: ValueParsing| {
-        p.na_values = na_seen.clone();
+        // The *whole* vocabulary, not only the tokens this sample happened to
+        // contain. A column typed as a number, date or boolean cannot have
+        // "NA" as a value — that is the argument the text branch above turns
+        // down, and it does not depend on where in the file the token sits.
+        //
+        // Declaring only what was seen made the same file behave two ways: a
+        // real 119k-row export (datascience-box `hotels.csv`) types `children`
+        // as an integer from its first 500 rows and then dies at row 40,601 on
+        // an `NA`, while the identical file with that `NA` near the top reads
+        // fine. Inconsistency is worse than either answer, and this is the
+        // answer the code already gave whenever it happened to look.
+        p.na_values = NA_TOKENS.iter().map(|t| t.to_string()).collect();
+        p.na_values.retain(|t| !t.is_empty());
         p
     };
+    // Kept for the note below: what this file actually contained.
+    let _ = &na_seen;
 
     // Integers, but only where nothing is lost by calling them integers.
     if numfmt::all_integral(&sample) {

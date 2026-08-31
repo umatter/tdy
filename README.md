@@ -71,6 +71,29 @@ The model emits *instructions, not data* — every byte in your output went
 through the deterministic executor, and the instructions are in the sidecar
 for review.
 
+**Types are checked, not guessed.** A type inferred from the first 500 rows is
+a guess about all the others, and real exports break it routinely — a column
+that is an integer for 40,600 rows and then `NA`, a station id that turns
+alphanumeric at row 708. So `tdy sniff` reads the whole file and widens any
+column whose guess does not hold, saying which values broke it:
+
+```
+column `station_id`: kept as text — 5 of 999 values are not an integer:
+  "TA1309000067" (row 708), "TA1309000067" (row 845). If those are strays
+  rather than data, drop them with a `drop_rows_matching` transform and
+  narrow the type by hand.
+```
+
+That costs a full read — about 6 s for a 141 MB CSV, 40 s for 987 MB, at
+bounded memory — paid once when the sidecar is written rather than on every
+query. `tdy sniff --quick` skips it, and records in the sidecar that it did.
+
+It is also why a header sitting in the middle of a file (two exports
+concatenated) is handled rather than fatal. A repeat that is *byte-identical*
+to the header is provably not data, so it is dropped; one that is merely
+similar is reported, never dropped, because discarding rows that fail to parse
+is exactly the silent data loss this tool refuses.
+
 **What tier 1 gets you on its own** (the default, with no backend
 configured): delimited files with title blocks, footers, quoting, mixed line
 endings and any encoding; JSON and NDJSON including a nested records array;
@@ -119,6 +142,7 @@ tdy query -f "..."                                 # --frozen: CI mode — fresh
 tdy sniff data/export.csv                          # infer + print spec + preview
 tdy sniff weird.txt --hint 'nginx access log'      # nudge the LLM tier
 tdy sniff f.xlsx --force --no-llm                  # re-run heuristics only
+tdy sniff huge.csv --quick                         # skip whole-file type checking
 tdy validate data/export.csv                       # spec valid? fingerprint fresh?
                                                     # does it still parse?
 tdy validate data/export.csv --stamp               # re-fingerprint a hand-edited
@@ -544,7 +568,7 @@ cargo install --path .        # puts `tdy` on your PATH
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 346 tests; plain `cargo test` also runs doc-tests
+cargo test --lib --tests    # 355 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

@@ -58,6 +58,12 @@ enum Command {
     /// Infer (or re-infer) the parsing spec for a file and preview it.
     Sniff {
         file: PathBuf,
+        /// Skip checking the inferred types against the whole file.
+        ///
+        /// Faster on a large file, and the spec it writes may fail on a value
+        /// further in. The sidecar records that it was not checked.
+        #[arg(long)]
+        quick: bool,
         /// Free-text hint passed to the LLM tier
         #[arg(long)]
         hint: Option<String>,
@@ -588,9 +594,9 @@ async fn run() -> Result<()> {
             let (schema, batches) = provider::run_query(&sql, &cfg, frozen).await?;
             provider::write_output(&schema, &batches, fmt, output.as_deref())?;
         }
-        Command::Sniff { file, hint, force, no_llm } => {
+        Command::Sniff { file, hint, force, no_llm, quick } => {
             let cfg = config::load(&overrides)?;
-            provider::sniff_command(&file, &cfg, hint.as_deref(), force, no_llm).await?;
+            provider::sniff_command(&file, &cfg, hint.as_deref(), force, no_llm, quick).await?;
         }
         Command::Validate { file, stamp } => {
             let cfg = config::load(&overrides)?;

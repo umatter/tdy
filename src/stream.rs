@@ -71,6 +71,7 @@ use crate::engine::{
 const BATCH_CELLS: usize = 1 << 20;
 use crate::spec::{
     ColumnSpec, Extraction, FixedField, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform,
+    ValueParsing,
 };
 
 /// Whether [`execute_batches`] can run this spec. See the module docs.
@@ -708,6 +709,199 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
         Ok(())
     })?;
     Ok(out)
+}
+
+/// Which of a spec's columns fail to parse *somewhere* in the file.
+///
+/// The reason this exists: a type inferred from the first 500 rows is a guess
+/// about the other 118,890. Real exports break it routinely — a station id
+/// that is digits until row 708 and `TA1309000067` after, an incident number
+/// that gains a `-18112015` suffix at row 4067 — and the result was a spec
+/// that validated, conformed, and died mid-query.
+///
+/// So the guess is *checked*. Every column is read as a raw string (which
+/// cannot fail), and each declared type is tried against those strings with
+/// `build_column_at` — the executor's own function — batch by batch. Nothing
+/// aborts on the first failure: the caller wants every column that is wrong,
+/// not the first.
+///
+/// Memory stays bounded, which is what makes this affordable at all: before
+/// the streaming work a full verification pass would have cost eight times the
+/// file.
+/// What a full read of the file says about a guessed spec.
+#[derive(Debug, Default)]
+pub struct Verification {
+    /// (column index, the parse error) for every column whose declared type
+    /// does not hold somewhere in the file.
+    pub failing: Vec<(usize, String)>,
+    /// For each failing column, the offending values and the rows they are on
+    /// — at most a few, because the point is to name the problem rather than
+    /// to list it. How many there are matters as much as what they are: one
+    /// bad value in 40,000 rows is a stray, and thousands are a wrong type.
+    pub offenders: Vec<(usize, Vec<(usize, String)>, usize)>,
+    /// Rows read. The denominator that turns "5 values are not integers" into
+    /// either "5 strays in 40,000" or "5 of 5, so it is simply not an integer
+    /// column".
+    pub rows: usize,
+    /// Body rows identical to the header.
+    ///
+    /// Concatenated exports do this — `cat jan.csv feb.csv > year.csv` leaves
+    /// February's header sitting in the middle of the data — and the result is
+    /// one text row that poisons every numeric column in the file.
+    pub repeated_header_rows: usize,
+}
+
+pub fn failing_columns(
+    spec: &ParseSpec,
+    path: &Path,
+    limits: Limits,
+) -> Result<Vec<(usize, String)>> {
+    Ok(verify(spec, path, limits)?.failing)
+}
+
+/// Read the whole file and report what the guess got wrong.
+///
+/// Two paths, because the answer is almost always "nothing". The fast one
+/// simply *runs the spec*: if every column types cleanly over the whole file
+/// there is nothing to report, and that costs one ordinary read. Only when
+/// something fails is the expensive analysis worth doing — reading every
+/// column as raw text and trying each declared type against it, to find every
+/// bad column rather than the first, and the values responsible.
+///
+/// Without the split this cost 16 s on a 141 MB file against 2.9 s for the
+/// same file's `count(*)`, because it did the typing work twice for every
+/// file whether or not anything was wrong.
+pub fn verify(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification> {
+    // A text column cannot fail to be text, so verifying one is pure work.
+    // Projecting them away is free on a file of numbers and a large saving on
+    // the wide mostly-textual exports that are most of real data.
+    let mut probe = spec.clone();
+    probe.columns.retain(|c| c.dtype != crate::spec::DType::Utf8);
+    if probe.columns.is_empty() {
+        return Ok(Verification::default());
+    }
+
+    let mut rows = 0usize;
+    let clean = if can_stream(&probe) {
+        execute_with(&probe, path, limits, |b| {
+            rows += b.num_rows();
+            Ok(())
+        })
+        .is_ok()
+    } else {
+        match crate::engine::execute_batches(&probe, path, limits) {
+            Ok(bs) => {
+                rows = bs.iter().map(|b| b.num_rows()).sum();
+                true
+            }
+            Err(_) => false,
+        }
+    };
+    if clean {
+        return Ok(Verification { rows, ..Verification::default() });
+    }
+    analyse(spec, path, limits)
+}
+
+/// The slow path: which columns are wrong, and which values made them so.
+fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification> {
+    use datafusion::arrow::array::{Array, StringArray};
+
+    // Read every column as an untouched string: no na_values, no strip, no
+    // separators — the raw post-transform text the real parse would see.
+    let mut probe = spec.clone();
+    for c in &mut probe.columns {
+        c.dtype = crate::spec::DType::Utf8;
+        c.nullable = true;
+        c.parse = ValueParsing::default();
+    }
+
+    let mut failed: Vec<Option<String>> = vec![None; spec.columns.len()];
+    let mut bad: Vec<(Vec<(usize, String)>, usize)> =
+        vec![(Vec::new(), 0); spec.columns.len()];
+    let mut repeats = 0usize;
+    let mut row_base = 0usize;
+    // The header cell each column reads from, which is what a repeated header
+    // row would contain.
+    let sources: Vec<String> =
+        spec.columns.iter().map(|c| c.source_name().trim().to_string()).collect();
+
+    let mut check = |batch: RecordBatch| -> Result<()> {
+        let cols: Vec<Option<&StringArray>> = (0..batch.num_columns())
+            .map(|i| batch.column(i).as_any().downcast_ref::<StringArray>())
+            .collect();
+
+        // A row is a repeated header when *every* column holds its own name.
+        // Requiring all of them, rather than one, is what keeps a `name`
+        // column containing the value "name" from being mistaken for one.
+        if spec.columns.len() > 1 {
+            for r in 0..batch.num_rows() {
+                let all = cols.iter().enumerate().all(|(i, a)| {
+                    a.map(|a| !a.is_null(r) && a.value(r).trim() == sources[i]).unwrap_or(false)
+                });
+                if all {
+                    repeats += 1;
+                }
+            }
+        }
+
+        for (i, col) in spec.columns.iter().enumerate() {
+            let Some(arr) = cols.get(i).copied().flatten() else { continue };
+            let values: Vec<&str> =
+                (0..arr.len()).map(|r| if arr.is_null(r) { "" } else { arr.value(r) }).collect();
+            if build_column_at(col, &values, row_base).is_ok() {
+                continue;
+            }
+            if failed[i].is_none() {
+                failed[i] = Some(
+                    build_column_at(col, &values, row_base)
+                        .err()
+                        .map(|e| format!("{e:#}"))
+                        .unwrap_or_default(),
+                );
+            }
+            // Only now, and only for this column, is it worth paying for a
+            // per-row scan: it turns "this column is not an integer" into
+            // "these two values are not, and here is where they are".
+            for (r, v) in values.iter().enumerate() {
+                if build_column_at(col, std::slice::from_ref(v), row_base + r).is_err() {
+                    bad[i].1 += 1;
+                    if bad[i].0.len() < 3 {
+                        bad[i].0.push((row_base + r + 1, (*v).to_string()));
+                    }
+                    // A column where *everything* fails is a wrong guess, not
+                    // a set of strays, and counting every one of a million
+                    // rows adds nothing a reader would use.
+                    if bad[i].1 >= 500 {
+                        break;
+                    }
+                }
+            }
+        }
+        row_base += batch.num_rows();
+        Ok(())
+    };
+
+    if can_stream(&probe) {
+        execute_with(&probe, path, limits, check)?;
+    } else {
+        for b in crate::engine::execute_batches(&probe, path, limits)? {
+            check(b)?;
+        }
+    }
+
+    let offenders = bad
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (v, _))| !v.is_empty())
+        .map(|(i, (v, n))| (i, v, n))
+        .collect();
+    Ok(Verification {
+        failing: failed.into_iter().enumerate().filter_map(|(i, e)| e.map(|e| (i, e))).collect(),
+        offenders,
+        rows: row_base,
+        repeated_header_rows: repeats,
+    })
 }
 
 /// The driver: calls `sink` with each batch as it is built, and never holds

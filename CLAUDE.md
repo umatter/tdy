@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 346 tests (skips doc-tests; see note below)
+cargo test --lib --tests                # 355 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -137,6 +137,18 @@ the same question every run would train people to answer without reading — and
 it, because it was about those bytes.
 
 Not yet: the model as frame proposer, `Transform::Constant`, declared-absent columns.
+
+## Real data
+
+`scripts/download_corpus.sh` clones twenty-six public data-wrangling exercise repositories
+into `corpus/` (gitignored, ~7 GB, 9,881 files). `TDY_CORPUS=corpus cargo test --test corpus
+-- --nocapture` sweeps them: never panic, never hang, anything read confidently is
+reproducible, plus a survey. Nothing in CI sees it, so anything it *finds* has to become a
+fixture in `testdata/` — that is what `12_late_surprises.py` is.
+
+Current state: **0 of 1,374 real CSVs declined** (15 before the type-verification work);
+`OxfordIHTM/messy-data`, which is purpose-built to be hard, lands at 50-75% confidence with
+accurate notes, which is the documented tier-2 boundary rather than a defect.
 
 ## The one rule
 
@@ -273,6 +285,17 @@ Things that only become clear from reading several modules:
   1,376 -> **98 MB**; 987 MB / 21M-row CSV refused -> **88 MB**; 134 MB / 1,000-column CSV
   4,156 -> **114 MB**; 138 MB / 1.5M-record NDJSON 2,128 -> **78 MB**. Memory does not track
   file size or width any more.
+- **Types are verified against the whole file, not sampled.** `sniff::verify_types` runs
+  `stream::verify` and widens any column whose guess does not hold, naming the offending
+  values and how many of how many. Four real files from `corpus/` used to die mid-query on
+  this (see `testdata/gen/12_late_surprises.py` for the reductions); erroring was correct but
+  avoidable. `verify` has a fast path — run the real spec, and only if it fails pay for the
+  raw-text analysis that finds *every* bad column — and projects away Utf8 columns, which
+  cannot fail. Together those took a 141 MB sniff from 16 s to 5.9 s; `--quick` skips it and
+  records that in the sidecar. This is affordable only because extraction streams.
+  A byte-identical repeated header is dropped automatically (provably not data); a merely
+  similar one is reported and kept, because dropping rows that fail to parse is the silent
+  data loss the whole design refuses.
 - **`xlguard` bounds a spreadsheet before it is read.** Every other limit is checked against a
   table that already exists — fine for text, useless for a format whose size is a *claim*: a
   899-byte `.ods` was measured at 4.8 GB and SIGABRT, which is the one failure mode the design
@@ -294,7 +317,7 @@ Measured on a 141 MB / 3M-row CSV (release build), before → after the hardenin
 
 | | before | after |
 |---|---|---|
-| `sniff` (needs a 16 KB sample) | 6.04 s, 1.20 GB RSS | **0.13 s, 24 MB** |
+| `sniff` (16 KB sample + a whole-file type check) | 6.04 s, 1.20 GB RSS | **5.9 s, 55 MB** |
 | `count(*)` over the whole file | 6.79 s, 1.40 GB | **2.96 s, 87 MB** |
 | same file referenced twice | 2 full parses | 1 (cached, under 64 MB) |
 

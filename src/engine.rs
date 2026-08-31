@@ -1031,7 +1031,15 @@ pub(crate) fn build_column_at(
                     v = Cow::Owned(v.replace(&r.from, &r.to));
                 }
             }
-            let is_na = v.is_empty() || p.na_values.iter().any(|na| na == v.as_ref());
+            // Case-insensitively: `NA`, `na` and `N/A` are the same claim
+            // about a value, and a sidecar that had to list every casing
+            // would be a list nobody could keep complete. `sniff::is_na`
+            // already folds case when it decides a token is missing, so the
+            // executor folding it too is what makes the two agree — they did
+            // not, and a column typed from a sample containing `NA` failed on
+            // a later `NULL`.
+            let is_na = v.is_empty()
+                || p.na_values.iter().any(|na| na.eq_ignore_ascii_case(v.as_ref()));
             if is_na {
                 return None;
             }

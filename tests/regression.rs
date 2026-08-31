@@ -842,3 +842,156 @@ fn a_zip_container_is_bounded_by_its_uncompressed_size() {
     assert!(msg.contains("expands to"), "unhelpful error: {msg}");
     assert!(msg.contains("max_file_bytes"), "error does not name the knob: {msg}");
 }
+
+// ---------------------------------------------------------------------------
+// When the first 500 rows lie
+// ---------------------------------------------------------------------------
+//
+// Four shapes reduced from real files that made tdy die mid-query, found by
+// sweeping `corpus/` — 9,881 files from twenty-six public data-wrangling
+// repositories. That corpus is gitignored and CI never sees it, so the shapes
+// live in `testdata/` and these tests are what protect the fixes.
+//
+// In every case tdy's old behaviour was *correct* — it errored, naming the
+// row, rather than inventing a value. But a tool that refuses one real CSV in
+// ten is not one anybody reaches for, and "correctly refused" is not "works".
+
+/// `NA` at row 901 in a column that is an integer for the 900 before it.
+///
+/// tdy already knew `NA` means missing — it is in `NA_TOKENS` — but only
+/// declared it when it happened to *see* one inside the 500-row type sample.
+/// So the identical file with the `NA` near the top read fine and this one
+/// died. One file behaving two ways depending on where a token sits is worse
+/// than either answer.
+#[tokio::test]
+async fn a_missing_marker_past_the_type_sample_is_still_a_missing_marker() {
+    let p = fixture("late_surprise_na_after_the_sample.csv");
+    let b = query(&format!(
+        "SELECT count(*) n, count(children) nonnull, sum(children) total \
+         FROM messy('{}')",
+        p.display()
+    ))
+    .await;
+    assert_eq!(col_i64(&b[0], 0), vec![Some(1000)], "rows");
+    assert_eq!(col_i64(&b[0], 1), vec![Some(999)], "the NA row must be null, not missing");
+    assert_eq!(col_i64(&b[0], 2), vec![Some(999)], "sum");
+}
+
+/// The same vocabulary, in a casing the file chose. `is_na` folds case when
+/// the sniffer decides a token is missing; the executor did not, so a spec
+/// carrying the canonical `na` failed on a file containing `NULL`.
+#[tokio::test]
+async fn missing_markers_match_whatever_case_the_file_used() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "case.csv", "id,v\n1,1\n2,NULL\n3,N/A\n4,nan\n5,5\n");
+    let b = query(&format!(
+        "SELECT count(v) nonnull, sum(v) total FROM messy('{}')",
+        p.display()
+    ))
+    .await;
+    assert_eq!(col_i64(&b[0], 0), vec![Some(2)], "NULL/N/A/nan must all be null");
+    assert_eq!(col_i64(&b[0], 1), vec![Some(6)]);
+}
+
+/// An id that is digits for 700 rows and then is not. No vocabulary fixes
+/// this — the value is data — so the only honest answer is that the column is
+/// text, decided by checking the guess against the whole file rather than
+/// discovering it at row 701 of somebody's query.
+#[tokio::test]
+async fn a_type_that_the_sample_got_wrong_is_widened_not_discovered_later() {
+    let p = fixture("late_surprise_id_turns_alphanumeric.csv");
+    let res = sniffed(&p);
+    let station = res
+        .spec
+        .columns
+        .iter()
+        .find(|c| c.name == "station_id")
+        .expect("station_id");
+    assert_eq!(station.dtype, DType::Utf8, "the sample's guess was not corrected");
+
+    // And the note names the value, its row, and how many of how many — which
+    // is what tells a reader "two strays" apart from "wrong type".
+    let note = res
+        .spec
+        .notes
+        .iter()
+        .find(|n| n.contains("station_id"))
+        .unwrap_or_else(|| panic!("no note explaining the widening: {:?}", res.spec.notes));
+    assert!(note.contains("TA1309000067"), "{note}");
+    assert!(note.contains("of 1000"), "the denominator is missing: {note}");
+
+    let b = query(&format!("SELECT count(*) FROM messy('{}')", p.display())).await;
+    assert_eq!(col_i64(&b[0], 0), vec![Some(1000)]);
+}
+
+/// A header from a *second* export, worded differently, sitting at row 501.
+///
+/// tdy must not drop it. Dropping rows because they fail to parse is exactly
+/// the silent data loss this project refuses — the row could be data. So the
+/// column widens, the note names the row, and a human who agrees it is a
+/// stray adds a `drop_rows_matching`.
+#[tokio::test]
+async fn a_differently_worded_header_mid_file_is_reported_never_dropped() {
+    let p = fixture("late_surprise_second_export_header.csv");
+    let res = sniffed(&p);
+    let amount = res.spec.columns.iter().find(|c| c.name == "amount").unwrap();
+    assert_eq!(amount.dtype, DType::Utf8);
+    assert!(
+        res.spec.notes.iter().any(|n| n.contains("Total") && n.contains("row 501")),
+        "{:?}",
+        res.spec.notes
+    );
+
+    // 1001 rows: the junk one is still there, because tdy cannot prove it is junk.
+    let b = query(&format!("SELECT count(*) FROM messy('{}')", p.display())).await;
+    assert_eq!(col_i64(&b[0], 0), vec![Some(1001)], "a row was silently dropped");
+}
+
+/// The same shape, but the repeat is byte-identical to the real header — and
+/// *that* tdy can settle without judgement, because a row reproducing the
+/// header exactly is provably not data. It is dropped, and the numeric columns
+/// keep their types.
+///
+/// The pair is the point: both look like "a header in the middle of the file",
+/// and tdy does automatically only the one it can prove.
+#[tokio::test]
+async fn an_identical_repeated_header_is_dropped_and_the_types_survive() {
+    let p = fixture("late_surprise_repeated_header.csv");
+    let res = sniffed(&p);
+    let amount = res.spec.columns.iter().find(|c| c.name == "amount").unwrap();
+    assert_eq!(amount.dtype, DType::Int64, "the repeat was not dropped, so the type widened");
+    assert!(
+        res.spec.transforms.iter().any(|t| matches!(t, Transform::DropRowsMatching { .. })),
+        "no drop transform was emitted: {:?}",
+        res.spec.transforms
+    );
+
+    let b = query(&format!(
+        "SELECT count(*) n, sum(amount) total FROM messy('{}')",
+        p.display()
+    ))
+    .await;
+    assert_eq!(col_i64(&b[0], 0), vec![Some(1000)], "the repeated header is still in the data");
+    assert_eq!(col_i64(&b[0], 1), vec![Some(600500)]);
+}
+
+/// `--quick` skips the check, and says so where it matters: in the sidecar,
+/// which is what a colleague reads six months later.
+#[test]
+fn quick_skips_verification_and_records_that_it_did() {
+    let p = fixture("late_surprise_id_turns_alphanumeric.csv");
+    let dir = TempDir::new().unwrap();
+    let staged = dir.path().join("f.csv");
+    std::fs::copy(&p, &staged).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["sniff", staged.to_str().unwrap(), "--no-llm", "--quick"])
+        .output()
+        .expect("run tdy");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("NOT checked against the whole file"), "{text}");
+    // Unverified, so the sample's wrong guess survives — which is exactly the
+    // behaviour the flag is opting into.
+    assert!(text.contains("int64"), "the unverified guess is not visible: {text}");
+}

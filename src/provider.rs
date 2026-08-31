@@ -299,6 +299,16 @@ pub async fn ensure_sidecar(
     hint: Option<&str>,
     force: bool,
 ) -> Result<PreparedFile> {
+    ensure_sidecar_opts(path, cfg, hint, force, sniff::SniffOpts::default()).await
+}
+
+pub async fn ensure_sidecar_opts(
+    path: &Path,
+    cfg: &Config,
+    hint: Option<&str>,
+    force: bool,
+    opts: sniff::SniffOpts,
+) -> Result<PreparedFile> {
     if !path.exists() {
         bail!("file not found: {}", path.display());
     }
@@ -314,7 +324,7 @@ pub async fn ensure_sidecar(
     }
 
     let s = sample::build(path, cfg.sample_bytes, cfg.limits)?;
-    let draft = sniff::sniff(path, &s, cfg.limits)
+    let draft = sniff::sniff_opts(path, &s, cfg.limits, opts)
         .with_context(|| format!("heuristic sniff of {}", path.display()))?;
 
     let (spec, method, model) = if draft.confidence >= cfg.confidence_threshold {
@@ -594,6 +604,7 @@ pub async fn sniff_command(
     hint: Option<&str>,
     force: bool,
     no_llm: bool,
+    quick: bool,
 ) -> Result<()> {
     let cfg = if no_llm {
         let mut c = cfg.clone();
@@ -602,7 +613,8 @@ pub async fn sniff_command(
     } else {
         cfg.clone()
     };
-    let prepared = ensure_sidecar(path, &cfg, hint, force).await?;
+    let prepared = ensure_sidecar_opts(path, &cfg, hint, force, sniff::SniffOpts { verify: !quick })
+        .await?;
     let sc_path = sidecar::sidecar_path(path);
     let text = std::fs::read_to_string(&sc_path)?;
     println!("# {}", sc_path.display());

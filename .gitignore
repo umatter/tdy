@@ -4,3 +4,9 @@
 # but the ones tdy writes next to testdata/ during a test run do not.
 /testdata/**/*.tdy.toml
 /testdata/**/*.tdy.lock
+
+# Third-party data-wrangling corpora fetched by scripts/download_corpus.sh.
+# Twenty-six upstream repositories with their own licences: cloned for
+# testing, never vendored. `tests/corpus.rs` skips when this is absent, which
+# is what CI sees.
+/corpus/
