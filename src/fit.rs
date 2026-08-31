@@ -277,7 +277,7 @@ impl Proposal {
                 names.push(src.clone());
             }
         }
-        let mut out = format!("could be supplied by:");
+        let mut out = String::from("could be supplied by:");
         for (src, why) in &self.candidates {
             out.push_str(&format!("\n  {src:?}  — {why}"));
         }

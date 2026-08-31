@@ -841,24 +841,33 @@ fn locate_failures(
     col: &crate::spec::ColumnSpec,
     values: &[&str],
     row_base: usize,
-    out: &mut (Vec<(usize, String)>, usize, bool),
+    out: &mut Tally,
 ) {
-    if out.2 || values.is_empty() || build_column_at(col, values, row_base).is_ok() {
+    if out.capped || values.is_empty() || build_column_at(col, values, row_base).is_ok() {
         return;
     }
     if values.len() == 1 {
-        out.1 += 1;
-        if out.0.len() < 3 {
-            out.0.push((row_base + 1, values[0].to_string()));
+        out.count += 1;
+        if out.examples.len() < 3 {
+            out.examples.push((row_base + 1, values[0].to_string()));
         }
-        if out.1 >= OFFENDER_CAP {
-            out.2 = true;
+        if out.count >= OFFENDER_CAP {
+            out.capped = true;
         }
         return;
     }
     let mid = values.len() / 2;
     locate_failures(col, &values[..mid], row_base, out);
     locate_failures(col, &values[mid..], row_base + mid, out);
+}
+
+/// One column's running failure tally, accumulated across batches.
+#[derive(Debug, Clone, Default)]
+struct Tally {
+    examples: Vec<(usize, String)>,
+    count: usize,
+    /// Counting stopped at [`OFFENDER_CAP`], so `count` is a floor.
+    capped: bool,
 }
 
 /// The slow path: which columns are wrong, and which values made them so.
@@ -875,9 +884,7 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
     }
 
     let mut failed: Vec<Option<String>> = vec![None; spec.columns.len()];
-    // (examples, count, counting-stopped-at-the-cap)
-    let mut bad: Vec<(Vec<(usize, String)>, usize, bool)> =
-        vec![(Vec::new(), 0, false); spec.columns.len()];
+    let mut bad: Vec<Tally> = vec![Tally::default(); spec.columns.len()];
     let mut repeats = 0usize;
     let mut row_base = 0usize;
     // The header cell each column reads from, which is what a repeated header
@@ -933,7 +940,7 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
             // A column where *everything* fails is a wrong guess, not a set
             // of strays, so counting stops at the cap — and the flag is what
             // keeps the message honest about having stopped.
-            if bad[i].2 {
+            if bad[i].capped {
                 continue;
             }
             locate_failures(col, &values, row_base, &mut bad[i]);
@@ -953,8 +960,13 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
     let offenders: Vec<Offenders> = bad
         .into_iter()
         .enumerate()
-        .filter(|(_, (v, _, _))| !v.is_empty())
-        .map(|(column, (examples, count, capped))| Offenders { column, examples, count, capped })
+        .filter(|(_, t)| !t.examples.is_empty())
+        .map(|(column, t)| Offenders {
+            column,
+            examples: t.examples,
+            count: t.count,
+            capped: t.capped,
+        })
         .collect();
     Ok(Verification {
         failing: failed.into_iter().enumerate().filter_map(|(i, e)| e.map(|e| (i, e))).collect(),

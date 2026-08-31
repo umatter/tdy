@@ -143,7 +143,7 @@ pub fn verify_types(spec: &mut crate::spec::ParseSpec, path: &Path, limits: Limi
     if spec.columns.iter().all(|c| c.dtype == DType::Utf8) {
         return;
     }
-    let mut v = match crate::stream::verify(&spec, path, limits) {
+    let mut v = match crate::stream::verify(spec, path, limits) {
         Ok(v) => v,
         // A file that cannot be read at all is not this function's problem —
         // the caller's own execution reports it properly. But silence here
@@ -196,7 +196,7 @@ pub fn verify_types(spec: &mut crate::spec::ParseSpec, path: &Path, limits: Limi
                  exports concatenated together",
                 v.repeated_header_rows
             ));
-            if let Ok(again) = crate::stream::verify(&spec, path, limits) {
+            if let Ok(again) = crate::stream::verify(spec, path, limits) {
                 v = again;
             }
         }
