@@ -147,9 +147,7 @@ pub struct Session {
     cwd: PathBuf,
     cfg: Config,
     quit: bool,
-    #[allow(dead_code)] // written/read from Task 8 (multi-line SQL assembly)
     sql_buffer: String,
-    #[allow(dead_code)] // written by Task 8 (`.output`), read once a query result is produced
     output: Option<(PathBuf, crate::provider::OutputFormat)>,
     #[allow(dead_code)] // written/read by Task 9 (`.accept`, the review gate)
     pending_accept: Option<(PathBuf, String)>,
@@ -239,16 +237,50 @@ impl Session {
     }
 
     /// One line in, one outcome out. Never panics on input; never prints.
+    ///
+    /// A line starting with `.` is a dot-command, dispatched immediately;
+    /// anything else is SQL, buffered until a `;` ends the statement
+    /// (sqlite's rule — see `parse`'s module doc). A dot-command typed while
+    /// a statement is pending discards the buffer and says so: silently
+    /// dropping half-typed SQL would be its own kind of wrong answer.
     pub async fn run(&mut self, line: &str, progress: Option<&progress::Sink>) -> Outcome {
-        let trimmed = line.trim();
-        // SQL assembly (Task 8) goes here; for now every non-dot line is
-        // an error so the tests for this task do not depend on it.
+        let trimmed = line.trim_end();
+        if trimmed.trim().is_empty() && self.sql_buffer.is_empty() {
+            return Outcome { echo: String::new(), text: String::new(), payload: Payload::Nothing, ok: true };
+        }
+        let is_dot = trimmed.trim_start().starts_with('.');
+        let mut prefix = String::new();
+        if is_dot && !self.sql_buffer.is_empty() {
+            prefix = format!("note: discarded incomplete statement: {}\n", first_line(&self.sql_buffer));
+            self.sql_buffer.clear();
+        }
+        if !is_dot {
+            if !self.sql_buffer.is_empty() {
+                self.sql_buffer.push('\n');
+            }
+            self.sql_buffer.push_str(trimmed);
+            if !self.sql_buffer.trim_end().ends_with(';') {
+                return Outcome {
+                    echo: trimmed.to_string(),
+                    text: String::new(),
+                    payload: Payload::Continue,
+                    ok: true,
+                };
+            }
+            let sql = std::mem::take(&mut self.sql_buffer);
+            let mut o = match self.run_sql(&sql).await {
+                Ok(o) => o,
+                Err(e) => Outcome::error(&sql, format!("{e:#}")),
+            };
+            o.echo = sql;
+            return o;
+        }
         let cmd = match parse(trimmed) {
             Ok(c) => c,
             Err(e) => return Outcome::error(trimmed, e.to_string()),
         };
         let echo = trimmed.to_string();
-        match self.dispatch(cmd, progress).await {
+        let mut o = match self.dispatch(cmd, progress).await {
             Ok(mut o) => {
                 if o.echo.is_empty() {
                     o.echo = echo;
@@ -256,7 +288,57 @@ impl Session {
                 o
             }
             Err(e) => Outcome::error(&echo, format!("{e:#}")),
+        };
+        if !prefix.is_empty() {
+            o.text = prefix + &o.text;
         }
+        o
+    }
+
+    /// Whether a SQL statement is buffered, waiting for a `;`.
+    pub fn sql_pending(&self) -> bool {
+        !self.sql_buffer.is_empty()
+    }
+
+    /// Run one complete SQL statement (already `;`-terminated) and format
+    /// its result — to `.output`'s route if one is active, to the screen
+    /// otherwise. Each statement builds its own query context (see the
+    /// design doc §4): a `.sniff --force` or a rewritten export between two
+    /// statements must not serve a `MemTable` built from the old spec.
+    async fn run_sql(&mut self, sql: &str) -> Result<Outcome> {
+        // A relative `messy('2025-01.csv')` inside the SQL text is resolved
+        // two ways: `MessyFunc` confines it against `self.root` regardless
+        // of the process's actual directory, but `provider::prepare_specs`'s
+        // pre-pass (sniffing, sidecar I/O) uses plain relative-path I/O —
+        // the same assumption the plain CLI makes, that process cwd *is*
+        // the working directory. `.cd` and `.draft` already realign the
+        // process to `self.cwd` for exactly this reason (see `Command::Cd`
+        // and `Command::Draft`'s `RestoreCwd`); a bare SQL statement needs
+        // the same realignment, held for the whole call since the pre-pass
+        // and the query it feeds are one `.await`.
+        struct RestoreCwd(Option<PathBuf>);
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                if let Some(p) = self.0.take() {
+                    let _ = std::env::set_current_dir(p);
+                }
+            }
+        }
+        let (schema, batches) = {
+            let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let _restore = RestoreCwd(std::env::current_dir().ok());
+            std::env::set_current_dir(&self.cwd)?;
+            crate::provider::run_query_rooted(sql, &self.cfg, false, Some(self.root.clone())).await?
+        };
+        let table = table_of(&schema, &batches, QUERY_ROWS_CAP);
+        let text = match self.output.take() {
+            Some((path, fmt)) => {
+                crate::provider::write_output(&schema, &batches, fmt, Some(&path))?;
+                format!("wrote {} row(s) to {}\n", table.total, self.display_rel(&path))
+            }
+            None => crate::provider::format_table(&batches)?,
+        };
+        Ok(Outcome { echo: String::new(), text, payload: Payload::Query(table), ok: true })
     }
 
     async fn dispatch(&mut self, cmd: Command, progress: Option<&progress::Sink>) -> Result<Outcome> {
@@ -445,6 +527,24 @@ impl Session {
                 let p = self.resolve(&file)?;
                 Outcome::ok(String::new(), Payload::Edit(p))
             }
+            Command::Output { file: None, .. } => {
+                self.output = None;
+                Outcome::ok("next result -> screen\n".into(), Payload::Nothing)
+            }
+            Command::Output { file: Some(f), format, force } => {
+                // `resolve_new`, not `resolve`: the file need not exist yet
+                // (see its doc comment, which names `.output` explicitly).
+                let path = self.resolve_new(&f)?;
+                if path.exists() && !force {
+                    bail!("{f} exists; --force to overwrite");
+                }
+                let fmt = match format {
+                    Some(x) => crate::provider::OutputFormat::parse(&x)?,
+                    None => crate::provider::OutputFormat::for_output_path(&path)?,
+                };
+                self.output = Some((path, fmt));
+                Outcome::ok(format!("next result -> {f}\n"), Payload::Nothing)
+            }
             other => bail!("`{}` is not implemented yet", describe_command(&other)),
         })
     }
@@ -559,6 +659,18 @@ impl Outcome {
 
 fn describe_command(c: &Command) -> String {
     format!("{c:?}")
+}
+
+/// How many rows a bare SQL result carries in its `Table` payload; the text
+/// (screen or `.output`) always reflects the whole result, this only bounds
+/// what a frontend holds in memory to render it.
+const QUERY_ROWS_CAP: usize = 500;
+
+/// The first line of a buffered SQL statement, for the "discarded" note —
+/// naming the whole thing would dump arbitrarily long SQL into a one-line
+/// message.
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or("")
 }
 
 /// Quote a root-relative path the way the console's own tokenizer expects

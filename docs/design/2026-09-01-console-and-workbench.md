@@ -122,8 +122,11 @@ Rules:
 - **An error is an `Outcome`, not an `Err`.** It lands in the scrollback like
   any other output and the main pane keeps its context. Only the runtime dying
   propagates.
-- **`SessionContext` persists across lines**, so a `messy()` under the caching
-  threshold is parsed once per session, not once per query.
+- **The query context is built per statement, not kept across lines.** A
+  `.sniff --force` or an export overwritten between two queries would
+  otherwise serve a `MemTable` built from the old spec — a silently wrong
+  answer. Within one statement the same file named twice is still parsed
+  once. Revisit if the provider's cache becomes fingerprint-keyed.
 
 ## 5. Entry points
 

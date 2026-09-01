@@ -293,3 +293,52 @@ async fn check_against_expands_a_glob() {
     assert!(o.text.contains("2025-11.csv") && o.text.contains("2025-12.csv"), "{}", o.text);
     assert!(!o.text.contains("does not exist"), "{}", o.text);
 }
+
+#[tokio::test]
+async fn sql_runs_when_the_statement_ends_and_spans_lines() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    s.run(".sniff 2025-01.csv --no-llm", None).await;
+    let o = s.run("SELECT count(*) AS n, sum(betrag) AS total", None).await;
+    assert!(o.ok && matches!(o.payload, Payload::Continue) && s.sql_pending());
+    let o = s.run("FROM messy('2025-01.csv');", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(!s.sql_pending());
+    assert_eq!(o.echo, "SELECT count(*) AS n, sum(betrag) AS total\nFROM messy('2025-01.csv');");
+    let Payload::Query(t) = o.payload else { panic!() };
+    assert_eq!(t.columns, ["n", "total"]);
+    assert_eq!(t.rows, [["4", "4460.00"]]);
+    assert!(o.text.contains("| 4 ") && o.text.contains("4460.00"));
+
+    // A dot-command discards a pending statement, out loud.
+    s.run("SELECT 1", None).await;
+    let o = s.run(".ls", None).await;
+    assert!(o.ok && o.text.starts_with("note: discarded incomplete statement"));
+    assert!(!s.sql_pending());
+
+    // A bad statement is an error outcome, not a crash.
+    let o = s.run("SELEKT 1;", None).await;
+    assert!(!o.ok && o.text.starts_with("Error: "));
+}
+
+#[tokio::test]
+async fn output_routes_the_next_result_to_a_file() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    s.run(".sniff 2025-01.csv --no-llm", None).await;
+    let o = s.run(".output jan.csv", None).await;
+    assert!(o.ok && o.text.contains("next result -> jan.csv"));
+    let o = s.run("SELECT region, betrag FROM messy('2025-01.csv') ORDER BY region;", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains("wrote 4 row(s) to jan.csv"));
+    let written = std::fs::read_to_string(d.path().join("jan.csv")).unwrap();
+    assert!(written.starts_with("region,betrag\n"));
+    // The route is consumed.
+    let o = s.run("SELECT 1 AS one;", None).await;
+    assert!(o.text.contains("| one |"));
+    // Refuses to overwrite without --force.
+    let o = s.run(".output jan.csv", None).await;
+    assert!(!o.ok && o.text.contains("exists"));
+    assert!(s.run(".output jan.csv --force", None).await.ok);
+    assert!(s.run(".output", None).await.ok); // back to the screen
+}

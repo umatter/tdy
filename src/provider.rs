@@ -601,6 +601,15 @@ fn report(prepared: &[PreparedFile], cfg: &Config) {
     }
 }
 
+/// The table the CLI prints for a result, as a string — also what the
+/// console's bare-SQL path shows on the screen (`Session::run_sql`) when no
+/// `.output` route is active.
+pub fn format_table(batches: &[RecordBatch]) -> Result<String> {
+    let text =
+        datafusion::arrow::util::pretty::pretty_format_batches(batches).context("formatting result")?;
+    Ok(format!("{text}\n"))
+}
+
 pub fn write_output(
     schema: &Arc<Schema>,
     batches: &[RecordBatch],
@@ -616,12 +625,10 @@ pub fn write_output(
                      memory twice; `-o results.parquet` (or .csv) streams instead"
                 );
             }
-            let text = datafusion::arrow::util::pretty::pretty_format_batches(batches)
-                .context("formatting result")?;
             // `--format table -o file` used to print to the terminal, write
             // nothing, and exit 0.
             let mut w = writer_for(out_path)?;
-            writeln!(w, "{text}").context("writing output")?;
+            write!(w, "{}", format_table(batches)?).context("writing output")?;
             w.flush().context("writing output")?;
         }
         (OutputFormat::Csv, out) => {
