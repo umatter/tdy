@@ -178,10 +178,16 @@ impl Session {
     }
 
     /// Resolve a user-supplied path against cwd and confine it to root.
+    ///
+    /// `fileio::confine` already distinguishes the two ways this can fail —
+    /// the path does not exist at all, or it exists but resolves outside
+    /// `root` — and its own message says which (the escape case's message
+    /// contains "outside"; the missing-file case's says "does not exist").
+    /// That distinction matters to a person typing at a prompt (a typo is
+    /// not an escape attempt), so it is preserved here, not collapsed.
     pub fn resolve(&self, p: &str) -> Result<PathBuf> {
         let joined = self.cwd.join(p);
-        crate::fileio::confine(&joined, &self.root)
-            .map_err(|_| anyhow::anyhow!("{p}: outside the console's root {}", self.root.display()))
+        crate::fileio::confine(&joined, &self.root).with_context(|| p.to_string())
     }
 
     /// Globs expanded against cwd, each result confined. Errors if a glob
@@ -194,9 +200,10 @@ impl Session {
                 bail!("{pat}: no file matches");
             }
             for h in hits {
-                out.push(crate::fileio::confine(&h, &self.root).map_err(|_| {
-                    anyhow::anyhow!("{}: outside the console's root {}", h.display(), self.root.display())
-                })?);
+                // Literal (non-glob) patterns pass through expand_glob
+                // unchecked, so a hit here can still be a plain typo, not
+                // an escape — see resolve()'s doc comment.
+                out.push(crate::fileio::confine(&h, &self.root).with_context(|| h.display().to_string())?);
             }
         }
         Ok(out)

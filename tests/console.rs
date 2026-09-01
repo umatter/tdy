@@ -143,3 +143,19 @@ async fn cd_stays_inside_the_root() {
     let o = s.run(".sniff ../../etc/passwd", None).await;
     assert!(!o.ok && o.text.contains("outside"));
 }
+
+#[tokio::test]
+async fn a_missing_file_is_a_typo_not_an_escape() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    // In the root, but never written: an ordinary typo.
+    let o = s.run(".sniff typo.csv", None).await;
+    assert!(!o.ok);
+    assert!(o.text.contains("does not exist"), "{}", o.text);
+    assert!(!o.text.contains("outside"), "{}", o.text);
+
+    let o = s.run(".cd nope_dir", None).await;
+    assert!(!o.ok);
+    assert!(o.text.contains("does not exist"), "{}", o.text);
+    assert!(!o.text.contains("outside"), "{}", o.text);
+}
