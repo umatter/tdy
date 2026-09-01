@@ -13,8 +13,10 @@
 //! - [`sqlscan`]  finding `messy('...')` in SQL without mistaking comments for code
 //! - [`fileio`]   bounded reads, streaming hashes, atomic writes
 //! - [`config`]   backend configuration resolution
+//! - [`console`]  the dot-command grammar and session — `tdy` with no arguments
 
 pub mod config;
+pub mod console;
 pub mod conform;
 pub mod dataset;
 pub mod detect;
