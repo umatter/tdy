@@ -394,6 +394,18 @@ impl Session {
     }
 
     async fn dispatch(&mut self, cmd: Command, progress: Option<&progress::Sink>) -> Result<Outcome> {
+        // Taken here, before `confine_command_paths` gets a chance to bail
+        // on a bad path — a `.accept BADTARGET M` line still parses as
+        // `Command::Accept`, so `run`'s own reset (see its doc comment)
+        // deliberately preserves the marker for it, expecting the `Accept`
+        // arm to settle whether it is really the same line repeated. If
+        // that line then errors out of `confine_command_paths` before ever
+        // reaching the arm, a stale step-one marker from a *different*
+        // `.accept` would otherwise survive an unrelated failed attempt.
+        // Taking it unconditionally here is a no-op for every other
+        // command, since `run` already cleared it before calling `dispatch`
+        // for anything that did not parse as `Command::Accept`.
+        let pending_accept = self.pending_accept.take();
         // Confinement applies to every path a command names, whether or not
         // that command is implemented yet: a `.sniff` outside the root must
         // fail as "outside", not as "not implemented".
@@ -583,13 +595,14 @@ impl Session {
                 Outcome::ok(format!("next result -> {f}\n"), Payload::Nothing)
             }
             Command::Accept { target, member } => {
-                // Taken, not merely read: the moment a genuine `.accept`
-                // dispatch begins, the marker is consumed. An error below —
-                // an unresolvable target, a member outside root, no fresh
-                // sidecar, nothing to review — must not leave a stale
-                // marker for an unrelated later `.accept` to match against;
-                // only the successful step-one tail below sets it again.
-                let pending = self.pending_accept.take();
+                // `pending_accept` was already taken at the top of
+                // `dispatch`, before `confine_command_paths` could bail on
+                // a bad target — see that comment. So every failure path
+                // below (an unresolvable target, a member outside root, no
+                // fresh sidecar, nothing to review) has already consumed
+                // any stale marker; only the successful step-one tail below
+                // sets it again.
+                let pending = pending_accept;
                 let t = self.resolve(&target)?;
                 // The member's path is named relative to the target's own
                 // directory (what the pile report and `fit_pile`'s `accept`

@@ -450,6 +450,17 @@ async fn accept_shows_evidence_first_and_accepts_only_on_repeat() {
     assert!(s.pending_accept().is_none());
     let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
     assert!(matches!(o.payload, Payload::Evidence { .. }));
+    assert!(s.pending_accept().is_some());
+
+    // A bad TARGET still bails before the `Accept` arm's own confinement
+    // check, in `confine_command_paths` — but must still consume a stale
+    // marker from before, or the next good `.accept` line would be
+    // mistaken for a repeat of THIS failed one rather than starting fresh.
+    let o = s.run(".accept nonexistent.tdy.sql 2025-07.csv", None).await;
+    assert!(!o.ok, "{}", o.text);
+    assert!(s.pending_accept().is_none());
+    let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
+    assert!(matches!(o.payload, Payload::Evidence { .. }));
 
     // Step two: the same line again performs the acceptance.
     let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
