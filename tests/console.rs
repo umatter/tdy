@@ -106,7 +106,6 @@ async fn help_quit_and_unknown() {
 }
 
 #[tokio::test]
-#[ignore = "enabled in Task 6"]
 async fn ls_hides_companions_and_reports_status() {
     let d = pile();
     std::fs::create_dir(d.path().join("archive")).unwrap();
@@ -158,4 +157,55 @@ async fn a_missing_file_is_a_typo_not_an_escape() {
     assert!(!o.ok);
     assert!(o.text.contains("does not exist"), "{}", o.text);
     assert!(!o.text.contains("outside"), "{}", o.text);
+}
+
+#[tokio::test]
+async fn sniff_writes_the_sidecar_and_returns_a_summary() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = s.run(".sniff 2025-01.csv --no-llm", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert_eq!(o.echo, ".sniff 2025-01.csv --no-llm");
+    assert!(d.path().join("2025-01.csv.tdy.toml").exists());
+    let Payload::Sniffed { spec, preview, kept_existing, .. } = o.payload else { panic!() };
+    assert!(!kept_existing);
+    assert_eq!(spec.columns.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["datum", "region", "betrag"]);
+    assert_eq!(spec.columns[2].2, "DECIMAL(38,2)");
+    assert_eq!(preview.columns, ["datum", "region", "betrag"]);
+    assert_eq!(preview.rows[0], ["2025-01-31", "Ost", "1100.00"]);
+    assert!(o.text.contains("preview (heuristic method, confidence 0.95)"));
+
+    // A second sniff keeps the fresh sidecar and says so.
+    let o = s.run(".sniff 2025-01.csv --no-llm", None).await;
+    assert!(o.ok);
+    assert!(o.text.starts_with("note: ") && o.text.contains("--force to re-infer"));
+    let Payload::Sniffed { kept_existing, .. } = o.payload else { panic!() };
+    assert!(kept_existing);
+}
+
+#[tokio::test]
+async fn validate_and_show() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = s.run(".validate 2025-01.csv", None).await;
+    assert!(!o.ok && o.text.contains("no sidecar"));
+    s.run(".sniff 2025-01.csv --no-llm", None).await;
+    let o = s.run(".validate 2025-01.csv", None).await;
+    assert!(o.ok && o.text.contains(": ok"));
+
+    let o = s.run(".show 2025-07.csv", None).await; // no sidecar
+    assert!(o.ok, "{}", o.text);
+    let Payload::Shown { raw, spec, .. } = o.payload else { panic!() };
+    assert_eq!(raw.lines[0], "Datum;Region;Betrag Rp.");
+    assert!(spec.is_none());
+    assert!(o.text.contains("Datum;Region;Betrag Rp.") && o.text.contains("no sidecar"));
+
+    let o = s.run(".show 2025-01.csv", None).await; // with sidecar
+    let Payload::Shown { spec: Some(sp), .. } = o.payload else { panic!() };
+    assert_eq!(sp.columns[0].1, "Datum");
+
+    let o = s.run(".show 2025-09.xlsx", None).await;
+    let Payload::Shown { raw, .. } = o.payload else { panic!() };
+    assert_eq!(raw.sheets.len(), 1);
+    assert_eq!(raw.sheets[0].0, "Umsatz");
 }

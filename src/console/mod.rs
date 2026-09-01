@@ -45,7 +45,6 @@ pub enum Payload {
     Continue,
     Quit,
     Listing(Vec<Entry>),
-    // constructed from Task 7 (.show)
     Shown { path: PathBuf, raw: RawHead, spec: Option<SpecSummary> },
     // constructed from Task 6 (.sniff)
     Sniffed { path: PathBuf, spec: SpecSummary, preview: Table, kept_existing: bool },
@@ -261,6 +260,39 @@ impl Session {
                 let entries = list_dir(&p)?;
                 Outcome::ok(render_listing(&entries), Payload::Listing(entries))
             }
+            Command::Sniff { file, quick, force, no_llm, hint } => {
+                let path = self.resolve(&file)?;
+                let out = crate::commands::sniff_text(
+                    &path,
+                    &self.cfg,
+                    crate::provider::SniffCli { hint: hint.as_deref(), force, no_llm, quick, json: false },
+                )
+                .await?;
+                let method = method_label(&out.prepared.method);
+                let summary = spec_summary(&out.spec, &method, out.prepared.confidence);
+                let batch = crate::engine::preview(&out.spec, &path, self.cfg.limits, 10)?;
+                let preview = table_of(&batch.schema(), std::slice::from_ref(&batch), 10);
+                Outcome::ok(
+                    out.text,
+                    Payload::Sniffed { path, spec: summary, preview, kept_existing: out.kept_existing },
+                )
+            }
+            Command::Validate { file, stamp } => {
+                let path = self.resolve(&file)?;
+                Outcome::ok(crate::commands::validate_text(&path, &self.cfg, stamp)?, Payload::Nothing)
+            }
+            Command::Show { file } => {
+                let path = self.resolve(&file)?;
+                let raw = raw_head(&path, self.cfg.limits)?;
+                let spec = match crate::sidecar::load(&path)? {
+                    crate::sidecar::SidecarStatus::Fresh(sc) => {
+                        Some(spec_summary(&sc.spec, &method_label(&sc.provenance.method), sc.spec.confidence))
+                    }
+                    _ => None,
+                };
+                let text = render_shown(&file, &raw, spec.as_ref());
+                Outcome::ok(text, Payload::Shown { path, raw, spec })
+            }
             other => bail!("`{}` is not implemented yet", describe_command(&other)),
         })
     }
@@ -422,6 +454,130 @@ pub fn render_listing(entries: &[Entry]) -> String {
             EntryStatus::Drift(n) => format!("target, drift ({n})"),
         };
         let _ = writeln!(s, "{:<width$}  {status}", e.name, width = width);
+    }
+    s
+}
+
+/// A rendered `ParseSpec`, for `.sniff` and `.show`'s payload and text.
+pub fn spec_summary(spec: &crate::spec::ParseSpec, method: &str, confidence: Option<f32>) -> SpecSummary {
+    SpecSummary {
+        method: method.to_string(),
+        confidence,
+        extraction: serde_json::to_string(&spec.extraction).unwrap_or_default(),
+        transforms: spec.transforms.iter().map(|t| serde_json::to_string(t).unwrap_or_default()).collect(),
+        columns: spec
+            .columns
+            .iter()
+            .map(|c| (c.name.clone(), c.source_name().to_string(), crate::commands::describe_dtype(&c.dtype)))
+            .collect(),
+        notes: spec.notes.clone(),
+    }
+}
+
+/// A batch of results as text-table rows, capped at `cap` rows (`total` and
+/// `truncated` still reflect the whole result).
+pub fn table_of(
+    schema: &datafusion::arrow::datatypes::Schema,
+    batches: &[datafusion::arrow::record_batch::RecordBatch],
+    cap: usize,
+) -> Table {
+    use datafusion::arrow::util::display::array_value_to_string;
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    let mut rows = Vec::new();
+    'outer: for b in batches {
+        for i in 0..b.num_rows() {
+            if rows.len() >= cap {
+                break 'outer;
+            }
+            rows.push(
+                (0..b.num_columns())
+                    .map(|c| {
+                        let col = b.column(c);
+                        if col.is_null(i) { String::new() } else { array_value_to_string(col, i).unwrap_or_default() }
+                    })
+                    .collect(),
+            );
+        }
+    }
+    Table {
+        columns: schema.fields().iter().map(|f| f.name().clone()).collect(),
+        types: schema.fields().iter().map(|f| f.data_type().to_string()).collect(),
+        truncated: total > rows.len(),
+        rows,
+        total,
+    }
+}
+
+const HEAD_BYTES: usize = 16 * 1024;
+const HEAD_LINES: usize = 40;
+const WORKBOOK_EXT: [&str; 5] = ["xlsx", "xlsm", "xls", "xlsb", "ods"];
+
+/// The raw head of a file, for `.show` — what tdy sees before any spec is
+/// applied. Workbooks report per-sheet shape instead of lines (a sheet has
+/// no single "head" worth printing).
+pub fn raw_head(path: &Path, limits: crate::config::Limits) -> Result<RawHead> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if WORKBOOK_EXT.contains(&ext.as_str()) {
+        let sheets = crate::engine::excel_sheet_shapes(path, limits)?
+            .into_iter()
+            .map(|s| (s.name, s.rows, s.cols))
+            .collect();
+        return Ok(RawHead { lines: Vec::new(), truncated: false, sheets });
+    }
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let mut buf = Vec::with_capacity(HEAD_BYTES);
+    f.by_ref().take(HEAD_BYTES as u64).read_to_end(&mut buf)?;
+    let more = f.metadata().map(|m| m.len() as usize > buf.len()).unwrap_or(false);
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+    if more && !text.ends_with('\n') {
+        lines.pop(); // a torn last line is not a line
+    }
+    let truncated = more || lines.len() > HEAD_LINES;
+    lines.truncate(HEAD_LINES);
+    Ok(RawHead { lines, truncated, sheets: Vec::new() })
+}
+
+/// The `.show` text: the raw head (or sheet shapes), then the sidecar
+/// summary if one exists.
+fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "{name}:");
+    if raw.sheets.is_empty() {
+        for l in &raw.lines {
+            let _ = writeln!(s, "  {l}");
+        }
+        if raw.truncated {
+            let _ = writeln!(s, "  …");
+        }
+    } else {
+        for (n, r, c) in &raw.sheets {
+            let _ = writeln!(s, "  sheet {n:?}: {r} row(s) x {c} col(s)");
+        }
+    }
+    match spec {
+        None => {
+            let _ = writeln!(s, "\nno sidecar — `.sniff {name}` to infer one");
+        }
+        Some(sp) => {
+            let _ = writeln!(
+                s,
+                "\nsidecar ({} method, confidence {}):",
+                sp.method,
+                sp.confidence.map(|c| format!("{c:.2}")).unwrap_or_else(|| "n/a".into())
+            );
+            let _ = writeln!(s, "  extraction  {}", sp.extraction);
+            for t in &sp.transforms {
+                let _ = writeln!(s, "  transform   {t}");
+            }
+            for (n, src, ty) in &sp.columns {
+                let _ = writeln!(s, "  {n:<16} <- {src:<24} {ty}");
+            }
+            for n in &sp.notes {
+                let _ = writeln!(s, "  note: {n}");
+            }
+        }
     }
     s
 }
