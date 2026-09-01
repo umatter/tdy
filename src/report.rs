@@ -123,6 +123,7 @@ pub fn problems_json(e: &FitError) -> serde_json::Value {
     serde_json::to_value(problems_of_error(e)).unwrap_or_default()
 }
 
+#[derive(Default)]
 pub struct FitOpts<'a> {
     pub dry_run: bool,
     pub accept: &'a [PathBuf],
@@ -130,12 +131,6 @@ pub struct FitOpts<'a> {
     /// Where to send progress while the pile is being fitted. `None` for a
     /// caller that only wants the answer.
     pub progress: Option<crate::progress::Sink>,
-}
-
-impl Default for FitOpts<'_> {
-    fn default() -> Self {
-        FitOpts { dry_run: false, accept: &[], propose: false, progress: None }
-    }
 }
 
 fn problem_of_gap(g: &Gap) -> Problem {
