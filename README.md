@@ -1,3 +1,10 @@
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/umatter/tdy/main/assets/logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/umatter/tdy/main/assets/logo-light.svg" alt="tdy — messy files in, tidy tables out" width="330">
+  </picture>
+</div>
+
 # tdy
 
 Pure SQL over messy files. The structural cleaning — title blocks, two-row
