@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 440 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 446 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -43,7 +43,8 @@ upgraded.
 
 On this machine plain `cargo test` ends with a spurious doc-test failure (`rustdoc` cannot
 load `libLLVM.so...` — a toolchain install issue, not code); `--lib --tests` avoids it.
-Rust ≥ 1.88 (DataFusion 46), a floor set by reqwest → url → icu_*, checked in CI. `[profile.dev] debug = false` is deliberate (slow builds) —
+Rust ≥ 1.88 (DataFusion 46), a floor set by reqwest → url → icu_* and now also sat on
+exactly by calamine 0.36 and zip 8, checked in CI. `[profile.dev] debug = false` is deliberate (slow builds) —
 flip it locally when you need a debugger, don't commit it.
 
 ## Where this is going
@@ -236,7 +237,9 @@ into `corpus/` (gitignored, ~7 GB, 9,881 files). `TDY_CORPUS=corpus cargo test -
 reproducible, plus a survey. Nothing in CI sees it, so anything it *finds* has to become a
 fixture in `testdata/` — that is what `12_late_surprises.py` is.
 
-Current state: **0 of 1,374 real CSVs declined** (15 before the type-verification work);
+Current state (re-swept after the calamine 0.26→0.36 upgrade — no regressions, and the
+only "declined" xlsx are Office `~$` owner-lock stubs, which is correct):
+**0 of 1,374 real CSVs declined** (15 before the type-verification work);
 `OxfordIHTM/messy-data`, which is purpose-built to be hard, lands at 50-75% confidence with
 accurate notes, which is the documented tier-2 boundary rather than a defect.
 
@@ -460,6 +463,12 @@ difference: everything under 64 MB takes the cached path and will not show it.
   100k-column sidecar is megabytes, and an undrained pipe deadlocks at 64 KB.
 
 ## Fixtures
+
+`assets/` follows the same rule as `testdata/`: everything but `assets/gen_logo.py` is
+generated (`python3 assets/gen_logo.py`, stdlib-only, byte-deterministic) — edit the pixel
+definitions in the script, never the SVGs/PNGs. The README references the logo SVGs by
+absolute raw-GitHub URL on purpose: the published crate excludes `assets/`, and crates.io
+renders the same README.
 
 `testdata/` is generated, never hand-edited — `python3 gen_fixtures.py`. Each generator in
 `testdata/gen/` owns a disjoint set of files and documents in its docstring what each file
