@@ -130,6 +130,18 @@ pub struct SpecSummary {
     pub notes: Vec<String>,
 }
 
+/// Guards every place this module changes the *process's* actual working
+/// directory (`.cd`, and `.draft`'s brief realignment so `draft_target`
+/// sees the same cwd-relative shape `tdy draft` does — see `Command::Cd`
+/// and `Command::Draft`). A `Session`'s own `cwd` field is what every other
+/// method actually resolves against, so in production — one session per
+/// process — this lock is never contended. It exists for the test binary,
+/// where multiple `Session`s in the same process race on this one piece of
+/// real OS state; a poisoned lock (a panic while held) must not cascade
+/// into every later test that touches the process directory, hence
+/// `into_inner()` rather than propagating the poison.
+static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub struct Session {
     root: PathBuf,
     cwd: PathBuf,
@@ -267,7 +279,12 @@ impl Session {
                 // Relative paths inside SQL (`messy('2025-01.csv')`) resolve
                 // against the process's directory; a console is one session
                 // per process, so moving the process is the honest thing.
-                std::env::set_current_dir(&self.cwd)?;
+                // `CWD_LOCK` (see its doc comment) keeps this from racing
+                // `.draft`'s own realignment in another `Session`.
+                {
+                    let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                    std::env::set_current_dir(&self.cwd)?;
+                }
                 Outcome::ok(format!("{}\n", self.display_rel(&self.cwd)), Payload::Nothing)
             }
             Command::Ls { dir } => {
@@ -312,11 +329,16 @@ impl Session {
                 Outcome::ok(text, Payload::Shown { path, raw, spec })
             }
             Command::Draft { files, to } => {
-                // `Outcome.echo` stays empty: a REPL already echoed the raw
-                // line as typed (globs and all) as it read it, so `run()`
-                // fills it from the trimmed input, same as every other
-                // command — the expanded paths are not what was typed.
                 let paths = self.expand(&files)?;
+                // The line as actually run: globs and defaults expanded
+                // (design §4) — the file list root-relative and quoted the
+                // way the console's own tokenizer reads it back, with
+                // `--to` appended when given.
+                let echo = format!(
+                    ".draft {}{}",
+                    paths.iter().map(|p| quote_rel(&self.display_rel(p))).collect::<Vec<_>>().join(" "),
+                    to.as_ref().map(|t| format!(" --to {t}")).unwrap_or_default()
+                );
                 // `draft_target` falls back to naming the table `dataset`
                 // only when the first file it is handed carries no
                 // directory component (see `table_name` in `draft.rs`) —
@@ -332,11 +354,15 @@ impl Session {
                     .map(|p| p.strip_prefix(&self.cwd).map(Path::to_path_buf).unwrap_or_else(|_| p.clone()))
                     .collect();
                 let ddl = {
-                    // Restores the process's previous directory on the way
-                    // out of this block, including on an early return via
-                    // `?` inside `draft_target` or an unwinding panic — a
-                    // sniff failure must not leave the process pointed at
-                    // this session's cwd forever.
+                    // `CWD_LOCK` (see its doc comment) keeps this realignment
+                    // from racing `.cd`'s own, permanent one in another
+                    // `Session` — held across the flip, the call, and the
+                    // restore. `RestoreCwd` restores the process's previous
+                    // directory on the way out of this block, including on
+                    // an early return via `?` inside `draft_target` or an
+                    // unwinding panic — a sniff failure must not leave the
+                    // process pointed at this session's cwd forever, and
+                    // must not leave the lock held either.
                     struct RestoreCwd(Option<PathBuf>);
                     impl Drop for RestoreCwd {
                         fn drop(&mut self) {
@@ -345,6 +371,7 @@ impl Session {
                             }
                         }
                     }
+                    let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                     let _restore = RestoreCwd(std::env::current_dir().ok());
                     std::env::set_current_dir(&self.cwd)?;
                     crate::draft::draft_target(&rel, self.cfg.limits)?
@@ -364,7 +391,7 @@ impl Session {
                     Some(p) => format!("wrote {}\n", self.display_rel(p)),
                     None => ddl.clone(),
                 };
-                Outcome { echo: String::new(), text, payload: Payload::Drafted { ddl, wrote }, ok: true }
+                Outcome { echo, text, payload: Payload::Drafted { ddl, wrote }, ok: true }
             }
             Command::Fit { target, file: Some(file), dry_run, propose } => {
                 let (t, f) = (self.resolve(&target)?, self.resolve(&file)?);
@@ -387,7 +414,13 @@ impl Session {
             }
             Command::Check { target, against } => {
                 let t = self.resolve(&target)?;
-                let files = against.iter().map(|a| self.resolve(a)).collect::<Result<Vec<_>>>()?;
+                // No shell is in front of this console (design §3): a glob
+                // in `--against` must be expanded here, the same way
+                // `confine_command_paths` already expands it to check
+                // confinement, or `.check t.tdy.sql --against 2025-*.csv`
+                // would pass that pre-check and then fail `check_text` as a
+                // literal file named `2025-*.csv`.
+                let files = self.expand(&against)?;
                 let out = crate::commands::check_text(&t, &files, self.cfg.limits)?;
                 let mut text = out.text;
                 if !out.ok {
@@ -531,11 +564,8 @@ fn describe_command(c: &Command) -> String {
 /// Quote a root-relative path the way the console's own tokenizer expects
 /// to read it back: `Debug` wraps a name carrying whitespace in double
 /// quotes with the same escaping `tokenize` already handles, so it
-/// round-trips through `.draft`'s echo. No dispatch arm calls this yet —
-/// `Outcome.echo` for `.draft` is left for `run()` to fill from the raw
-/// line — but a caller that logs what a glob actually expanded to (a batch
-/// runner, or Task 9's `.accept`) needs exactly this quoting.
-#[allow(dead_code)]
+/// round-trips through `.draft`'s echo — spec §4 wants `Outcome.echo` to be
+/// the line as actually run, globs and defaults expanded.
 fn quote_rel(s: &str) -> String {
     if s.chars().any(char::is_whitespace) { format!("{s:?}") } else { s.to_string() }
 }

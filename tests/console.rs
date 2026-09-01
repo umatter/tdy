@@ -216,7 +216,14 @@ async fn draft_prints_or_writes_and_never_overwrites() {
     let mut s = session(d.path()).await;
     let o = s.run(".draft 2025-*.csv 2025-*.xlsx", None).await;
     assert!(o.ok, "{}", o.text);
-    assert_eq!(o.echo, ".draft 2025-*.csv 2025-*.xlsx");
+    // The line as actually run: globs expanded, root-relative, in match
+    // order (all `2025-*.csv` hits, then all `2025-*.xlsx` hits).
+    assert_eq!(
+        o.echo,
+        "\
+.draft 2025-01.csv 2025-02.csv 2025-03.csv 2025-04.csv 2025-05.csv 2025-06.csv \
+2025-07.csv 2025-08.csv 2025-11.csv 2025-12.csv 2025-09.xlsx 2025-10.xlsx"
+    );
     assert!(o.text.contains("CREATE TABLE dataset") && o.text.contains("in 11 of 12 file(s)"));
     let Payload::Drafted { wrote, .. } = o.payload else { panic!() };
     assert!(wrote.is_none());
@@ -269,4 +276,20 @@ async fn check_schema_config_edit() {
     let o = s.run(".edit sales.tdy.sql", None).await;
     assert!(o.ok);
     assert!(matches!(o.payload, Payload::Edit(ref p) if p.ends_with("sales.tdy.sql")));
+}
+
+#[tokio::test]
+async fn check_against_expands_a_glob() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    s.run(".sniff 2025-11.csv --no-llm", None).await;
+    s.run(".sniff 2025-12.csv --no-llm", None).await;
+    // No shell sits in front of this console (design §3): `--against` must
+    // be glob-expanded here, the same way `confine_command_paths` already
+    // expands it for the confinement pre-check — otherwise this would reach
+    // `check_text` as a literal file named `2025-1*.csv` and fail as
+    // "does not exist" instead of naming the two real, sniffed files.
+    let o = s.run(".check sales.tdy.sql --against 2025-1*.csv", None).await;
+    assert!(o.text.contains("2025-11.csv") && o.text.contains("2025-12.csv"), "{}", o.text);
+    assert!(!o.text.contains("does not exist"), "{}", o.text);
 }
