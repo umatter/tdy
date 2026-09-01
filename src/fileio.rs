@@ -114,6 +114,37 @@ pub fn hash_file(path: &Path) -> Result<(String, u64)> {
     Ok((hasher.finalize().to_hex().to_string(), total))
 }
 
+/// Resolve `path` and prove it lives under `root`, or say why not.
+///
+/// The one confinement check for everything the MCP server touches: tool
+/// arguments, the file references inside SQL, the members a target's globs
+/// resolve to, and the paths recorded in a lock. Canonicalisation resolves
+/// `../` and symlinks, so a link inside the root pointing outside it is
+/// refused; `starts_with` compares whole components, so `/root-evil` is not
+/// inside `/root`. Callers must then *use the returned path*, not the raw
+/// one — resolving once and opening through the same resolved path is what
+/// closes the gap between the check and the open.
+///
+/// `root` must itself be canonical (the server canonicalises it at startup).
+pub fn confine(path: &Path, root: &Path) -> Result<PathBuf> {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let canon = joined.canonicalize().with_context(|| {
+        format!("{} does not exist under {}", path.display(), root.display())
+    })?;
+    if !canon.starts_with(root) {
+        bail!(
+            "{} is outside this server's --root ({})",
+            path.display(),
+            root.display()
+        );
+    }
+    Ok(canon)
+}
+
 /// Write a file so that it is either the old contents or the new ones, never
 /// a half-written mixture: write a sibling temp file, then rename over the
 /// target. A sidecar is a record of provenance; a truncated one is worse than
@@ -233,6 +264,46 @@ mod tests {
         let d = tempfile::TempDir::new().unwrap();
         let err = read_all(d.path(), u64::MAX).unwrap_err();
         assert!(format!("{err:#}").contains("directory"));
+    }
+
+    #[test]
+    fn confine_resolves_and_refuses_escapes() {
+        let root_dir = tempfile::TempDir::new().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::write(root.join("in.csv"), "a\n1\n").unwrap();
+        std::fs::write(outside.path().join("secret.csv"), "a\n1\n").unwrap();
+
+        // A relative path inside the root resolves to its canonical form.
+        let ok = confine(Path::new("in.csv"), &root).unwrap();
+        assert_eq!(ok, root.join("in.csv"));
+
+        // `../` must not escape, and neither must an absolute path outside.
+        assert!(confine(Path::new("../secret.csv"), &root).is_err());
+        let abs = outside.path().join("secret.csv");
+        let err = confine(&abs, &root).unwrap_err();
+        assert!(format!("{err:#}").contains("outside"), "{err:#}");
+
+        // A symlink inside the root pointing outside it is an escape: the
+        // check is on the resolved target, not on where the link sits.
+        #[cfg(unix)]
+        {
+            let link = root.join("link.csv");
+            std::os::unix::fs::symlink(outside.path().join("secret.csv"), &link).unwrap();
+            let err = confine(Path::new("link.csv"), &root).unwrap_err();
+            assert!(format!("{err:#}").contains("outside"), "{err:#}");
+        }
+
+        // A sibling directory sharing the root's name as a prefix is not
+        // inside it: the comparison is per component, not per byte.
+        let sibling = root
+            .parent()
+            .unwrap()
+            .join(format!("{}-evil", root.file_name().unwrap().to_string_lossy()));
+        std::fs::create_dir(&sibling).unwrap();
+        std::fs::write(sibling.join("x.csv"), "a\n").unwrap();
+        assert!(confine(&sibling.join("x.csv"), &root).is_err());
+        std::fs::remove_dir_all(&sibling).unwrap();
     }
 
     #[test]

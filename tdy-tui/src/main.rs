@@ -312,6 +312,7 @@ fn spawn_fit(
                 // file's columns could actually produce the declared type.
                 propose: true,
                 progress: Some(sink),
+                root: None,
             },
         )
         .await

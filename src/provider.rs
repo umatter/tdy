@@ -48,6 +48,12 @@ use crate::stream;
 pub struct MessyFunc {
     pub frozen: bool,
     pub limits: Limits,
+    /// When set (the MCP server), every path is proved to resolve under this
+    /// directory *here*, where the file is opened — not only in the pre-pass
+    /// over the SQL text. The pre-pass and DataFusion parse the query
+    /// independently, and a check that lives only on one side of that split
+    /// is a check the other side can walk past.
+    root: Option<PathBuf>,
     /// One parse per file per query. A self-join over `messy('big.csv')`
     /// otherwise reads and parses the whole file once per reference.
     ///
@@ -135,7 +141,11 @@ impl PartitionStream for SpecPartition {
 
 impl MessyFunc {
     pub fn new(frozen: bool, limits: Limits) -> Self {
-        MessyFunc { frozen, limits, cache: Mutex::new(HashMap::new()) }
+        MessyFunc { frozen, limits, root: None, cache: Mutex::new(HashMap::new()) }
+    }
+
+    pub fn rooted(frozen: bool, limits: Limits, root: PathBuf) -> Self {
+        MessyFunc { frozen, limits, root: Some(root), cache: Mutex::new(HashMap::new()) }
     }
 }
 
@@ -151,6 +161,14 @@ impl TableFunctionImpl for MessyFunc {
         let path = PathBuf::from(&path_str);
         // `./data/x.csv` and `data/x.csv` are one file and must be parsed once.
         let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        // Confined mode: prove the resolved path is under the root, and then
+        // read *that* path — checking one path and opening another is how a
+        // symlink swapped between the two escapes.
+        let path = match &self.root {
+            Some(root) => crate::fileio::confine(&path, root)
+                .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?,
+            None => path,
+        };
 
         if let Some(hit) = self
             .cache
@@ -449,9 +467,22 @@ impl OutputFormat {
 }
 
 pub fn session(cfg: &Config, frozen: bool) -> SessionContext {
+    session_rooted(cfg, frozen, None)
+}
+
+/// A session whose `messy()` and `dataset()` refuse, at open time, any path
+/// that does not resolve under `root`. This is the MCP server's session: the
+/// enforcement lives in the table functions themselves, so it holds whatever
+/// path DataFusion's own parser hands them — not only for the references the
+/// pre-pass happened to find.
+pub fn session_rooted(cfg: &Config, frozen: bool, root: Option<PathBuf>) -> SessionContext {
     let ctx = SessionContext::new();
-    ctx.register_udtf("messy", Arc::new(MessyFunc::new(frozen, cfg.limits)));
-    ctx.register_udtf("dataset", Arc::new(DatasetFunc { limits: cfg.limits }));
+    let messy = match root.clone() {
+        Some(r) => MessyFunc::rooted(frozen, cfg.limits, r),
+        None => MessyFunc::new(frozen, cfg.limits),
+    };
+    ctx.register_udtf("messy", Arc::new(messy));
+    ctx.register_udtf("dataset", Arc::new(DatasetFunc { limits: cfg.limits, root }));
     ctx
 }
 
@@ -465,6 +496,9 @@ pub fn session(cfg: &Config, frozen: bool) -> SessionContext {
 #[derive(Debug)]
 pub struct DatasetFunc {
     limits: Limits,
+    /// See [`MessyFunc::root`]. For a dataset the root also confines what the
+    /// target *reaches* — its lock's member paths — inside `dataset::resolve`.
+    root: Option<PathBuf>,
 }
 
 impl TableFunctionImpl for DatasetFunc {
@@ -474,7 +508,13 @@ impl TableFunctionImpl for DatasetFunc {
                 "dataset() takes a path to a target file, e.g. dataset('sales.tdy.sql')".into(),
             )
         })?;
-        crate::dataset::provider(std::path::Path::new(&path), self.limits)
+        let path = std::path::PathBuf::from(&path);
+        let path = match &self.root {
+            Some(root) => crate::fileio::confine(&path, root)
+                .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?,
+            None => path,
+        };
+        crate::dataset::provider(&path, self.limits, self.root.as_deref())
             .map_err(|e| DataFusionError::External(format!("{e:#}").into()))
     }
 }
@@ -484,10 +524,34 @@ pub async fn run_query(
     cfg: &Config,
     frozen: bool,
 ) -> Result<(Arc<Schema>, Vec<RecordBatch>)> {
+    run_query_rooted(sql, cfg, frozen, None).await
+}
+
+/// [`run_query`], confined: with `root` set, every file the query names must
+/// resolve under it. Enforced twice on purpose — here, before the pre-pass,
+/// so inference never samples (or writes a sidecar beside) a file outside
+/// the root; and inside the table functions at open time, so the check also
+/// holds for whatever DataFusion's own parser extracts. The pre-pass and the
+/// planner tokenize the SQL independently; a check that only one of them
+/// runs is a check the other can disagree with.
+pub async fn run_query_rooted(
+    sql: &str,
+    cfg: &Config,
+    frozen: bool,
+    root: Option<PathBuf>,
+) -> Result<(Arc<Schema>, Vec<RecordBatch>)> {
+    if let Some(r) = &root {
+        for m in sqlscan::find_messy_refs(sql) {
+            crate::fileio::confine(Path::new(&m.path), r)?;
+        }
+        for d in sqlscan::find_dataset_refs(sql) {
+            crate::fileio::confine(Path::new(&d), r)?;
+        }
+    }
     if !frozen {
         report(&prepare_specs(sql, cfg).await?, cfg);
     }
-    let ctx = session(cfg, frozen);
+    let ctx = session_rooted(cfg, frozen, root);
     // Planning is where messy() runs, so our own errors surface here; unwrap
     // them so the user reads the sentence we wrote rather than DataFusion's
     // adapter chain repeating it.

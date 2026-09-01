@@ -221,17 +221,13 @@ fn tool_list(allow_accept: bool) -> Value {
 }
 
 impl McpServer {
-    /// A path argument, confined to the root.
+    /// A path argument, confined to the root. The same check guards the
+    /// executors themselves (`fileio::confine` inside `messy()`, `dataset()`
+    /// and `fit_pile`), so a path that slips past this pre-check — or that
+    /// changes between the check and the open — is refused again at open
+    /// time by the code that opens it.
     fn scoped(&self, raw: &str) -> Result<PathBuf> {
-        let p = Path::new(raw);
-        let joined = if p.is_absolute() { p.to_path_buf() } else { self.root.join(p) };
-        let canon = joined
-            .canonicalize()
-            .with_context(|| format!("{raw:?} does not exist under {}", self.root.display()))?;
-        if !canon.starts_with(&self.root) {
-            bail!("{raw:?} is outside this server's --root ({})", self.root.display());
-        }
-        Ok(canon)
+        crate::fileio::confine(Path::new(raw), &self.root)
     }
 
     async fn call(&self, name: &str, args: &Value) -> Result<Value> {
@@ -298,6 +294,10 @@ impl McpServer {
                 // stdout is protocol here, so nothing is narrated; the
                 // report itself is the answer.
                 progress: None,
+                // A target may declare globs that reach outside the served
+                // tree; a confined fit refuses them instead of writing
+                // sidecars out there.
+                root: Some(&self.root),
             },
         )
         .await?;
@@ -313,7 +313,7 @@ impl McpServer {
                 "reason": "no lock — run the fit tool first",
             }));
         }
-        Ok(match crate::dataset::resolve(&target_path, self.cfg.limits) {
+        Ok(match crate::dataset::resolve(&target_path, self.cfg.limits, Some(&self.root)) {
             Ok(resolved) => json!({
                 "target": target.name, "ready": true,
                 "members": resolved.members.iter().map(|m| m.rel.clone()).collect::<Vec<_>>(),
@@ -326,21 +326,18 @@ impl McpServer {
 
     async fn query(&self, args: &Value) -> Result<Value> {
         let sql = str_arg(args, "sql")?;
-        // The SQL names files; those references are paths and are confined
-        // exactly like path arguments.
-        for r in crate::sqlscan::find_messy_refs(sql) {
-            self.scoped(&r.path)?;
-        }
-        for r in crate::sqlscan::find_dataset_refs(sql) {
-            self.scoped(&r)?;
-        }
         let max_rows = args["max_rows"]
             .as_u64()
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_ROWS)
             .min(MAX_ROWS);
 
-        let (schema, batches) = crate::provider::run_query(sql, &self.cfg, false).await?;
+        // The SQL names files; the rooted runner confines them — before the
+        // inference pre-pass, and again inside `messy()`/`dataset()` at open
+        // time, where a dataset's lock members are confined too.
+        let (schema, batches) =
+            crate::provider::run_query_rooted(sql, &self.cfg, false, Some(self.root.clone()))
+                .await?;
         let columns: Vec<Value> = schema
             .fields()
             .iter()

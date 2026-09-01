@@ -264,3 +264,80 @@ fn every_path_is_confined_to_the_root() {
     assert_eq!(res["row_count"], 36);
     assert_eq!(res["truncated"], true);
 }
+
+/// Confinement holds for what a target *reaches*, not only what a tool call
+/// names: a target inside the root whose globs climb out of it must be
+/// refused before a single sidecar is written out there.
+#[test]
+fn a_target_whose_globs_reach_outside_the_root_is_refused() {
+    let outer = tempfile::TempDir::new().unwrap();
+    let root = outer.path().join("root");
+    let loot = outer.path().join("loot");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&loot).unwrap();
+    std::fs::write(loot.join("x.csv"), "a\n1\n").unwrap();
+    std::fs::write(
+        root.join("reach.tdy.sql"),
+        "CREATE TABLE loot (a TEXT) WITH (files = '../loot/*.csv')\n",
+    )
+    .unwrap();
+
+    let mut s = Server::start(&root, false);
+    let (msg, err) = s.call("fit", serde_json::json!({"target": "reach.tdy.sql"}));
+    assert!(err, "a fit reaching outside --root must be refused: {msg:#}");
+    let text = msg.as_str().unwrap_or_default();
+    assert!(text.contains("root"), "{text}");
+    assert!(
+        !loot.join("x.csv.tdy.toml").exists(),
+        "the refused fit must not have written a sidecar outside the root"
+    );
+}
+
+/// A hand-crafted lock naming a member outside the root is refused when the
+/// dataset is read — the member check lives where the member is resolved, so
+/// it holds however the lock came to exist.
+#[test]
+fn a_lock_member_outside_the_root_is_refused_at_query_time() {
+    let outer = tempfile::TempDir::new().unwrap();
+    let root = outer.path().join("root");
+    let loot = outer.path().join("loot");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&loot).unwrap();
+    std::fs::write(loot.join("x.csv"), "a\n1\n").unwrap();
+    let target_path = root.join("crafted.tdy.sql");
+    std::fs::write(
+        &target_path,
+        "CREATE TABLE crafted (a TEXT) WITH (files = '*.csv')\n",
+    )
+    .unwrap();
+
+    // A lock `tdy fit` would never write (the confined fit above refuses),
+    // but a lock is a file on disk and the dataset must not trust it.
+    let target = tdy::target::Target::load(&target_path).unwrap();
+    let (blake3, bytes) = tdy::sidecar::hash_file(&loot.join("x.csv")).unwrap();
+    let lock = tdy::lockfile::Lock {
+        lock_version: tdy::lockfile::LOCK_VERSION,
+        target: target.name.clone(),
+        target_hash: tdy::lockfile::target_hash(&target),
+        tool_version: "test".into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        members: vec![tdy::lockfile::Member {
+            path: "../loot/x.csv".into(),
+            blake3,
+            bytes,
+            spec_digest: String::new(),
+            review: None,
+            accepted: false,
+        }],
+    };
+    lock.save(&target_path).unwrap();
+
+    let mut s = Server::start(&root, false);
+    let (msg, err) = s.call(
+        "query",
+        serde_json::json!({"sql": "SELECT * FROM dataset('crafted.tdy.sql')"}),
+    );
+    assert!(err, "a lock member outside --root must be refused: {msg:#}");
+    let text = msg.as_str().unwrap_or_default();
+    assert!(text.contains("root"), "{text}");
+}

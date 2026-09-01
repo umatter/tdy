@@ -209,7 +209,7 @@ fn check_json(
                 "reason": format!("no lock — run `tdy fit {}` first", target_path.display()),
             })
         } else {
-            match tdy::dataset::resolve(target_path, limits) {
+            match tdy::dataset::resolve(target_path, limits, None) {
                 Ok(resolved) => serde_json::json!({
                     "target": target.name, "ready": true,
                     "members": resolved.members.iter().map(|m| m.rel.clone()).collect::<Vec<_>>(),
@@ -299,6 +299,7 @@ async fn fit_dataset(
             // The one thing a terminal user needs unprompted while this runs
             // is that a file is being sent to a model.
             progress: Some(tdy::progress::stderr_sink()),
+            root: None,
         },
     )
     .await?;
@@ -497,7 +498,7 @@ fn check_command(
             );
             return Ok(());
         }
-        let resolved = tdy::dataset::resolve(target_path, limits)?;
+        let resolved = tdy::dataset::resolve(target_path, limits, None)?;
         println!("\n{} member(s), all conforming:", resolved.members.len());
         for m in &resolved.members {
             println!("  {:<28} OK", m.rel);

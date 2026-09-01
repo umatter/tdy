@@ -64,7 +64,14 @@ pub struct Resolved {
 ///
 /// Every failure here is one a query must not paper over, so each is an error
 /// naming the file and the fix rather than a member quietly dropped.
-pub fn resolve(target_file: &Path, limits: Limits) -> Result<Resolved> {
+/// `root`: when set (the MCP server), every member the lock names must
+/// resolve under it. A target file inside the root can otherwise reach
+/// outside it — its globs and its lock's member paths are joined relative to
+/// the target's directory, and nothing in a `../exports/*.csv` pattern or a
+/// hand-crafted lock entry keeps that join inside the served tree. The check
+/// happens here, where the member's path is resolved for reading, so the
+/// path that was proved is the path that is opened.
+pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Result<Resolved> {
     let target = Target::load(target_file)?;
     let schema: SchemaRef = Arc::new(target.arrow_schema());
 
@@ -121,7 +128,17 @@ pub fn resolve(target_file: &Path, limits: Limits) -> Result<Resolved> {
     let dir = lockfile::target_dir(target_file);
     let mut members = Vec::with_capacity(lock.members.len());
     for m in &lock.members {
-        let path = dir.join(&m.path);
+        let path = match root {
+            // Confined mode: the member must resolve under the root, and the
+            // resolved path is the one that gets read.
+            Some(r) => crate::fileio::confine(&dir.join(&m.path), r).with_context(|| {
+                format!(
+                    "{} is a member of `{}` but does not resolve inside the served root",
+                    m.path, target.name
+                )
+            })?,
+            None => dir.join(&m.path),
+        };
         // The sidecar must be present *and* fresh: a stale one is a spec no
         // query would use, and this is the one place that cannot re-plan.
         let spec = match crate::sidecar::load(&path)? {
@@ -287,8 +304,12 @@ impl PartitionStream for MembersPartition {
 }
 
 /// Load a dataset for `dataset('path')` in SQL.
-pub fn provider(target_file: &Path, limits: Limits) -> Result<Arc<dyn TableProvider>> {
-    let resolved = resolve(target_file, limits)
+pub fn provider(
+    target_file: &Path,
+    limits: Limits,
+    root: Option<&Path>,
+) -> Result<Arc<dyn TableProvider>> {
+    let resolved = resolve(target_file, limits, root)
         .with_context(|| format!("dataset({})", target_file.display()))?;
     Ok(Arc::new(DatasetTable::new(resolved, limits)))
 }

@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::config::Config;
@@ -131,6 +131,12 @@ pub struct FitOpts<'a> {
     /// Where to send progress while the pile is being fitted. `None` for a
     /// caller that only wants the answer.
     pub progress: Option<crate::progress::Sink>,
+    /// When set (the MCP server), every member the target's globs resolve to
+    /// must itself resolve under this directory. Globs are joined relative to
+    /// the target's directory, so `files = '../…'` reaches outside the served
+    /// tree — and a fit *writes* (sidecars beside members, then the lock), so
+    /// an unconfined fit would write outside the root, not just read.
+    pub root: Option<&'a Path>,
 }
 
 fn problem_of_gap(g: &Gap) -> Problem {
@@ -253,6 +259,23 @@ pub async fn fit_pile(
             target.files,
             target_path.display()
         );
+    }
+
+    // Confined mode: every member must resolve under the root before anything
+    // is read or written. Checked for the whole pile up front — a fit that
+    // sniffed three members and then refused the fourth would already have
+    // written three sidecars on the strength of a declaration that reaches
+    // outside the served tree.
+    if let Some(root) = opts.root {
+        for rel in &rels {
+            crate::fileio::confine(&dir.join(rel), root).with_context(|| {
+                format!(
+                    "`{}` resolves member {rel} outside the served root; \
+                     a target under --root may only reach files under --root",
+                    target.name
+                )
+            })?;
+        }
     }
 
     // A previous lock's acceptances carry over for entries that have not
