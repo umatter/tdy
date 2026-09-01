@@ -149,7 +149,9 @@ fn scan_ods_cells<R: Read>(reader: R) -> Result<u64> {
     use quick_xml::events::Event;
 
     let mut xml = quick_xml::Reader::from_reader(BufReader::new(reader));
-    xml.trim_text(false);
+    // quick-xml's default; stated because this scan counts *cells*, not text,
+    // and must not depend on how whitespace between tags is handled.
+    xml.config_mut().trim_text(false);
     let mut buf = Vec::new();
 
     let mut worst: u64 = 0;

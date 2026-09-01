@@ -1,0 +1,26 @@
+# cargo-deny configuration — CI runs `cargo deny check advisories bans sources`.
+#
+# Licenses are deliberately not checked here: the dependency tree is
+# MIT/Apache-2.0 ecosystem Rust, and a license gate that fails on a metadata
+# quirk trains people to ignore the job that also carries the advisories.
+
+[advisories]
+version = 2
+ignore = [
+    # `paste` is unmaintained (an advisory, not a vulnerability). It reaches
+    # this tree only as a build-time proc-macro of datafusion 46's own macros;
+    # it parses no input of ours and ships no code into the binary. It leaves
+    # the tree whenever datafusion is next upgraded — re-check this ignore
+    # then.
+    "RUSTSEC-2024-0436",
+]
+
+[bans]
+# Duplicate versions cost build time and binary size but are not defects;
+# the direct pins in Cargo.toml (zip, quick-xml matching calamine's own)
+# keep the ones we control de-duplicated.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

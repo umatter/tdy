@@ -74,6 +74,20 @@ jobs:
         # mechanical reformat. `cargo fmt --all` any time you want it.
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+  deny:
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Advisories, bans and sources only — deny.toml says why licenses are
+      # not gated. This is the job that catches the next RUSTSEC advisory in
+      # reqwest/zip/quick-xml/calamine, which is where they appear for a tool
+      # that parses untrusted files; it found two real quick-xml DoS
+      # advisories the day it was added.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources
+
   msrv:
     name: minimum supported Rust (1.88)
     runs-on: ubuntu-latest
