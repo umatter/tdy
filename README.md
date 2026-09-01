@@ -103,22 +103,20 @@ text you can read, edit and commit. `messy('2025-01.csv')` in SQL uses it,
 so the query sees the tidy table from the preview, never the raw text:
 
 ```bash
-tdy query "SELECT region, sum(betrag) AS betrag FROM messy('2025-01.csv') GROUP BY region ORDER BY region"
+tdy query "SELECT count(*) AS rows, sum(betrag) AS total_chf, max(datum) AS datum FROM messy('2025-01.csv')"
 ```
 
 ```
-+--------+---------+
-| region | betrag  |
-+--------+---------+
-| Nord   | 1120.00 |
-| Ost    | 1100.00 |
-| Sued   | 1130.00 |
-| West   | 1110.00 |
-+--------+---------+
++------+-----------+------------+
+| rows | total_chf | datum      |
++------+-----------+------------+
+| 4    | 4460.00   | 2025-01-31 |
++------+-----------+------------+
 ```
 
-`sum(betrag)` is exact decimal arithmetic, not float, and `datum` is a
-real `DATE` — because the sidecar says so, and only because it says so.
+1'100 + 1'110 + 1'120 + 1'130 = 4'460, in exact decimal arithmetic rather
+than float, and `max()` over `datum` works because it is a real `DATE` —
+both because the sidecar says so, and only because it says so.
 
 **2. The whole pile.** Step 1 took each file on its own terms. For a
 dataset you do the opposite: declare the one table you *want*, and let tdy
