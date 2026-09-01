@@ -341,6 +341,39 @@ pub fn resolve(target: &Target, target_file: &Path) -> Result<Vec<String>> {
     Ok(out.into_iter().collect())
 }
 
+/// One pattern against one directory, for a caller with no shell in front of
+/// it (the console). `*` and `?` in the final path segment only, the same
+/// matcher `files =` uses, so a glob means the same thing in both places.
+///
+/// A literal (no `*`/`?`) is returned as-is whether or not it exists: the
+/// command that opens it reports "file not found", which is more useful than
+/// "no match". Sidecars and locks are never data, so they are skipped even
+/// when `*` would match them.
+pub fn expand_glob(dir: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
+    let (sub, name_pat) = split_pattern(pattern);
+    let search = if sub.is_empty() { dir.to_path_buf() } else { dir.join(&sub) };
+    if !name_pat.contains(['*', '?']) {
+        return Ok(vec![search.join(&name_pat)]);
+    }
+    let mut out: BTreeSet<PathBuf> = BTreeSet::new();
+    let rd = std::fs::read_dir(&search)
+        .with_context(|| format!("cannot read directory {}", search.display()))?;
+    for e in rd.flatten() {
+        if !e.path().is_file() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().to_string();
+        if !matches_glob(&name_pat, &name) {
+            continue;
+        }
+        if name.ends_with(".tdy.toml") || name.ends_with(".tdy.lock") {
+            continue;
+        }
+        out.insert(search.join(name));
+    }
+    Ok(out.into_iter().collect())
+}
+
 /// `exports/2025-*.csv` -> ("exports", "2025-*.csv")
 fn split_pattern(p: &str) -> (String, String) {
     match p.rsplit_once('/') {
@@ -498,5 +531,36 @@ mod tests {
             t("CREATE TABLE s (a TEXT) WITH (files = '2025-*.csv', exclude = '*-entwurf.csv')");
         let got = resolve(&target, &dir.path().join("s.tdy.sql")).unwrap();
         assert_eq!(got, vec!["2025-01.csv"]);
+    }
+
+    #[test]
+    fn expand_glob_matches_files_sorted_and_skips_companions() {
+        let d = tempfile::tempdir().unwrap();
+        for n in ["b.csv", "a.csv", "a.csv.tdy.toml", "t.tdy.lock", "x.txt"] {
+            std::fs::write(d.path().join(n), "").unwrap();
+        }
+        std::fs::create_dir(d.path().join("sub.csv")).unwrap(); // a dir, not a file
+        let got = expand_glob(d.path(), "*.csv").unwrap();
+        let names: Vec<String> =
+            got.iter().map(|p| p.file_name().unwrap().to_string_lossy().into()).collect();
+        assert_eq!(names, ["a.csv", "b.csv"]);
+        assert!(got.iter().all(|p| p.starts_with(d.path())));
+    }
+
+    #[test]
+    fn expand_glob_literal_passes_through_even_if_absent() {
+        let d = tempfile::tempdir().unwrap();
+        let got = expand_glob(d.path(), "missing.csv").unwrap();
+        assert_eq!(got, vec![d.path().join("missing.csv")]);
+        assert!(expand_glob(d.path(), "nothing-*.csv").unwrap().is_empty());
+    }
+
+    #[test]
+    fn expand_glob_with_subdirectory() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("exports")).unwrap();
+        std::fs::write(d.path().join("exports/2025-01.csv"), "").unwrap();
+        let got = expand_glob(d.path(), "exports/2025-*.csv").unwrap();
+        assert_eq!(got, vec![d.path().join("exports/2025-01.csv")]);
     }
 }
