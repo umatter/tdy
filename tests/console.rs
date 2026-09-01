@@ -473,3 +473,38 @@ async fn accept_shows_evidence_first_and_accepts_only_on_repeat() {
     let o = s.run(".accept sales.tdy.sql 2025-01.csv", None).await;
     assert!(!o.ok && o.text.contains("nothing to accept"));
 }
+
+#[tokio::test]
+async fn fit_text_equals_the_binary_stdout_plus_its_error_line() {
+    let d = pile();
+    let cli = tdy(d.path(), &["fit", "sales.tdy.sql"]);
+    assert!(!cli.status.success());
+    let stderr = String::from_utf8_lossy(&cli.stderr);
+    let error_line = stderr.lines().find(|l| l.starts_with("Error: ")).expect("an Error line");
+    let expected = format!("{}{error_line}\n", String::from_utf8_lossy(&cli.stdout));
+    // Fresh copy so sidecars written by the CLI run do not change the text.
+    let d2 = pile();
+    let mut s = session(d2.path()).await;
+    let o = s.run(".fit sales.tdy.sql", None).await;
+    assert_eq!(o.text, expected);
+}
+
+#[tokio::test]
+async fn query_text_equals_the_binary() {
+    let d = pile();
+    tdy(d.path(), &["sniff", "2025-01.csv", "--no-llm"]);
+    let cli = tdy(d.path(), &["query", "SELECT region, betrag FROM messy('2025-01.csv') ORDER BY region"]);
+    assert!(cli.status.success());
+    let mut s = session(d.path()).await;
+    let o = s.run("SELECT region, betrag FROM messy('2025-01.csv') ORDER BY region;", None).await;
+    assert_eq!(o.text, String::from_utf8_lossy(&cli.stdout));
+}
+
+#[tokio::test]
+async fn draft_text_equals_the_binary() {
+    let d = pile();
+    let cli = tdy(d.path(), &["draft", "2025-01.csv", "2025-02.csv", "2025-12.csv"]);
+    let mut s = session(d.path()).await;
+    let o = s.run(".draft 2025-01.csv 2025-02.csv 2025-12.csv", None).await;
+    assert_eq!(o.text, String::from_utf8_lossy(&cli.stdout));
+}
