@@ -9,6 +9,7 @@
 //! - [`numfmt`]   which character is the decimal point (and proof, not guesswork)
 //! - [`infer`]    tier-2 LLM inference with grammar-constrained decoding
 //! - [`engine`]   ParseSpec + file -> Arrow RecordBatch
+//! - [`evidence`] what accepting a reviewed member would do, computed over the whole file
 //! - [`provider`] DataFusion `messy()` UDTF, query running, output
 //! - [`sqlscan`]  finding `messy('...')` in SQL without mistaking comments for code
 //! - [`fileio`]   bounded reads, streaming hashes, atomic writes
@@ -25,6 +26,7 @@ pub mod mcp;
 pub mod progress;
 pub mod report;
 pub mod engine;
+pub mod evidence;
 pub mod fileio;
 pub mod fit;
 pub mod infer;

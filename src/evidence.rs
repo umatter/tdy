@@ -14,8 +14,8 @@
 //! a person triggers by pressing a key.
 
 use anyhow::{Context, Result};
-use tdy::config::Limits;
-use tdy::spec::{ColumnSpec, DType, ParseSpec, Transform, ValueParsing};
+use crate::config::Limits;
+use crate::spec::{ColumnSpec, DType, ParseSpec, Transform, ValueParsing};
 
 use datafusion::arrow::array::Array;
 use std::path::Path;
@@ -256,7 +256,7 @@ fn frame_evidence(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Evide
     // streamed pass, which holds one batch. Collecting every batch to show
     // six rows made the accept screen fail on members an ordinary query
     // handles fine.
-    let batch = tdy::engine::preview(spec, path, limits, 6)?;
+    let batch = crate::engine::preview(spec, path, limits, 6)?;
     let header: Vec<String> =
         spec.columns.iter().map(|c| format!("{} ← {}", c.name, c.source_name())).collect();
     let head = (0..batch.num_rows())
@@ -271,7 +271,7 @@ fn frame_evidence(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Evide
 }
 
 fn describe_extraction(spec: &ParseSpec) -> String {
-    use tdy::spec::Extraction;
+    use crate::spec::Extraction;
     let mut parts = vec![spec.extraction.format_name().to_string()];
     match &spec.extraction {
         Extraction::Json { pointer: Some(p), .. } => parts.push(format!("pointer {p:?}")),
@@ -298,8 +298,8 @@ fn describe_extraction(spec: &ParseSpec) -> String {
 /// promises costs one batch of memory rather than the file.
 fn strings_of(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Vec<String>> {
     let mut out = Vec::new();
-    if tdy::stream::enabled() && tdy::stream::can_stream(spec) {
-        tdy::stream::execute_with(spec, path, limits, |b| {
+    if crate::stream::enabled() && crate::stream::can_stream(spec) {
+        crate::stream::execute_with(spec, path, limits, |b| {
             let col = b.column(0);
             for i in 0..b.num_rows() {
                 out.push(cell(col, i));
@@ -307,7 +307,7 @@ fn strings_of(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Vec<Strin
             Ok(())
         })?;
     } else {
-        for b in tdy::engine::execute_batches(spec, path, limits)? {
+        for b in crate::engine::execute_batches(spec, path, limits)? {
             let col = b.column(0);
             for i in 0..b.num_rows() {
                 out.push(cell(col, i));
@@ -321,13 +321,13 @@ fn strings_of(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Vec<Strin
 /// count is one number and must not cost the file.
 fn row_count(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<usize> {
     let mut n = 0usize;
-    if tdy::stream::enabled() && tdy::stream::can_stream(spec) {
-        tdy::stream::execute_with(spec, path, limits, |b| {
+    if crate::stream::enabled() && crate::stream::can_stream(spec) {
+        crate::stream::execute_with(spec, path, limits, |b| {
             n += b.num_rows();
             Ok(())
         })?;
     } else {
-        n = tdy::engine::execute_batches(spec, path, limits)?.iter().map(|b| b.num_rows()).sum();
+        n = crate::engine::execute_batches(spec, path, limits)?.iter().map(|b| b.num_rows()).sum();
     }
     Ok(n)
 }
@@ -346,8 +346,6 @@ mod tests {
 
     fn corpus() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
             .join("testdata")
             .join("drifting_exports")
     }
@@ -537,7 +535,7 @@ type = "utf8"
         assert!(h.contains("left"), "{h}");
         assert!(h.contains('÷'), "{h}");
         // And the executor agrees with the word.
-        assert_eq!(tdy::engine::shift_decimal_point("170000", -2), "1700.00");
+        assert_eq!(crate::engine::shift_decimal_point("170000", -2), "1700.00");
     }
 
     /// A judgement with nothing to compute says so, rather than rendering an

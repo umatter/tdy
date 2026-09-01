@@ -7,8 +7,8 @@
 //! a TUI nobody can check.
 
 pub use tdy::target::TargetColumn;
+pub use tdy::evidence;
 
 pub mod app;
-pub mod evidence;
 pub mod remedy;
 pub mod ui;
