@@ -189,6 +189,24 @@ impl Session {
         crate::fileio::confine(&joined, &self.root).with_context(|| p.to_string())
     }
 
+    /// Resolve a path that names something not written yet — `.draft --to`
+    /// and (Task 8) `.output` — by confining its *parent directory* rather
+    /// than the path itself: `fileio::confine` canonicalises, which a
+    /// not-yet-existing file cannot survive. The parent must exist and
+    /// resolve under root; the file name is appended to its canonical form
+    /// so a parent reached through a symlink still lands where root says it
+    /// does.
+    fn resolve_new(&self, p: &str) -> Result<PathBuf> {
+        let joined = self.cwd.join(p);
+        let name = joined.file_name().with_context(|| format!("{p}: not a file name"))?.to_owned();
+        let parent = match joined.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        let confined_parent = crate::fileio::confine(parent, &self.root).with_context(|| p.to_string())?;
+        Ok(confined_parent.join(name))
+    }
+
     /// Globs expanded against cwd, each result confined. Errors if a glob
     /// matched nothing.
     pub fn expand(&self, patterns: &[String]) -> Result<Vec<PathBuf>> {
@@ -229,7 +247,7 @@ impl Session {
         }
     }
 
-    async fn dispatch(&mut self, cmd: Command, _progress: Option<&progress::Sink>) -> Result<Outcome> {
+    async fn dispatch(&mut self, cmd: Command, progress: Option<&progress::Sink>) -> Result<Outcome> {
         // Confinement applies to every path a command names, whether or not
         // that command is implemented yet: a `.sniff` outside the root must
         // fail as "outside", not as "not implemented".
@@ -293,8 +311,147 @@ impl Session {
                 let text = render_shown(&file, &raw, spec.as_ref());
                 Outcome::ok(text, Payload::Shown { path, raw, spec })
             }
+            Command::Draft { files, to } => {
+                // `Outcome.echo` stays empty: a REPL already echoed the raw
+                // line as typed (globs and all) as it read it, so `run()`
+                // fills it from the trimmed input, same as every other
+                // command — the expanded paths are not what was typed.
+                let paths = self.expand(&files)?;
+                // `draft_target` falls back to naming the table `dataset`
+                // only when the first file it is handed carries no
+                // directory component (see `table_name` in `draft.rs`) —
+                // exactly how `tdy draft` is normally invoked: cd into the
+                // pile, then a shell-expanded glob with no path prefix. The
+                // console always resolves to an absolute path, so it
+                // reproduces that shape itself, aligning the process's
+                // actual directory to `self.cwd` for the call — the same
+                // thing `.cd` does permanently, on the same reasoning that a
+                // console owns the process it runs in (see `Command::Cd`).
+                let rel: Vec<PathBuf> = paths
+                    .iter()
+                    .map(|p| p.strip_prefix(&self.cwd).map(Path::to_path_buf).unwrap_or_else(|_| p.clone()))
+                    .collect();
+                let ddl = {
+                    // Restores the process's previous directory on the way
+                    // out of this block, including on an early return via
+                    // `?` inside `draft_target` or an unwinding panic — a
+                    // sniff failure must not leave the process pointed at
+                    // this session's cwd forever.
+                    struct RestoreCwd(Option<PathBuf>);
+                    impl Drop for RestoreCwd {
+                        fn drop(&mut self) {
+                            if let Some(p) = self.0.take() {
+                                let _ = std::env::set_current_dir(p);
+                            }
+                        }
+                    }
+                    let _restore = RestoreCwd(std::env::current_dir().ok());
+                    std::env::set_current_dir(&self.cwd)?;
+                    crate::draft::draft_target(&rel, self.cfg.limits)?
+                };
+                let wrote = match to {
+                    Some(t) => {
+                        let dest = self.resolve_new(&t)?;
+                        if dest.exists() {
+                            bail!("{t} exists; choose another name or remove it first");
+                        }
+                        crate::fileio::atomic_write(&dest, &ddl)?;
+                        Some(dest)
+                    }
+                    None => None,
+                };
+                let text = match &wrote {
+                    Some(p) => format!("wrote {}\n", self.display_rel(p)),
+                    None => ddl.clone(),
+                };
+                Outcome { echo: String::new(), text, payload: Payload::Drafted { ddl, wrote }, ok: true }
+            }
+            Command::Fit { target, file: Some(file), dry_run, propose } => {
+                let (t, f) = (self.resolve(&target)?, self.resolve(&file)?);
+                let out =
+                    crate::commands::fit_one_text(&t, &f, &self.cfg, dry_run, propose, progress).await?;
+                let mut text = out.text;
+                if !out.ok {
+                    let msg = if out.gaps {
+                        "no plan reaches the declared schema".to_string()
+                    } else {
+                        format!("could not fit {file}")
+                    };
+                    writeln!(text, "Error: {msg}")?;
+                }
+                Outcome { echo: String::new(), text, payload: Payload::Nothing, ok: out.ok }
+            }
+            Command::Fit { target, file: None, dry_run, propose } => {
+                let t = self.resolve(&target)?;
+                self.fit_pile(&t, &[], dry_run, propose, progress).await?
+            }
+            Command::Check { target, against } => {
+                let t = self.resolve(&target)?;
+                let files = against.iter().map(|a| self.resolve(a)).collect::<Result<Vec<_>>>()?;
+                let out = crate::commands::check_text(&t, &files, self.cfg.limits)?;
+                let mut text = out.text;
+                if !out.ok {
+                    writeln!(text, "Error: {} file(s) do not produce the declared schema", out.bad)?;
+                }
+                Outcome { echo: String::new(), text, payload: Payload::Nothing, ok: out.ok }
+            }
+            Command::Schema => Outcome::ok(
+                format!("{}\n", serde_json::to_string_pretty(&crate::spec::ParseSpec::json_schema())?),
+                Payload::Nothing,
+            ),
+            Command::ConfigInit => {
+                let path = crate::config::config_file_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "~/.config/tdy/config.toml".into());
+                Outcome::ok(
+                    format!("# write this to {path}\n\n{}\n", crate::config::SAMPLE_CONFIG),
+                    Payload::Nothing,
+                )
+            }
+            Command::Edit { file } => {
+                let p = self.resolve(&file)?;
+                Outcome::ok(String::new(), Payload::Edit(p))
+            }
             other => bail!("`{}` is not implemented yet", describe_command(&other)),
         })
+    }
+
+    /// Shared by `.draft --to`, `.fit`'s pile path, and (Task 9) `.accept`'s
+    /// second step: fits every member the target's globs match and writes
+    /// the lock only if all of them fit, rendering the same text `tdy fit`
+    /// prints — with the same failure sentence appended when the pile does
+    /// not fully fit, since a partial lock is refused either way.
+    async fn fit_pile(
+        &mut self,
+        target: &Path,
+        accept: &[PathBuf],
+        dry_run: bool,
+        propose: bool,
+        progress: Option<&progress::Sink>,
+    ) -> Result<Outcome> {
+        let r = crate::report::fit_pile(
+            target,
+            &self.cfg,
+            crate::report::FitOpts {
+                dry_run,
+                accept,
+                propose,
+                progress: progress.cloned(),
+                root: Some(&self.root),
+            },
+        )
+        .await?;
+        let mut text = crate::report::render_pile_text(&r);
+        let ok = r.failed == 0;
+        if !ok {
+            writeln!(
+                text,
+                "Error: {} file(s) cannot reach the declared schema; no lock written. \
+                 Fix them, exclude them, or widen the target.",
+                r.failed
+            )?;
+        }
+        Ok(Outcome { echo: String::new(), text, payload: Payload::Fitted(r), ok })
     }
 
     /// Resolve (or expand) every path-shaped argument a command carries,
@@ -369,6 +526,18 @@ impl Outcome {
 
 fn describe_command(c: &Command) -> String {
     format!("{c:?}")
+}
+
+/// Quote a root-relative path the way the console's own tokenizer expects
+/// to read it back: `Debug` wraps a name carrying whitespace in double
+/// quotes with the same escaping `tokenize` already handles, so it
+/// round-trips through `.draft`'s echo. No dispatch arm calls this yet —
+/// `Outcome.echo` for `.draft` is left for `run()` to fill from the raw
+/// line — but a caller that logs what a glob actually expanded to (a batch
+/// runner, or Task 9's `.accept`) needs exactly this quoting.
+#[allow(dead_code)]
+fn quote_rel(s: &str) -> String {
+    if s.chars().any(char::is_whitespace) { format!("{s:?}") } else { s.to_string() }
 }
 
 /// Which files the browser and `.ls` treat as data (by extension).

@@ -209,3 +209,64 @@ async fn validate_and_show() {
     assert_eq!(raw.sheets.len(), 1);
     assert_eq!(raw.sheets[0].0, "Umsatz");
 }
+
+#[tokio::test]
+async fn draft_prints_or_writes_and_never_overwrites() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = s.run(".draft 2025-*.csv 2025-*.xlsx", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert_eq!(o.echo, ".draft 2025-*.csv 2025-*.xlsx");
+    assert!(o.text.contains("CREATE TABLE dataset") && o.text.contains("in 11 of 12 file(s)"));
+    let Payload::Drafted { wrote, .. } = o.payload else { panic!() };
+    assert!(wrote.is_none());
+
+    let o = s.run(".draft 2025-*.csv --to mine.tdy.sql", None).await;
+    assert!(o.ok && d.path().join("mine.tdy.sql").exists());
+    assert!(o.text.contains("wrote mine.tdy.sql"));
+    let o = s.run(".draft 2025-*.csv --to mine.tdy.sql", None).await;
+    assert!(!o.ok && o.text.contains("exists"));
+
+    let o = s.run(".draft nothing-*.csv", None).await;
+    assert!(!o.ok && o.text.contains("no file matches"));
+}
+
+#[tokio::test]
+async fn fit_reports_refusals_writes_no_lock_and_then_fits_the_fixed_target() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = s.run(".fit sales.tdy.sql", None).await;
+    assert!(!o.ok);
+    let Payload::Fitted(r) = &o.payload else { panic!("{:?}", o.payload) };
+    assert_eq!((r.fitted, r.failed), (9, 3));
+    assert!(r.lock_written.is_none());
+    assert!(o.text.contains("9 of 12 file(s) fit `sales`"));
+    assert!(o.text.ends_with("Error: 3 file(s) cannot reach the declared schema; no lock written. Fix them, exclude them, or widen the target.\n"));
+    assert!(!d.path().join("sales.tdy.lock").exists());
+
+    std::fs::copy(corpus().join("sales_ok.tdy.sql"), d.path().join("sales_ok.tdy.sql")).unwrap();
+    let o = s.run(".fit sales_ok.tdy.sql", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(d.path().join("sales_ok.tdy.lock").exists());
+
+    // One file against the target: the fit-one text path.
+    let o = s.run(".fit sales.tdy.sql 2025-07.csv", None).await;
+    assert!(!o.ok && o.text.contains("cannot reach `sales`"));
+    let o = s.run(".fit sales.tdy.sql 2025-01.csv --dry-run", None).await;
+    assert!(o.ok && o.text.contains("--dry-run: nothing written"));
+}
+
+#[tokio::test]
+async fn check_schema_config_edit() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = s.run(".check sales.tdy.sql", None).await;
+    assert!(o.ok && o.text.contains("nothing to check"));
+    let o = s.run(".schema", None).await;
+    assert!(o.ok && o.text.trim_start().starts_with('{'));
+    let o = s.run(".config init", None).await;
+    assert!(o.ok && o.text.contains("[backend]") || o.text.contains("backend"));
+    let o = s.run(".edit sales.tdy.sql", None).await;
+    assert!(o.ok);
+    assert!(matches!(o.payload, Payload::Edit(ref p) if p.ends_with("sales.tdy.sql")));
+}
