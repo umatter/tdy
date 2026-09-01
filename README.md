@@ -62,9 +62,29 @@ tdy query "SELECT region, sum(betrag) AS betrag FROM messy('2025-01.csv') GROUP 
 `betrag` is an exact `decimal(14,2)` and `datum` a real `DATE` parsed as
 `%d.%m.%Y` — the sidecar says so, and you can read and edit it.
 
-**2. The whole pile.** `sales.tdy.sql` declares the table you *want* — three
-columns, their types, and the header spellings each may be read from — and
-`tdy fit` plans every file onto it:
+**2. The whole pile.** Step 1 took each file on its own terms. For a
+dataset you do the opposite: declare the one table you *want*, and let tdy
+prove which files can become it. The declaration is plain SQL DDL in a
+`.tdy.sql` file — you write it once, by hand (or scaffold it with
+`tdy draft`), and check it in. The example ships with one written already,
+`sales.tdy.sql`; stripped of its comments it is this:
+
+```sql
+CREATE TABLE sales (
+  month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
+  region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
+  amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
+)
+WITH (
+  files      = '2025-*.csv, 2025-*.xlsx',
+  date_order = 'dmy'
+);
+```
+
+Three columns, their types, and for each one the header spellings it may be
+read from — because the files say `Datum`, `Date`, `Betrag`, `Amount`, and
+nothing bridges that automatically. `tdy fit` plans every file the glob
+matches onto it:
 
 ```bash
 tdy fit sales.tdy.sql
@@ -92,8 +112,8 @@ Error: 3 file(s) cannot reach the declared schema; no lock written. Fix them, ex
 
 Nine fit; three are refused with the reason, and **no lock is written**,
 because a dataset silently missing three months is the outcome tdy exists
-to prevent. `sales_ok.tdy.sql` is the same declaration with those three
-excluded (open it — the fix is one commented line). Fit that and query the
+to prevent. `sales_ok.tdy.sql` is the same declaration with one line added:
+`exclude = '2025-07.csv, 2025-08.csv, 2025-11.csv'`. Fit that and query the
 dataset as one table:
 
 ```bash
