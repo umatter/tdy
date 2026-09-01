@@ -357,3 +357,95 @@ async fn session_run_future_is_send() {
     assert_send(s.run(".help", None));
     s.run(".help", None).await; // and still drive it once
 }
+
+const RAPPEN_SIDECAR: &str = r#"
+# hand-written: Betrag Rp. is Rappen; shift the point two places left.
+spec_version = 1
+[source]
+path = "2025-07.csv"
+blake3 = "REPLACED"
+bytes = 0
+[provenance]
+method = "manual"
+tool_version = "test"
+created_at = "2026-01-01T00:00:00Z"
+[spec]
+confidence = 1.0
+notes = []
+[spec.extraction]
+format = "delimited"
+delimiter = ";"
+[[spec.transforms]]
+op = "promote_header"
+rows = 1
+[[spec.columns]]
+name = "month"
+source = "Datum"
+nullable = false
+[spec.columns.dtype]
+type = "date"
+format = "%d.%m.%Y"
+[[spec.columns]]
+name = "region"
+source = "Region"
+nullable = false
+[spec.columns.dtype]
+type = "utf8"
+[[spec.columns]]
+name = "amount_chf"
+source = "Betrag Rp."
+nullable = false
+[spec.columns.dtype]
+type = "decimal"
+precision = 14
+scale = 2
+[spec.columns.parse]
+decimal_shift = -2
+"#;
+
+fn write_rappen_sidecar(dir: &Path) {
+    let file = dir.join("2025-07.csv");
+    let (hash, bytes) = tdy::sidecar::hash_file(&file).unwrap();
+    let toml = RAPPEN_SIDECAR.replace("blake3 = \"REPLACED\"", &format!("blake3 = \"{hash}\""))
+        .replace("bytes = 0", &format!("bytes = {bytes}"));
+    std::fs::write(dir.join("2025-07.csv.tdy.toml"), toml).unwrap();
+}
+
+#[tokio::test]
+async fn accept_shows_evidence_first_and_accepts_only_on_repeat() {
+    let d = pile();
+    write_rappen_sidecar(d.path());
+    let mut s = session(d.path()).await;
+
+    // The pile fit leaves 2025-07 waiting on review (manual spec, decimal_shift).
+    let o = s.run(".fit sales.tdy.sql", None).await;
+    let Payload::Fitted(r) = &o.payload else { panic!() };
+    let m07 = r.members.iter().find(|m| m.path == "2025-07.csv").unwrap();
+    assert!(m07.review.is_some() && !m07.accepted, "{m07:?}");
+
+    // Step one: evidence, nothing written.
+    let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
+    assert!(o.ok, "{}", o.text);
+    let Payload::Evidence { rows, .. } = &o.payload else { panic!("{:?}", o.payload) };
+    assert!(!rows.is_empty());
+    assert!(o.text.contains("170000") && o.text.contains("1700.00"));
+    assert!(o.text.contains("run `.accept sales.tdy.sql 2025-07.csv` again to accept"));
+    assert!(s.pending_accept().is_some());
+
+    // Any other command in between resets to step one.
+    s.run(".ls", None).await;
+    assert!(s.pending_accept().is_none());
+    let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
+    assert!(matches!(o.payload, Payload::Evidence { .. }));
+
+    // Step two: the same line again performs the acceptance.
+    let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
+    let Payload::Fitted(r) = &o.payload else { panic!("{:?}", o.payload) };
+    let m07 = r.members.iter().find(|m| m.path == "2025-07.csv").unwrap();
+    assert!(m07.accepted, "{m07:?}");
+    assert!(s.pending_accept().is_none());
+
+    // A member with nothing to review is refused, not silently accepted.
+    let o = s.run(".accept sales.tdy.sql 2025-01.csv", None).await;
+    assert!(!o.ok && o.text.contains("nothing to accept"));
+}

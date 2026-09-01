@@ -190,7 +190,9 @@ pub struct Session {
     quit: bool,
     sql_buffer: String,
     output: Option<(PathBuf, crate::provider::OutputFormat)>,
-    #[allow(dead_code)] // written/read by Task 9 (`.accept`, the review gate)
+    /// The review gate's own memory: set by `.accept`'s step one (evidence
+    /// shown, nothing written), cleared by anything except an identical
+    /// repeat of that same line — see `run`'s reset rule.
     pending_accept: Option<(PathBuf, String)>,
 }
 
@@ -225,6 +227,13 @@ impl Session {
     /// Set by `.quit`; frontends check it after each `run`.
     pub fn wants_quit(&self) -> bool {
         self.quit
+    }
+
+    /// The target and member `.accept` is waiting to hear repeated back, if
+    /// any — a frontend can use this to show "press again to confirm"
+    /// without re-deriving the rule itself.
+    pub fn pending_accept(&self) -> Option<(&Path, &str)> {
+        self.pending_accept.as_ref().map(|(p, m)| (p.as_path(), m.as_str()))
     }
 
     /// Resolve a user-supplied path against cwd and confine it to root.
@@ -290,6 +299,17 @@ impl Session {
             return Outcome { echo: String::new(), text: String::new(), payload: Payload::Nothing, ok: true };
         }
         let is_dot = trimmed.trim_start().starts_with('.');
+        // The review gate's second step is reachable only by literally
+        // repeating the same `.accept TARGET MEMBER` line back — anything
+        // else in between resets it to step one: any other dot-command, an
+        // unparsable line, a completed SQL statement, and even a fragment
+        // that only extends the SQL buffer (`Continue`) without running
+        // anything. So this is decided from the parse, before dispatch,
+        // parsed once here and reused below rather than parsed again.
+        let dot_parsed = is_dot.then(|| parse(trimmed));
+        if !matches!(&dot_parsed, Some(Ok(Command::Accept { .. }))) {
+            self.pending_accept = None;
+        }
         let mut prefix = String::new();
         if is_dot && !self.sql_buffer.is_empty() {
             prefix = format!("note: discarded incomplete statement: {}\n", first_line(&self.sql_buffer));
@@ -316,7 +336,7 @@ impl Session {
             o.echo = sql;
             return o;
         }
-        let cmd = match parse(trimmed) {
+        let cmd = match dot_parsed.expect("is_dot implies dot_parsed is Some") {
             Ok(c) => c,
             Err(e) => return Outcome::error(trimmed, e.to_string()),
         };
@@ -558,6 +578,50 @@ impl Session {
                 };
                 self.output = Some((path, fmt));
                 Outcome::ok(format!("next result -> {f}\n"), Payload::Nothing)
+            }
+            Command::Accept { target, member } => {
+                let t = self.resolve(&target)?;
+                // The member's path is named relative to the target's own
+                // directory (what the pile report and `fit_pile`'s `accept`
+                // both use), not resolved against `self.cwd` the way a plain
+                // file argument would be — confined the same way `resolve`
+                // is, and with the same error preserved (a typo is "does not
+                // exist", not "outside").
+                let member_path = crate::fileio::confine(&crate::lockfile::target_dir(&t).join(&member), &self.root)
+                    .with_context(|| member.clone())?;
+                let same = self
+                    .pending_accept
+                    .as_ref()
+                    .map(|(pt, pm)| pt == &t && pm == &member)
+                    .unwrap_or(false);
+                if same {
+                    // Step two: the same line, run again, is the only path
+                    // to `accepted == true`.
+                    self.pending_accept = None;
+                    let mut o = self.fit_pile(&t, &[PathBuf::from(&member)], false, false, progress).await?;
+                    o.text = format!("accepted {member}\n\n{}", o.text);
+                    return Ok(o);
+                }
+                // Step one: evidence only, nothing written.
+                let sc = match crate::sidecar::load(&member_path)? {
+                    crate::sidecar::SidecarStatus::Fresh(sc) => sc,
+                    _ => bail!("{member} has no fresh sidecar; run `.fit {target}` first"),
+                };
+                let reasons = crate::fit::review_reasons(&sc.spec);
+                if reasons.is_empty() {
+                    bail!("nothing to accept: {member} has no judgement waiting on review");
+                }
+                let model_framed = matches!(sc.provenance.method, crate::spec::InferenceMethod::Llm);
+                let rows =
+                    crate::evidence::for_spec(&sc.spec, &member_path, self.cfg.limits, &reasons.join("; "), model_framed)?;
+                let mut text = format!("evidence for {member} (nothing written):\n");
+                for r in &reasons {
+                    let _ = writeln!(text, "  review: {r}");
+                }
+                text.push_str(&render_evidence(&rows));
+                let _ = writeln!(text, "\nrun `.accept {target} {member}` again to accept");
+                self.pending_accept = Some((t.clone(), member.clone()));
+                Outcome::ok(text, Payload::Evidence { target: t, member, rows })
             }
             other => bail!("`{}` is not implemented yet", describe_command(&other)),
         })
@@ -902,6 +966,39 @@ fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>) -> String
             for n in &sp.notes {
                 let _ = writeln!(s, "  note: {n}");
             }
+        }
+    }
+    s
+}
+
+/// The evidence `.accept`'s step one shows: what accepting each judgement
+/// in `rows` would actually do, not merely why it is a judgement — see
+/// `evidence::for_spec`'s doc comment on why restating the reason is not
+/// enough.
+pub fn render_evidence(rows: &[crate::evidence::Evidence]) -> String {
+    use crate::evidence::Evidence;
+    let mut s = String::new();
+    for e in rows {
+        let _ = writeln!(s, "\n  {}", e.headline());
+        match e {
+            Evidence::Shift { head, smallest, largest, .. } => {
+                for p in head.iter().take(5) {
+                    let _ = writeln!(s, "    row {:<6} {:>14}  ->  {}", p.row, p.raw, p.parsed);
+                }
+                if let Some(p) = smallest {
+                    let _ = writeln!(s, "    smallest  row {:<6} {:>14}  ->  {}", p.row, p.raw, p.parsed);
+                }
+                if let Some(p) = largest {
+                    let _ = writeln!(s, "    largest   row {:<6} {:>14}  ->  {}", p.row, p.raw, p.parsed);
+                }
+            }
+            Evidence::Frame { header, head, .. } => {
+                let _ = writeln!(s, "    header: {}", header.join(" | "));
+                for r in head.iter().take(5) {
+                    let _ = writeln!(s, "    {}", r.join(" | "));
+                }
+            }
+            Evidence::Constant { .. } | Evidence::Unillustrated { .. } => {}
         }
     }
     s
