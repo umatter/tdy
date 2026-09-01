@@ -39,12 +39,70 @@ from a system that could not keep its own format straight — Swiss
 `.xlsx`, one month in Rappen instead of francs, one with two columns both
 called `Betrag`, one with no region at all.
 
-**1. One file.** Ask tdy what it sees, then query it. The sniff writes a
-sidecar (`2025-01.csv.tdy.toml`) next to the file; the query reads it.
+**1. One file.** Look at January's export first:
 
 ```bash
 cd testdata/drifting_exports
+cat 2025-01.csv
+```
+
+```
+Datum;Region;Betrag
+31.01.2025;Ost;1'100.00
+31.01.2025;West;1'110.00
+31.01.2025;Nord;1'120.00
+31.01.2025;Sued;1'130.00
+```
+
+Semicolons, day-first dates, and amounts grouped with an apostrophe — three
+things a stock CSV reader either gets wrong or hands back as strings. Ask
+tdy what it sees:
+
+```bash
 tdy sniff 2025-01.csv --no-llm
+```
+
+It prints the parsing spec it inferred and a preview. Trimmed:
+
+```toml
+[spec.extraction]
+format = "delimited"
+delimiter = ";"
+
+[[spec.columns]]
+name = "datum"
+source = "Datum"
+[spec.columns.dtype]
+type = "date"
+format = "%d.%m.%Y"
+
+[[spec.columns]]
+name = "betrag"
+source = "Betrag"
+[spec.columns.dtype]
+type = "decimal"
+scale = 2
+[spec.columns.parse]
+thousands_separator = "'"
+```
+
+```
+preview (heuristic method, confidence 0.95):
++------------+--------+---------+
+| datum      | region | betrag  |
++------------+--------+---------+
+| 2025-01-31 | Ost    | 1100.00 |
+| 2025-01-31 | West   | 1110.00 |
+| 2025-01-31 | Nord   | 1120.00 |
+| 2025-01-31 | Sued   | 1130.00 |
++------------+--------+---------+
+```
+
+That spec is now on disk as `2025-01.csv.tdy.toml`, next to the file — plain
+text you can read, edit and commit. `messy('2025-01.csv')` in SQL uses it,
+so the query sees the tidy table from the preview, never the raw text:
+
+```bash
 tdy query "SELECT region, sum(betrag) AS betrag FROM messy('2025-01.csv') GROUP BY region ORDER BY region"
 ```
 
@@ -59,8 +117,8 @@ tdy query "SELECT region, sum(betrag) AS betrag FROM messy('2025-01.csv') GROUP 
 +--------+---------+
 ```
 
-`betrag` is an exact `decimal(14,2)` and `datum` a real `DATE` parsed as
-`%d.%m.%Y` — the sidecar says so, and you can read and edit it.
+`sum(betrag)` is exact decimal arithmetic, not float, and `datum` is a
+real `DATE` — because the sidecar says so, and only because it says so.
 
 **2. The whole pile.** Step 1 took each file on its own terms. For a
 dataset you do the opposite: declare the one table you *want*, and let tdy
