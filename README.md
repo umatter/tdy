@@ -210,15 +210,22 @@ Nine fit; three are refused with the reason, and **no lock is written**,
 because a dataset silently missing three months is the outcome tdy exists
 to prevent. July is in Rappen, August has two `Betrag` columns and does not
 say which is meant, November has no region: none of that is tdy's to
-decide. Decide it — here, by leaving the three out — with one line in the
-`WITH` block of `sales.tdy.sql`:
+decide. Decide it — here, by leaving the three out — with one `exclude`
+line in the `WITH` block of `sales.tdy.sql`:
 
-```sql
+```bash
+cat > sales.tdy.sql <<'EOF'
+CREATE TABLE sales (
+  month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
+  region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
+  amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
+)
 WITH (
   files      = '2025-*.csv, 2025-*.xlsx',
   exclude    = '2025-07.csv, 2025-08.csv, 2025-11.csv',
   date_order = 'dmy'
 );
+EOF
 ```
 
 Fit again, and query the dataset as one table:
