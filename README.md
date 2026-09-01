@@ -37,12 +37,16 @@ The example is `testdata/drifting_exports/`: twelve monthly sales exports
 from a system that could not keep its own format straight — Swiss
 `1'100.00` amounts, `31.01.2025` dates, semicolons, then two months as
 `.xlsx`, one month in Rappen instead of francs, one with two columns both
-called `Betrag`, one with no region at all.
+called `Betrag`, one with no region at all. Copy the data files somewhere
+of your own, since tdy writes its notes next to them:
+
+```bash
+mkdir ~/sales && cp testdata/drifting_exports/2025-* ~/sales && cd ~/sales
+```
 
 **1. One file.** Look at January's export first:
 
 ```bash
-cd testdata/drifting_exports
 cat 2025-01.csv
 ```
 
@@ -158,10 +162,11 @@ refuses to guess that `Datum` and `Date`, or `Betrag`, `Betrag CHF` and
 `Amount`, mean the same thing — you know that; it cannot. (Its grouping
 note is wrong for the same reason: this *is* one dataset, in four
 vocabularies.) Collapsing it to the three columns you mean, each synonym
-carried as a `matches` spelling, is the human step. The result is
-`sales.tdy.sql`, shipped beside the files; stripped of comments:
+carried as a `matches` spelling, is the human step. Write that as
+`sales.tdy.sql` beside the data:
 
-```sql
+```bash
+cat > sales.tdy.sql <<'EOF'
 CREATE TABLE sales (
   month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
   region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
@@ -171,6 +176,7 @@ WITH (
   files      = '2025-*.csv, 2025-*.xlsx',
   date_order = 'dmy'
 );
+EOF
 ```
 
 You write this once, review it in git like code, and never touch the
@@ -202,13 +208,24 @@ Error: 3 file(s) cannot reach the declared schema; no lock written. Fix them, ex
 
 Nine fit; three are refused with the reason, and **no lock is written**,
 because a dataset silently missing three months is the outcome tdy exists
-to prevent. `sales_ok.tdy.sql` is the same declaration with one line added:
-`exclude = '2025-07.csv, 2025-08.csv, 2025-11.csv'`. Fit that and query the
-dataset as one table:
+to prevent. July is in Rappen, August has two `Betrag` columns and does not
+say which is meant, November has no region: none of that is tdy's to
+decide. Decide it — here, by leaving the three out — with one line in the
+`WITH` block of `sales.tdy.sql`:
+
+```sql
+WITH (
+  files      = '2025-*.csv, 2025-*.xlsx',
+  exclude    = '2025-07.csv, 2025-08.csv, 2025-11.csv',
+  date_order = 'dmy'
+);
+```
+
+Fit again, and query the dataset as one table:
 
 ```bash
-tdy fit sales_ok.tdy.sql          # 9 of 9 fit; writes sales_ok.tdy.lock
-tdy query "SELECT region, sum(amount_chf) AS total_chf FROM dataset('sales_ok.tdy.sql') GROUP BY region ORDER BY region"
+tdy fit sales.tdy.sql            # 9 of 9 fit; writes sales.tdy.lock
+tdy query "SELECT region, sum(amount_chf) AS total_chf FROM dataset('sales.tdy.sql') GROUP BY region ORDER BY region"
 ```
 
 ```
@@ -224,14 +241,17 @@ tdy query "SELECT region, sum(amount_chf) AS total_chf FROM dataset('sales_ok.td
 
 36 rows, 57'340.00 in total, from nine files in two formats with three
 different header vocabularies and two date formats — and every step of how
-each one was read is on disk, in git-diffable text, beside the file.
+each one was read is on disk, in git-diffable text, beside the data:
+`sales.tdy.sql` (yours), `sales.tdy.lock` (what fit proved, and over which
+bytes) and one `*.tdy.toml` per member.
 
 **3. Look around.** `tdy ui sales.tdy.sql` opens the same pile in the
-terminal UI, with each refusal next to the file's own rows. Everything the
-quick start wrote (`*.tdy.toml`, `*.tdy.lock`) is gitignored under
-`testdata/`, so `git status` stays clean. To point tdy at your own files,
-start with `tdy sniff <file>`; for a model to help with the hard cases, see
-[Two-tier inference](#two-tier-inference) and `tdy config init`.
+terminal UI, with each refusal next to the file's own rows. To point tdy at
+your own files, start with `tdy sniff <file>`; for a model to help with the
+hard cases, see [Two-tier inference](#two-tier-inference) and
+`tdy config init`. (The repo keeps the same declaration as
+`testdata/drifting_exports/sales.tdy.sql` and `sales_ok.tdy.sql`, with
+commentary, for its tests.)
 
 ## The idea
 
