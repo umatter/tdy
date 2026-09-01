@@ -15,6 +15,7 @@
 //! ships with each command.
 
 pub mod parse;
+pub mod line;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

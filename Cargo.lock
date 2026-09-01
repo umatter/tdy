@@ -3746,6 +3746,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "clap",
+ "crossterm",
  "csv",
  "datafusion",
  "dirs",
