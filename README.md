@@ -118,12 +118,48 @@ tdy query "SELECT count(*) AS rows, sum(betrag) AS total_chf, max(datum) AS datu
 than float, and `max()` over `datum` works because it is a real `DATE` —
 both because the sidecar says so, and only because it says so.
 
-**2. The whole pile.** Step 1 took each file on its own terms. For a
-dataset you do the opposite: declare the one table you *want*, and let tdy
-prove which files can become it. The declaration is plain SQL DDL in a
-`.tdy.sql` file — you write it once, by hand (or scaffold it with
-`tdy draft`), and check it in. The example ships with one written already,
-`sales.tdy.sql`; stripped of its comments it is this:
+**2. The whole pile.** Step 1 took one file on its own terms. For a
+dataset you go the other way: declare the one table you *want*, and let tdy
+prove which files can become it. Start by letting tdy draft that
+declaration from the files:
+
+```bash
+tdy draft 2025-*.csv 2025-*.xlsx
+```
+
+```sql
+-- Drafted by `tdy draft` from 12 file(s). A DRAFT, not an answer:
+-- everything below is what the sniffer measured; only you know which columns
+-- mean the same thing and which files do not belong. ...
+--
+-- NOTE: these files do not look like ONE dataset. By shared column
+-- names they group as 4 distinct shapes: ...
+
+CREATE TABLE dataset (
+  datum        DATE          OPTIONS(matches = 'Datum'),  -- in 11 of 12 file(s)
+  region       TEXT          OPTIONS(matches = 'Region'),  -- in 11 of 12 file(s)
+  betrag       DECIMAL(38,2) OPTIONS(matches = 'Betrag'),  -- in 9 of 12 file(s)
+  betrag_rp    BIGINT        OPTIONS(matches = 'Betrag Rp.'),  -- in 1 of 12 file(s)
+  betrag_2     DECIMAL(38,2) OPTIONS(matches = 'Betrag_2'),  -- in 1 of 12 file(s)
+  kundennummer TEXT          OPTIONS(matches = 'Kundennummer'),  -- in 1 of 12 file(s)
+  betrag_chf   DECIMAL(38,2) OPTIONS(matches = 'Betrag CHF'),  -- in 1 of 12 file(s)
+  date         DATE          OPTIONS(matches = 'Date'),  -- in 1 of 12 file(s)
+  amount       DECIMAL(38,2) OPTIONS(matches = 'Amount'),  -- in 1 of 12 file(s)
+  discount     BIGINT        OPTIONS(matches = 'Discount')  -- in 1 of 12 file(s)
+)
+WITH (
+  files = '*.csv, *.xlsx',
+  date_order = 'dmy'
+);
+```
+
+Ten columns, because the draft reports every header spelling it found and
+refuses to guess that `Datum` and `Date`, or `Betrag`, `Betrag CHF` and
+`Amount`, mean the same thing — you know that; it cannot. (Its grouping
+note is wrong for the same reason: this *is* one dataset, in four
+vocabularies.) Collapsing it to the three columns you mean, each synonym
+carried as a `matches` spelling, is the human step. The result is
+`sales.tdy.sql`, shipped beside the files; stripped of comments:
 
 ```sql
 CREATE TABLE sales (
@@ -137,10 +173,8 @@ WITH (
 );
 ```
 
-Three columns, their types, and for each one the header spellings it may be
-read from — because the files say `Datum`, `Date`, `Betrag`, `Amount`, and
-nothing bridges that automatically. `tdy fit` plans every file the glob
-matches onto it:
+You write this once, review it in git like code, and never touch the
+files. `tdy fit` plans every file the glob matches onto it:
 
 ```bash
 tdy fit sales.tdy.sql
