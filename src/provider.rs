@@ -702,43 +702,22 @@ pub struct SniffCli<'a> {
 /// `tdy sniff`, optionally as JSON: the sidecar's content plus what the run
 /// concluded, one object, machine-readable — the shape the MCP tier returns.
 pub async fn sniff_command(path: &Path, cfg: &Config, opts: SniffCli<'_>) -> Result<()> {
-    let SniffCli { hint, force, no_llm, quick, json } = opts;
-    let cfg = if no_llm {
-        let mut c = cfg.clone();
-        c.backend = Backend::None;
-        c
-    } else {
-        cfg.clone()
-    };
-    let prepared = ensure_sidecar_opts(path, &cfg, hint, force, sniff::SniffOpts { verify: !quick })
-        .await?;
-    if json {
+    if opts.json {
+        let SniffCli { hint, force, no_llm, quick, .. } = opts;
+        let cfg = if no_llm {
+            let mut c = cfg.clone();
+            c.backend = Backend::None;
+            c
+        } else {
+            cfg.clone()
+        };
+        let prepared =
+            ensure_sidecar_opts(path, &cfg, hint, force, sniff::SniffOpts { verify: !quick })
+                .await?;
         println!("{}", serde_json::to_string_pretty(&sniff_json_value(path, &prepared)?)?);
         return Ok(());
     }
-    let sc_path = sidecar::sidecar_path(path);
-    let text = std::fs::read_to_string(&sc_path)?;
-    println!("# {}", sc_path.display());
-    println!("{text}");
-
-    let spec = sidecar::load(path)?
-        .fresh_spec()
-        .ok_or_else(|| anyhow!("internal: sidecar not fresh right after writing it"))?;
-    let batch = engine::preview(&spec, path, cfg.limits, 10)?;
-    println!(
-        "preview ({} method, confidence {}):",
-        match prepared.method {
-            InferenceMethod::Heuristic => "heuristic",
-            InferenceMethod::Llm => "llm",
-            InferenceMethod::Manual => "manual",
-        },
-        prepared
-            .confidence
-            .map(|c| format!("{c:.2}"))
-            .unwrap_or_else(|| "n/a".into())
-    );
-    let text = datafusion::arrow::util::pretty::pretty_format_batches(&[batch])?;
-    println!("{text}");
+    print!("{}", crate::commands::sniff_text(path, cfg, opts).await?.text);
     Ok(())
 }
 
@@ -746,15 +725,7 @@ pub async fn sniff_command(path: &Path, cfg: &Config, opts: SniffCli<'_>) -> Res
 /// spec, confirm the fingerprint, and execute the spec over the head of the
 /// file. Optionally re-stamp the fingerprint for a hand-edited sidecar.
 pub fn validate_command(path: &Path, cfg: &Config, restamp: bool) -> Result<()> {
-    let sc_path = sidecar::sidecar_path(path);
-    let notes = validate_quiet(path, cfg, restamp)?;
-    if restamp {
-        println!("re-fingerprinted {} (method = manual)", sc_path.display());
-    }
-    println!("{}: ok", sc_path.display());
-    for n in &notes {
-        println!("  note: {n}");
-    }
+    print!("{}", crate::commands::validate_text(path, cfg, restamp)?);
     Ok(())
 }
 

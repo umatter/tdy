@@ -173,27 +173,6 @@ enum ConfigAction {
     Init,
 }
 
-/// Suggestions for columns nothing bound, as pasteable SQL.
-fn print_proposals(
-    file: &std::path::Path,
-    target: &tdy::target::Target,
-    limits: tdy::config::Limits,
-) {
-    let Ok(proposals) = tdy::fit::propose(file, target, limits) else { return };
-    for p in &proposals {
-        let existing: Vec<String> = target
-            .columns
-            .iter()
-            .find(|c| c.name == p.column)
-            .map(|c| std::iter::once(c.name.clone()).chain(c.matches.iter().cloned()).collect())
-            .unwrap_or_default();
-        println!("    `{}` ({}):", p.column, p.want);
-        for line in p.message(&existing).lines() {
-            println!("      {line}");
-        }
-    }
-}
-
 /// `tdy check --json`: the same gate, as one object a machine can act on.
 fn check_json(
     target_path: &std::path::Path,
@@ -333,119 +312,79 @@ async fn fit_command(
     propose: bool,
     json: bool,
 ) -> Result<()> {
-    let limits = cfg.limits;
     use tdy::fit::FitError;
     use tdy::target::Target;
+
+    if !json {
+        let out = tdy::commands::fit_one_text(
+            target_path,
+            file,
+            cfg,
+            dry_run,
+            propose,
+            Some(&tdy::progress::stderr_sink()),
+        )
+        .await?;
+        print!("{}", out.text);
+        if !out.ok {
+            if out.gaps {
+                anyhow::bail!("no plan reaches the declared schema");
+            }
+            anyhow::bail!("could not fit {}", file.display());
+        }
+        return Ok(());
+    }
 
     let target = Target::load(target_path)?;
     match tdy::fit::plan(file, &target, cfg, Some(&tdy::progress::stderr_sink())).await {
         Ok(planned) => {
             let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
-            if json {
-                let report = serde_json::json!({
-                    "path": file.display().to_string(),
-                    "status": if fitted.review.is_some() { "needs_review" } else { "fits" },
-                    "via": match method {
-                        tdy::spec::InferenceMethod::Llm => "llm",
-                        tdy::spec::InferenceMethod::Manual => "manual",
-                        tdy::spec::InferenceMethod::Heuristic => "heuristic",
-                    },
-                    "sources": fitted.spec.columns.iter().map(|c| serde_json::json!({
-                        "column": c.name, "source": c.source_name(),
-                    })).collect::<Vec<_>>(),
-                    "review": fitted.review,
-                    "notes": fitted.spec.notes,
-                    "dry_run": dry_run,
-                });
-                if !dry_run {
-                    tdy::sidecar::save(
-                        file,
-                        &fitted.spec,
-                        tdy::sidecar::ProvenanceInfo {
-                            method,
-                            model,
-                            prompt_version: None,
-                            sampled_bytes: None,
-                        },
-                    )?;
-                }
-                println!("{}", serde_json::to_string_pretty(&report)?);
-                return Ok(());
-            }
-            println!("{} fits `{}`:", file.display(), target.name);
-            for c in &fitted.spec.columns {
-                println!(
-                    "  {:<16} <- {:<24} {}",
-                    c.name,
-                    format!("{:?}", c.source_name()),
-                    describe(&c.dtype)
-                );
-            }
-            for n in fitted.spec.notes.iter().filter(|n| !tdy::fit::is_binding_note(n)) {
-                println!("  note: {n}");
-            }
-            if dry_run {
-                println!("\n--dry-run: nothing written.");
-                return Ok(());
-            }
-            if let Some(r) = &fitted.review {
-                println!("  REVIEW: {r}");
-            }
-            let path = tdy::sidecar::save(
-                file,
-                &fitted.spec,
-                tdy::sidecar::ProvenanceInfo {
-                    method,
-                    model,
-                    prompt_version: None,
-                    sampled_bytes: None,
+            let report = serde_json::json!({
+                "path": file.display().to_string(),
+                "status": if fitted.review.is_some() { "needs_review" } else { "fits" },
+                "via": match method {
+                    tdy::spec::InferenceMethod::Llm => "llm",
+                    tdy::spec::InferenceMethod::Manual => "manual",
+                    tdy::spec::InferenceMethod::Heuristic => "heuristic",
                 },
-            )?;
-            println!("\nwrote {}", path.display());
+                "sources": fitted.spec.columns.iter().map(|c| serde_json::json!({
+                    "column": c.name, "source": c.source_name(),
+                })).collect::<Vec<_>>(),
+                "review": fitted.review,
+                "notes": fitted.spec.notes,
+                "dry_run": dry_run,
+            });
+            if !dry_run {
+                tdy::sidecar::save(
+                    file,
+                    &fitted.spec,
+                    tdy::sidecar::ProvenanceInfo {
+                        method,
+                        model,
+                        prompt_version: None,
+                        sampled_bytes: None,
+                    },
+                )?;
+            }
+            println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
         Err(FitError::Gaps(gaps)) => {
-            if json {
-                let e = FitError::Gaps(gaps);
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "path": file.display().to_string(),
-                        "status": "gaps",
-                        "problems": tdy::report::problems_json(&e),
-                    }))?
-                );
-                anyhow::bail!("no plan reaches the declared schema")
-            }
-            println!("{} cannot reach `{}`:\n", file.display(), target.name);
-            print!("{}", FitError::Gaps(gaps));
-            if propose {
-                println!("  suggestions:");
-                print_proposals(file, &target, limits);
-            }
+            let e = FitError::Gaps(gaps);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "path": file.display().to_string(),
+                    "status": "gaps",
+                    "problems": tdy::report::problems_json(&e),
+                }))?
+            );
             anyhow::bail!("no plan reaches the declared schema")
         }
         Err(e) => {
             print!("{e}");
             anyhow::bail!("could not fit {}", file.display())
         }
-    }
-}
-
-/// A column's type, in the language the target is written in.
-fn describe(d: &tdy::spec::DType) -> String {
-    use tdy::spec::DType;
-    match d {
-        DType::Utf8 => "TEXT".into(),
-        DType::Bool => "BOOLEAN".into(),
-        DType::Int64 => "BIGINT".into(),
-        DType::Float64 => "DOUBLE".into(),
-        DType::Decimal { precision, scale } => format!("DECIMAL({precision},{scale})"),
-        DType::Date { format } => format!("DATE  ({format})"),
-        DType::Timestamp { format, timezone } => match timezone {
-            Some(tz) => format!("TIMESTAMP  ({format}, {tz})"),
-            None => format!("TIMESTAMP  ({format})"),
-        },
     }
 }
 
@@ -464,119 +403,14 @@ fn check_command(
     limits: tdy::config::Limits,
     json: bool,
 ) -> Result<()> {
-    use tdy::conform::{judge, Verdict};
-    use tdy::target::Target;
-
-    let target = Target::load(target_path)?;
     if json {
+        let target = tdy::target::Target::load(target_path)?;
         return check_json(target_path, &target, files, limits);
     }
-    println!(
-        "{}: `{}`, {} column(s)",
-        target_path.display(),
-        target.name,
-        target.columns.len()
-    );
-
-    if files.is_empty() {
-        // With a lock, the dataset itself is what CI wants checked, and
-        // `dataset::resolve` runs exactly the checks a query would: drift,
-        // every member's sidecar present and fresh, every member still
-        // conforming, nothing waiting on a human. Reusing it is what keeps
-        // the gate and the query from disagreeing.
-        //
-        // Without a lock there is nothing to check, and saying so beats
-        // exiting zero on a target nobody has fitted.
-        let lock = tdy::lockfile::Lock::load(target_path)?;
-        if lock.is_none() {
-            println!(
-                "\nnothing to check: `{}` has no lock. Run `tdy fit {}` first, or pass \
-                 --against <FILE> to check a single sidecar.\ndeclared sources: {}",
-                target.name,
-                target_path.display(),
-                if target.files.is_empty() { "(none)".into() } else { target.files.join(", ") }
-            );
-            return Ok(());
-        }
-        let resolved = tdy::dataset::resolve(target_path, limits, None)?;
-        println!("\n{} member(s), all conforming:", resolved.members.len());
-        for m in &resolved.members {
-            println!("  {:<28} OK", m.rel);
-        }
-        println!("\n`{}` is ready to query.", target.name);
-        return Ok(());
-    }
-
-    let mut bad = 0usize;
-    for f in files {
-        use tdy::sidecar::SidecarStatus;
-        let sc = tdy::sidecar::sidecar_path(f);
-        let (spec, stale) = match tdy::sidecar::load(f) {
-            Ok(SidecarStatus::Fresh(s)) => (s.spec, false),
-            // A stale sidecar is still worth *checking* — the shape it
-            // produces is a property of the spec, not of the file's current
-            // bytes — but it must not pass. Every other consumer treats stale
-            // as fatal: `validate` bails, `--frozen` bails, and a non-frozen
-            // query throws the spec away and re-sniffs. So the spec this would
-            // otherwise bless is one no query will ever use, and going green
-            // on it means going green on exactly the drift this gate exists to
-            // catch.
-            Ok(SidecarStatus::Stale(s)) => (s.spec, true),
-            Ok(SidecarStatus::Absent) => {
-                println!(
-                    "\n{}: NO SIDECAR — run `tdy sniff {}` first",
-                    sc.display(),
-                    f.display()
-                );
-                bad += 1;
-                continue;
-            }
-            Err(e) => {
-                println!("\n{}: UNREADABLE — {e:#}", sc.display());
-                bad += 1;
-                continue;
-            }
-        };
-        // Nothing is fitted to a target yet: `tdy fit` does not exist. Every
-        // non-conforming spec is therefore reported as never-fitted rather
-        // than as a contradiction, which is the honest reading and keeps a
-        // sniffed sidecar's ordinary differences from looking like defects.
-        let verdict = judge(&spec, &target, false);
-        if stale {
-            println!(
-                "\n{}: STALE — the file has changed since this spec was written, so this \
-                 is not the spec a query would use.\n  Re-sniff it, or \
-                 `tdy validate --stamp` if the spec is still right, then check again.",
-                sc.display()
-            );
-            bad += 1;
-        } else {
-            println!("\n{}: {}", sc.display(), verdict.label());
-        }
-        for m in verdict.mismatches() {
-            println!("  {}", m.message());
-        }
-        if let Verdict::Unfitted(m) = &verdict {
-            if !m.is_empty() {
-                println!(
-                    "  (this sidecar was inferred, not fitted to a target — \
-                     `tdy fit` will land it once it exists)"
-                );
-            }
-        }
-        if !verdict.is_ok() && !stale {
-            bad += 1;
-        }
-    }
-
-    println!(
-        "\n{} of {} file(s) conform to `{}`.",
-        files.len() - bad,
-        files.len(),
-        target.name
-    );
-    if bad > 0 {
-        anyhow::bail!("{bad} file(s) do not produce the declared schema");
+    let out = tdy::commands::check_text(target_path, files, limits)?;
+    print!("{}", out.text);
+    if !out.ok {
+        anyhow::bail!("{} file(s) do not produce the declared schema", out.bad);
     }
     Ok(())
 }

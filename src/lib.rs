@@ -15,7 +15,9 @@
 //! - [`fileio`]   bounded reads, streaming hashes, atomic writes
 //! - [`config`]   backend configuration resolution
 //! - [`console`]  the dot-command grammar and session — `tdy` with no arguments
+//! - [`commands`] the CLI's subcommands as functions that return their text
 
+pub mod commands;
 pub mod config;
 pub mod console;
 pub mod conform;
