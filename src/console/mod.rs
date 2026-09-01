@@ -295,20 +295,23 @@ impl Session {
     /// dropping half-typed SQL would be its own kind of wrong answer.
     pub async fn run(&mut self, line: &str, progress: Option<&progress::Sink>) -> Outcome {
         let trimmed = line.trim_end();
-        if trimmed.trim().is_empty() && self.sql_buffer.is_empty() {
-            return Outcome { echo: String::new(), text: String::new(), payload: Payload::Nothing, ok: true };
-        }
         let is_dot = trimmed.trim_start().starts_with('.');
         // The review gate's second step is reachable only by literally
         // repeating the same `.accept TARGET MEMBER` line back — anything
         // else in between resets it to step one: any other dot-command, an
-        // unparsable line, a completed SQL statement, and even a fragment
-        // that only extends the SQL buffer (`Continue`) without running
-        // anything. So this is decided from the parse, before dispatch,
-        // parsed once here and reused below rather than parsed again.
+        // unparsable line, a completed SQL statement, a fragment that only
+        // extends the SQL buffer (`Continue`) without running anything, and
+        // a blank line (bare Enter is still "a line that is not that exact
+        // `.accept`", and the invariant is ANY other line resets it) — so
+        // this runs before the blank-line early return below, not after it.
+        // Decided from the parse, before dispatch, parsed once here and
+        // reused below rather than parsed again.
         let dot_parsed = is_dot.then(|| parse(trimmed));
         if !matches!(&dot_parsed, Some(Ok(Command::Accept { .. }))) {
             self.pending_accept = None;
+        }
+        if trimmed.trim().is_empty() && self.sql_buffer.is_empty() {
+            return Outcome { echo: String::new(), text: String::new(), payload: Payload::Nothing, ok: true };
         }
         let mut prefix = String::new();
         if is_dot && !self.sql_buffer.is_empty() {
@@ -580,6 +583,13 @@ impl Session {
                 Outcome::ok(format!("next result -> {f}\n"), Payload::Nothing)
             }
             Command::Accept { target, member } => {
+                // Taken, not merely read: the moment a genuine `.accept`
+                // dispatch begins, the marker is consumed. An error below —
+                // an unresolvable target, a member outside root, no fresh
+                // sidecar, nothing to review — must not leave a stale
+                // marker for an unrelated later `.accept` to match against;
+                // only the successful step-one tail below sets it again.
+                let pending = self.pending_accept.take();
                 let t = self.resolve(&target)?;
                 // The member's path is named relative to the target's own
                 // directory (what the pile report and `fit_pile`'s `accept`
@@ -589,15 +599,10 @@ impl Session {
                 // exist", not "outside").
                 let member_path = crate::fileio::confine(&crate::lockfile::target_dir(&t).join(&member), &self.root)
                     .with_context(|| member.clone())?;
-                let same = self
-                    .pending_accept
-                    .as_ref()
-                    .map(|(pt, pm)| pt == &t && pm == &member)
-                    .unwrap_or(false);
+                let same = pending.as_ref().map(|(pt, pm)| pt == &t && pm == &member).unwrap_or(false);
                 if same {
                     // Step two: the same line, run again, is the only path
                     // to `accepted == true`.
-                    self.pending_accept = None;
                     let mut o = self.fit_pile(&t, &[PathBuf::from(&member)], false, false, progress).await?;
                     o.text = format!("accepted {member}\n\n{}", o.text);
                     return Ok(o);

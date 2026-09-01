@@ -437,6 +437,19 @@ async fn accept_shows_evidence_first_and_accepts_only_on_repeat() {
     assert!(s.pending_accept().is_none());
     let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
     assert!(matches!(o.payload, Payload::Evidence { .. }));
+    assert!(s.pending_accept().is_some());
+
+    // A blank line is still "another line in between" — bare Enter must not
+    // let the next identical `.accept` be mistaken for the repeat.
+    s.run("", None).await;
+    assert!(s.pending_accept().is_none());
+    let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
+    assert!(matches!(o.payload, Payload::Evidence { .. }));
+    assert!(s.pending_accept().is_some());
+    s.run("   ", None).await;
+    assert!(s.pending_accept().is_none());
+    let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
+    assert!(matches!(o.payload, Payload::Evidence { .. }));
 
     // Step two: the same line again performs the acceptance.
     let o = s.run(".accept sales.tdy.sql 2025-07.csv", None).await;
