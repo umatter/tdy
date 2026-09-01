@@ -34,6 +34,12 @@ rustup on this machine), so its lints are found by CI rather than locally. The o
 actually bitten: `too_many_arguments` fires at 8, and `src/engine.rs::extract_delimited`
 carries an explicit `#[allow]` for it. Group parameters into a context struct rather than
 adding the allow — that is what `fit::Ctx` is.
+CI also runs `cargo deny check advisories bans sources` (config in `deny.toml`; licenses
+deliberately ungated — the reasoning is in that file). A new RUSTSEC advisory therefore
+turns CI red: fix it by upgrading the crate, and keep tdy's direct `zip`/`quick-xml` pins
+matching calamine's own so the tree builds one copy of each. `paste` (unmaintained, via
+datafusion's proc-macros) is the one documented ignore; re-check it when datafusion is
+upgraded.
 
 On this machine plain `cargo test` ends with a spurious doc-test failure (`rustdoc` cannot
 load `libLLVM.so...` — a toolchain install issue, not code); `--lib --tests` avoids it.
@@ -197,7 +203,10 @@ fields (kind, column, want, tried, the file's header, the remedy in `message`).
 `src/mcp.rs` serves the same surface over MCP stdio (`tdy mcp --root DIR`): hand-rolled
 newline-delimited JSON-RPC (a page of protocol; an SDK would cost a dependency tree and an
 MSRV negotiation), handlers call only the non-printing lib functions (stdout is protocol),
-every path — tool args and refs inside SQL — is confined to `--root` via canonicalisation,
+every path is confined to `--root` via canonicalisation (`fileio::confine`) — tool args,
+refs inside SQL, the members a target's globs resolve to, and lock member paths, enforced
+where each file is *opened* (`MessyFunc`, `dataset::resolve`, `fit_pile`), not only in the
+pre-parse, because the pre-pass and DataFusion tokenize the SQL independently —
 and **acceptance is refused unless the server was started with `--allow-accept`**: the
 review gate's whole meaning is that a human judges, so delegation to an agent is the
 operator's explicit act, never a default. `tests/mcp.rs` drives it as a subprocess.

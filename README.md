@@ -509,13 +509,22 @@ act on rather than prose to re-parse.
 
 Two properties are deliberate:
 
-- **Every path is confined to `--root`** — tool arguments and the file
-  references inside SQL alike, checked on canonicalised paths.
+- **Every path is confined to `--root`** — tool arguments, the file
+  references inside SQL, the members a target's globs resolve to, and the
+  paths a lock records. Checked on canonicalised paths (so `../` and
+  symlinks do not escape), and enforced where each file is *opened*, not
+  only where the request is parsed.
 - **The review gate survives the agent.** By default the agent can *see*
   every review reason, structured, but cannot accept one: acceptance is a
   human judgement, and the refusal tells the agent to relay the question to
   its user. Starting the server with `--allow-accept` is the operator's
   explicit statement that this agent may take those judgements.
+
+What the agent can see is exactly everything under `--root`: the `query`
+tool runs arbitrary (read-only) SQL, and "confined to the root" means it can
+read any file there, not only the ones you had in mind. Point `--root` at
+the data directory, not at a project tree that also holds credentials or
+anything else the agent has no business reading.
 
 Query results are row-capped (default 200, max 10,000) with the truncation
 declared, so a curious agent gets a preview and a `row_count`, not a flood.
