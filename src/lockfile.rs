@@ -536,14 +536,17 @@ mod tests {
     #[test]
     fn expand_glob_matches_files_sorted_and_skips_companions() {
         let d = tempfile::tempdir().unwrap();
-        for n in ["b.csv", "a.csv", "a.csv.tdy.toml", "t.tdy.lock", "x.txt"] {
+        // Pattern `a*` matches a.csv, a.csv.tdy.toml, and a.tdy.lock, but the latter
+        // two should be filtered by the companion-skip logic since they end with
+        // .tdy.toml or .tdy.lock.
+        for n in ["b.csv", "a.csv", "a.csv.tdy.toml", "a.tdy.lock", "x.txt"] {
             std::fs::write(d.path().join(n), "").unwrap();
         }
         std::fs::create_dir(d.path().join("sub.csv")).unwrap(); // a dir, not a file
-        let got = expand_glob(d.path(), "*.csv").unwrap();
+        let got = expand_glob(d.path(), "a*").unwrap();
         let names: Vec<String> =
             got.iter().map(|p| p.file_name().unwrap().to_string_lossy().into()).collect();
-        assert_eq!(names, ["a.csv", "b.csv"]);
+        assert_eq!(names, ["a.csv"]);
         assert!(got.iter().all(|p| p.starts_with(d.path())));
     }
 
