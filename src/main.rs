@@ -22,8 +22,10 @@ use tdy::provider::{self, OutputFormat};
       tdy query -f \"SELECT * FROM messy('data.csv')\"   # frozen: sidecars must exist & match"
 )]
 struct Cli {
+    /// With no subcommand: the console (or the workbench, if `tdy-tui` is
+    /// installed and this is a terminal).
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 
     /// Inference backend: none | local | anthropic | openrouter (overrides config/env)
     #[arg(long, global = true)]
@@ -165,6 +167,8 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// The plain console, always (even when the workbench is installed).
+    Console,
 }
 
 #[derive(Subcommand)]
@@ -415,6 +419,27 @@ fn check_command(
     Ok(())
 }
 
+/// Whether `tdy-tui` is on `PATH` — the precondition for opening the
+/// workbench instead of the plain console when `tdy` is run with no
+/// arguments.
+fn workbench_on_path() -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join("tdy-tui").is_file()))
+        .unwrap_or(false)
+}
+
+/// Hand the terminal to `tdy-tui`, exactly as `tdy ui` does.
+fn exec_workbench(target: Option<PathBuf>) -> Result<()> {
+    let mut cmd = std::process::Command::new("tdy-tui");
+    if let Some(t) = target {
+        cmd.arg(t);
+    }
+    match cmd.status() {
+        Ok(st) => std::process::exit(st.code().unwrap_or(1)),
+        Err(e) => anyhow::bail!("cannot run tdy-tui: {e}"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // A panic is a bug in tdy, not a bad file. Say so, and say where to send
@@ -446,7 +471,20 @@ async fn run() -> Result<()> {
         model: cli.model.clone(),
     };
 
-    match cli.command {
+    let command = match cli.command {
+        Some(c) => c,
+        None => {
+            if tdy::console::repl::stdio_is_tty() && workbench_on_path() {
+                return exec_workbench(None);
+            }
+            if tdy::console::repl::stdio_is_tty() && !workbench_on_path() {
+                eprintln!("terminal UI not installed: cargo install --path tdy-tui");
+            }
+            Command::Console
+        }
+    };
+
+    match command {
         Command::Query { sql, output, format, frozen } => {
             let cfg = config::load(&overrides)?;
             let fmt = match (&format, &output) {
@@ -480,19 +518,28 @@ async fn run() -> Result<()> {
             provider::validate_command(&file, &cfg, stamp)?;
         }
         Command::Ui { target } => {
-            let mut cmd = std::process::Command::new("tdy-tui");
-            if let Some(t) = target {
-                cmd.arg(t);
-            }
-            match cmd.status() {
-                Ok(st) => std::process::exit(st.code().unwrap_or(1)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+            if !workbench_on_path() {
+                anyhow::bail!(
                     "`tdy-tui` is not on PATH. It ships as its own binary so that the \
                      terminal UI's dependencies stay out of tdy. From a source checkout:\n  \
                      cargo install --path tdy-tui\n\
                      (or `cargo install tdy-tui` once it is published)"
-                ),
-                Err(e) => anyhow::bail!("cannot run tdy-tui: {e}"),
+                );
+            }
+            exec_workbench(target)?;
+        }
+        Command::Console => {
+            let cfg = config::load(&overrides)?;
+            let mut session = tdy::console::Session::new(std::path::Path::new("."), cfg)?;
+            if tdy::console::repl::stdio_is_tty() {
+                tdy::console::repl::run_interactive(&mut session).await?;
+            } else {
+                let stdin = std::io::stdin();
+                let mut stdout = std::io::stdout();
+                let code = tdy::console::repl::run_batch(&mut session, stdin.lock(), &mut stdout).await?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
             }
         }
         Command::Mcp { root, allow_accept } => {

@@ -16,6 +16,7 @@
 
 pub mod parse;
 pub mod line;
+pub mod repl;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -363,6 +364,20 @@ impl Session {
     /// Whether a SQL statement is buffered, waiting for a `;`.
     pub fn sql_pending(&self) -> bool {
         !self.sql_buffer.is_empty()
+    }
+
+    /// Abandon a pending SQL statement (Ctrl-C at the `   -> ` continuation
+    /// prompt, in the interactive frontend) without running it, returning
+    /// the discarded text so the caller can print the same
+    /// "note: discarded incomplete statement" line `run` prints when a
+    /// dot-command interrupts a buffered statement. `None` when nothing was
+    /// pending.
+    pub fn discard_pending(&mut self) -> Option<String> {
+        if self.sql_buffer.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.sql_buffer))
+        }
     }
 
     /// Run one complete SQL statement (already `;`-terminated) and format
