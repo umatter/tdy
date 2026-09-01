@@ -9,6 +9,7 @@
 //! OpenAI-compatible server: llama.cpp, Ollama, vLLM) keeps it on-box even
 //! then.
 
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -52,29 +53,66 @@ impl Backend {
 
 /// Is this base URL a server on this machine?
 ///
+/// The host component of a URL, lower-cased, with scheme, userinfo, port,
+/// path/query/fragment and IPv6 brackets stripped.
+///
+/// Deliberately small: this is only ever asked whether the host is *this
+/// machine*, and it must not be fooled by the parts of a URL that are not the
+/// host — `user@`, `:port`, `/path`. Returns `None` for an empty host.
+fn url_host(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    // Authority ends at the first path/query/fragment delimiter.
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    // Userinfo, if any, ends at the last '@' before the host.
+    let hostport = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+
+    let host = if let Some(rest) = hostport.strip_prefix('[') {
+        // Bracketed IPv6 literal: the host is everything up to ']'. Any
+        // ":port" that follows the bracket is not part of the host.
+        rest.split(']').next().unwrap_or(rest)
+    } else if hostport.matches(':').count() == 1 {
+        // host:port — one colon means a port, so drop it. (An unbracketed
+        // bare IPv6 has several colons and no port; leave it whole.)
+        hostport.rsplit_once(':').map(|(h, _)| h).unwrap_or(hostport)
+    } else {
+        hostport
+    };
+
+    let host = host.trim().to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
+/// Does this base URL point at a server on *this* machine?
+///
 /// `backend = "local"` is a promise about *where the server is*, and pointing
 /// it at a hosted endpoint is exactly how a file leaves the machine by
 /// accident. So the promise is checked rather than taken on trust.
+///
+/// The check parses the host and asks the network stack, never string shape.
+/// An earlier version matched `host.starts_with("127.")` and `.local` /
+/// `.localhost` suffixes; each admitted a genuinely remote host —
+/// `127.0.0.1.attacker.com` starts with `127.`, `exfil.localhost` ends with
+/// `.localhost`, and a `.local` mDNS name is a *different* box on the LAN — so
+/// a file could leave the machine while tdy reported that nothing did.
+///
+/// A bare `localhost` and any literal loopback/unspecified IP are local. A DNS
+/// name is **not** resolved here (that would put a network round-trip in a
+/// pure predicate on a hot path, and a name can resolve differently later), so
+/// anything that is neither `localhost` nor a loopback IP literal is treated
+/// as remote. That fails safe: at worst a genuinely-local `myhost.local` earns
+/// a spurious "your file is leaving" notice, never a silent egress.
 pub fn is_loopback_url(url: &str) -> bool {
-    let rest = url
-        .split_once("://")
-        .map(|(_, r)| r)
-        .unwrap_or(url);
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(rest)
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or_else(|| rest.split(['/', '?', '#']).next().unwrap_or(rest))
-        .trim_matches(['[', ']'])
-        .to_ascii_lowercase();
-    host == "localhost"
-        || host == "::1"
-        || host == "0.0.0.0"
-        || host.starts_with("127.")
-        || host.ends_with(".local")
-        || host.ends_with(".localhost")
+    let Some(host) = url_host(url) else { return false };
+    if host == "localhost" {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        // `0.0.0.0` / `::` as a destination resolve to loopback on connect, so
+        // a local server bound to the unspecified address is still local.
+        Ok(ip) => ip.is_loopback() || ip.is_unspecified(),
+        // Not localhost and not an IP literal: a DNS name we will not resolve.
+        Err(_) => false,
+    }
 }
 
 /// The Anthropic model used when none is configured. Kept current
@@ -623,8 +661,11 @@ mod tests {
         for u in [
             "http://localhost:11434",
             "http://127.0.0.1:8080",
+            "http://127.5.5.5:8080",       // all of 127.0.0.0/8 is loopback
             "http://[::1]:8080/v1",
-            "http://box.local:1234",
+            "http://[::1]",                 // bracketed v6, no port
+            "http://0.0.0.0:8080",          // unspecified resolves to loopback
+            "http://user:pw@localhost:8080/v1", // userinfo must not confuse it
         ] {
             assert!(is_loopback_url(u), "{u}");
         }
@@ -632,9 +673,41 @@ mod tests {
             "https://openrouter.ai/api",
             "https://api.example.com",
             "http://10.0.0.5:8080",
+            "http://box.local:1234",        // mDNS: a different machine on the LAN
         ] {
             assert!(!is_loopback_url(u), "{u}");
         }
+    }
+
+    #[test]
+    fn hosts_that_only_look_local_are_treated_as_remote() {
+        // The F-1 regression: string-shape matching classified each of these
+        // as loopback, so a `backend = "local"` pointed at them leaked file
+        // samples with no "your file is leaving" notice. They are remote.
+        for u in [
+            "http://127.0.0.1.attacker.com/v1",   // starts with "127." but is a domain
+            "http://localhost.attacker.com",       // "localhost" is only a prefix
+            "http://evil.local:11434",             // .local suffix, remote host
+            "http://exfil.localhost/v1",           // .localhost suffix, remote host
+            "http://127.0.0.1@evil.com/v1",        // loopback in userinfo, host is evil.com
+        ] {
+            assert!(!is_loopback_url(u), "{u} must be treated as remote");
+        }
+    }
+
+    #[test]
+    fn a_local_backend_pointed_at_a_lookalike_host_is_reported_as_remote() {
+        // End to end through the config: the notice depends on is_remote().
+        let cfg = res(
+            Some(
+                "[inference]\nbackend = \"local\"\nmodel = \"m\"\n\
+                 base_url = \"http://127.0.0.1.attacker.com/v1\"\n",
+            ),
+            EnvVars::default(),
+            Overrides::default(),
+        )
+        .unwrap();
+        assert!(cfg.is_remote(), "a lookalike host must not suppress the egress notice");
     }
 
     #[test]
