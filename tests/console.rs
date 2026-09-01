@@ -83,3 +83,63 @@ fn check_text_matches_binary_including_failure() {
     assert_eq!(out.text, String::from_utf8_lossy(&cli.stdout));
     assert!(out.ok);
 }
+
+use tdy::console::{EntryKind, EntryStatus, Payload, Session};
+
+async fn session(dir: &Path) -> Session {
+    Session::new(dir, no_llm()).unwrap()
+}
+
+#[tokio::test]
+async fn help_quit_and_unknown() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = s.run(".help", None).await;
+    assert!(o.ok);
+    assert!(o.text.contains(".sniff FILE") && o.text.contains(".fit TARGET"));
+    let o = s.run(".nope", None).await;
+    assert!(!o.ok);
+    assert_eq!(o.text, "Error: unknown command `.nope` — `.help` lists them\n");
+    assert!(matches!(o.payload, Payload::Error { .. }));
+    let o = s.run(".quit", None).await;
+    assert!(matches!(o.payload, Payload::Quit) && s.wants_quit());
+}
+
+#[tokio::test]
+#[ignore = "enabled in Task 6"]
+async fn ls_hides_companions_and_reports_status() {
+    let d = pile();
+    std::fs::create_dir(d.path().join("archive")).unwrap();
+    let mut s = session(d.path()).await;
+    s.run(".sniff 2025-01.csv --no-llm", None).await;
+    // Stale: sidecar written, then the file changes.
+    s.run(".sniff 2025-02.csv --no-llm", None).await;
+    std::fs::write(d.path().join("2025-02.csv"), "Datum;Region;Betrag\n01.02.2025;Ost;1\n").unwrap();
+
+    let o = s.run(".ls", None).await;
+    assert!(o.ok);
+    let Payload::Listing(entries) = o.payload else { panic!("{:?}", o.payload) };
+    let find = |n: &str| entries.iter().find(|e| e.name == n).unwrap_or_else(|| panic!("{n} missing"));
+    assert_eq!(find("archive/").kind, EntryKind::Dir);
+    assert!(matches!(find("2025-01.csv").status, EntryStatus::Sniffed { .. }));
+    assert_eq!(find("2025-02.csv").status, EntryStatus::Stale);
+    assert_eq!(find("2025-07.csv").status, EntryStatus::None);
+    assert_eq!(find("sales.tdy.sql").kind, EntryKind::Target);
+    assert_eq!(find("sales.tdy.sql").status, EntryStatus::NoLock);
+    assert!(entries.iter().all(|e| !e.name.ends_with(".tdy.toml")));
+    assert!(o.text.contains("2025-02.csv") && o.text.contains("stale"));
+}
+
+#[tokio::test]
+async fn cd_stays_inside_the_root() {
+    let d = pile();
+    std::fs::create_dir(d.path().join("archive")).unwrap();
+    let mut s = session(d.path()).await;
+    assert!(s.run(".cd archive", None).await.ok);
+    assert!(s.cwd().ends_with("archive"));
+    assert!(s.run(".cd ..", None).await.ok);
+    let o = s.run(".cd ..", None).await;
+    assert!(!o.ok && o.text.contains("outside"));
+    let o = s.run(".sniff ../../etc/passwd", None).await;
+    assert!(!o.ok && o.text.contains("outside"));
+}
