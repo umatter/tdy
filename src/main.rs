@@ -88,6 +88,16 @@ enum Command {
         #[arg(long)]
         stamp: bool,
     },
+    /// Open the terminal UI for a target (requires `tdy-tui` on PATH).
+    ///
+    /// A thin shim, the way cargo finds its subcommands: the UI is a separate
+    /// binary so that ratatui and crossterm stay out of `tdy`'s dependency
+    /// tree, and this is here so nobody has to remember that.
+    Ui {
+        /// The target .tdy.sql file. Omit to find one beside the working
+        /// directory.
+        target: Option<PathBuf>,
+    },
     /// Serve tdy's tools over the Model Context Protocol (stdio).
     ///
     /// For AI agents: the same sniff/draft/fit/check/query/validate surface,
@@ -282,7 +292,14 @@ async fn fit_dataset(
     let r = tdy::report::fit_pile(
         target_path,
         cfg,
-        tdy::report::FitOpts { dry_run, accept, propose },
+        tdy::report::FitOpts {
+            dry_run,
+            accept,
+            propose,
+            // The one thing a terminal user needs unprompted while this runs
+            // is that a file is being sent to a model.
+            progress: Some(tdy::progress::stderr_sink()),
+        },
     )
     .await?;
     if json {
@@ -320,7 +337,7 @@ async fn fit_command(
     use tdy::target::Target;
 
     let target = Target::load(target_path)?;
-    match tdy::fit::plan(file, &target, cfg).await {
+    match tdy::fit::plan(file, &target, cfg, Some(&tdy::progress::stderr_sink())).await {
         Ok(planned) => {
             let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
             if json {
@@ -626,6 +643,21 @@ async fn run() -> Result<()> {
         Command::Validate { file, stamp } => {
             let cfg = config::load(&overrides)?;
             provider::validate_command(&file, &cfg, stamp)?;
+        }
+        Command::Ui { target } => {
+            let mut cmd = std::process::Command::new("tdy-tui");
+            if let Some(t) = target {
+                cmd.arg(t);
+            }
+            match cmd.status() {
+                Ok(st) => std::process::exit(st.code().unwrap_or(1)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+                    "`tdy-tui` is not on PATH. It ships as its own binary so that the \
+                     terminal UI's dependencies stay out of tdy:\n  \
+                     cargo install tdy-tui"
+                ),
+                Err(e) => anyhow::bail!("cannot run tdy-tui: {e}"),
+            }
         }
         Command::Mcp { root, allow_accept } => {
             let cfg = config::load(&overrides)?;

@@ -58,18 +58,21 @@ jobs:
           echo "all fixtures regenerate byte-identically"
 
       - name: Build
-        run: cargo build --locked --all-targets
+        # --workspace, or the terminal UI silently stops being built: in a
+        # workspace with a root package, cargo's default is the root package
+        # alone.
+        run: cargo build --locked --workspace --all-targets
 
       - name: Test
         # --lib --tests rather than a bare `cargo test`: there are no
         # doc-tests to speak of, and this is the invocation the docs give.
-        run: cargo test --locked --lib --tests
+        run: cargo test --locked --workspace --lib --tests
 
       - name: Clippy
         # Formatting is deliberately not gated: this codebase has never been
         # through rustfmt, and adding it would bury the code under a
         # mechanical reformat. `cargo fmt --all` any time you want it.
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   msrv:
     name: minimum supported Rust (1.88)
@@ -84,7 +87,7 @@ jobs:
       # rust-version honest, not to run the suite twice. It has already
       # earned its place twice over — the README claimed 1.81, and the real
       # floor turned out to be 1.88 (icu_* via reqwest -> url -> idna).
-      - run: cargo check --locked --all-targets
+      - run: cargo check --locked --workspace --all-targets
 
   reproducible:
     name: --frozen is reproducible

@@ -1204,7 +1204,7 @@ pub(crate) fn build_column_at(
 /// -2 is `1234.50`, with no float involved and nothing rounded. That matters
 /// because the whole reason this exists is money, and a `* 0.01` would
 /// introduce exactly the representation error `decimal` was chosen to avoid.
-pub(crate) fn shift_decimal_point(v: &str, shift: i8) -> String {
+pub fn shift_decimal_point(v: &str, shift: i8) -> String {
     let v = v.trim();
     let (sign, rest) = match v.strip_prefix('-') {
         Some(r) => ("-", r),

@@ -55,3 +55,9 @@ tempfile = "3"
 # faster and smaller build. Flip to `debug = true` when you need a debugger.
 [profile.dev]
 debug = false
+
+# A workspace with the CLI at its root and the terminal UI beside it: ratatui
+# and crossterm are the TUI's business, and keeping them out of `tdy`'s
+# dependency tree is what keeps the published crate (and its build) small.
+[workspace]
+members = [".", "tdy-tui"]

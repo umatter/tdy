@@ -108,7 +108,17 @@ async fn a_model_proposed_frame_is_proved_and_gated_behind_review() {
     assert!(det.is_err(), "if the sniffer can frame this, the test proves nothing");
 
     // …and the model path must fit it, typed from the declaration.
-    let planned = tdy::fit::plan(&p, &target, &cfg).await.expect("the frame fits");
+    // A progress sink collects what the run narrated, so the Consulting
+    // event — the one step that leaves the machine and spends money — is
+    // asserted rather than assumed.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink: tdy::progress::Sink = {
+        let seen = seen.clone();
+        std::sync::Arc::new(move |e| seen.lock().unwrap().push(format!("{e:?}")))
+    };
+    let planned = tdy::fit::plan(&p, &target, &cfg, Some(&sink))
+        .await
+        .expect("the frame fits");
     assert_eq!(planned.method, tdy::spec::InferenceMethod::Llm);
     assert_eq!(planned.model.as_deref(), Some("mock-model"));
 
@@ -147,7 +157,7 @@ async fn a_model_is_never_asked_to_resolve_a_proven_ambiguity() {
          ) WITH (files = '*.json')",
     )
     .unwrap();
-    let err = tdy::fit::plan(&p, &target, &cfg).await.expect_err("must stay refused");
+    let err = tdy::fit::plan(&p, &target, &cfg, None).await.expect_err("must stay refused");
     assert!(
         matches!(err, tdy::fit::FitError::AmbiguousFrame { .. }),
         "{err}"

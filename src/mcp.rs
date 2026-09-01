@@ -295,6 +295,9 @@ impl McpServer {
                 dry_run: args["dry_run"].as_bool().unwrap_or(false),
                 accept: &accept,
                 propose: args["propose"].as_bool().unwrap_or(false),
+                // stdout is protocol here, so nothing is narrated; the
+                // report itself is the answer.
+                progress: None,
             },
         )
         .await?;

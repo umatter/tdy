@@ -158,6 +158,7 @@ tdy check sales.tdy.sql --against exports/*.csv     # do these sidecars still pr
                                                     # the schema I declared?
 tdy schema                                         # the JSON Schema (the grammar)
 tdy config init                                    # sample config + location
+tdy ui sales.tdy.sql                               # the review loop, on one screen
 tdy mcp --root exports/                            # serve the tools over MCP
                                                     # for AI agents (stdio)
 ```
@@ -464,6 +465,35 @@ deterministic and `--frozen` keeps meaning "same files, same answer". Because
 conformance already proved every member has an identical schema, the union is
 a concatenation — there is nothing to coerce, and no chance of the silent
 Int64-plus-Utf8-becomes-Utf8 widening an ordinary `UNION ALL` would do.
+
+## For humans: `tdy ui`
+
+```bash
+tdy ui sales.tdy.sql        # or `tdy-tui sales.tdy.sql`
+```
+
+The review loop on one screen: the pile with each member's status and the
+*reason* beside it, a member view putting the gap next to the file's own rows
+(in the file's own spelling, which is what a `matches` clause needs), remedies
+as numbered one-key edits that show you the diff of your declaration before
+writing it, and a query scratchpad.
+
+The screen that matters is the accept screen. A member behind the review gate
+is opened from its own inspection view, and `a` there does not accept — it
+*reads the file* and shows you the consequence: the raw values beside what
+they become, and the largest and smallest results over every row, because a
+`decimal_shift` applied the wrong way is invisible in the head of a file and
+obvious at its ends. Only a second `a`, on that screen, accepts — one member
+at a time. There is no accept-all anywhere.
+
+It is a view over the same artifacts, never a parallel store: a TUI session
+leaves behind exactly the sidecars, target and lock a CLI session would, so
+the git diff afterwards reads like any other. It ships as its own binary so
+that ratatui stays out of `tdy`'s dependency tree:
+
+```bash
+cargo install tdy-tui
+```
 
 ## For AI agents: `tdy mcp`
 

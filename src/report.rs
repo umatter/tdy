@@ -127,6 +127,15 @@ pub struct FitOpts<'a> {
     pub dry_run: bool,
     pub accept: &'a [PathBuf],
     pub propose: bool,
+    /// Where to send progress while the pile is being fitted. `None` for a
+    /// caller that only wants the answer.
+    pub progress: Option<crate::progress::Sink>,
+}
+
+impl Default for FitOpts<'_> {
+    fn default() -> Self {
+        FitOpts { dry_run: false, accept: &[], propose: false, progress: None }
+    }
 }
 
 fn problem_of_gap(g: &Gap) -> Problem {
@@ -283,8 +292,22 @@ pub async fn fit_pile(
     let mut failed = 0usize;
     let mut needs_review = 0usize;
 
-    for rel in &rels {
+    let total = rels.len();
+    for (index, rel) in rels.iter().enumerate() {
         let p = dir.join(rel);
+        crate::progress::emit(
+            opts.progress.as_ref(),
+            crate::progress::Event::MemberStarted {
+                path: rel.clone(),
+                index,
+                total,
+            },
+        );
+        // One labelled block per member, so every path out of the work below
+        // lands in the same place and `MemberFinished` is emitted exactly
+        // once — a UI that missed an event would leave a spinner running
+        // forever on a file that had in fact finished.
+        'member: {
         // A fresh sidecar that still conforms IS the plan, whoever wrote it.
         // A hand-written one is a human assertion the planner must never
         // overwrite (a contradiction is an error, not a replan); a
@@ -328,7 +351,7 @@ pub async fn fit_pile(
                             .collect(),
                         proposals: Vec::new(),
                     });
-                    continue;
+                    break 'member;
                 }
                 if let Err(e) = crate::engine::dry_run(&spec, &p, limits) {
                     failed += 1;
@@ -352,7 +375,7 @@ pub async fn fit_pile(
                         }],
                         proposals: Vec::new(),
                     });
-                    continue;
+                    break 'member;
                 }
                 let review = {
                     let mut rs = crate::fit::review_reasons(&spec);
@@ -408,10 +431,10 @@ pub async fn fit_pile(
                     review,
                     accepted: is_accepted,
                 });
-                continue;
+                break 'member;
             }
         }
-        match crate::fit::plan(&p, &target, cfg).await {
+        match crate::fit::plan(&p, &target, cfg, opts.progress.as_ref()).await {
             Ok(planned) => {
                 let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
                 if !opts.dry_run {
@@ -499,6 +522,16 @@ pub async fn fit_pile(
                 });
             }
         }
+        }
+        crate::progress::emit(
+            opts.progress.as_ref(),
+            crate::progress::Event::MemberFinished {
+                path: rel.clone(),
+                index,
+                total,
+                status: reports.last().map(|r| r.status).unwrap_or(MemberStatus::Error),
+            },
+        );
     }
 
     let fitted = lock_members.len();

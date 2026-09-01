@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --lib --tests                # 400 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 440 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -201,6 +201,23 @@ every path — tool args and refs inside SQL — is confined to `--root` via can
 and **acceptance is refused unless the server was started with `--allow-accept`**: the
 review gate's whole meaning is that a human judges, so delegation to an agent is the
 operator's explicit act, never a default. `tests/mcp.rs` drives it as a subprocess.
+
+**The terminal UI is `tdy-tui`, a workspace member** (`tdy` stays the root package so the
+published crate keeps its small tree; **CI must say `--workspace`** or cargo builds and lints the
+root package alone). Everything that *decides* is in plain modules with plain tests —
+`app.rs` is a pure state machine (`Key` in, `Action` out, no terminal), `remedy.rs` edits the
+target **textually** and re-parses to prove the edit took effect (never re-serialises the AST,
+which would delete the human's comments), `evidence.rs` computes what a judgement does. `ui.rs`
+renders and mutates nothing, so `tests/render.rs` asserts on real drawn text via `TestBackend`.
+Three rules are load-bearing: acceptance is reachable *only* from the evidence screen and only
+one member at a time (`a` elsewhere does nothing); every target write is preceded by a shown
+diff; and the remedy menu is ranked by `--propose` (which of the file's columns can actually
+produce the declared type) rather than listed in file order. The "what tdy sees" panel shows the
+file's **own** header spelling and **raw** values — that is what a `matches` clause needs — and
+falls back to a sniff when the member has no sidecar, which is exactly the refused member whose
+screen most needs it. `tdy::progress` (owned `Sink`, so a fit can run on a spawned task) is what
+lets the status line narrate; a transient remark must use `Msg::Note`, never `Msg::Progress`,
+or the UI stays busy forever and takes no keys but `q`.
 
 ## Real data
 

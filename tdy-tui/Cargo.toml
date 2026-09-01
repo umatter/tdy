@@ -1,0 +1,23 @@
+[package]
+name = "tdy-tui"
+version = "0.1.0"
+edition = "2021"
+# ratatui 0.30 requires exactly this, which is also tdy's floor.
+rust-version = "1.88"
+description = "Terminal UI for tdy: review a pile of messy files against a declared schema"
+license = "MIT"
+repository = "https://github.com/umatter/tdy"
+
+[dependencies]
+tdy = { path = "..", version = "0.1.0" }
+ratatui = "0.30"
+crossterm = "0.29"
+anyhow = "1"
+serde_json = "1"
+datafusion = "46"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+toml = "0.8"

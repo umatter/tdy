@@ -20,6 +20,7 @@ pub mod dataset;
 pub mod detect;
 pub mod draft;
 pub mod mcp;
+pub mod progress;
 pub mod report;
 pub mod engine;
 pub mod fileio;

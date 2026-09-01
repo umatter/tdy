@@ -540,12 +540,13 @@ pub async fn plan(
     path: &Path,
     target: &Target,
     cfg: &crate::config::Config,
+    progress: Option<&crate::progress::Sink>,
 ) -> Result<Planned, FitError> {
     let heuristic = InferenceMethod::Heuristic;
     match fit(path, target, cfg.limits) {
         Ok(fitted) => Ok(Planned { fitted, method: heuristic, model: None }),
         Err(e) if cfg.backend != crate::config::Backend::None && frame_could_help(&e) => {
-            match fit_with_model(path, target, cfg).await {
+            match fit_with_model(path, target, cfg, progress).await {
                 Ok(planned) => Ok(planned),
                 // The deterministic failure is the representative one: it
                 // names the gaps in the user's own terms. But the model
@@ -587,17 +588,20 @@ async fn fit_with_model(
     path: &Path,
     target: &Target,
     cfg: &crate::config::Config,
+    progress: Option<&crate::progress::Sink>,
 ) -> Result<Planned, FitError> {
     let sample = crate::sample::build(path, 16 * 1024, cfg.limits)
         .with_context(|| format!("sampling {}", path.display()))
         .map_err(FitError::Unreadable)?;
     if cfg.is_remote() {
-        eprintln!(
-            "note: sending {} bytes sampled from {} to {} ({}) to propose a frame",
-            sample.sampled_bytes,
-            path.display(),
-            cfg.backend.label(),
-            cfg.model
+        crate::progress::emit(
+            progress,
+            crate::progress::Event::Consulting {
+                path: path.display().to_string(),
+                backend: cfg.backend.label().to_string(),
+                model: cfg.model.clone(),
+                bytes: sample.sampled_bytes,
+            },
         );
     }
     // The binder matches by name, so the names are part of the contract and
