@@ -22,6 +22,107 @@ ORDER BY region, monat
 tdy query "SELECT ... FROM messy('umsatz_2025.xlsx') ..." -o umsatz.parquet
 ```
 
+## Quick start
+
+Five minutes, no API key, on data that ships with the repo.
+
+```bash
+git clone https://github.com/umatter/tdy.git
+cd tdy
+cargo install --path .          # `tdy` on your PATH (Rust ≥ 1.88)
+cargo install --path tdy-tui    # optional: the terminal UI behind `tdy ui`
+```
+
+The example is `testdata/drifting_exports/`: twelve monthly sales exports
+from a system that could not keep its own format straight — Swiss
+`1'100.00` amounts, `31.01.2025` dates, semicolons, then two months as
+`.xlsx`, one month in Rappen instead of francs, one with two columns both
+called `Betrag`, one with no region at all.
+
+**1. One file.** Ask tdy what it sees, then query it. The sniff writes a
+sidecar (`2025-01.csv.tdy.toml`) next to the file; the query reads it.
+
+```bash
+cd testdata/drifting_exports
+tdy sniff 2025-01.csv --no-llm
+tdy query "SELECT region, sum(betrag) AS betrag FROM messy('2025-01.csv') GROUP BY region ORDER BY region"
+```
+
+```
++--------+---------+
+| region | betrag  |
++--------+---------+
+| Nord   | 1120.00 |
+| Ost    | 1100.00 |
+| Sued   | 1130.00 |
+| West   | 1110.00 |
++--------+---------+
+```
+
+`betrag` is an exact `decimal(14,2)` and `datum` a real `DATE` parsed as
+`%d.%m.%Y` — the sidecar says so, and you can read and edit it.
+
+**2. The whole pile.** `sales.tdy.sql` declares the table you *want* — three
+columns, their types, and the header spellings each may be read from — and
+`tdy fit` plans every file onto it:
+
+```bash
+tdy fit sales.tdy.sql
+```
+
+```
+  2025-01.csv              fits      month<-"Datum"  region<-"Region"  amount_chf<-"Betrag"
+  ...
+  2025-07.csv              GAP
+      `amount_chf` (DECIMAL(14,2)): no column of this file binds
+          looked for "amount_chf", "Betrag", "Betrag CHF", "Amount", "Umsatz"
+          the file has ["Datum", "Region", "Betrag Rp."]
+  2025-08.csv              GAP
+      `amount_chf`: 2 columns of this file match, which is ambiguous
+          column 3 named "Betrag" and column 4 named "Betrag"
+          tdy will not choose between them — they may well mean different things.
+  2025-09.xlsx             fits      month<-"Datum"  region<-"Region"  amount_chf<-"Betrag CHF"
+  2025-10.xlsx             fits      month<-"Date"   region<-"Region"  amount_chf<-"Amount"
+  2025-11.csv              GAP
+      `region` (TEXT): no column of this file binds
+  ...
+9 of 12 file(s) fit `sales`.
+Error: 3 file(s) cannot reach the declared schema; no lock written. Fix them, exclude them, or widen the target.
+```
+
+Nine fit; three are refused with the reason, and **no lock is written**,
+because a dataset silently missing three months is the outcome tdy exists
+to prevent. `sales_ok.tdy.sql` is the same declaration with those three
+excluded (open it — the fix is one commented line). Fit that and query the
+dataset as one table:
+
+```bash
+tdy fit sales_ok.tdy.sql          # 9 of 9 fit; writes sales_ok.tdy.lock
+tdy query "SELECT region, sum(amount_chf) AS total_chf FROM dataset('sales_ok.tdy.sql') GROUP BY region ORDER BY region"
+```
+
+```
++--------+-----------+
+| region | total_chf |
++--------+-----------+
+| Nord   | 14380.00  |
+| Ost    | 14200.00  |
+| Sued   | 14470.00  |
+| West   | 14290.00  |
++--------+-----------+
+```
+
+36 rows, 57'340.00 in total, from nine files in two formats with three
+different header vocabularies and two date formats — and every step of how
+each one was read is on disk, in git-diffable text, beside the file.
+
+**3. Look around.** `tdy ui sales.tdy.sql` opens the same pile in the
+terminal UI, with each refusal next to the file's own rows. Everything the
+quick start wrote (`*.tdy.toml`, `*.tdy.lock`) is gitignored under
+`testdata/`, so `git status` stays clean. To point tdy at your own files,
+start with `tdy sniff <file>`; for a model to help with the hard cases, see
+[Two-tier inference](#two-tier-inference) and `tdy config init`.
+
 ## The idea
 
 Every messy file gets a **sidecar**: `umsatz_2025.xlsx.tdy.toml`, sitting
@@ -499,7 +600,7 @@ the git diff afterwards reads like any other. It ships as its own binary so
 that ratatui stays out of `tdy`'s dependency tree:
 
 ```bash
-cargo install tdy-tui
+cargo install --path tdy-tui   # from a source checkout, beside `cargo install --path .`
 ```
 
 ## For AI agents: `tdy mcp`
@@ -727,6 +828,7 @@ costs ~122 bytes and a delimited one ~46 — so 50M is a ceiling of roughly
 
 ```bash
 cargo install --path .        # puts `tdy` on your PATH
+cargo install --path tdy-tui  # the terminal UI behind `tdy ui` (optional, separate binary)
 ```
 
 ## Build & test

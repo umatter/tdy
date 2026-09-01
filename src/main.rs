@@ -654,8 +654,9 @@ async fn run() -> Result<()> {
                 Ok(st) => std::process::exit(st.code().unwrap_or(1)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
                     "`tdy-tui` is not on PATH. It ships as its own binary so that the \
-                     terminal UI's dependencies stay out of tdy:\n  \
-                     cargo install tdy-tui"
+                     terminal UI's dependencies stay out of tdy. From a source checkout:\n  \
+                     cargo install --path tdy-tui\n\
+                     (or `cargo install tdy-tui` once it is published)"
                 ),
                 Err(e) => anyhow::bail!("cannot run tdy-tui: {e}"),
             }
