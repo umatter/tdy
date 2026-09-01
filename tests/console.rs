@@ -342,3 +342,18 @@ async fn output_routes_the_next_result_to_a_file() {
     assert!(s.run(".output jan.csv --force", None).await.ok);
     assert!(s.run(".output", None).await.ok); // back to the screen
 }
+
+/// A compile-time check, not a runtime one: `CWD_LOCK` used to be a
+/// `std::sync::Mutex`, and holding its guard across the `.await` inside
+/// `run_sql` made `Session::run`'s returned future `!Send` — which fails to
+/// compile under `tokio::spawn`, exactly how the workbench slice is
+/// designed to drive it. `assert_send` only typechecks; if this file
+/// compiles, the future is `Send`.
+#[tokio::test]
+async fn session_run_future_is_send() {
+    fn assert_send<T: Send>(_: T) {}
+    let d = pile();
+    let mut s = session(d.path()).await;
+    assert_send(s.run(".help", None));
+    s.run(".help", None).await; // and still drive it once
+}

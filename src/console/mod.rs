@@ -131,16 +131,57 @@ pub struct SpecSummary {
 }
 
 /// Guards every place this module changes the *process's* actual working
-/// directory (`.cd`, and `.draft`'s brief realignment so `draft_target`
-/// sees the same cwd-relative shape `tdy draft` does — see `Command::Cd`
-/// and `Command::Draft`). A `Session`'s own `cwd` field is what every other
-/// method actually resolves against, so in production — one session per
-/// process — this lock is never contended. It exists for the test binary,
-/// where multiple `Session`s in the same process race on this one piece of
-/// real OS state; a poisoned lock (a panic while held) must not cascade
-/// into every later test that touches the process directory, hence
-/// `into_inner()` rather than propagating the poison.
-static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// directory (`.cd`, `.draft`'s brief realignment so `draft_target` sees
+/// the same cwd-relative shape `tdy draft` does, and `run_sql`'s — see
+/// `Command::Cd`, `Command::Draft`, `Session::run_sql`). A `Session`'s own
+/// `cwd` field is what every other method actually resolves against, so in
+/// production — one session per process — this lock is never contended. It
+/// exists for the test binary, where multiple `Session`s in the same
+/// process race on this one piece of real OS state.
+///
+/// `tokio::sync::Mutex`, not `std::sync::Mutex`: `run_sql` holds the guard
+/// across an `.await` (the flip must span the whole query, not just the
+/// `set_current_dir` call — see its doc comment), and a `std::sync::Mutex`
+/// guard held across an await point makes the enclosing future `!Send`,
+/// which broke `tokio::spawn(session.run(...))` — exactly how the workbench
+/// slice is designed to drive it. Tokio's mutex has no poisoning, so there
+/// is no `into_inner()` to unwrap here.
+static CWD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// RAII guard shared by `.draft` and `run_sql`: flips the process's actual
+/// working directory to `dir` for the duration of a call that — unlike the
+/// rest of this module — consults process cwd rather than `Session::cwd`
+/// (`draft_target`'s bare-name table-naming convention; SQL's relative
+/// `messy()`/`dataset()` paths, resolved by `provider::prepare_specs`'s
+/// pre-pass). Held under `CWD_LOCK` for its whole lifetime — the flip, the
+/// call, and the restore — including across an `.await` in `run_sql`'s
+/// case, which is exactly why `CWD_LOCK` is a `tokio::sync::Mutex` rather
+/// than a `std` one (see its doc comment). Restores the previous directory
+/// on drop, including on an early return via `?` inside the wrapped call
+/// or an unwinding panic — a sniff or a query failure must not leave the
+/// process pointed at this session's cwd forever. `.cd`'s own, permanent
+/// flip does not use this: it has nothing to restore to.
+struct RestoreCwd {
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+    prev: Option<PathBuf>,
+}
+
+impl RestoreCwd {
+    async fn to(dir: &Path) -> Result<RestoreCwd> {
+        let lock = CWD_LOCK.lock().await;
+        let prev = std::env::current_dir().ok();
+        std::env::set_current_dir(dir)?;
+        Ok(RestoreCwd { _lock: lock, prev })
+    }
+}
+
+impl Drop for RestoreCwd {
+    fn drop(&mut self) {
+        if let Some(p) = self.prev.take() {
+            let _ = std::env::set_current_dir(p);
+        }
+    }
+}
 
 pub struct Session {
     root: PathBuf,
@@ -311,23 +352,11 @@ impl Session {
         // of the process's actual directory, but `provider::prepare_specs`'s
         // pre-pass (sniffing, sidecar I/O) uses plain relative-path I/O —
         // the same assumption the plain CLI makes, that process cwd *is*
-        // the working directory. `.cd` and `.draft` already realign the
-        // process to `self.cwd` for exactly this reason (see `Command::Cd`
-        // and `Command::Draft`'s `RestoreCwd`); a bare SQL statement needs
-        // the same realignment, held for the whole call since the pre-pass
-        // and the query it feeds are one `.await`.
-        struct RestoreCwd(Option<PathBuf>);
-        impl Drop for RestoreCwd {
-            fn drop(&mut self) {
-                if let Some(p) = self.0.take() {
-                    let _ = std::env::set_current_dir(p);
-                }
-            }
-        }
+        // the working directory. `RestoreCwd` (shared with `.draft`) holds
+        // the realignment across the whole call, since the pre-pass and the
+        // query it feeds are one `.await`.
         let (schema, batches) = {
-            let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let _restore = RestoreCwd(std::env::current_dir().ok());
-            std::env::set_current_dir(&self.cwd)?;
+            let _restore = RestoreCwd::to(&self.cwd).await?;
             crate::provider::run_query_rooted(sql, &self.cfg, false, Some(self.root.clone())).await?
         };
         let table = table_of(&schema, &batches, QUERY_ROWS_CAP);
@@ -364,7 +393,7 @@ impl Session {
                 // `CWD_LOCK` (see its doc comment) keeps this from racing
                 // `.draft`'s own realignment in another `Session`.
                 {
-                    let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                    let _lock = CWD_LOCK.lock().await;
                     std::env::set_current_dir(&self.cwd)?;
                 }
                 Outcome::ok(format!("{}\n", self.display_rel(&self.cwd)), Payload::Nothing)
@@ -436,26 +465,11 @@ impl Session {
                     .map(|p| p.strip_prefix(&self.cwd).map(Path::to_path_buf).unwrap_or_else(|_| p.clone()))
                     .collect();
                 let ddl = {
-                    // `CWD_LOCK` (see its doc comment) keeps this realignment
-                    // from racing `.cd`'s own, permanent one in another
-                    // `Session` — held across the flip, the call, and the
-                    // restore. `RestoreCwd` restores the process's previous
-                    // directory on the way out of this block, including on
-                    // an early return via `?` inside `draft_target` or an
-                    // unwinding panic — a sniff failure must not leave the
-                    // process pointed at this session's cwd forever, and
-                    // must not leave the lock held either.
-                    struct RestoreCwd(Option<PathBuf>);
-                    impl Drop for RestoreCwd {
-                        fn drop(&mut self) {
-                            if let Some(p) = self.0.take() {
-                                let _ = std::env::set_current_dir(p);
-                            }
-                        }
-                    }
-                    let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-                    let _restore = RestoreCwd(std::env::current_dir().ok());
-                    std::env::set_current_dir(&self.cwd)?;
+                    // `RestoreCwd` (see its doc comment) keeps this
+                    // realignment from racing `.cd`'s own, permanent one in
+                    // another `Session`, held across the flip, the call, and
+                    // the restore.
+                    let _restore = RestoreCwd::to(&self.cwd).await?;
                     crate::draft::draft_target(&rel, self.cfg.limits)?
                 };
                 let wrote = match to {
