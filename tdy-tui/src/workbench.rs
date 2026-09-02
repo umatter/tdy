@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use tdy::console::line::{Edit as LineEdit, LineEditor};
-use tdy::console::{EntryKind, Outcome, Payload, RawHead, SpecSummary, Table};
+use tdy::console::{EntryKind, Outcome, Payload, RawHead, SpecSummary, Table, quote_rel};
 use tdy::evidence::Evidence;
 use tdy::report::{MemberReport, PileReport};
 
@@ -1267,13 +1267,3 @@ fn member_preview_path(target: &Path, member_rel: &str) -> PathBuf {
     target_dir.join(member_rel)
 }
 
-/// Quote a rel path the way the console's own tokenizer expects to read it
-/// back — Debug-quote (the console's `quote_rel` rule) only when it
-/// contains whitespace.
-fn quote_rel(s: &str) -> String {
-    if s.chars().any(char::is_whitespace) {
-        format!("{s:?}")
-    } else {
-        s.to_string()
-    }
-}

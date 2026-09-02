@@ -30,7 +30,7 @@ use tdy_tui::wb_ui;
 use tdy_tui::workbench::{WbAction, Workbench};
 use tdy::config::Config;
 use tdy::console::repl::{append_history, load_history};
-use tdy::console::{raw_head, spec_summary, Outcome, Payload, RawHead, Session, SpecSummary};
+use tdy::console::{method_label, raw_head, spec_summary, Outcome, Payload, RawHead, Session, SpecSummary};
 
 #[derive(Parser)]
 #[command(
@@ -259,16 +259,6 @@ fn spawn_console_worker(
     line_tx
 }
 
-/// `InferenceMethod` as the lowercase word its TOML uses — the same mapping
-/// `tdy::console`'s own (private) `method_label` applies, reproduced here
-/// because it is not exported and this task does not touch that module.
-fn wb_method_label(m: &tdy::spec::InferenceMethod) -> &'static str {
-    match m {
-        tdy::spec::InferenceMethod::Heuristic => "heuristic",
-        tdy::spec::InferenceMethod::Llm => "llm",
-        tdy::spec::InferenceMethod::Manual => "manual",
-    }
-}
 
 /// A `WbAction::PreviewFile`, satisfied off the UI thread: the raw head,
 /// plus — if a fresh sidecar exists — the spec it describes. Mirrors what
@@ -292,7 +282,7 @@ fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf
         let mut stale = false;
         let spec = match tdy::sidecar::load(&path) {
             Ok(tdy::sidecar::SidecarStatus::Fresh(sc)) => {
-                Some(spec_summary(&sc.spec, wb_method_label(&sc.provenance.method), sc.spec.confidence))
+                Some(spec_summary(&sc.spec, &method_label(&sc.provenance.method), sc.spec.confidence))
             }
             // Kept as `None`, exactly as before — the footer is what
             // distinguishes this from "never sniffed" now, not the spec.

@@ -837,12 +837,16 @@ fn first_line(s: &str) -> &str {
 ///
 /// The case this exists for is whitespace, and `Debug`'s double quotes are
 /// exactly what `tokenize` strips back off. It is not a general shell
-/// quoter: `tokenize` has no escape character at all (a `\` inside quotes
+/// Quote a relative path as the console's tokenizer expects to read it back.
+///
+/// The console's tokenizer has no escape character (a `\` inside quotes
 /// is a literal `\`), so a file name containing a `"` or a `\` echoes as
 /// something that would not tokenize back to itself. Nothing depends on
 /// that round trip — the echo is display — and adding escapes here without
 /// adding them to `tokenize` would only move the disagreement.
-fn quote_rel(s: &str) -> String {
+///
+/// Shared with the workbench (tdy-tui).
+pub fn quote_rel(s: &str) -> String {
     if s.chars().any(char::is_whitespace) { format!("{s:?}") } else { s.to_string() }
 }
 
@@ -898,7 +902,12 @@ fn file_status(path: &Path) -> EntryStatus {
 /// The sidecar's `InferenceMethod` as the lowercase word its TOML uses
 /// (`heuristic`/`llm`/`manual`) — `Debug` would print the Rust identifier
 /// casing instead.
-fn method_label(m: &crate::spec::InferenceMethod) -> String {
+///
+/// This uses the serde-derived implementation, which tracks `InferenceMethod`'s
+/// serde attributes automatically and must not be hand-written.
+///
+/// Shared with the workbench (tdy-tui).
+pub fn method_label(m: &crate::spec::InferenceMethod) -> String {
     serde_json::to_string(m).unwrap_or_default().trim_matches('"').to_string()
 }
 
@@ -1141,5 +1150,25 @@ Everything else is a dot-command:
             .trim_end()
             .to_string()
             + "\n",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_method_label() {
+        assert_eq!(method_label(&crate::spec::InferenceMethod::Heuristic), "heuristic");
+        assert_eq!(method_label(&crate::spec::InferenceMethod::Llm), "llm");
+        assert_eq!(method_label(&crate::spec::InferenceMethod::Manual), "manual");
+    }
+
+    #[test]
+    fn test_quote_rel() {
+        // Plain name without whitespace should be unchanged
+        assert_eq!(quote_rel("file.csv"), "file.csv");
+        // Name with whitespace should be Debug-quoted
+        assert_eq!(quote_rel("my file.csv"), "\"my file.csv\"");
     }
 }
