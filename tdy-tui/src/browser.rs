@@ -80,6 +80,37 @@ impl Browser {
         }
     }
 
+    /// Re-root the listing on `dir` — the *session's* working directory.
+    ///
+    /// The session, not the browser, is the source of truth for where we
+    /// are: `.cd` is ordinary typed grammar, so the session can move
+    /// without the browser ever being asked, and a browser descent whose
+    /// `.cd` the session refused (a symlink out of the root, which
+    /// `list_dir` follows and `confine` does not) must roll back. Both are
+    /// the same bug — a shortcut synthesizing `.sniff jan.csv` for the
+    /// highlighted file while the session resolves that name somewhere
+    /// else — and this heals both directions.
+    ///
+    /// A dir outside the root is refused and the browser keeps what it has:
+    /// the browser is confined to its root, and leaving it would be a worse
+    /// answer than a stale one. Returns true if the directory moved.
+    pub fn sync_dir(&mut self, dir: &Path) -> bool {
+        // The session's cwd is canonical (`Session::new` and `.cd` both
+        // canonicalise); canonicalise here too so a caller handing over a
+        // symlinked-but-equivalent path is not read as a move.
+        let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        if dir == self.dir || !dir.starts_with(&self.root) {
+            return false;
+        }
+        self.dir = dir;
+        // A different directory means a different list: start at the top,
+        // exactly as `enter()` does, rather than carrying an index that
+        // pointed at some other file.
+        self.selected = 0;
+        self.refresh();
+        true
+    }
+
     /// Move selection up or down by delta, clamping to [0, entries.len()).
     pub fn move_sel(&mut self, delta: i32) {
         let current = self.selected as i32;
@@ -183,6 +214,36 @@ mod tests {
         let mut b = Browser::new(d.path()).unwrap();
         b.enter(); // into sub/
         assert_eq!(b.selected_rel().as_deref(), Some("c.csv"));
+    }
+
+    #[test]
+    fn sync_dir_follows_the_session_under_the_root_and_refuses_to_leave_it() {
+        let d = pile();
+        let mut b = Browser::new(d.path()).unwrap();
+        let root = b.root().to_path_buf();
+
+        // The session `.cd`d into sub/ without the browser being asked
+        // (a typed `.cd`): the browser follows.
+        assert!(b.sync_dir(&root.join("sub")));
+        assert_eq!(b.title(), "sub");
+        let names: Vec<&str> = b.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["c.csv", "d.csv"], "the listing is refreshed, not stale");
+        assert_eq!(b.selected, 0);
+
+        // The same dir again is not a move.
+        assert!(!b.sync_dir(&root.join("sub")));
+
+        // Anything outside the root is refused, and the browser keeps what
+        // it has rather than leaving its root.
+        let outside = tempfile::tempdir().unwrap();
+        assert!(!b.sync_dir(outside.path()));
+        assert_eq!(b.title(), "sub");
+        assert!(b.dir.starts_with(&root));
+
+        // Back to the root (a `.cd ..`, or a refused descent rolling back).
+        assert!(b.sync_dir(&root));
+        assert_eq!(b.title(), ".");
+        assert_eq!(b.entries.len(), 4);
     }
 
     #[test]

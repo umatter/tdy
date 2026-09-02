@@ -329,7 +329,12 @@ fn apply_msg(app: &mut App, msg: Msg) {
 enum WbMsg {
     /// The worker began running this line.
     Started(String),
-    Done(Box<Outcome>),
+    /// A line finished. The session's cwd rides along because `.cd` is
+    /// ordinary typed grammar: the session can move without the browser
+    /// being asked, and a browser descent whose `.cd` the session refused
+    /// must roll back. The session is the source of truth; every `Done`
+    /// re-roots the browser on it (see `Workbench::apply`).
+    Done { outcome: Box<Outcome>, cwd: PathBuf },
     /// Work is happening, and this is what it is.
     Progress(String),
     /// A transient remark that does NOT mean work is running — see `Msg::Note`'s
@@ -376,7 +381,8 @@ fn spawn_console_worker(
             });
             let o = session.run(&line, Some(&sink)).await;
             let quit = session.wants_quit();
-            let _ = tx.send(WbMsg::Done(Box::new(o)));
+            let cwd = session.cwd().to_path_buf();
+            let _ = tx.send(WbMsg::Done { outcome: Box::new(o), cwd });
             if quit {
                 break;
             }
@@ -461,7 +467,12 @@ fn act_on_wb(
             // `begin` is idempotent (see its doc comment), so the `Started`
             // message this same line produces later is a harmless no-op.
             wb.begin(&line);
-            let _ = line_tx.send(line);
+            // A dead worker (the `Session` failed to build, or the task
+            // ended) must not leave the UI busy forever with the error
+            // hidden behind the busy text.
+            if line_tx.send(line).is_err() {
+                wb.worker_died("the console worker is gone — restart the workbench");
+            }
         }
         WbAction::PreviewFile(path) => spawn_wb_preview(preview_tx.clone(), cfg.clone(), path),
         WbAction::Edit(path) => {
@@ -503,7 +514,9 @@ async fn run_workbench(
     let (tx, mut rx) = mpsc::unbounded_channel::<WbMsg>();
     let line_tx = spawn_console_worker(root, cfg.clone(), tx.clone());
     if let Some(line) = initial {
-        let _ = line_tx.send(line);
+        if line_tx.send(line).is_err() {
+            wb.worker_died("the console worker is gone — restart the workbench");
+        }
     }
 
     loop {
@@ -518,14 +531,14 @@ async fn run_workbench(
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 WbMsg::Started(line) => wb.begin(&line),
-                WbMsg::Done(o) => {
+                WbMsg::Done { outcome: o, cwd } => {
                     // Taken before `apply` consumes `o`: the history file
                     // gets the echo exactly when `apply`'s own in-memory
                     // recall (`editor.remember`, inside `begin`) would have
                     // — non-empty, and not a buffered-SQL `Continue`.
                     let echo = o.echo.clone();
                     let is_continue = matches!(o.payload, Payload::Continue);
-                    let action = wb.apply(*o);
+                    let action = wb.apply(*o, &cwd);
                     if !echo.is_empty() && !is_continue {
                         append_history(&echo);
                     }

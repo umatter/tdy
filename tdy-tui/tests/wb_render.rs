@@ -55,7 +55,7 @@ fn scrollback_shows_echo_then_text_and_busy_shows_in_status() {
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains(".ls"), "{text}");
     use tdy::console::{Outcome, Payload};
-    w.apply(Outcome { echo: ".ls".into(), text: "a.csv  sniffed\n".into(), payload: Payload::Nothing, ok: true });
+    w.apply(Outcome { echo: ".ls".into(), text: "a.csv  sniffed\n".into(), payload: Payload::Nothing, ok: true }, d.path());
     w.progress("fitting a.csv (1 of 9)".into());
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("tdy> .ls"), "{text}");
@@ -104,7 +104,7 @@ fn a_file_without_a_sidecar_shows_raw_only_and_no_opinion() {
             raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: true, sheets: vec![] },
             spec: None,
         },
-    });
+    }, d.path());
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("A;B") && text.contains("1;2"), "{text}");
     assert!(text.contains("…"), "truncation marker: {text}");
@@ -129,7 +129,7 @@ fn a_sniffed_file_shows_raw_beside_the_spec_and_its_decisions() {
     let follow = w.apply(Outcome {
         echo: ".sniff a.csv".into(), text: String::new(), ok: true,
         payload: Payload::Sniffed { path: d.path().join("a.csv"), spec, preview, kept_existing: false },
-    });
+    }, d.path());
     assert!(follow.is_some(), "sniffed context asks the runtime for the raw half");
     let text = screen(&mut w, 110, 34).join("\n");
     assert!(text.contains("betrag") && text.contains("Betrag") && text.contains("DECIMAL(38,2)"), "{text}");
@@ -147,7 +147,7 @@ fn a_query_context_shows_the_table_and_counts() {
         columns: vec!["region".into(), "total".into()], types: vec![],
         rows: vec![vec!["Ost".into(), "14200.00".into()]], total: 500, truncated: true,
     };
-    w.apply(Outcome { echo: "SELECT 1;".into(), text: String::new(), ok: true, payload: Payload::Query(t) });
+    w.apply(Outcome { echo: "SELECT 1;".into(), text: String::new(), ok: true, payload: Payload::Query(t) }, d.path());
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("region") && text.contains("14200.00"), "{text}");
     assert!(text.contains("500 row(s)") && text.contains("truncated"), "{text}");
@@ -179,7 +179,7 @@ fn a_short_pane_never_zeroes_the_spec_summary_for_the_preview_strip() {
     w.apply(Outcome {
         echo: ".sniff a.csv".into(), text: String::new(), ok: true,
         payload: Payload::Sniffed { path: d.path().join("a.csv"), spec, preview, kept_existing: false },
-    });
+    }, d.path());
     // No panic reaching here is itself part of what this test checks.
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("0.60"), "spec summary must still render, not be squeezed to nothing: {text}");

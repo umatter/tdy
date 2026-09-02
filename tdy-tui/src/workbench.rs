@@ -1,12 +1,14 @@
 //! The frame's state machine: a key in, a [`WbAction`] out.
 //!
-//! `Workbench` is pure — no I/O, no printing, no terminal calls. The
+//! `Workbench` decides only — no printing, no terminal calls, and the one
+//! piece of I/O it does is the browser's own directory listing (a
+//! `refresh`, when a `Done` moves the session's cwd). The
 //! runtime (Task 4/5) owns the console worker and the terminal; this module
 //! only decides what should happen, so its whole behaviour is a unit test.
 //! `ui.rs` (Task 3) reads its state and never changes it, the way `app.rs`
 //! already keeps rendering and deciding apart for the evidence screen.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -159,9 +161,29 @@ impl Workbench {
         self.editor.remember(line);
     }
 
-    /// The worker finished a line: record it, update the context.
-    pub fn apply(&mut self, o: Outcome) -> Option<WbAction> {
+    /// The console worker is gone (the `Session` failed to build, or the
+    /// task ended): clear busy and say so. Without this a dispatch whose
+    /// send fails leaves the UI busy forever — the busy text covering the
+    /// very error that explains it, and every key but Ctrl-Q swallowed.
+    pub fn worker_died(&mut self, note: &str) {
         self.busy = None;
+        self.status = note.to_string();
+    }
+
+    /// The worker finished a line: record it, update the context, and
+    /// re-root the browser on the session's `cwd`.
+    ///
+    /// The cwd rides on every `Done` because `.cd` is ordinary typed
+    /// grammar: the browser moves only when navigation went *through* it,
+    /// so after a typed `.cd sub` the browser would still list the root and
+    /// its `s` shortcut would synthesize `.sniff jan.csv` for a file the
+    /// session resolves in `sub/` — a different file than the highlighted
+    /// one. Taking the session as the source of truth heals that and the
+    /// reverse (a browser descent whose `.cd` the session refused: that
+    /// `Done` carries the unchanged cwd and rolls the browser back).
+    pub fn apply(&mut self, o: Outcome, cwd: &Path) -> Option<WbAction> {
+        self.busy = None;
+        self.browser.sync_dir(cwd);
         self.sql_pending = matches!(&o.payload, Payload::Continue);
         let Outcome { echo, text, payload, ok } = o;
         // A buffered SQL line still echoes; only skip a cell that is
@@ -171,14 +193,13 @@ impl Workbench {
         }
         match payload {
             Payload::Shown { path, raw, spec } => {
-                self.context = Context::File { path, raw, spec, preview: None };
+                self.show_file(path, raw, spec, None);
                 None
             }
             Payload::Sniffed { path, spec, preview, .. } => {
                 // The state machine does no I/O: the raw half is filled in
                 // by the runtime's own PreviewFile action.
-                self.context =
-                    Context::File { path: path.clone(), raw: RawHead::default(), spec: Some(spec), preview: Some(preview) };
+                self.show_file(path.clone(), RawHead::default(), Some(spec), Some(preview));
                 Some(WbAction::PreviewFile(path))
             }
             Payload::Query(t) => {
@@ -223,6 +244,20 @@ impl Workbench {
             Context::File { path: p, preview, .. } if *p == path => preview.clone(),
             _ => None,
         };
+        self.show_file(path, raw, spec, preview);
+    }
+
+    /// Point the main pane at a file, resetting its scroll only when the
+    /// file actually changes. Arrowing to the next file must open it at the
+    /// top — carrying the previous file's offset renders a short file as a
+    /// blank pane, which reads as an empty file — while an update for the
+    /// *same* path (a `.sniff`'s raw fill-in landing after the fact) must
+    /// keep the scroll the user set.
+    fn show_file(&mut self, path: PathBuf, raw: RawHead, spec: Option<SpecSummary>, preview: Option<Table>) {
+        let same = matches!(&self.context, Context::File { path: p, .. } if *p == path);
+        if !same {
+            self.main_scroll = 0;
+        }
         self.context = Context::File { path, raw, spec, preview };
     }
 

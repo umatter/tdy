@@ -98,7 +98,7 @@ fn apply_updates_scrollback_and_context() {
     let raw = RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] };
     let follow = w.apply(outcome(".show a.csv", "a.csv:\n  A;B\n", Payload::Shown {
         path: d.path().join("a.csv"), raw, spec: None,
-    }));
+    }), d.path());
     assert!(follow.is_none());
     assert!(w.busy.is_none());
     assert_eq!(w.scrollback.last().unwrap().echo, ".show a.csv");
@@ -107,12 +107,12 @@ fn apply_updates_scrollback_and_context() {
     // A query result becomes the main pane's context.
     w.begin("SELECT 1;");
     let t = Table { columns: vec!["a".into()], types: vec![], rows: vec![vec!["1".into()]], total: 1, truncated: false };
-    w.apply(outcome("SELECT 1;", "| a |\n", Payload::Query(t)));
+    w.apply(outcome("SELECT 1;", "| a |\n", Payload::Query(t)), d.path());
     assert!(matches!(w.context, Context::Query(_)));
 
     // Edit comes back as a follow-up action.
     w.begin(".edit a.csv");
-    let follow = w.apply(outcome(".edit a.csv", "", Payload::Edit(d.path().join("a.csv"))));
+    let follow = w.apply(outcome(".edit a.csv", "", Payload::Edit(d.path().join("a.csv"))), d.path());
     assert!(matches!(follow, Some(WbAction::Edit(_))));
 }
 
@@ -164,4 +164,86 @@ fn zoom_resize_and_scroll_are_console_focus_keys() {
     assert_eq!(w.scroll, 5);
     type_line(&mut w, ".ls"); // any dispatch resets scroll
     assert_eq!(w.scroll, 0);
+}
+
+/// CRITICAL: a typed `.cd` moves the session but never the browser, so the
+/// browser would keep listing the old directory while `s` on the
+/// highlighted file synthesized a name the session resolves elsewhere — a
+/// different file than the one shown (monthly trees repeat names, so this
+/// is not hypothetical). Every `Done` carries the session's cwd and the
+/// browser re-roots on it.
+#[test]
+fn a_done_carrying_a_different_cwd_re_roots_the_browser() {
+    let d = pile();
+    let mut w = wb(&d);
+    assert_eq!(w.browser.title(), ".");
+
+    // Typed — the browser is never asked to move.
+    let act = type_line(&mut w, ".cd sub");
+    assert_eq!(act, WbAction::Dispatch(".cd sub".into()));
+    w.begin(".cd sub");
+    w.apply(outcome(".cd sub", "sub\n", Payload::Nothing), &d.path().join("sub"));
+    assert_eq!(w.browser.title(), "sub", "the browser follows the session");
+
+    // And the shortcut now names the file the browser is actually showing.
+    w.key(key(KeyCode::Tab)); // Browser
+    assert_eq!(w.key(key(KeyCode::Char('s'))), WbAction::Dispatch(".sniff c.csv".into()));
+
+    // The reverse direction: a browser descent whose `.cd` the session
+    // refused (a symlink out of the root) comes back as a `Done` carrying
+    // the unchanged cwd, and the browser rolls back.
+    w.begin(".cd nowhere");
+    w.apply(outcome(".cd nowhere", "outside the root\n", Payload::Nothing), d.path());
+    assert_eq!(w.browser.title(), ".");
+}
+
+/// IMPORTANT: if the console worker is gone, the dispatch never runs — busy
+/// must not stay set, or the UI is wedged with the explanation hidden
+/// behind the busy text and only Ctrl-Q left.
+#[test]
+fn a_dead_worker_clears_busy_instead_of_wedging_the_ui() {
+    let d = pile();
+    let mut w = wb(&d);
+    let action = type_line(&mut w, ".sniff a.csv");
+    let WbAction::Dispatch(line) = action else { panic!("expected Dispatch, got {action:?}") };
+    w.begin(&line);
+    assert!(w.busy.is_some());
+    // What the runtime does when `line_tx.send` reports a closed channel.
+    w.worker_died("the console worker is gone — restart the workbench");
+    assert!(w.busy.is_none());
+    assert!(w.status.contains("worker is gone"), "{}", w.status);
+    // And keys act again rather than being swallowed by the busy gate.
+    assert_eq!(type_line(&mut w, ".ls"), WbAction::Dispatch(".ls".into()));
+}
+
+/// IMPORTANT: the main pane's scroll belongs to the file being shown.
+/// Arrowing to the next file must open it at the top — a short file
+/// rendered at the previous file's offset is a blank pane, which reads as
+/// an empty file — while a same-path update (the `.sniff` follow-up filling
+/// in the raw half) must keep the scroll the user set.
+#[test]
+fn main_scroll_resets_on_a_new_file_and_survives_a_same_path_update() {
+    let d = pile();
+    let mut w = wb(&d);
+    let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] };
+    w.begin(".show a.csv");
+    w.apply(outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw: raw(), spec: None }), d.path());
+
+    // Scroll the raw view down.
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab)); // Main
+    w.key(key(KeyCode::Down));
+    w.key(key(KeyCode::Down));
+    assert_eq!(w.main_scroll, 2);
+
+    // A different file: back to the top.
+    w.begin(".show b.csv");
+    w.apply(outcome(".show b.csv", "", Payload::Shown { path: d.path().join("b.csv"), raw: raw(), spec: None }), d.path());
+    assert_eq!(w.main_scroll, 0);
+
+    // The same file again (the preview's raw fill-in): the scroll stands.
+    w.key(key(KeyCode::Down));
+    assert_eq!(w.main_scroll, 1);
+    w.set_preview(d.path().join("b.csv"), raw(), None);
+    assert_eq!(w.main_scroll, 1, "a same-path update must not throw away the user's scroll");
 }

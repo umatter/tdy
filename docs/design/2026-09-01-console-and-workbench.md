@@ -135,7 +135,7 @@ Rules:
 | `tdy` (stdin and stdout are TTYs) | the plain console. *(End state, deferred to slice 3: the workbench when `tdy-tui` is on PATH — deferred because until the workbench is rebuilt, tdy-tui is the target-centric TUI, which without a target is an error and the wrong landing place. Decided in use, 2026-09-02.)* |
 | `tdy` (stdin not a TTY) | the batch runner: read lines to EOF, print `text`, exit non-zero at the first error — `tdy < script.tdy` |
 | `tdy console` | the plain console, always |
-| `tdy ui [PATH]` / `tdy-tui [PATH]` | the workbench, always; with a file as the initial context, with a target also running `.fit` on it (today's behaviour) |
+| `tdy ui [PATH]` / `tdy-tui [PATH]` | a named `.tdy.sql` target — or exactly one discoverable in the working directory — opens the classic review flow (today's behaviour). A directory, no target, or several targets opens the workbench rooted there; a data file opens the workbench in its directory with an initial `.show` of it. *Classic-behind-a-target holds until slice 3 migrates those views into the workbench's main pane.* |
 | `tdy <subcommand> …` | unchanged |
 
 The plain console: `tdy>` prompt, `   ->` for continuation lines, in-memory
