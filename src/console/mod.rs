@@ -346,7 +346,7 @@ impl Session {
                 };
             }
             let sql = std::mem::take(&mut self.sql_buffer);
-            let mut o = match self.run_sql(&sql).await {
+            let mut o = match self.run_sql(&sql, progress).await {
                 Ok(o) => o,
                 Err(e) => Outcome::error(&sql, format!("{e:#}")),
             };
@@ -406,7 +406,7 @@ impl Session {
     /// otherwise. Each statement builds its own query context (see the
     /// design doc §4): a `.sniff --force` or a rewritten export between two
     /// statements must not serve a `MemTable` built from the old spec.
-    async fn run_sql(&mut self, sql: &str) -> Result<Outcome> {
+    async fn run_sql(&mut self, sql: &str, progress: Option<&progress::Sink>) -> Result<Outcome> {
         // A relative `messy('2025-01.csv')` inside the SQL text has to mean
         // the file `.ls` and `.sniff` would mean — the one in *this
         // session's* directory — and it is reached by two different routes
@@ -426,7 +426,8 @@ impl Session {
             let _restore = RestoreCwd::to(&self.cwd).await?;
             let confine =
                 crate::provider::Confinement::new(self.root.clone(), self.cwd.clone());
-            crate::provider::run_query_confined(sql, &self.cfg, false, Some(confine)).await?
+            crate::provider::run_query_confined_with(sql, &self.cfg, false, Some(confine), progress)
+                .await?
         };
         let table = table_of(&schema, &batches, QUERY_ROWS_CAP);
         let text = match self.output.take() {

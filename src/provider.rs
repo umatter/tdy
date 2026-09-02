@@ -578,6 +578,38 @@ pub async fn run_query(
     run_query_rooted(sql, cfg, frozen, None).await
 }
 
+/// [`run_query_confined`], with the caller's progress sink threaded through
+/// so low-confidence pre-pass warnings become [`crate::progress::Event::Note`]
+/// instead of `eprintln!` — the CLI has no sink and gets today's stderr
+/// output unchanged; a TUI passes its own and stops being printed over.
+pub async fn run_query_confined_with(
+    sql: &str,
+    cfg: &Config,
+    frozen: bool,
+    confine: Option<Confinement>,
+    sink: Option<&crate::progress::Sink>,
+) -> Result<(Arc<Schema>, Vec<RecordBatch>)> {
+    if let Some(c) = &confine {
+        for m in sqlscan::find_messy_refs(sql) {
+            c.resolve(Path::new(&m.path))?;
+        }
+        for d in sqlscan::find_dataset_refs(sql) {
+            c.resolve(Path::new(&d))?;
+        }
+    }
+    if !frozen {
+        report_to(&prepare_specs(sql, cfg).await?, cfg, sink);
+    }
+    let ctx = session_confined(cfg, frozen, confine);
+    // Planning is where messy() runs, so our own errors surface here; unwrap
+    // them so the user reads the sentence we wrote rather than DataFusion's
+    // adapter chain repeating it.
+    let df = ctx.sql(sql).await.map_err(unwrap_df)?;
+    let schema: Arc<Schema> = Arc::new(df.schema().as_arrow().clone());
+    let batches = df.collect().await.map_err(unwrap_df)?;
+    Ok((schema, batches))
+}
+
 /// [`run_query`], confined: with `root` set, every file the query names must
 /// resolve under it. Enforced twice on purpose — here, before the pre-pass,
 /// so inference never samples (or writes a sidecar beside) a file outside
@@ -606,25 +638,7 @@ pub async fn run_query_confined(
     frozen: bool,
     confine: Option<Confinement>,
 ) -> Result<(Arc<Schema>, Vec<RecordBatch>)> {
-    if let Some(c) = &confine {
-        for m in sqlscan::find_messy_refs(sql) {
-            c.resolve(Path::new(&m.path))?;
-        }
-        for d in sqlscan::find_dataset_refs(sql) {
-            c.resolve(Path::new(&d))?;
-        }
-    }
-    if !frozen {
-        report(&prepare_specs(sql, cfg).await?, cfg);
-    }
-    let ctx = session_confined(cfg, frozen, confine);
-    // Planning is where messy() runs, so our own errors surface here; unwrap
-    // them so the user reads the sentence we wrote rather than DataFusion's
-    // adapter chain repeating it.
-    let df = ctx.sql(sql).await.map_err(unwrap_df)?;
-    let schema: Arc<Schema> = Arc::new(df.schema().as_arrow().clone());
-    let batches = df.collect().await.map_err(unwrap_df)?;
-    Ok((schema, batches))
+    run_query_confined_with(sql, cfg, frozen, confine, None).await
 }
 
 /// DataFusion wraps our errors in `External(...)`, whose Display already
@@ -649,18 +663,37 @@ fn unwrap_df(e: DataFusionError) -> anyhow::Error {
     anyhow!("{}", inner(e))
 }
 
-fn report(prepared: &[PreparedFile], cfg: &Config) {
+/// Warn about every low-confidence spec the pre-pass produced. With a sink,
+/// each warning becomes one [`crate::progress::Event::Note`] — the header
+/// line and its `- note` lines joined with `\n`, so a listener sees it as
+/// one remark rather than a burst of unrelated-looking lines. With no sink
+/// (the plain CLI), the lines go to stderr exactly as before.
+fn report_to(prepared: &[PreparedFile], cfg: &Config, sink: Option<&crate::progress::Sink>) {
     for p in prepared {
         if let Some(c) = p.confidence {
             if c < cfg.confidence_threshold {
-                eprintln!(
+                let header = format!(
                     "note: spec for {} has confidence {:.2}; review with `tdy sniff {}`",
                     p.path.display(),
                     c,
                     p.path.display()
                 );
-                for n in &p.notes {
-                    eprintln!("      - {n}");
+                match sink {
+                    Some(s) => {
+                        let mut text = header;
+                        for n in &p.notes {
+                            text.push('\n');
+                            text.push_str("      - ");
+                            text.push_str(n);
+                        }
+                        s(crate::progress::Event::Note(text));
+                    }
+                    None => {
+                        eprintln!("{header}");
+                        for n in &p.notes {
+                            eprintln!("      - {n}");
+                        }
+                    }
                 }
             }
         }

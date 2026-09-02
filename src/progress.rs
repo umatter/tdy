@@ -32,6 +32,9 @@ pub enum Event {
     /// spends money: a UI should be able to say so *while it happens*, not
     /// afterwards in a note.
     Consulting { path: String, backend: String, model: String, bytes: u64 },
+    /// A remark for the user that is not tied to a member — e.g. a
+    /// low-confidence spec warning during a query's pre-pass.
+    Note(String),
 }
 
 /// Where events go. `Send + Sync` so a fit can run on a spawned task.
@@ -48,12 +51,27 @@ pub(crate) fn emit(sink: Option<&Sink>, event: Event) {
 /// their file is being sent to a model. Per-member progress stays silent
 /// there because the CLI prints the whole table when it is done.
 pub fn stderr_sink() -> Sink {
-    Arc::new(|e| {
-        if let Event::Consulting { path, backend, model, bytes } = e {
+    Arc::new(|e| match e {
+        Event::Consulting { path, backend, model, bytes } => {
             eprintln!(
                 "note: sending {bytes} bytes sampled from {path} to {backend} ({model}) \
                  to propose a frame"
             );
         }
+        Event::Note(t) => eprintln!("{t}"),
+        Event::MemberStarted { .. } | Event::MemberFinished { .. } => {}
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Smoke test: the CLI sink must not panic on a `Note` event, the one
+    /// this module adds for warnings that used to be printed directly by
+    /// their callers.
+    #[test]
+    fn stderr_sink_handles_note() {
+        (stderr_sink())(Event::Note("x".into()));
+    }
 }

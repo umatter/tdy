@@ -614,3 +614,48 @@ async fn cd_moves_the_sql_surface_not_only_the_dot_commands() {
     let o = s.run("SELECT 1 FROM messy('/etc/passwd');", None).await;
     assert!(!o.ok && o.text.contains("outside"), "{}", o.text);
 }
+
+/// `provider::report`/`report_to` used to `eprintln!` low-confidence
+/// warnings straight over the TUI's alternate screen. They must instead
+/// travel through the session's progress sink as `Event::Note` — and only
+/// from the query pre-pass, not from `.sniff` itself, which already prints
+/// the same information in its own output.
+#[tokio::test]
+async fn low_confidence_notes_reach_the_sink_not_stderr() {
+    use std::sync::{Arc, Mutex};
+
+    let d = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join("umsatz.xlsx"),
+        d.path().join("umsatz.xlsx"),
+    )
+    .unwrap();
+
+    let mut s = session(d.path()).await;
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink: tdy::progress::Sink = {
+        let seen = seen.clone();
+        Arc::new(move |e| {
+            if let tdy::progress::Event::Note(t) = e {
+                seen.lock().unwrap().push(t);
+            }
+        })
+    };
+
+    let o = s.run(".sniff umsatz.xlsx --no-llm", Some(&sink)).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "sniff itself must not emit a note: {:?}",
+        seen.lock().unwrap()
+    );
+
+    let o = s.run("SELECT count(*) AS n FROM messy('umsatz.xlsx');", Some(&sink)).await;
+    assert!(o.ok, "{}", o.text);
+
+    let notes = seen.lock().unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("confidence"), "{notes:?}");
+    assert!(notes[0].contains("umsatz.xlsx"), "{notes:?}");
+}

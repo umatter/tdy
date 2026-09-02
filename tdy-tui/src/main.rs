@@ -235,6 +235,10 @@ fn spawn_console_worker(
                     Event::Consulting { path, backend, model, bytes } => {
                         format!("asking {model} via {backend} about {path} ({bytes} bytes sent)")
                     }
+                    Event::Note(t) => {
+                        let _ = sink_tx.send(WbMsg::Note(t));
+                        return;
+                    }
                 };
                 let _ = sink_tx.send(WbMsg::Progress(what));
             });
