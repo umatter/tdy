@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 485 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 541 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -227,10 +227,17 @@ Three rules are load-bearing: acceptance is reachable *only* from the evidence s
 one member at a time (`a` elsewhere does nothing, and the gate is the console's own two-step
 `.accept` grammar, not a UI-only shortcut); every target write is preceded by a shown diff; and
 the remedy menu is ranked by `--propose` (which of the file's columns can actually produce the
-declared type) rather than listed in file order. The "what tdy sees" panel shows the file's
-**own** header spelling and **raw** values — that is what a `matches` clause needs — and falls
-back to a sniff when the member has no sidecar, which is exactly the refused member whose
-screen most needs it. `tdy::progress` (owned `Sink`, so a fit can run on a spawned task) is what
+declared type) rather than listed in file order — which is why every `.fit` the workbench
+dispatches carries `--propose`: the launch line (`.fit T --dry-run --propose`, in
+`main::dry_run_target_mode`), `f`'s refit, and `f` on a browser target. Without it
+`MemberReport.proposals` is empty and the menu falls back to the file's header in file order.
+The "what tdy sees" panel is the **raw head**, read as bytes and shown as text
+(`console::raw_head`) — the file's own header spelling and unparsed values, which is what a
+`matches` clause needs — and it needs no sidecar, so a refused member (the one whose screen
+most needs it) gets it too. Known gap: for a **workbook** member `raw_head` returns sheet
+*shapes* only, no cells, so that panel cannot show a spreadsheet's own header spellings;
+`Problem.header` in the gap report still carries them, and that is what the remedy menu is
+built from. `tdy::progress` (owned `Sink`, so a fit can run on a spawned task) is what
 lets the status line narrate; a transient remark must use `Msg::Note`, never `Msg::Progress`,
 or the UI stays busy forever and takes no keys but `q`.
 

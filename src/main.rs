@@ -92,10 +92,12 @@ enum Command {
     },
     /// Open the terminal UI (requires `tdy-tui` on PATH).
     ///
-    /// A `.tdy.sql` target opens the classic review flow; a data file opens
-    /// the workbench rooted at its directory and showing that file; omitted
-    /// opens the classic flow on the one discoverable `.tdy.sql` file if
-    /// there is exactly one, else the workbench on the working directory.
+    /// A `.tdy.sql` target opens the workbench already fitted — as a dry
+    /// run, so looking writes nothing; `f` is the key that fits for real. A
+    /// data file opens the workbench rooted at its directory and showing
+    /// that file. Omitted, it opens fitted on the one discoverable
+    /// `.tdy.sql` here if there is exactly one, else on the working
+    /// directory.
     ///
     /// A thin shim, the way cargo finds its subcommands: the UI is a separate
     /// binary so that ratatui and crossterm stay out of `tdy`'s dependency

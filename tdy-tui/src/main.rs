@@ -109,6 +109,14 @@ fn choose_mode(arg: Option<PathBuf>) -> Result<Mode> {
 /// not write — a person who opens it, looks at a pile, and quits should
 /// leave the directory exactly as they found it; `f` is the key that writes
 /// for real (see `Workbench::refit_pile`).
+///
+/// `--propose` rides along because the proposals ARE the remedy menu's
+/// ranking (spec §7: "the remedy menu ranked by `--propose`"), and without
+/// them a refused member's menu is the file's header in file order. It is
+/// read-only analysis — `report::fit_pile` calls `fit::propose`, which
+/// samples, frames and probes and writes nothing — so it cannot compromise
+/// the dry run. The two flags are independent switches in the console
+/// grammar (`console::parse`), so the order they appear in is free.
 fn dry_run_target_mode(t: PathBuf) -> Result<Mode> {
     let t = t.canonicalize().with_context(|| format!("cannot open {}", t.display()))?;
     let sql = std::fs::read_to_string(&t)
@@ -118,7 +126,10 @@ fn dry_run_target_mode(t: PathBuf) -> Result<Mode> {
     tdy::target::Target::parse(&sql).with_context(|| format!("in {}", t.display()))?;
     let root = t.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
     let name = t.file_name().unwrap().to_string_lossy().to_string();
-    Ok(Mode::Workbench { root, initial: Some(format!(".fit {} --dry-run", quote_name(&name))) })
+    Ok(Mode::Workbench {
+        root,
+        initial: Some(format!(".fit {} --dry-run --propose", quote_name(&name))),
+    })
 }
 
 /// Quote a bare file name the way the console's tokenizer reads it back —
@@ -376,6 +387,7 @@ fn act_on_wb(
             // The edit may have changed the file's sidecar status (or
             // nothing at all); either way a refresh is cheap and honest.
             wb.browser.refresh();
+            after_editing(wb, &path);
         }
     }
     Ok(())
@@ -472,6 +484,46 @@ async fn run_workbench(
     Ok(())
 }
 
+/// `$EDITOR` has returned. If what was edited is the pile's own target,
+/// two things must happen before the next keystroke.
+///
+/// **Say the lock is stale** (spec §8 rule 2: "`.edit` is the honest
+/// exception… on return the browser status updates and the console notes
+/// 'target edited; lock is stale — `.fit` to re-prove'"). The note is
+/// emitted here rather than as the `Outcome`'s text because
+/// `Command::Edit`'s arm in `console::dispatch` returns `Payload::Edit`
+/// *before* the editor runs — the console cannot know what the editor did,
+/// or whether it even exited cleanly. The runtime is the only place that
+/// knows the editor has returned, so it is the honest place to say so.
+///
+/// **Re-read the declaration.** The remedy menu stages its edits against
+/// `wb.target_sql`, and `write_target`'s guard refuses to write when the
+/// file no longer matches that text. Leaving it stale would turn the very
+/// next remedy digit into a refusal ("changed since it was read"), which is
+/// safe but useless; re-reading makes the next remedy stage against what
+/// the human just wrote. A read failure is reported, not swallowed — and
+/// leaves the old text in place, where the guard will catch it.
+fn after_editing(wb: &mut Workbench, edited: &Path) {
+    let Some(target) = wb.pile_target() else { return };
+    // Compare canonically: the dispatched `.edit` line is spelled relative
+    // to the session's cwd, the context's target is absolute.
+    let same = match (target.canonicalize(), edited.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => target == edited,
+    };
+    if !same {
+        return;
+    }
+    let target = target.to_path_buf();
+    match std::fs::read_to_string(&target) {
+        Ok(text) => {
+            wb.set_target_sql(text);
+            wb.note("target edited; lock is stale — `.fit` to re-prove".to_string());
+        }
+        Err(e) => wb.note(format!("cannot read {}: {e:#}", target.display())),
+    }
+}
+
 /// Write the target, but only onto the bytes we last read.
 ///
 /// The TUI keeps the declaration in memory to build diffs against. If the
@@ -488,7 +540,11 @@ fn write_target(path: &Path, expected: &str, new_text: &str) -> Result<()> {
             path.display()
         );
     }
-    std::fs::write(path, new_text)
+    // Temp + rename, the same way every sidecar is written: a target
+    // truncated by a crash or a full disk mid-write is a declaration that
+    // no longer parses, and the lock beside it still claims twelve proofs
+    // against it.
+    tdy::fileio::atomic_write(path, new_text)
         .with_context(|| format!("cannot write {}", path.display()))
 }
 
@@ -558,7 +614,7 @@ mod tests {
         std::fs::write(&p, target_sql()).unwrap();
         let Mode::Workbench { root, initial } = choose_mode(Some(p.clone())).unwrap();
         assert_eq!(root, d.path().canonicalize().unwrap());
-        assert_eq!(initial.as_deref(), Some(".fit t.tdy.sql --dry-run"));
+        assert_eq!(initial.as_deref(), Some(".fit t.tdy.sql --dry-run --propose"));
     }
 
     #[test]
@@ -607,21 +663,48 @@ mod tests {
         std::env::set_current_dir(d.path()).unwrap();
         let Mode::Workbench { root, initial } = choose_mode(None).unwrap();
         assert_eq!(root, d.path().canonicalize().unwrap());
-        assert_eq!(initial.as_deref(), Some(".fit only.tdy.sql --dry-run"));
+        assert_eq!(initial.as_deref(), Some(".fit only.tdy.sql --dry-run --propose"));
     }
 
     /// However the single target was found — named on the command line, or
     /// the lone `*.tdy.sql` discovered in the working directory — the fit
     /// `main` dispatches first must be a dry run: opening a review tool to
-    /// look and quitting must leave the directory exactly as found.
+    /// look and quitting must leave the directory exactly as found. It must
+    /// also ask for `--propose`, because the proposals are what ranks a
+    /// refused member's remedy menu (spec §7); the flags are independent
+    /// switches, so this asserts both are *present* rather than pinning an
+    /// order the grammar does not care about.
     #[test]
-    fn the_initial_fit_line_always_ends_dry_run() {
+    fn the_initial_fit_line_is_always_a_dry_run_that_proposes() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("t.tdy.sql");
         std::fs::write(&p, target_sql()).unwrap();
         let Mode::Workbench { initial, .. } = choose_mode(Some(p)).unwrap();
         let line = initial.expect("expected an initial line");
-        assert!(line.ends_with("--dry-run"), "{line}");
         assert!(line.starts_with(".fit "), "{line}");
+        assert!(line.contains("--dry-run"), "{line}");
+        assert!(line.contains("--propose"), "{line}");
+    }
+
+    /// …and the console grammar really accepts the two together — asserted
+    /// against `console::parse` itself rather than by reading the flag
+    /// table, so a grammar change that made them exclusive fails here
+    /// instead of at the next launch.
+    #[test]
+    fn the_initial_fit_line_parses_as_a_dry_run_with_proposals() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("t.tdy.sql");
+        std::fs::write(&p, target_sql()).unwrap();
+        let Mode::Workbench { initial, .. } = choose_mode(Some(p)).unwrap();
+        let line = initial.expect("expected an initial line");
+        assert_eq!(
+            tdy::console::parse(&line).expect("the console must accept the launch line"),
+            tdy::console::Command::Fit {
+                target: "t.tdy.sql".into(),
+                file: None,
+                dry_run: true,
+                propose: true,
+            }
+        );
     }
 }

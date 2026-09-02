@@ -549,23 +549,49 @@ impl Workbench {
         }
     }
 
-    /// Every remedy every problem of the current Member offers, in order,
-    /// deduplicated by first occurrence — `remedy::remedies_for` is fed each
-    /// problem's own JSON (the same shape the old classic app's
-    /// `refresh_remedies` builds via `serde_json::to_value`), so a remedy
-    /// this module invents and one `remedy.rs` actually knows how to apply
-    /// can never drift apart. Empty outside a `Member` context, or for a
-    /// member with no problems (nothing to fit is nothing to remedy).
+    /// The remedies offered for the current Member, **best first**.
+    ///
+    /// "Best" is not a guess: `.fit --propose` reports which of the file's
+    /// columns could actually *produce* the declared type, and those come
+    /// first, in the order the planner ranked them. Offering the file's
+    /// header in file order instead would put an arbitrary column at [1] —
+    /// and a menu whose first entry is usually wrong is a menu that teaches
+    /// people to stop reading it. (Ported from the classic app's
+    /// `App::compute_remedies`, deleted with `app.rs` in Task 7; the
+    /// workbench's `.fit` dispatches carry `--propose` so `proposals` is
+    /// populated — see `refit_pile` and `main::dry_run_target_mode`.)
+    ///
+    /// Everything the problems offer follows, deduplicated by first
+    /// occurrence — `remedy::remedies_for` is fed each problem's own JSON
+    /// (the same shape `compute_remedies` built via `serde_json::to_value`),
+    /// so a remedy this module invents and one `remedy.rs` actually knows
+    /// how to apply can never drift apart. Empty outside a `Member`
+    /// context, or for a member with neither proposals nor problems
+    /// (nothing to fit is nothing to remedy).
     pub fn member_remedies(&self) -> Vec<Remedy> {
         let Context::Member { report, member, .. } = &self.context else { return Vec::new() };
         let Some(m) = report.members.get(*member) else { return Vec::new() };
         let mut out: Vec<Remedy> = Vec::new();
+        let push = |r: Remedy, out: &mut Vec<Remedy>| {
+            if !out.contains(&r) {
+                out.push(r);
+            }
+        };
+        // Type-compatible candidates first, in the planner's own order, and
+        // only for the columns that actually failed to bind.
+        for p in &m.proposals {
+            for (spelling, _why) in &p.candidates {
+                push(
+                    Remedy::AddMatch { column: p.column.clone(), spelling: spelling.clone() },
+                    &mut out,
+                );
+            }
+        }
+        // Then everything else the file offers, and the structural remedies.
         for p in &m.problems {
             let value = serde_json::to_value(p).unwrap_or_default();
             for r in remedy::remedies_for(&value, &m.path) {
-                if !out.contains(&r) {
-                    out.push(r);
-                }
+                push(r, &mut out);
             }
         }
         out
@@ -685,9 +711,18 @@ impl Workbench {
             KeyCode::Char('s') => self.shortcut(".sniff"),
             KeyCode::Char('e') => self.shortcut(".edit"),
             // `f` fits a target — only meaningful on a `*.tdy.sql` entry; a
-            // data file's shortcut stays `s`.
+            // data file's shortcut stays `s`. `--propose` for the same
+            // reason `refit_pile` asks for it: the Pile this produces is
+            // the one whose members' remedy menus need ranking.
             KeyCode::Char('f') => match self.browser.selected_entry() {
-                Some(e) if e.kind == EntryKind::Target => self.shortcut(".fit"),
+                Some(e) if e.kind == EntryKind::Target => {
+                    match self.browser.selected_rel() {
+                        Some(rel) => {
+                            WbAction::Dispatch(format!(".fit {} --propose", quote_rel(&rel)))
+                        }
+                        None => WbAction::None,
+                    }
+                }
                 _ => WbAction::None,
             },
             KeyCode::Char('d') => {
@@ -966,9 +1001,16 @@ impl Workbench {
     /// target lives under it (the common case) and as its full path
     /// otherwise — the dispatched line must still resolve from the
     /// session's cwd even after a `.cd` has moved the browser elsewhere.
+    ///
+    /// `--propose` rides along for the same reason the launch line carries
+    /// it (`main::dry_run_target_mode`): the proposals ARE the remedy
+    /// menu's ranking (see `member_remedies`), and a refit that dropped
+    /// them would leave the next member's menu in file order. Unlike the
+    /// launch line this one is *not* a dry run — `f` is the key that writes
+    /// the lock for real.
     fn refit_pile(&self) -> WbAction {
         let Context::Pile { target, .. } = &self.context else { return WbAction::None };
-        WbAction::Dispatch(format!(".fit {}", quote_rel(&self.rel_spelling(target))))
+        WbAction::Dispatch(format!(".fit {} --propose", quote_rel(&self.rel_spelling(target))))
     }
 
     fn rel_spelling(&self, path: &Path) -> String {

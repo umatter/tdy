@@ -196,13 +196,21 @@ fn a_query_context_shows_the_table_and_counts() {
 
 /// The Empty view now draws the generated mark (half-block glyphs) above
 /// the orientation lines, in a pane tall enough to hold it.
+///
+/// The orientation must also be *true*: it used to advertise "the classic
+/// review flow", which no longer exists — a target on the command line
+/// opens this very workbench, fitted as a dry run. Orientation text that
+/// names a screen the reader can never reach is worse than none.
 #[test]
-fn the_empty_view_draws_the_mark() {
+fn the_empty_view_draws_the_mark_and_orients_truthfully() {
     let d = pile();
     let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains('▀') || text.contains('▄'), "no mark glyph found: {text}");
     assert!(text.contains("select a file"), "{text}");
+    assert!(!text.contains("classic"), "the classic flow is gone; do not advertise it: {text}");
+    assert!(text.contains("dry run"), "{text}");
+    assert!(text.contains("press f"), "{text}");
 }
 
 /// `?` opens a bordered ` keys ` overlay over the main pane, listing the
@@ -692,4 +700,216 @@ fn a_failed_cells_echo_still_shows() {
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("tdy> .nope"), "{text}");
     assert!(text.contains("Error: unknown command"), "{text}");
+}
+
+/// Rendering must not panic at hostile sizes: a narrow or short terminal is
+/// a resize away, and a panic there takes the user's terminal with it.
+///
+/// The classic screens carried this sweep as
+/// `render.rs::every_screen_renders_at_hostile_sizes` (deleted with them in
+/// Task 7; it drew at 20x5, 40x10, 200x60, 10x3 and 1x1). It comes back
+/// here over `Context` instead of `Screen`, at the union of that list and
+/// the small squares that break layout arithmetic (2x2, 5x5, 20x10, 80x24),
+/// and it covers the two overlays as well — a box drawn into an area
+/// smaller than its own borders is exactly where a subtraction underflows.
+/// The assertion is simply that nothing panics.
+#[test]
+fn every_context_renders_at_hostile_sizes() {
+    use tdy::console::{Outcome, Payload, RawHead, SpecSummary, Table};
+    use tdy::evidence::Evidence;
+
+    const SIZES: [(u16, u16); 9] =
+        [(1, 1), (2, 2), (5, 5), (10, 3), (20, 5), (20, 10), (40, 10), (80, 24), (200, 60)];
+
+    fn raw() -> RawHead {
+        RawHead {
+            lines: vec!["Datum;Kanton;Betrag".into(), "2025-01-01;BE;1.00".into()],
+            truncated: true,
+            sheets: vec![],
+        }
+    }
+    fn spec() -> SpecSummary {
+        SpecSummary {
+            method: "heuristic".into(),
+            confidence: Some(0.42),
+            extraction: r#"{"format":"delimited","delimiter":";"}"#.into(),
+            transforms: vec!["promote_header".into()],
+            columns: vec![("betrag".into(), "Betrag".into(), "DECIMAL(38,2)".into())],
+            notes: vec!["ambiguous date order".into()],
+        }
+    }
+    fn table() -> Table {
+        Table {
+            columns: vec!["region".into(), "amount_chf".into()],
+            types: vec!["Utf8".into(), "Decimal128(38, 2)".into()],
+            rows: vec![vec!["BE".into(), "14200.00".into()]],
+            total: 500,
+            truncated: true,
+        }
+    }
+    /// A gap member plus a reviewable one, as a dry-run Pile: something in
+    /// every status column, and Enter on index 0 reaches a Member with a
+    /// remedy menu.
+    fn fitted(d: &tempfile::TempDir) -> Workbench {
+        let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+        w.begin(".fit t.tdy.sql --dry-run --propose");
+        let members =
+            vec![gap_member("2025-11.csv"), member("2025-07.csv", MemberStatus::NeedsReview)];
+        let report = PileReport {
+            target: "t".into(),
+            target_file: "t.tdy.sql".into(),
+            declared_columns: 3,
+            fitted: 1,
+            failed: 1,
+            needs_review: 1,
+            members,
+            lock_written: None,
+            dry_run: true,
+        };
+        w.apply(
+            Outcome {
+                echo: ".fit t.tdy.sql --dry-run --propose".into(),
+                text: String::new(),
+                ok: true,
+                payload: Payload::Fitted(report),
+            },
+            d.path(),
+        );
+        w
+    }
+    /// Enter on the gap member, with the raw half a real run would have
+    /// filled in from its preview task.
+    fn opened_member(d: &tempfile::TempDir) -> Workbench {
+        let mut w = fitted(d);
+        w.key(key(KeyCode::Tab)); // Browser
+        w.key(key(KeyCode::Tab)); // Main
+        w.key(key(KeyCode::Enter));
+        if let tdy_tui::workbench::Context::Member { target, report, member, .. } = &w.context {
+            let path = target.parent().unwrap().join(&report.members[*member].path);
+            w.set_preview(w.preview_gen, path, raw(), None, false);
+        }
+        w
+    }
+
+    type Build = fn(&tempfile::TempDir) -> Workbench;
+    let builders: [(&str, Build); 9] = [
+        ("empty", |d| Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8)),
+        ("file, no spec", |d| {
+            let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+            w.begin(".show a.csv");
+            w.apply(
+                Outcome {
+                    echo: ".show a.csv".into(),
+                    text: String::new(),
+                    ok: true,
+                    payload: Payload::Shown {
+                        path: d.path().join("a.csv"),
+                        raw: raw(),
+                        spec: None,
+                        stale: true,
+                    },
+                },
+                d.path(),
+            );
+            w
+        }),
+        ("file, with spec", |d| {
+            let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+            w.begin(".sniff a.csv");
+            w.apply(
+                Outcome {
+                    echo: ".sniff a.csv".into(),
+                    text: String::new(),
+                    ok: true,
+                    payload: Payload::Sniffed {
+                        path: d.path().join("a.csv"),
+                        spec: spec(),
+                        preview: table(),
+                        kept_existing: false,
+                    },
+                },
+                d.path(),
+            );
+            w.set_preview(w.preview_gen, d.path().join("a.csv"), raw(), Some(spec()), false);
+            w
+        }),
+        ("query", |d| {
+            let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+            w.begin("SELECT * FROM dataset('t.tdy.sql');");
+            w.apply(
+                Outcome {
+                    echo: "SELECT * FROM dataset('t.tdy.sql');".into(),
+                    text: String::new(),
+                    ok: true,
+                    payload: Payload::Query(table()),
+                },
+                d.path(),
+            );
+            w
+        }),
+        ("pile", fitted),
+        ("member", opened_member),
+        ("evidence", |d| {
+            let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+            w.begin(".accept t.tdy.sql 2025-07.csv");
+            w.apply(
+                Outcome {
+                    echo: ".accept t.tdy.sql 2025-07.csv".into(),
+                    text: String::new(),
+                    ok: true,
+                    payload: Payload::Evidence {
+                        target: d.path().join("t.tdy.sql"),
+                        member: "2025-07.csv".into(),
+                        rows: vec![
+                            Evidence::Constant {
+                                column: "region".into(),
+                                value: "Ticino".into(),
+                                rows: 4,
+                            },
+                            Evidence::Unillustrated { reason: "a model chose the frame".into() },
+                        ],
+                    },
+                },
+                d.path(),
+            );
+            w
+        }),
+        ("help overlay", |d| {
+            let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+            w.key(key(KeyCode::Tab)); // Browser — `?` in the console is a character
+            w.key(key(KeyCode::Char('?')));
+            assert!(w.help);
+            w
+        }),
+        ("confirm overlay", |d| {
+            let mut w = opened_member(d);
+            w.set_target_sql(std::fs::read_to_string(d.path().join("t.tdy.sql")).unwrap());
+            w.key(key(KeyCode::Char('1')));
+            assert!(w.pending_edit.is_some(), "the confirm overlay must actually be staged");
+            w
+        }),
+    ];
+
+    for (name, build) in builders {
+        for (cols, rows) in SIZES {
+            // A fresh directory per draw: the browser reads it live, and
+            // one builder's writes must not leak into the next.
+            let d = tempfile::tempdir().unwrap();
+            std::fs::write(d.path().join("a.csv"), "Datum;Kanton;Betrag\n2025-01-01;BE;1.00\n")
+                .unwrap();
+            std::fs::write(
+                d.path().join("t.tdy.sql"),
+                "CREATE TABLE t (\n  region TEXT NOT NULL OPTIONS(matches = 'Region')\n) \
+                 WITH (files='*.csv');\n",
+            )
+            .unwrap();
+            let mut w = build(&d);
+            // Any panic happens inside here; the context's name and the
+            // size are what a failure report needs to carry.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = screen(&mut w, cols, rows);
+            }))
+            .unwrap_or_else(|_| panic!("{name} panicked at {cols}x{rows}"));
+        }
+    }
 }

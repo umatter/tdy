@@ -1,7 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tdy::console::{Outcome, Payload, RawHead, Table};
-use tdy::report::{MemberReport, MemberStatus, PileReport, Problem, SourceBinding};
+use tdy::report::{
+    MemberReport, MemberStatus, PileReport, Problem, ProposalReport, SourceBinding,
+};
 use tdy_tui::browser::Browser;
+use tdy_tui::remedy::Remedy;
 use tdy_tui::workbench::{Context, Focus, WbAction, Workbench};
 
 /// From a Pile with the given members, focus Main and press Enter on
@@ -400,6 +403,11 @@ fn f_dispatches_a_refit_from_pile_and_from_a_browser_target() {
     let WbAction::Dispatch(line) = act else { panic!("expected Dispatch, got {act:?}") };
     assert!(line.contains(".fit"), "{line}");
     assert!(line.contains("sales.tdy.sql"), "{line}");
+    // The refit must keep asking for proposals: they are what ranks the
+    // remedy menu of every member the new report refuses.
+    assert!(line.contains("--propose"), "{line}");
+    // …and it is NOT a dry run — `f` is the key that writes for real.
+    assert!(!line.contains("--dry-run"), "{line}");
 
     // From Browser, on a target entry.
     let mut w2 = wb(&d);
@@ -407,7 +415,10 @@ fn f_dispatches_a_refit_from_pile_and_from_a_browser_target() {
     while w2.browser.selected_entry().map(|e| e.name.as_str()) != Some("t.tdy.sql") {
         w2.key(key(KeyCode::Down));
     }
-    assert_eq!(w2.key(key(KeyCode::Char('f'))), WbAction::Dispatch(".fit t.tdy.sql".into()));
+    assert_eq!(
+        w2.key(key(KeyCode::Char('f'))),
+        WbAction::Dispatch(".fit t.tdy.sql --propose".into())
+    );
 
     // `f` on a data file does nothing; `s` still sniffs.
     w2.key(key(KeyCode::Up));
@@ -468,6 +479,50 @@ fn member_remedies_come_from_the_problems() {
     // A fits-member (Enter on index 0) offers nothing.
     let (w2, _) = pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits)], 0);
     assert!(w2.member_remedies().is_empty());
+}
+
+/// The menu is **ranked by `--propose`**, not listed in file order (design
+/// §7, and CLAUDE.md's "ranked by `--propose` … rather than listed in file
+/// order"). The member's `Problem` names the file's whole header —
+/// `Datum` first, `Kanton` second — but `--propose` found that only
+/// `Kanton` can actually produce a TEXT `region`; a date cannot. So the
+/// first entry must be the `Kanton` match, and `Datum` must come after it.
+///
+/// This is the assertion the deleted `tests/render.rs` carried as "the
+/// type-compatible candidate must be [1]" (`[1]` being the menu's
+/// one-based label for `remedies()[0]`); it moves here now that ranking
+/// lives in `Workbench::member_remedies`.
+#[test]
+fn the_remedy_menu_is_ranked_by_propose_not_by_file_order() {
+    let d = pile();
+    let mut m = gap_member("2025-11.csv");
+    // What `--propose` found: `Kanton` can produce TEXT, `Datum` cannot.
+    m.proposals = vec![ProposalReport {
+        column: "region".into(),
+        want: "TEXT".into(),
+        candidates: vec![("Kanton".into(), "all 4 sampled value(s) parse as TEXT".into())],
+        message: "region TEXT OPTIONS(matches = 'Kanton')".into(),
+    }];
+    let (w, _) = pile_and_enter(&d, vec![m], 0);
+    let remedies = w.member_remedies();
+    assert!(
+        matches!(&remedies[0], Remedy::AddMatch { column, spelling }
+                 if column == "region" && spelling == "Kanton"),
+        "the type-compatible candidate must be [1], got {remedies:?}"
+    );
+    // The header's other column is still reachable — ranking demotes it,
+    // it does not hide it; a proposal is a ranking, not a proof.
+    assert!(
+        remedies.iter().any(|r| matches!(r, Remedy::AddMatch { spelling, .. } if spelling == "Datum")),
+        "the file's other column must still be offered, lower down: {remedies:?}"
+    );
+    // …and it is offered exactly once, though both the proposal and the
+    // problem's header name `Kanton`.
+    let kantons = remedies
+        .iter()
+        .filter(|r| matches!(r, Remedy::AddMatch { spelling, .. } if spelling == "Kanton"))
+        .count();
+    assert_eq!(kantons, 1, "the proposal and the problem must dedupe: {remedies:?}");
 }
 
 /// Up/Down move `remedy_selected`, clamped to the remedy count; Esc returns
@@ -614,6 +669,53 @@ fn a_digit_stages_an_edit_and_y_writes_then_refits() {
     assert!(tdy::target::Target::parse(&new_text).is_ok(), "{new_text}");
     assert!(refit.starts_with(".fit "), "{refit}");
     assert!(refit.contains("t.tdy.sql"), "{refit}");
+}
+
+/// After `$EDITOR` returns, the runtime re-reads the target and hands the
+/// new text to `set_target_sql` (`main::after_editing`) — so the *next*
+/// remedy digit stages against what the human just wrote, not against the
+/// text from before the edit. This is the half of spec §8's `.edit` return
+/// path that is testable here: `set_target_sql` is a `Workbench` method
+/// with an observable consequence, while the accompanying "target edited;
+/// lock is stale — `.fit` to re-prove" note is emitted by the runtime after
+/// the editor process exits, which no test in this crate can reach without
+/// a terminal and an `$EDITOR`.
+///
+/// Concretely: the pre-edit declaration matches on `Region`, the post-edit
+/// one on `Bezirk`. Staging after the re-read must produce an edit whose
+/// `expected` is the *new* text — otherwise `write_target`'s guard would
+/// refuse the very next write, and the remedy menu would be permanently
+/// dead after any use of `t`.
+#[test]
+fn re_reading_the_target_after_an_edit_restages_against_the_new_text() {
+    let d = pile();
+    std::fs::write(d.path().join("t.tdy.sql"), target_sql()).unwrap();
+    let (mut w, _) = t_pile_and_enter(&d, vec![gap_member("2025-02.csv")], 0);
+    w.set_target_sql(target_sql().to_string());
+
+    // …the human presses `t`, edits, and the runtime re-reads.
+    let edited =
+        target_sql().replace("matches = 'Region'", "matches = 'Bezirk'");
+    assert_ne!(edited, target_sql());
+    std::fs::write(d.path().join("t.tdy.sql"), &edited).unwrap();
+    w.set_target_sql(edited.clone());
+
+    let act = w.key(key(KeyCode::Char('1')));
+    assert_eq!(act, WbAction::None);
+    let (_, _, _, expected) = w.pending_edit.as_ref().expect("digit 1 should stage an edit");
+    assert_eq!(
+        expected, &edited,
+        "the staged edit must be against the post-edit text, or the guard refuses the write"
+    );
+
+    // And `y`'s WriteTarget carries that same `expected`, which is what
+    // `write_target` compares the file against.
+    let WbAction::WriteTarget { expected, new_text, .. } = w.key(key(KeyCode::Char('y'))) else {
+        panic!("expected WriteTarget")
+    };
+    assert_eq!(expected, edited);
+    assert_eq!(expected, std::fs::read_to_string(d.path().join("t.tdy.sql")).unwrap());
+    assert!(tdy::target::Target::parse(&new_text).is_ok(), "{new_text}");
 }
 
 /// The confirm overlay is modal: once an edit is staged, arbitrary keys

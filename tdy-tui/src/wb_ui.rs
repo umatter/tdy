@@ -344,7 +344,11 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
             }
             lines.push(Line::raw("select a file on the left, or type `.help`"));
             lines.push(Line::raw(w.browser.root().display().to_string()));
-            lines.push(Line::raw("`tdy ui <target>` opens the classic review flow"));
+            // The classic screens are gone (slice 3 Task 7): a target on
+            // the command line opens this same workbench, already fitted —
+            // as a DRY RUN, because opening a review tool to look must not
+            // write. Say that, and say which key writes.
+            lines.push(Line::raw("`tdy ui <target>` opens it fitted — a dry run until you press f"));
             f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
         }
         Context::File { raw, spec, preview, stale, .. } => match spec {
