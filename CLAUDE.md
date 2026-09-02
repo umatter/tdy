@@ -231,8 +231,10 @@ or the UI stays busy forever and takes no keys but `q`.
 
 **The console is `src/console/`** (`parse` — pure grammar; `Session::run` — one line in, an
 `Outcome { echo, text, payload, ok }` out; `line` — the prompt's editor as a state machine;
-`repl` — the TTY loop and the piped batch runner). `tdy` with no subcommand opens it (or execs
-`tdy-tui` when that is on PATH and stdio is a terminal). Its `text` is the CLI's text because
+`repl` — the TTY loop and the piped batch runner). `tdy` with no subcommand opens it,
+unconditionally — the design's route-to-workbench default is deferred until the workbench IS
+the console plus panes (slice 3); today's tdy-tui without a target is an error, the wrong
+landing place. Its `text` is the CLI's text because
 `src/commands.rs` produces both — the CLI arms print what `commands::*_text` return, and
 `tests/console.rs` asserts the console's `.fit`/`.sniff`/`.draft`/query text equals the
 binary's. The query context is deliberately **not** kept across statements (a re-sniff between

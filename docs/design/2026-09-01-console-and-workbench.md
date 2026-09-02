@@ -132,7 +132,7 @@ Rules:
 
 | invocation | opens |
 |---|---|
-| `tdy` (stdin and stdout are TTYs) | the workbench if `tdy-tui` is on PATH; otherwise the plain console, with a one-line note the first time in a session: `terminal UI not installed: cargo install --path tdy-tui` |
+| `tdy` (stdin and stdout are TTYs) | the plain console. *(End state, deferred to slice 3: the workbench when `tdy-tui` is on PATH — deferred because until the workbench is rebuilt, tdy-tui is the target-centric TUI, which without a target is an error and the wrong landing place. Decided in use, 2026-09-02.)* |
 | `tdy` (stdin not a TTY) | the batch runner: read lines to EOF, print `text`, exit non-zero at the first error — `tdy < script.tdy` |
 | `tdy console` | the plain console, always |
 | `tdy ui [PATH]` / `tdy-tui [PATH]` | the workbench, always; with a file as the initial context, with a target also running `.fit` on it (today's behaviour) |
@@ -347,6 +347,10 @@ The rules that hold today, restated for the console:
   the dataset rather than as a directory.
 - **`tdy` alone opens the workbench when installed, the console otherwise.**
   The environment-dependent default is acceptable because it is announced once
-  and both forms are one word away (`tdy ui`, `tdy console`).
+  and both forms are one word away (`tdy ui`, `tdy console`). *Revised in use
+  (2026-09-02): until the workbench exists, `tdy` alone always opens the
+  console — routing it to today's target-centric TUI landed the user in an
+  error. The environment-dependent default returns with slice 3, when the
+  workbench is the console plus panes.*
 - **No readline crate.** A minimal line editor keeps the dependency tree small
   for the published crate; history recall is the feature that matters.

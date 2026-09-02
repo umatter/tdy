@@ -474,12 +474,12 @@ async fn run() -> Result<()> {
     let command = match cli.command {
         Some(c) => c,
         None => {
-            if tdy::console::repl::stdio_is_tty() && workbench_on_path() {
-                return exec_workbench(None);
-            }
-            if tdy::console::repl::stdio_is_tty() && !workbench_on_path() {
-                eprintln!("terminal UI not installed: cargo install --path tdy-tui");
-            }
+            // `tdy` alone opens the console. The design's end state routes a
+            // bare `tdy` to the workbench once the workbench IS the console
+            // plus panes (slice 2); today's tdy-tui is the target-centric
+            // review TUI, which without a target is an error — the wrong
+            // thing to land someone in. Until slice 2, the console is the
+            // front door and `tdy ui` reaches the TUI explicitly.
             Command::Console
         }
     };

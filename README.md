@@ -421,8 +421,8 @@ and a test holds them equal — so nothing you learn in one place is wrong in
 the other.
 
 Piped input makes it a batch runner: `tdy < setup.tdy` runs the lines and
-exits non-zero at the first error. `tdy console` forces the plain console;
-when the terminal UI is installed, `tdy` alone opens that instead.
+exits non-zero at the first error. `tdy console` is the same thing spelled
+out; the terminal UI stays behind its own door, `tdy ui`.
 
 ## Commands
 
@@ -1022,10 +1022,9 @@ cargo install --path .        # puts `tdy` on your PATH
 cargo install --path tdy-tui  # the terminal UI behind `tdy ui` (optional, separate binary)
 ```
 
-`tdy` with no arguments opens a console (batteries included, no second
-install); with `tdy-tui` also installed and a terminal attached, `tdy` alone
-opens that instead — see [The console](#the-console) and
-[For humans: `tdy ui`](#for-humans-tdy-ui).
+`tdy` with no arguments opens the console (batteries included, no second
+install); the terminal UI is reached explicitly with `tdy ui` — see
+[The console](#the-console) and [For humans: `tdy ui`](#for-humans-tdy-ui).
 
 ## Build & test
 
