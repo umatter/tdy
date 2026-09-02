@@ -317,6 +317,14 @@ The rules that hold today, restated for the console:
   cycling, `Esc` back-stepping and the two-step accept are unit tests with no
   terminal.
 
+*Slice 3 deleted `app.rs`, `ui.rs` and `tdy-tui/tests/render.rs` along with the
+classic target-only screens they tested, and carried the two properties above
+into the workbench under new names: `tdy-tui/tests/workbench.rs` is the pure
+state machine (`Key` in, `WbAction` out — focus cycling, `Esc`
+back-stepping, the two-step accept, the audit-trail property), and
+`tdy-tui/tests/wb_render.rs` is the `TestBackend` renderer, extended over
+`Context` as this section anticipated.*
+
 ## 11. Slices
 
 1. **Console.** `tdy::console` (`parse`, `Session`, `Outcome`), the plain
@@ -356,6 +364,28 @@ The rules that hold today, restated for the console:
    prove the edit took) survives into the workbench unchanged. Bare `tdy`
    now reaches the workbench directly (§5) — the scope change slice 2 filed
    is resolved, not carried further.*
+4. **Spec-completion and polish.**
+   *Done 2026-09-02. Five things closed out of what slices 1-3 left open:
+   low-confidence query pre-pass warnings, formerly printed directly by their
+   callers, now travel as `progress::Event::Note` through the same sink
+   `Consulting` uses, so the workbench status line narrates them instead of
+   being printed over and the CLI's `stderr_sink` keeps the old stderr text.
+   The §7 workbook gap — a member's raw view showing only sheet shapes — is
+   closed for the first sheet: `RawHead.grid` carries a bounded 20×12 grid in
+   the file's own header spelling and separators (extraction's own
+   `render_cell`, xlguard-bounded), shown as full cells in console text and 14-char-truncated
+   cells in the TUI; a tab per sheet remains future work. Selection and scroll
+   position, previously lost on every refit and every pane switch, now
+   survive: a refit keeps the member selected by path rather than by index,
+   Enter stages the marked remedy, a failed preview renders its error in the
+   pane instead of leaving the old one showing, and PgUp/PgDn scrolls Pile,
+   Member and Query visibly rather than only Evidence. `record_target` moved
+   off its own ad hoc splitting onto `tdy::console`'s real tokenizer, so a
+   quoted or flag-prefixed target argument parses the same way the console
+   parses it; edit notes only claim success when the write succeeded; and
+   status hints are per-context, every one ending `^Q quit`. Two duplicated
+   helpers, `quote_rel` and `method_label`, were unified into one copy each,
+   public in `tdy::console`.*
 
 ## 12. Decisions taken along the way
 

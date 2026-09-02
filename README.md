@@ -784,7 +784,9 @@ already fit: as a **dry run** (`.fit <target> --dry-run`), because looking
 must not write a lock or carry over an acceptance. `f` on the pile refits
 for real. Anywhere else — no target, several, a directory, or a plain data
 file — it opens the same workbench with nothing fit yet (a data file starts
-with `.show` of it). Every keyboard shortcut — `s` to sniff the selected
+with `.show` of it). A workbook member's raw view shows its first sheet as a
+grid, in the file's own header spelling and values, not just its shape.
+Every keyboard shortcut — `s` to sniff the selected
 file, `f` to fit a target, `d`/`D` to mark files and draft over the marks,
 `t` to edit the target, Enter on a directory, Backspace to go up — dispatches
 the equivalent console line and echoes it into the scrollback exactly as if
@@ -1058,7 +1060,7 @@ console explicitly — see [The console](#the-console) and
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests    # 541 tests; plain `cargo test` also runs doc-tests
+cargo test --workspace --lib --tests    # 565 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py                 # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

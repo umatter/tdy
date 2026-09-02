@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 541 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 565 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -234,12 +234,18 @@ dispatches carries `--propose`: the launch line (`.fit T --dry-run --propose`, i
 The "what tdy sees" panel is the **raw head**, read as bytes and shown as text
 (`console::raw_head`) — the file's own header spelling and unparsed values, which is what a
 `matches` clause needs — and it needs no sidecar, so a refused member (the one whose screen
-most needs it) gets it too. Known gap: for a **workbook** member `raw_head` returns sheet
-*shapes* only, no cells, so that panel cannot show a spreadsheet's own header spellings;
-`Problem.header` in the gap report still carries them, and that is what the remedy menu is
-built from. `tdy::progress` (owned `Sink`, so a fit can run on a spawned task) is what
-lets the status line narrate; a transient remark must use `Msg::Note`, never `Msg::Progress`,
-or the UI stays busy forever and takes no keys but `q`.
+most needs it) gets it too. For a **workbook** member, `raw_head` also carries `grid`, a
+bounded 20x12 read of the first sheet (xlguard-bounded, extraction's own `render_cell`), so that
+panel shows the spreadsheet's own header spellings and raw values, not just its shape; a tab
+per sheet is still future work, so a workbook with the fitting sheet elsewhere still falls
+back to `Problem.header`, which the remedy menu is built from regardless. `tdy::progress`
+(owned `Sink`, so a fit can run on a spawned task) is what lets the status line narrate; a
+transient remark must use `Msg::Note`, never `Msg::Progress`, or the UI stays busy forever and
+takes no keys but `q`. The same discipline now reaches query results too:
+`progress::Event::Note` carries a low-confidence spec warning from the query pre-pass through
+the sink instead of being printed by its caller directly, so the workbench's status line
+narrates it and the CLI's `stderr_sink` prints the same text it always did — one event type,
+one place either frontend has to handle it.
 
 **The workbench is `tdy-tui` — `browser.rs`, `workbench.rs`, `wb_ui.rs`.**
 `browser.rs` is a tree over `console::list_dir` (dirs first, companions folded, confined at the
