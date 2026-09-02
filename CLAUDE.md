@@ -214,60 +214,73 @@ operator's explicit act, never a default. `tests/mcp.rs` drives it as a subproce
 
 **The terminal UI is `tdy-tui`, a workspace member** (`tdy` stays the root package so the
 published crate keeps its small tree; **CI must say `--workspace`** or cargo builds and lints the
-root package alone). Everything that *decides* is in plain modules with plain tests —
-`app.rs` is a pure state machine (`Key` in, `Action` out, no terminal), `remedy.rs` edits the
-target **textually** and re-parses to prove the edit took effect (never re-serialises the AST,
-which would delete the human's comments). `ui.rs` renders and mutates nothing, so
-`tests/render.rs` asserts on real drawn text via `TestBackend`.
+root package alone). The workbench is now its *only* mode — the classic target-only review
+screens (`app.rs`, `ui.rs`, and their `tests/render.rs`) were deleted in slice 3 once
+Pile/Member/Evidence moved behind the workbench's own `Context`; nothing in the crate reaches
+them any more. `remedy.rs` survived that deletion unchanged: it edits the target **textually**
+and re-parses to prove the edit took effect (never re-serialises the AST, which would delete
+the human's comments), and the workbench's confirm overlay calls it exactly as the classic
+accept screen did. The parity tests that used to pin the classic screens' behaviour live on
+under the same names inside `tdy-tui/tests/workbench.rs` and `tdy-tui/tests/wb_render.rs`, now
+asserting on the workbench's `Context::Member`/`Context::Evidence` instead.
 Three rules are load-bearing: acceptance is reachable *only* from the evidence screen and only
-one member at a time (`a` elsewhere does nothing); every target write is preceded by a shown
-diff; and the remedy menu is ranked by `--propose` (which of the file's columns can actually
-produce the declared type) rather than listed in file order. The "what tdy sees" panel shows the
-file's **own** header spelling and **raw** values — that is what a `matches` clause needs — and
-falls back to a sniff when the member has no sidecar, which is exactly the refused member whose
+one member at a time (`a` elsewhere does nothing, and the gate is the console's own two-step
+`.accept` grammar, not a UI-only shortcut); every target write is preceded by a shown diff; and
+the remedy menu is ranked by `--propose` (which of the file's columns can actually produce the
+declared type) rather than listed in file order. The "what tdy sees" panel shows the file's
+**own** header spelling and **raw** values — that is what a `matches` clause needs — and falls
+back to a sniff when the member has no sidecar, which is exactly the refused member whose
 screen most needs it. `tdy::progress` (owned `Sink`, so a fit can run on a spawned task) is what
 lets the status line narrate; a transient remark must use `Msg::Note`, never `Msg::Progress`,
 or the UI stays busy forever and takes no keys but `q`.
 
-**The workbench is `tdy-tui`'s other door — `browser.rs`, `workbench.rs`, `wb_ui.rs`.**
+**The workbench is `tdy-tui` — `browser.rs`, `workbench.rs`, `wb_ui.rs`.**
 `browser.rs` is a tree over `console::list_dir` (dirs first, companions folded, confined at the
-root); `workbench.rs` is `app.rs`'s sibling for the new frame — pure, `Key` in, `WbAction` out,
-no I/O — and owns focus (`Tab` cycles console → browser → main), the main pane's `Context`
-(`Empty`, `File` with or without a sidecar, `Query`), and every keyboard shortcut; `wb_ui.rs`
-reads that state and changes nothing, the same discipline `ui.rs` already keeps for the classic
-screens. **One code path**: a browser shortcut (`s` → `.sniff <selected>`, Enter on a directory
-→ `.cd`, Backspace → `.cd ..`) never acts directly — it produces the identical
-`WbAction::Dispatch(line)` a typed line would, so the two cannot drift and the console
-scrollback is a complete, literal audit trail of the session. `tests/workbench.rs` pins this as
-an equality, not a description (`shortcut_and_typed_line_produce_identical_dispatches_after_cd`
-and its sibling). The browser's status column is its own compact glyph vocabulary (`✓ 0.95`,
-`✗ stale`, `no lock` / `locked` / `drift (N)`) — deliberately not `render_listing`'s long form
-(`sniffed 0.95 (heuristic)`, `stale`, …), which stays what `.ls` prints; a 26-column pane has no
-room for the long form, and the ruling this slice made is that the browser and `.ls` are allowed
-to say the same fact two different ways. **A single background task owns the `Session`**
+root); `workbench.rs` is the frame's pure state machine — `Key` in, `WbAction` out, no I/O —
+and owns focus (`Tab` cycles console → browser → main), the main pane's `Context`
+(`Empty`, `File` with or without a sidecar, `Query`, `Pile`, `Member`, `Evidence`), and every
+keyboard shortcut; `wb_ui.rs` reads that state and changes nothing, so `tests/wb_render.rs`
+asserts on real drawn text via `TestBackend`. **One code path**: a browser or main-pane
+shortcut (`s` → `.sniff <selected>`, `f` on a target → `.fit <it>`, `t` → `.edit` the target,
+`d`/`D` → mark/`.draft` the marked files, Enter on a directory → `.cd`, Backspace → `.cd ..`)
+never acts directly — it produces the identical `WbAction::Dispatch(line)` a typed line would,
+so the two cannot drift and the console scrollback is a complete, literal audit trail of the
+session. `tests/workbench.rs` pins this as an equality, not a description
+(`shortcut_and_typed_line_produce_identical_dispatches_after_cd` and its sibling). The
+browser's status column is its own compact glyph vocabulary (`✓ 0.95`, `✗ stale`, `no lock` /
+`locked` / `drift (N)`) — deliberately not `render_listing`'s long form (`sniffed 0.95
+(heuristic)`, `stale`, …), which stays what `.ls` prints; a 26-column pane has no room for the
+long form, and the ruling this slice made is that the browser and `.ls` are allowed to say the
+same fact two different ways. **A single background task owns the `Session`**
 (`spawn_console_worker` in `tdy-tui/src/main.rs`): the UI sends lines over an unbounded channel
 and the worker runs them one at a time, in arrival order — a plain queue standing in for the
 console's own one-statement-at-a-time serialization, so two shortcuts fired before the first
 finishes cannot run out of order or against two different `SessionContext`s. A `.tdy.sql`
-target — named, or the one discoverable file when none is named — still opens the classic
-Pile/Member/Evidence screens from before the workbench existed; anything else (no target and
-none or several discoverable, a directory, or a data file) opens the workbench instead, rooted
-at the directory or, for a data file, its directory, showing it. The classic screens stay behind
-a target argument until slice 3 moves them behind `Context` too.
+target — named, or the one discoverable file when none is named — opens the workbench rooted
+at the target's directory with an initial `.fit <name> --dry-run`: a review tool must not write
+on open, so the launch fit never touches the lock or carries over an acceptance, and `f`
+refits for real. Anything else (no target and none or several discoverable, a directory, or a
+data file) opens the plain workbench, rooted at the directory or, for a data file, its
+directory, showing it. `.abort` — Ctrl-C on an empty console prompt dispatches it — discards a
+buffered SQL statement, in the workbench exactly as in the plain console; a staged remedy diff
+is cancelled separately and locally, with Esc or `n` on the confirm overlay.
 
 **The console is `src/console/`** (`parse` — pure grammar; `Session::run` — one line in, an
 `Outcome { echo, text, payload, ok }` out; `line` — the prompt's editor as a state machine;
-`repl` — the TTY loop and the piped batch runner). `tdy` with no subcommand opens it,
-unconditionally, even now that the workbench exists: bare `tdy` stays the console (design doc
-§5, revised 2026-09-02) and `tdy ui`/`tdy-tui` are the workbench's own doors — routing a bare
-`tdy` there too is deferred again, to slice 3. Its `text` is the CLI's text because
-`src/commands.rs` produces both — the CLI arms print what `commands::*_text` return, and
-`tests/console.rs` asserts the console's `.fit`/`.sniff`/`.draft`/query text equals the
+`repl` — the TTY loop and the piped batch runner). `tdy` with no subcommand and both stdio ends
+a TTY now opens the workbench when `tdy-tui` is on `PATH` — the design's §5 end state, landed
+with slice 3 (2026-09-02): tdy-tui without a named target IS the workbench, so there is no
+longer a wrong place to land someone. Without `tdy-tui` installed it falls back to the console
+with a one-line stderr note; piped stdin always batches; `tdy console` still forces the plain
+console explicitly, and `tdy ui`/`tdy-tui` remain its other doors. Its `text` is the CLI's text
+because `src/commands.rs` produces both — the CLI arms print what `commands::*_text` return,
+and `tests/console.rs` asserts the console's `.fit`/`.sniff`/`.draft`/query text equals the
 binary's. The query context is deliberately **not** kept across statements (a re-sniff between
 two queries would serve a stale `MemTable`). `.accept` is two steps in the session itself
-(`pending_accept`), and any other command in between resets it. `evidence` now lives in the
-library (`src/evidence.rs`); `tdy-tui` re-exports it (`pub use tdy::evidence;` in
-`tdy-tui/src/lib.rs`) rather than keeping its own copy.
+(`pending_accept`), and any other command in between resets it — `.abort` included, since it is
+a command like any other, not a special case carved out for the review gate. `evidence` lives in the library
+(`src/evidence.rs`); `tdy-tui` no longer re-exports it — every caller inside `tdy-tui` reaches
+it as `tdy::evidence` directly.
 
 The console's raw-mode line editor (`src/console/line.rs`, `src/console/repl.rs`) needs
 `crossterm` for key events, so `crossterm` is a **direct** dependency of `tdy` itself — root

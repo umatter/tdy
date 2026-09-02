@@ -133,10 +133,10 @@ Rules:
 
 | invocation | opens |
 |---|---|
-| `tdy` (stdin and stdout are TTYs) | the plain console. *(End state, deferred to slice 3: the workbench when `tdy-tui` is on PATH — deferred because until the workbench is rebuilt, tdy-tui is the target-centric TUI, which without a target is an error and the wrong landing place. Decided in use, 2026-09-02.)* |
+| `tdy` (stdin and stdout are TTYs) | the workbench, when `tdy-tui` is on PATH; the plain console with a one-line stderr note (`terminal UI not installed: cargo install --path tdy-tui`) otherwise. *Landed with slice 3 (2026-09-02): now that tdy-tui without a target IS the workbench (Pile/Member/Evidence panes over the console's own session, not the old target-only review screen), routing a bare `tdy` there no longer risks landing someone in an error.* |
 | `tdy` (stdin not a TTY) | the batch runner: read lines to EOF, print `text`, exit non-zero at the first error — `tdy < script.tdy` |
 | `tdy console` | the plain console, always |
-| `tdy ui [PATH]` / `tdy-tui [PATH]` | a named `.tdy.sql` target — or exactly one discoverable in the working directory — opens the classic review flow (today's behaviour). A directory, no target, or several targets opens the workbench rooted there; a data file opens the workbench in its directory with an initial `.show` of it. *Classic-behind-a-target holds until slice 3 migrates those views into the workbench's main pane.* |
+| `tdy ui [PATH]` / `tdy-tui [PATH]` | a named `.tdy.sql` target — or exactly one discoverable in the working directory — opens the workbench rooted at the target's directory with an initial `.fit <name> --dry-run` (looking must not write; `f` refits for real). A directory, no target, or several targets opens the plain workbench rooted there; a data file opens the workbench in its directory with an initial `.show` of it. |
 | `tdy <subcommand> …` | unchanged |
 
 The plain console: `tdy>` prompt, `   ->` for continuation lines, in-memory
@@ -338,6 +338,24 @@ The rules that hold today, restated for the console:
 3. **Views.** Pile, Member, Evidence and Query move behind `Context`; the
    remedy overlay; the two-step accept; the old screens deleted. The mark on
    the Empty and help views.
+   *Done 2026-09-02. Pile/Member/Evidence render over the same `PileReport`/
+   `Problem` types the CLI and MCP surface produce; `t` edits the target,
+   `d`/`D` mark files and draft over the marks. Every write goes through the
+   remedy overlay's shown diff, then a dispatched refit — the one sanctioned
+   write path. Acceptance is two console lines (`.accept` step one names the
+   member and step two confirms it), so the gate is the session's own
+   grammar rather than a UI-only shortcut, and it stays reachable only from
+   the evidence screen, one member at a time. `.abort` discards a buffered
+   SQL statement — Ctrl-C on an empty console prompt dispatches it — in the
+   workbench exactly as in the plain console; it is a grammar addition
+   beyond this document's original §3, folded into that section's table
+   above rather than kept as a separate note. A staged remedy diff is
+   cancelled separately, locally, with Esc or `n` on the confirm overlay:
+   `.abort` is about the console line, not the overlay. `app.rs`/`ui.rs`, the classic target-only screens,
+   are deleted; `remedy.rs` (editing the target's text and re-parsing to
+   prove the edit took) survives into the workbench unchanged. Bare `tdy`
+   now reaches the workbench directly (§5) — the scope change slice 2 filed
+   is resolved, not carried further.*
 
 ## 12. Decisions taken along the way
 
@@ -357,9 +375,10 @@ The rules that hold today, restated for the console:
 - **`tdy` alone opens the workbench when installed, the console otherwise.**
   The environment-dependent default is acceptable because it is announced once
   and both forms are one word away (`tdy ui`, `tdy console`). *Revised in use
-  (2026-09-02): until the workbench exists, `tdy` alone always opens the
-  console — routing it to today's target-centric TUI landed the user in an
-  error. The environment-dependent default returns with slice 3, when the
-  workbench is the console plus panes.*
+  (2026-09-02, slice 2): until the workbench existed, `tdy` alone always
+  opened the console — routing it to the then-current target-centric TUI
+  landed the user in an error. Restored in slice 3 (2026-09-02), now that the
+  workbench is the console plus panes and a bare `tdy` without a target lands
+  on `Context::Empty`, not an error.*
 - **No readline crate.** A minimal line editor keeps the dependency tree small
   for the published crate; history recall is the feature that matters.

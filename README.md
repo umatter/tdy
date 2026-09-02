@@ -270,11 +270,12 @@ each one was read is on disk, in git-diffable text, beside the data:
 bytes) and one `*.tdy.toml` per member.
 
 **3. Look around.** `tdy ui sales.tdy.sql` opens the same pile in the
-terminal UI, with each refusal next to the file's own rows (so does `tdy ui`
-alone, here — `sales.tdy.sql` is the only target in the directory). Point it
-at a directory with no target, or several, and you get the workbench
-instead — three panes over the files themselves, described in
-[For humans: `tdy ui`](#for-humans-tdy-ui). To point tdy at your own files, start
+workbench, fitted as a dry run, with each refusal next to the file's own
+rows (so does `tdy ui` alone, here — `sales.tdy.sql` is the only target in
+the directory). Point it at a directory with no target, or several, and you
+get the same workbench with nothing fitted yet — three panes over the files
+themselves, described in [For humans: `tdy ui`](#for-humans-tdy-ui). To
+point tdy at your own files, start
 with `tdy sniff <file>` or the console's `.sniff <file>`; for a model to
 help with the hard cases, see [Two-tier inference](#two-tier-inference) and
 `tdy config init`. (The repo keeps the same declaration as
@@ -424,8 +425,10 @@ and a test holds them equal — so nothing you learn in one place is wrong in
 the other.
 
 Piped input makes it a batch runner: `tdy < setup.tdy` runs the lines and
-exits non-zero at the first error. `tdy console` is the same thing spelled
-out; the terminal UI stays behind its own door, `tdy ui`.
+exits non-zero at the first error. On a real terminal, bare `tdy` opens the
+workbench instead when the terminal UI is installed (`tdy console` always
+forces this plain console, even then); without `tdy-tui` on `PATH` it prints
+a one-line note and falls back to the console shown above.
 
 ## Commands
 
@@ -766,41 +769,47 @@ Int64-plus-Utf8-becomes-Utf8 widening an ordinary `UNION ALL` would do.
 
 ```bash
 tdy ui                       # or `tdy-tui` — the workbench, rooted here
-tdy ui sales.tdy.sql         # or `tdy-tui sales.tdy.sql` — the classic screens below
+tdy ui sales.tdy.sql         # or `tdy-tui sales.tdy.sql` — the workbench, fitted
 ```
 
-Point `tdy ui` at a `.tdy.sql` target — or leave it bare in a directory
-holding exactly one — and it opens the classic pile-review screens described
-below, unchanged from before the workbench existed. Anywhere else — no
-target, several, a directory, or a plain data file — it opens the workbench
-instead: three panes over the directory (or, for a data file, its directory,
-already showing that file). A file browser on the left lists everything tdy
-can read plus any targets, each with a one-glance status (`✓ 0.95` sniffed,
-`✗ stale`, and for a target `no lock` / `locked` / `drift (N)`); a main pane
-on the right shows whatever you're looking at — a file's raw head, or, once
-it's sniffed, that head beside what tdy made of it and why; and underneath
-both, the same console as `tdy console` — a `tdy>` prompt taking
-dot-commands (`.sniff`, `.fit`, `.cd`, …) and SQL. Every keyboard shortcut in
-the browser or main pane — `s` to sniff the selected file, Enter on a
-directory, Backspace to go up — dispatches the equivalent console line and
-echoes it into the scrollback exactly as if you had typed it, so the
-transcript at the bottom is a complete, literal record of the session rather
-than a UI you have to trust separately from it. `tdy console` forces the
+There is one mode. `tdy ui` opens the workbench: a file browser on the left
+listing everything tdy can read plus any targets, each with a one-glance
+status (`✓ 0.95` sniffed, `✗ stale`, and for a target `no lock` / `locked` /
+`drift (N)`); a main pane on the right showing whatever you're looking at;
+and underneath both, the same console as `tdy console` — a `tdy>` prompt
+taking dot-commands (`.sniff`, `.fit`, `.cd`, …) and SQL. Point it at a
+`.tdy.sql` target — named on the command line, or the one target found in a
+bare `tdy ui`'s directory — and it opens rooted there with the target
+already fit: as a **dry run** (`.fit <target> --dry-run`), because looking
+must not write a lock or carry over an acceptance. `f` on the pile refits
+for real. Anywhere else — no target, several, a directory, or a plain data
+file — it opens the same workbench with nothing fit yet (a data file starts
+with `.show` of it). Every keyboard shortcut — `s` to sniff the selected
+file, `f` to fit a target, `d`/`D` to mark files and draft over the marks,
+`t` to edit the target, Enter on a directory, Backspace to go up — dispatches
+the equivalent console line and echoes it into the scrollback exactly as if
+you had typed it, so the transcript at the bottom is a complete, literal
+record of the session rather than a UI you have to trust separately from it.
+`?` shows the key list for whichever pane has focus. `tdy console` forces the
 plain console even when the terminal UI is installed.
 
-The review loop on one screen: the pile with each member's status and the
-*reason* beside it, a member view putting the gap next to the file's own rows
-(in the file's own spelling, which is what a `matches` clause needs), remedies
-as numbered one-key edits that show you the diff of your declaration before
-writing it, and a query scratchpad.
+A member view puts the gap next to the file's own rows, in the file's own
+spelling — what a `matches` clause needs — with remedies as numbered one-key
+edits. Picking one shows the diff of your declaration *before* writing it;
+confirming is the one sanctioned write, followed by a dispatched refit. Esc
+or `n` cancels that staged diff without writing anything; `.abort` (or
+Ctrl-C on an empty console prompt) discards a buffered SQL statement, in
+the workbench and the plain console alike.
 
-The screen that matters is the accept screen. A member behind the review gate
-is opened from its own inspection view, and `a` there does not accept — it
-*reads the file* and shows you the consequence: the raw values beside what
-they become, and the largest and smallest results over every row, because a
-`decimal_shift` applied the wrong way is invisible in the head of a file and
-obvious at its ends. Only a second `a`, on that screen, accepts — one member
-at a time. There is no accept-all anywhere.
+The screen that matters is the accept screen, and it walks the same two-step
+gate as the console's own `.accept`. A member behind the review gate is
+opened from its own inspection view, and `a` there does not accept — it
+dispatches `.accept <target> <member>`, which *reads the file* and shows you
+the consequence: the raw values beside what they become, and the largest and
+smallest results over every row, because a `decimal_shift` applied the wrong
+way is invisible in the head of a file and obvious at its ends. Only a second
+`a`, which re-dispatches that same line, accepts — one member at a time.
+There is no accept-all anywhere.
 
 It is a view over the same artifacts, never a parallel store: a TUI session
 leaves behind exactly the sidecars, target and lock a CLI session would, so
@@ -1040,8 +1049,10 @@ cargo install --path tdy-tui  # the terminal UI behind `tdy ui` (optional, separ
 ```
 
 `tdy` with no arguments opens the console (batteries included, no second
-install); the terminal UI is reached explicitly with `tdy ui` — see
-[The console](#the-console) and [For humans: `tdy ui`](#for-humans-tdy-ui).
+install) on a real terminal without `tdy-tui`; with it installed, bare `tdy`
+opens the workbench instead, and `tdy console` still reaches the plain
+console explicitly — see [The console](#the-console) and
+[For humans: `tdy ui`](#for-humans-tdy-ui).
 
 ## Build & test
 

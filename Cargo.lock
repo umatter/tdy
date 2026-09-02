@@ -3771,7 +3771,6 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
- "datafusion",
  "ratatui",
  "serde_json",
  "tdy",

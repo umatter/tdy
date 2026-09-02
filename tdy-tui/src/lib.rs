@@ -7,7 +7,6 @@
 //! through a screen is a TUI nobody can check.
 
 pub use tdy::target::TargetColumn;
-pub use tdy::evidence;
 
 pub mod browser;
 pub mod mark;

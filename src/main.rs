@@ -480,12 +480,22 @@ async fn run() -> Result<()> {
     let command = match cli.command {
         Some(c) => c,
         None => {
-            // `tdy` alone opens the console. The design's end state routes a
-            // bare `tdy` to the workbench once the workbench IS the console
-            // plus panes (slice 2); today's tdy-tui is the target-centric
-            // review TUI, which without a target is an error — the wrong
-            // thing to land someone in. Until slice 2, the console is the
-            // front door and `tdy ui` reaches the TUI explicitly.
+            // `tdy` alone is the console's front door, and — now that
+            // tdy-tui without a named target IS the workbench (Pile/Member/
+            // Evidence panes over the console's own session, not a
+            // target-only review screen) — the workbench is what a bare
+            // `tdy` opens on a real terminal when it is installed. A TTY
+            // without `tdy-tui` on PATH falls back to the plain console
+            // with a note; piped stdin (no TTY at all) always batches, and
+            // `Command::Console` handles that split on its own, so route
+            // straight there. `tdy console` still forces the plain console
+            // even when the workbench is available.
+            if tdy::console::repl::stdio_is_tty() {
+                if workbench_on_path() {
+                    exec_workbench(None)?;
+                }
+                eprintln!("terminal UI not installed: cargo install --path tdy-tui");
+            }
             Command::Console
         }
     };

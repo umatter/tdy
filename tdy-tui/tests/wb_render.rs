@@ -290,6 +290,41 @@ fn the_pile_context_lists_members_with_status_words() {
     assert!(row0.contains('▸'), "{row0}");
 }
 
+/// A dry-run fit (the launch-time review, and `f`'s explicit `--dry-run`)
+/// must say so in the pile header — `dry run` is the difference between
+/// "this is what would happen" and "this is what happened", and the
+/// workbench must never blur the two.
+#[test]
+fn a_dry_run_pile_report_marks_the_header() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload};
+    w.begin(".fit sales.tdy.sql --dry-run");
+    let members = vec![member("2025-01.csv", MemberStatus::Fits)];
+    let report = PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: members.len(),
+        failed: 0,
+        needs_review: 0,
+        members,
+        lock_written: None,
+        dry_run: true,
+    };
+    w.apply(
+        Outcome {
+            echo: ".fit sales.tdy.sql --dry-run".into(),
+            text: String::new(),
+            ok: true,
+            payload: Payload::Fitted(report),
+        },
+        d.path(),
+    );
+    let text = screen(&mut w, 110, 30).join("\n");
+    assert!(text.contains("· dry run"), "{text}");
+}
+
 #[test]
 fn a_short_pane_never_zeroes_the_spec_summary_for_the_preview_strip() {
     let d = pile();
