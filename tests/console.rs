@@ -208,6 +208,24 @@ async fn validate_and_show() {
     let Payload::Shown { raw, .. } = o.payload else { panic!() };
     assert_eq!(raw.sheets.len(), 1);
     assert_eq!(raw.sheets[0].0, "Umsatz");
+
+    // Overwriting the file after it was sniffed leaves its sidecar's
+    // fingerprint stale; `.show` must say so — a different line, and a
+    // different `stale` flag on the payload — not the plain "no sidecar"
+    // text a never-sniffed file gets.
+    let mut content = std::fs::read_to_string(d.path().join("2025-01.csv")).unwrap();
+    content.push_str("2025-13;Ost;999
+");
+    std::fs::write(d.path().join("2025-01.csv"), content).unwrap();
+    let o = s.run(".show 2025-01.csv", None).await;
+    let Payload::Shown { spec, stale, .. } = o.payload else { panic!() };
+    assert!(spec.is_none(), "a stale sidecar is not a fresh spec to show");
+    assert!(stale, "a changed file must be reported stale, not just no-sidecar");
+    assert!(
+        o.text.contains("sidecar stale") && o.text.contains("--force"),
+        "{}",
+        o.text
+    );
 }
 
 #[tokio::test]

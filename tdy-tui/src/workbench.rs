@@ -399,14 +399,14 @@ impl Workbench {
             self.scrollback.push(Cell { echo, text, ok });
         }
         match payload {
-            Payload::Shown { path, raw, spec } => {
-                // `.show` names no staleness of its own (see `show_file`'s
-                // caller-supplied `stale` — this path has nothing to supply
-                // yet): a spec present here is fresh by construction
-                // (`Command::Show` only ever fills it from
-                // `SidecarStatus::Fresh`), so `false` is exactly right and
-                // not merely a placeholder.
-                self.show_file(path, raw, spec, None, false);
+            Payload::Shown { path, raw, spec, stale } => {
+                // `.show` now names its own staleness (`Command::Show`
+                // distinguishes `Fresh`/`Stale`/`Absent` and carries the
+                // flag through `Payload::Shown`) — passed straight through,
+                // so a typed `.show` on a stale file gets the same
+                // `.sniff --force` footer an arrow-key preview would give
+                // it, not the generic "not sniffed" hint.
+                self.show_file(path, raw, spec, None, stale);
                 None
             }
             Payload::Sniffed { path, spec, preview, .. } => {

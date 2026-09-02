@@ -164,7 +164,7 @@ fn apply_updates_scrollback_and_context() {
     w.begin(".show a.csv");
     let raw = RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] };
     let follow = w.apply(outcome(".show a.csv", "a.csv:\n  A;B\n", Payload::Shown {
-        path: d.path().join("a.csv"), raw, spec: None,
+        path: d.path().join("a.csv"), raw, spec: None, stale: false,
     }), d.path());
     assert!(follow.is_none());
     assert!(w.busy.is_none());
@@ -423,7 +423,7 @@ fn main_scroll_resets_on_a_new_file_and_survives_a_same_path_update() {
     let mut w = wb(&d);
     let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] };
     w.begin(".show a.csv");
-    w.apply(outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw: raw(), spec: None }), d.path());
+    w.apply(outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw: raw(), spec: None, stale: false }), d.path());
 
     // Scroll the raw view down.
     w.key(key(KeyCode::Tab));
@@ -434,7 +434,7 @@ fn main_scroll_resets_on_a_new_file_and_survives_a_same_path_update() {
 
     // A different file: back to the top.
     w.begin(".show b.csv");
-    w.apply(outcome(".show b.csv", "", Payload::Shown { path: d.path().join("b.csv"), raw: raw(), spec: None }), d.path());
+    w.apply(outcome(".show b.csv", "", Payload::Shown { path: d.path().join("b.csv"), raw: raw(), spec: None, stale: false }), d.path());
     assert_eq!(w.main_scroll, 0);
 
     // The same file again (the preview's raw fill-in): the scroll stands.
@@ -816,7 +816,7 @@ fn main_scroll_is_clamped_to_a_generous_bound() {
     let raw = RawHead { lines: vec!["a".into(), "b".into(), "c".into()], truncated: false, sheets: vec![] };
     w.begin(".show a.csv");
     w.apply(
-        outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw, spec: None }),
+        outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw, spec: None, stale: false }),
         d.path(),
     );
     w.key(key(KeyCode::Tab)); // Browser
@@ -840,7 +840,7 @@ fn set_preview_drops_a_stale_generation_before_the_path_check() {
         outcome(
             ".show a.csv",
             "",
-            Payload::Shown { path: d.path().join("a.csv"), raw: RawHead::default(), spec: None },
+            Payload::Shown { path: d.path().join("a.csv"), raw: RawHead::default(), spec: None, stale: false },
         ),
         d.path(),
     );

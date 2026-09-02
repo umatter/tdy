@@ -47,7 +47,7 @@ pub enum Payload {
     Continue,
     Quit,
     Listing(Vec<Entry>),
-    Shown { path: PathBuf, raw: RawHead, spec: Option<SpecSummary> },
+    Shown { path: PathBuf, raw: RawHead, spec: Option<SpecSummary>, stale: bool },
     // constructed from Task 6 (.sniff)
     Sniffed { path: PathBuf, spec: SpecSummary, preview: Table, kept_existing: bool },
     // constructed from Task 7 (.draft)
@@ -511,14 +511,23 @@ impl Session {
             Command::Show { file } => {
                 let path = self.resolve(&file)?;
                 let raw = raw_head(&path, self.cfg.limits)?;
-                let spec = match crate::sidecar::load(&path)? {
-                    crate::sidecar::SidecarStatus::Fresh(sc) => {
-                        Some(spec_summary(&sc.spec, &method_label(&sc.provenance.method), sc.spec.confidence))
-                    }
-                    _ => None,
+                // `sidecar::load` already tells `Fresh`/`Stale`/`Absent` apart
+                // — carrying that through (rather than folding `Stale` into
+                // the same `None` a never-sniffed file gets) is what lets the
+                // workbench's `Context::File.stale` footer, and this
+                // command's own text below, name the fix that actually
+                // applies instead of a generic "not sniffed" that would just
+                // report the same staleness back.
+                let (spec, stale) = match crate::sidecar::load(&path)? {
+                    crate::sidecar::SidecarStatus::Fresh(sc) => (
+                        Some(spec_summary(&sc.spec, &method_label(&sc.provenance.method), sc.spec.confidence)),
+                        false,
+                    ),
+                    crate::sidecar::SidecarStatus::Stale(_) => (None, true),
+                    crate::sidecar::SidecarStatus::Absent => (None, false),
                 };
-                let text = render_shown(&file, &raw, spec.as_ref());
-                Outcome::ok(text, Payload::Shown { path, raw, spec })
+                let text = render_shown(&file, &raw, spec.as_ref(), stale);
+                Outcome::ok(text, Payload::Shown { path, raw, spec, stale })
             }
             Command::Draft { files, to } => {
                 let paths = self.expand(&files)?;
@@ -1002,7 +1011,7 @@ pub fn raw_head(path: &Path, limits: crate::config::Limits) -> Result<RawHead> {
 
 /// The `.show` text: the raw head (or sheet shapes), then the sidecar
 /// summary if one exists.
-fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>) -> String {
+fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>, stale: bool) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "{name}:");
     if raw.sheets.is_empty() {
@@ -1018,6 +1027,9 @@ fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>) -> String
         }
     }
     match spec {
+        None if stale => {
+            let _ = writeln!(s, "\nsidecar stale — `.sniff {name} --force` to re-infer");
+        }
         None => {
             let _ = writeln!(s, "\nno sidecar — `.sniff {name}` to infer one");
         }

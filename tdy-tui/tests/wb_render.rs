@@ -141,6 +141,7 @@ fn a_file_without_a_sidecar_shows_raw_only_and_no_opinion() {
             path: d.path().join("a.csv"),
             raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: true, sheets: vec![] },
             spec: None,
+            stale: false,
         },
     }, d.path());
     let text = screen(&mut w, 100, 30).join("\n");
@@ -496,7 +497,7 @@ fn a_stale_sidecar_shows_the_force_hint_instead_of_not_sniffed() {
             echo: ".show a.csv".into(),
             text: String::new(),
             ok: true,
-            payload: Payload::Shown { path: d.path().join("a.csv"), raw: raw(), spec: None },
+            payload: Payload::Shown { path: d.path().join("a.csv"), raw: raw(), spec: None, stale: false },
         },
         d.path(),
     );
@@ -505,6 +506,37 @@ fn a_stale_sidecar_shows_the_force_hint_instead_of_not_sniffed() {
     // arrow key fired one in this test, so `preview_gen` is still 0.
     w.set_preview(0, d.path().join("a.csv"), raw(), None, true);
 
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("sidecar stale"), "{text}");
+    assert!(text.contains(".sniff --force"), "{text}");
+    assert!(!text.contains("not sniffed"), "{text}");
+}
+
+/// A typed `.show` on a file with a stale sidecar must show the same
+/// `.sniff --force` footer an arrow-key preview would — `Payload::Shown`
+/// now carries its own `stale` flag (`Command::Show` tells `Fresh`/`Stale`/
+/// `Absent` apart), so `apply`'s Shown arm needs no help from a later
+/// `set_preview` call to get this right.
+#[test]
+fn a_typed_show_on_a_stale_sidecar_shows_the_force_hint_too() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload, RawHead};
+    w.begin(".show a.csv");
+    w.apply(
+        Outcome {
+            echo: ".show a.csv".into(),
+            text: String::new(),
+            ok: true,
+            payload: Payload::Shown {
+                path: d.path().join("a.csv"),
+                raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] },
+                spec: None,
+                stale: true,
+            },
+        },
+        d.path(),
+    );
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("sidecar stale"), "{text}");
     assert!(text.contains(".sniff --force"), "{text}");
@@ -528,6 +560,7 @@ fn a_file_with_no_sidecar_at_all_still_shows_the_plain_footer() {
                 path: d.path().join("a.csv"),
                 raw: RawHead { lines: vec!["A;B".into()], truncated: false, sheets: vec![] },
                 spec: None,
+                stale: false,
             },
         },
         d.path(),
