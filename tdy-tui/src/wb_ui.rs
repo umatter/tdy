@@ -57,7 +57,9 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("↑ / ↓ (member)", "pick a remedy"),
     ("e (member)", "edit the file"),
     ("1-9 (member)", "apply a remedy"),
+    ("a (member / evidence)", "accept — show evidence, then accept"),
     ("Esc (member)", "back to the pile"),
+    ("Esc (evidence)", "close (f re-opens the pile)"),
     ("y / Esc (confirm)", "write the edit / cancel"),
     ("?", "show this help"),
 ];
@@ -300,6 +302,7 @@ fn context_title(ctx: &Context) -> String {
             .get(*member)
             .map(|m| m.path.clone())
             .unwrap_or_else(|| "member".to_string()),
+        Context::Evidence { member, .. } => format!("accept {member} ?"),
     }
 }
 
@@ -351,7 +354,62 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
                 }
             }
         }
+        Context::Evidence { rows, .. } => draw_evidence(f, area, block, rows),
     }
+}
+
+/// The Evidence view: `.accept`'s step one, rendered — every judgement in
+/// `rows` shows its `headline()`, and this is what restores the classic
+/// accept screen's load-bearing property (see `evidence::for_spec`'s own
+/// doc comment): a `Shift` shows the raw text beside what it parses to, plus
+/// the smallest/largest over the *whole* file, because a shift applied the
+/// wrong way is invisible in the head of a file and obvious at the ends.
+/// Never just the first judgement — accepting the rest unseen is exactly
+/// what this screen exists to prevent.
+fn draw_evidence(f: &mut Frame, area: Rect, block: Block<'static>, rows: &[tdy::evidence::Evidence]) {
+    use tdy::evidence::Evidence;
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let [content, footer] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for e in rows {
+        lines.push(Line::styled(e.headline(), Style::new().add_modifier(Modifier::BOLD)));
+        match e {
+            Evidence::Shift { head, smallest, largest, .. } => {
+                for p in head.iter().take(5) {
+                    lines.push(Line::raw(format!("row {:>5}  {:>14} -> {}", p.row, p.raw, p.parsed)));
+                }
+                if let Some(p) = smallest {
+                    lines.push(Line::raw(format!(
+                        "smallest  row {:>5}  {:>14} -> {}",
+                        p.row, p.raw, p.parsed
+                    )));
+                }
+                if let Some(p) = largest {
+                    lines.push(Line::raw(format!(
+                        "largest   row {:>5}  {:>14} -> {}",
+                        p.row, p.raw, p.parsed
+                    )));
+                }
+            }
+            Evidence::Frame { header, head, .. } => {
+                lines.push(Line::raw(header.join(" | ")));
+                for r in head.iter().take(5) {
+                    lines.push(Line::raw(r.join(" | ")));
+                }
+            }
+            Evidence::Constant { .. } | Evidence::Unillustrated { .. } => {}
+        }
+        lines.push(Line::raw(""));
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), content);
+    f.render_widget(
+        Paragraph::new(Line::styled("a accepts · Esc closes", Style::new().fg(DIM))),
+        footer,
+    );
 }
 
 /// The Member view: the gap beside the file's own rows. Left column is the

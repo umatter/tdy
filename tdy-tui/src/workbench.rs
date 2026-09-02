@@ -14,6 +14,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use tdy::console::line::{Edit as LineEdit, LineEditor};
 use tdy::console::{EntryKind, Outcome, Payload, RawHead, SpecSummary, Table};
+use tdy::evidence::Evidence;
 use tdy::report::{MemberReport, PileReport};
 
 use crate::browser::Browser;
@@ -49,6 +50,15 @@ pub enum Context {
         /// Which remedy is highlighted in the ranked remedy menu.
         remedy_selected: usize,
     },
+    /// `.accept`'s step one: what accepting this member's judgement(s) would
+    /// actually do — never anything written yet. `line` is the exact
+    /// `.accept TARGET MEMBER` line that produced this, echoed back
+    /// verbatim by `a` here so the *session's* `pending_accept` (not this
+    /// module — see the module doc) can recognise step two as the same
+    /// line repeated. Arriving here necessarily replaces whatever `Member`
+    /// context sent the `a` that produced it — see `key_evidence` and
+    /// `Esc`'s handling below for the consequence.
+    Evidence { target: PathBuf, member: String, rows: Vec<Evidence>, line: String },
 }
 
 /// One scrollback cell: the echoed line, then its text.
@@ -217,6 +227,20 @@ impl Workbench {
                             self.leave_member();
                             return WbAction::None;
                         }
+                        Context::Evidence { .. } => {
+                            // The Member context this evidence replaced is
+                            // gone (Evidence cannot carry a `PileReport`
+                            // alongside it without cloning one, which the
+                            // design deliberately avoids everywhere else —
+                            // see `enter_pile_member`/`leave_member`), so
+                            // there is no report to hand back here. Empty,
+                            // plus a note pointing at `f`, which still works
+                            // (`last_target` survives) to bring the pile back.
+                            self.context = Context::Empty;
+                            self.status =
+                                "evidence closed — press f to re-open the pile".to_string();
+                            return WbAction::None;
+                        }
                         _ => {}
                     }
                 }
@@ -314,6 +338,10 @@ impl Workbench {
         self.browser.sync_dir(cwd);
         self.sql_pending = matches!(&o.payload, Payload::Continue);
         let Outcome { echo, text, payload, ok } = o;
+        // `Payload::Evidence` wants the exact line that produced it (see
+        // `Context::Evidence`'s doc) — captured here, before the scrollback
+        // push below moves `echo` into a `Cell`.
+        let line = echo.clone();
         // A buffered SQL line still echoes; only skip a cell that is
         // entirely empty.
         if !(echo.is_empty() && text.is_empty()) {
@@ -350,6 +378,10 @@ impl Workbench {
                     Some(target) => self.context = Context::Pile { target, report: r, selected: 0 },
                     None => self.status = "fitted, but no target known".to_string(),
                 }
+                None
+            }
+            Payload::Evidence { target, member, rows } => {
+                self.context = Context::Evidence { target, member, rows, line };
                 None
             }
             Payload::Edit(p) => Some(WbAction::Edit(p)),
@@ -584,6 +616,9 @@ impl Workbench {
         if matches!(&self.context, Context::Member { .. }) {
             return self.key_member(k);
         }
+        if matches!(&self.context, Context::Evidence { .. }) {
+            return self.key_evidence(k);
+        }
         match k.code {
             KeyCode::Up => {
                 self.main_scroll = self.main_scroll.saturating_sub(1);
@@ -634,7 +669,8 @@ impl Workbench {
     /// Keys over a Member context (Main focus): Up/Down pick a remedy,
     /// clamped to the current menu; `e` edits the file itself; `1`-`9` stage
     /// the corresponding remedy from `member_remedies()` for confirmation
-    /// (see `apply_remedy`). `a` lands in a later task.
+    /// (see `apply_remedy`); `a` dispatches `.accept` step one (see
+    /// `accept_member`).
     fn key_member(&mut self, k: KeyEvent) -> WbAction {
         match k.code {
             KeyCode::Up => {
@@ -647,6 +683,46 @@ impl Workbench {
             }
             KeyCode::Char('e') => self.edit_member(),
             KeyCode::Char(c @ '1'..='9') => self.apply_remedy((c as u8 - b'1') as usize),
+            KeyCode::Char('a') => self.accept_member(),
+            _ => WbAction::None,
+        }
+    }
+
+    /// `a` over a Member with a live judgement waiting on review (`review:
+    /// Some(_)` and not yet `accepted`) dispatches `.accept TARGET MEMBER` —
+    /// the console's own step one, which returns evidence and remembers the
+    /// line (see the session's `pending_accept`); any other member (fits, a
+    /// gap, or already accepted) has nothing to accept, so the key is
+    /// swallowed with a status note rather than dispatching a line the
+    /// console would itself reject with "nothing to accept".
+    fn accept_member(&mut self) -> WbAction {
+        let (target_rel, member_rel, reviewable) = match &self.context {
+            Context::Member { target, report, member, .. } => match report.members.get(*member) {
+                Some(m) => (self.rel_spelling(target), m.path.clone(), m.review.is_some() && !m.accepted),
+                None => return WbAction::None,
+            },
+            _ => return WbAction::None,
+        };
+        if reviewable {
+            WbAction::Dispatch(format!(".accept {} {}", quote_rel(&target_rel), quote_rel(&member_rel)))
+        } else {
+            self.status = "nothing to accept for this member".to_string();
+            WbAction::None
+        }
+    }
+
+    /// Keys over an Evidence context (Main focus): `a` re-dispatches the
+    /// exact `.accept` line that produced this evidence, verbatim — the
+    /// session recognises the repeat as step two (see the module doc on
+    /// `Context::Evidence`). Nothing else acts here; `Esc` is handled
+    /// earlier in `key()`, ahead of the focus dispatch, because it needs to
+    /// leave `Focus::Main` in place the same way Pile/Member's `Esc` does.
+    fn key_evidence(&mut self, k: KeyEvent) -> WbAction {
+        match k.code {
+            KeyCode::Char('a') => match &self.context {
+                Context::Evidence { line, .. } => WbAction::Dispatch(line.clone()),
+                _ => WbAction::None,
+            },
             _ => WbAction::None,
         }
     }

@@ -405,3 +405,56 @@ fn the_confirm_overlay_shows_the_diff() {
     assert!(text.contains("y writes the target"), "{text}");
     assert!(text.contains("Esc cancels"), "{text}");
 }
+
+/// The Evidence view: this restores the classic accept screen's load-bearing
+/// property — raw beside parsed, and the extremes over the whole file, not
+/// just the head — plus every judgement's own headline, even the ones with
+/// nothing else to show (`Unillustrated`).
+#[test]
+fn the_evidence_view_shows_raw_beside_parsed_and_the_extremes() {
+    use tdy::console::{Outcome, Payload};
+    use tdy::evidence::{Evidence, Pair};
+
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    w.begin(".accept t.tdy.sql m.csv");
+    let rows = vec![
+        Evidence::Shift {
+            column: "amount_chf".into(),
+            source: "Betrag Rp.".into(),
+            shift: -2,
+            head: vec![Pair { row: 1, raw: "170000".into(), parsed: "1700.00".into() }],
+            smallest: Some(Pair { row: 9, raw: "5".into(), parsed: "0.05".into() }),
+            largest: Some(Pair { row: 3, raw: "999999".into(), parsed: "9999.99".into() }),
+            rows: 36,
+        },
+        Evidence::Unillustrated { reason: "a model chose the frame".into() },
+    ];
+    w.apply(
+        Outcome {
+            echo: ".accept t.tdy.sql m.csv".into(),
+            text: String::new(),
+            ok: true,
+            payload: Payload::Evidence {
+                target: d.path().join("t.tdy.sql"),
+                member: "m.csv".into(),
+                rows,
+            },
+        },
+        d.path(),
+    );
+
+    let text = screen(&mut w, 110, 34).join("\n");
+    assert!(text.contains(" accept m.csv ? "), "{text}");
+    assert!(text.contains("170000"), "raw: {text}");
+    assert!(text.contains("1700.00"), "parsed: {text}");
+    assert!(text.contains("0.05"), "smallest: {text}");
+    assert!(text.contains("9999.99"), "largest: {text}");
+    assert!(text.contains("amount_chf"), "the Shift judgement's headline: {text}");
+    assert!(
+        text.contains("no computable consequence to show"),
+        "the Unillustrated judgement's headline too — every judgement shows: {text}"
+    );
+    assert!(text.contains("a accepts"), "{text}");
+    assert!(text.contains("Esc closes"), "{text}");
+}

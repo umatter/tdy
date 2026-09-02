@@ -625,3 +625,63 @@ fn the_overlay_is_modal_and_esc_cancels() {
     assert!(w.pending_edit.is_none(), "Esc cancels");
     assert!(w.status.contains("cancelled"), "{}", w.status);
 }
+
+/// `a` over a Member with a live judgement (`review: Some(_)`, not yet
+/// accepted) dispatches `.accept TARGET MEMBER`, naming both the target and
+/// the member; `a` over a member with nothing to review (fits, no review
+/// pending) is swallowed with a status note instead.
+#[test]
+fn a_dispatches_accept_only_for_reviewable_members() {
+    let d = pile();
+    let (mut w, act) =
+        pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::NeedsReview)], 0);
+    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+
+    let act = w.key(key(KeyCode::Char('a')));
+    let WbAction::Dispatch(line) = act else { panic!("expected Dispatch, got {act:?}") };
+    assert!(line.starts_with(".accept "), "{line}");
+    assert!(line.contains("sales.tdy.sql"), "{line}");
+    assert!(line.contains("2025-01.csv"), "{line}");
+
+    let (mut w2, _) = pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits)], 0);
+    let act2 = w2.key(key(KeyCode::Char('a')));
+    assert_eq!(act2, WbAction::None);
+    assert!(w2.status.contains("nothing to accept"), "{}", w2.status);
+}
+
+/// `Payload::Evidence` lands as `Context::Evidence`, carrying the exact
+/// `.accept` line that produced it; `a` there re-dispatches that identical
+/// line (the session treats the repeat as step two); `Esc` backs out to
+/// `Context::Empty` with a note pointing at `f` to bring the pile back.
+#[test]
+fn evidence_arrives_and_a_repeats_the_exact_line() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".accept t.tdy.sql m.csv");
+    let rows = vec![tdy::evidence::Evidence::Unillustrated { reason: "x".into() }];
+    w.apply(
+        outcome(
+            ".accept t.tdy.sql m.csv",
+            "evidence for m.csv (nothing written):\n",
+            Payload::Evidence { target: d.path().join("t.tdy.sql"), member: "m.csv".into(), rows },
+        ),
+        d.path(),
+    );
+    match &w.context {
+        Context::Evidence { line, member, .. } => {
+            assert_eq!(line, ".accept t.tdy.sql m.csv");
+            assert_eq!(member, "m.csv");
+        }
+        other => panic!("expected Evidence context, got {other:?}"),
+    }
+
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let act = w.key(key(KeyCode::Char('a')));
+    assert_eq!(act, WbAction::Dispatch(".accept t.tdy.sql m.csv".to_string()));
+
+    let act = w.key(key(KeyCode::Esc));
+    assert_eq!(act, WbAction::None);
+    assert!(matches!(w.context, Context::Empty), "{:?}", w.context);
+    assert!(w.status.contains("evidence closed"), "{}", w.status);
+}
