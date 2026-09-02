@@ -1,7 +1,5 @@
-use std::path::PathBuf;
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use tdy::console::{Outcome, Payload, RawHead, SpecSummary, Table};
+use tdy::console::{Outcome, Payload, RawHead, Table};
 use tdy_tui::browser::Browser;
 use tdy_tui::workbench::{Context, Focus, WbAction, Workbench};
 
