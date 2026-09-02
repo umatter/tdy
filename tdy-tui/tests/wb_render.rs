@@ -357,3 +357,51 @@ fn the_member_context_shows_gap_beside_raw_and_the_menu() {
     assert!(has_remedy_line, "numbered remedy menu: {text}");
     assert!(text.contains('▸'), "selection marker: {text}");
 }
+
+/// After staging an edit (digit `1` on a gap member whose header's first
+/// entry is `Kanton`), the confirm overlay covers the main pane with a
+/// ` confirm edit ` title, the diff's `+` line, and the y/Esc footer.
+#[test]
+fn the_confirm_overlay_shows_the_diff() {
+    let d = pile();
+    let target_sql =
+        "CREATE TABLE t (\n  region TEXT NOT NULL OPTIONS(matches = 'Region')\n) WITH (files='*.csv');\n";
+    std::fs::write(d.path().join("t.tdy.sql"), target_sql).unwrap();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    use tdy::console::{Outcome, Payload};
+    w.begin(".fit sales.tdy.sql");
+    let mut m = gap_member("2025-02.csv");
+    // Kanton first, so digit `1` (the first AddMatch candidate) stages the
+    // spelling this test asserts on.
+    m.problems[0].header = vec!["Kanton".into(), "Datum".into()];
+    let report = PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: 0,
+        failed: 1,
+        needs_review: 0,
+        members: vec![m],
+        lock_written: None,
+        dry_run: false,
+    };
+    w.apply(
+        Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    w.key(key(KeyCode::Enter)); // opens the Member context
+    w.set_target_sql(target_sql.to_string());
+
+    let act = w.key(key(KeyCode::Char('1')));
+    assert_eq!(act, tdy_tui::workbench::WbAction::None);
+    assert!(w.pending_edit.is_some(), "digit 1 should stage an edit");
+
+    let text = screen(&mut w, 110, 34).join("\n");
+    assert!(text.contains(" confirm edit "), "{text}");
+    let plus_line = text.lines().find(|l| l.contains('+') && l.contains("Kanton"));
+    assert!(plus_line.is_some(), "expected a `+` diff line naming Kanton: {text}");
+    assert!(text.contains("y writes the target"), "{text}");
+    assert!(text.contains("Esc cancels"), "{text}");
+}

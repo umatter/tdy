@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use tdy::console::line::{Edit, LineEditor};
+use tdy::console::line::{Edit as LineEdit, LineEditor};
 use tdy::console::{EntryKind, Outcome, Payload, RawHead, SpecSummary, Table};
 use tdy::report::{MemberReport, PileReport};
 
 use crate::browser::Browser;
-use crate::remedy::{self, Remedy};
+use crate::remedy::{self, Edit, Remedy};
 
 /// Which pane keys are routed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +70,11 @@ pub enum WbAction {
     PreviewFile(PathBuf),
     /// Run $EDITOR on this path (comes back via Payload::Edit too).
     Edit(PathBuf),
+    /// Write a confirmed remedy edit to the target, guarded by `expected`
+    /// (the text it was staged against — see `write_target`), then dispatch
+    /// `refit` (a `.fit <target>` line) through the normal Dispatch path so
+    /// the refit lands in the scrollback like any other command.
+    WriteTarget { path: PathBuf, expected: String, new_text: String, refit: String },
 }
 
 pub struct Workbench {
@@ -106,6 +111,17 @@ pub struct Workbench {
     /// fitted. Set in `begin()`; every other command leaves it alone.
     /// Deliberately fragile (see `record_target`'s doc comment).
     pub last_target: Option<PathBuf>,
+    /// The target's source text, as last read after a `Fitted` — see the
+    /// runtime's `Done` handling. What a Member's remedy menu edits; `None`
+    /// until the first fit lands, so a digit pressed before then is a status
+    /// note rather than an edit against stale or absent text.
+    pub target_sql: Option<String>,
+    /// A staged edit awaiting `y`/`Esc` confirmation: the remedy that
+    /// produced it, the edit itself, the target it would be written to, and
+    /// the text it was staged against (what `write_target`'s guard compares
+    /// the file to before writing — see `WbAction::WriteTarget`). Its mere
+    /// presence makes `key()` modal — see the top of that function.
+    pub pending_edit: Option<(Remedy, Edit, PathBuf, String)>,
 }
 
 impl Workbench {
@@ -126,6 +142,8 @@ impl Workbench {
             help: false,
             sql_pending: false,
             last_target: None,
+            target_sql: None,
+            pending_edit: None,
         }
     }
 
@@ -140,6 +158,26 @@ impl Workbench {
         if ctrl && k.code == KeyCode::Char('q') {
             self.should_quit = true;
             return WbAction::Quit;
+        }
+        // A staged edit is modal: every key but Ctrl-Q (handled above), `y`
+        // and Esc/`n` is swallowed — no Tab, no busy gate to check, nothing
+        // falls through to the ordinary focus dispatch below. `y` takes the
+        // staged edit and turns it into the one write this module can ask
+        // for; the runtime supplies the guard and does the actual I/O.
+        if self.pending_edit.is_some() {
+            return match k.code {
+                KeyCode::Char('y') => {
+                    let (_, edit, target, expected) = self.pending_edit.take().unwrap();
+                    let refit = format!(".fit {}", quote_rel(&self.rel_spelling(&target)));
+                    WbAction::WriteTarget { path: target, expected, new_text: edit.new_text, refit }
+                }
+                KeyCode::Esc | KeyCode::Char('n') => {
+                    self.pending_edit = None;
+                    self.status = "edit cancelled".to_string();
+                    WbAction::None
+                }
+                _ => WbAction::None,
+            };
         }
         // The help overlay swallows exactly the next key, whatever it is,
         // to close itself — that is the whole overlay contract, and it
@@ -414,6 +452,25 @@ impl Workbench {
         out
     }
 
+    /// The target's absolute path, from the current `Pile` or `Member`
+    /// context — `None` outside either. Lets the runtime re-read the
+    /// target's text after a `Fitted` `Done` without reaching into the
+    /// `Context` enum itself.
+    pub fn pile_target(&self) -> Option<&Path> {
+        match &self.context {
+            Context::Pile { target, .. } | Context::Member { target, .. } => Some(target),
+            _ => None,
+        }
+    }
+
+    /// Record the target's source text, freshly read — what a Member's
+    /// remedy menu edits from here on. Called by the runtime after every
+    /// `Fitted` `Done` (see `pile_target`), so the menu always edits the
+    /// text the last fit actually saw.
+    pub fn set_target_sql(&mut self, text: String) {
+        self.target_sql = Some(text);
+    }
+
     pub fn prompt(&self) -> &'static str {
         if self.sql_pending {
             "   -> "
@@ -453,19 +510,19 @@ impl Workbench {
                 WbAction::None
             }
             _ => match self.editor.key(k) {
-                Edit::Submit(line) => {
+                LineEdit::Submit(line) => {
                     if line.trim().is_empty() {
                         return WbAction::None;
                     }
                     self.scroll = 0;
                     WbAction::Dispatch(line)
                 }
-                Edit::Interrupt => {
+                LineEdit::Interrupt => {
                     // Plain Ctrl-C on an empty prompt: hint, don't quit.
                     self.status = "Ctrl-Q quits".to_string();
                     WbAction::None
                 }
-                Edit::Redraw | Edit::Cleared | Edit::Eof | Edit::Nothing => WbAction::None,
+                LineEdit::Redraw | LineEdit::Cleared | LineEdit::Eof | LineEdit::Nothing => WbAction::None,
             },
         }
     }
@@ -575,8 +632,9 @@ impl Workbench {
     }
 
     /// Keys over a Member context (Main focus): Up/Down pick a remedy,
-    /// clamped to the current menu; `e` edits the file itself. `a` and the
-    /// digit shortcuts land in later tasks.
+    /// clamped to the current menu; `e` edits the file itself; `1`-`9` stage
+    /// the corresponding remedy from `member_remedies()` for confirmation
+    /// (see `apply_remedy`). `a` lands in a later task.
     fn key_member(&mut self, k: KeyEvent) -> WbAction {
         match k.code {
             KeyCode::Up => {
@@ -588,7 +646,40 @@ impl Workbench {
                 WbAction::None
             }
             KeyCode::Char('e') => self.edit_member(),
+            KeyCode::Char(c @ '1'..='9') => self.apply_remedy((c as u8 - b'1') as usize),
             _ => WbAction::None,
+        }
+    }
+
+    /// Digit `n` over a Member: stage `member_remedies()[n]` as a
+    /// `pending_edit` for the confirm overlay. Out of range and "no target
+    /// text loaded yet" both end in a status note rather than an edit — the
+    /// second is real (a fit that never landed a `Fitted`, or one whose
+    /// target could not be resolved) and must not panic or silently do
+    /// nothing unexplained. `remedy::apply`'s own errors (a column the
+    /// declaration does not have any more, an edit that would not parse or
+    /// would change more than it says) surface the same way.
+    fn apply_remedy(&mut self, idx: usize) -> WbAction {
+        let remedies = self.member_remedies();
+        let Some(remedy) = remedies.get(idx).cloned() else {
+            self.status = format!("no remedy {}", idx + 1);
+            return WbAction::None;
+        };
+        let Some(sql) = self.target_sql.clone() else {
+            self.status = "target text not loaded yet".to_string();
+            return WbAction::None;
+        };
+        let Context::Member { target, .. } = &self.context else { return WbAction::None };
+        let target = target.clone();
+        match remedy::apply(&sql, &remedy) {
+            Ok(edit) => {
+                self.pending_edit = Some((remedy, edit, target, sql));
+                WbAction::None
+            }
+            Err(e) => {
+                self.status = format!("{e:#}");
+                WbAction::None
+            }
         }
     }
 

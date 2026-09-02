@@ -442,12 +442,32 @@ fn read_wb_key() -> Result<Option<KeyEvent>> {
     Ok(Some(k))
 }
 
+/// Dispatch one line the way `key()`'s own `WbAction::Dispatch` does: mark
+/// busy synchronously, before the line ever reaches the worker (`key()`
+/// reads `busy` to gate further input, and the worker's own `Started` round
+/// trip is a whole poll cycle away — a fast key burst, or a synthesized
+/// refit line right after a write, could otherwise slip a second dispatch
+/// past the gate before the first shows busy; `begin` is idempotent, so the
+/// `Started` message this same line produces later is a harmless no-op),
+/// then hand it to the worker. Shared by the `Dispatch` arm below and by
+/// `WriteTarget`'s post-write refit, so both go through one busy/scrollback
+/// path rather than two that could drift apart.
+fn dispatch_line(wb: &mut Workbench, line: String, line_tx: &mpsc::UnboundedSender<String>) {
+    wb.begin(&line);
+    // A dead worker (the `Session` failed to build, or the task ended) must
+    // not leave the UI busy forever with the error hidden behind the busy
+    // text.
+    if line_tx.send(line).is_err() {
+        wb.worker_died("the console worker is gone — restart the workbench");
+    }
+}
+
 /// Act on what the workbench decided: send a line to the worker, kick off a
-/// preview, or run `$EDITOR` — the same suspend/reenter dance the classic
+/// preview, run `$EDITOR` — the same suspend/reenter dance the classic
 /// flow's `OpenEditor` arm does (see `run`), since a workbench member can be
-/// opened for editing too. `WbAction::None`/`Quit` need nothing here:
-/// `Workbench` itself already set `should_quit`, which the caller checks
-/// after every action.
+/// opened for editing too — or write a confirmed remedy edit. `WbAction::
+/// None`/`Quit` need nothing here: `Workbench` itself already set
+/// `should_quit`, which the caller checks after every action.
 fn act_on_wb(
     action: WbAction,
     wb: &mut Workbench,
@@ -458,23 +478,24 @@ fn act_on_wb(
 ) -> Result<()> {
     match action {
         WbAction::None | WbAction::Quit => {}
-        WbAction::Dispatch(line) => {
-            // Mark busy synchronously, before the line ever reaches the
-            // worker: `key()` reads `busy` to gate further input, and the
-            // worker's own `Started` round trip is a whole poll cycle away
-            // — a fast key burst (or a paste) could otherwise slip a second
-            // `Dispatch` past the gate before the first shows busy.
-            // `begin` is idempotent (see its doc comment), so the `Started`
-            // message this same line produces later is a harmless no-op.
-            wb.begin(&line);
-            // A dead worker (the `Session` failed to build, or the task
-            // ended) must not leave the UI busy forever with the error
-            // hidden behind the busy text.
-            if line_tx.send(line).is_err() {
-                wb.worker_died("the console worker is gone — restart the workbench");
+        WbAction::Dispatch(line) => dispatch_line(wb, line, line_tx),
+        WbAction::PreviewFile(path) => spawn_wb_preview(preview_tx.clone(), cfg.clone(), path),
+        // The remedy overlay's write: the ONE sanctioned non-console write
+        // in the workbench (spec §8 rule 2), always behind the shown diff
+        // `y` just confirmed. `write_target`'s guard refuses a stale write
+        // (the file changed since the diff was staged) rather than clobber
+        // it; on success the refit goes through the same `dispatch_line`
+        // the console uses, so it lands in the scrollback and busy/history
+        // behave exactly as if it had been typed.
+        WbAction::WriteTarget { path, expected, new_text, refit } => {
+            match write_target(&path, &expected, &new_text) {
+                Ok(()) => {
+                    wb.note("target written".to_string());
+                    dispatch_line(wb, refit, line_tx);
+                }
+                Err(e) => wb.note(format!("{e:#}")),
             }
         }
-        WbAction::PreviewFile(path) => spawn_wb_preview(preview_tx.clone(), cfg.clone(), path),
         WbAction::Edit(path) => {
             // The editor owns the terminal while it runs; taking it back
             // afterwards must restore raw mode and the alternate screen, or
@@ -535,9 +556,12 @@ async fn run_workbench(
                     // Taken before `apply` consumes `o`: the history file
                     // gets the echo exactly when `apply`'s own in-memory
                     // recall (`editor.remember`, inside `begin`) would have
-                    // — non-empty, and not a buffered-SQL `Continue`.
+                    // — non-empty, and not a buffered-SQL `Continue` — and
+                    // "was this a fit" has to be known before `apply` moves
+                    // the payload into `Context::Pile`.
                     let echo = o.echo.clone();
                     let is_continue = matches!(o.payload, Payload::Continue);
+                    let was_fitted = matches!(o.payload, Payload::Fitted(_));
                     let action = wb.apply(*o, &cwd);
                     if !echo.is_empty() && !is_continue {
                         append_history(&echo);
@@ -545,6 +569,20 @@ async fn run_workbench(
                     // A sniff/fit/edit may have changed sidecar status;
                     // refreshing is one read_dir + sidecar headers.
                     wb.browser.refresh();
+                    // The remedy menu edits the target's own text, and a
+                    // fit is the one moment that text is known to be fresh
+                    // (it is what `fit_pile` just re-proved every member
+                    // against). Re-read it now rather than lazily on the
+                    // first digit press, so a menu opened right after a fit
+                    // is never staged against text from before it.
+                    if was_fitted {
+                        if let Some(target) = wb.pile_target().map(Path::to_path_buf) {
+                            match std::fs::read_to_string(&target) {
+                                Ok(text) => wb.set_target_sql(text),
+                                Err(e) => wb.note(format!("cannot read {}: {e:#}", target.display())),
+                            }
+                        }
+                    }
                     if let Some(action) = action {
                         act_on_wb(action, &mut wb, terminal, &line_tx, &tx, &cfg)?;
                     }

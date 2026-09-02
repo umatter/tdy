@@ -535,3 +535,93 @@ fn e_dispatches_edit_for_the_member() {
     assert!(line.starts_with(".edit"), "{line}");
     assert!(line.contains("2025-02.csv"), "{line}");
 }
+
+/// The target text a Member's remedy menu edits — written for real, so the
+/// staged edit can be re-parsed as a target and the diff read back.
+fn target_sql() -> &'static str {
+    "CREATE TABLE t (\n  region TEXT NOT NULL OPTIONS(matches = 'Region')\n) WITH (files='*.csv');\n"
+}
+
+/// From a Pile targeted at `t.tdy.sql` (rather than `pile_and_enter`'s
+/// hard-coded `sales.tdy.sql`), enter the given member — the remedy tests
+/// below need the dispatched `.fit` and the real target file on disk to
+/// name the same path.
+fn t_pile_and_enter(d: &tempfile::TempDir, members: Vec<MemberReport>, selected: usize) -> (Workbench, WbAction) {
+    let mut w = wb(d);
+    w.begin(".fit t.tdy.sql");
+    let report = pile_report("t.tdy.sql", members);
+    w.apply(outcome(".fit t.tdy.sql", "", Payload::Fitted(report)), d.path());
+    if let Context::Pile { selected: sel, .. } = &mut w.context {
+        *sel = selected;
+    }
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let act = w.key(key(KeyCode::Enter));
+    (w, act)
+}
+
+/// Digit `1` over a gap member's remedy menu stages an edit — `pending_edit`
+/// is set, its diff carries a `+` line — and `y` turns it into a
+/// `WriteTarget` action whose `new_text` still parses as a target, whose
+/// `expected` is the text `set_target_sql` was given, and whose `refit`
+/// re-dispatches `.fit` at the same target.
+#[test]
+fn a_digit_stages_an_edit_and_y_writes_then_refits() {
+    let d = pile();
+    let target_path = d.path().join("t.tdy.sql");
+    std::fs::write(&target_path, target_sql()).unwrap();
+    let (mut w, act) = t_pile_and_enter(&d, vec![gap_member("2025-02.csv")], 0);
+    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    w.set_target_sql(target_sql().to_string());
+
+    let act = w.key(key(KeyCode::Char('1')));
+    assert_eq!(act, WbAction::None);
+    let (_, edit, staged_target, expected) =
+        w.pending_edit.as_ref().expect("digit 1 should stage an edit");
+    assert!(staged_target.ends_with("t.tdy.sql"), "{staged_target:?}");
+    assert_eq!(expected, target_sql());
+    assert!(edit.diff().lines().any(|l| l.contains('+')), "{}", edit.diff());
+
+    let act = w.key(key(KeyCode::Char('y')));
+    assert!(w.pending_edit.is_none(), "y clears the pending edit");
+    let WbAction::WriteTarget { path, expected, new_text, refit } = act else {
+        panic!("expected WriteTarget, got {act:?}")
+    };
+    assert!(path.ends_with("t.tdy.sql"), "{path:?}");
+    assert_eq!(expected, target_sql());
+    assert!(tdy::target::Target::parse(&new_text).is_ok(), "{new_text}");
+    assert!(refit.starts_with(".fit "), "{refit}");
+    assert!(refit.contains("t.tdy.sql"), "{refit}");
+}
+
+/// The confirm overlay is modal: once an edit is staged, arbitrary keys
+/// (typing, Tab) are swallowed and change nothing; Esc cancels and clears
+/// `pending_edit`. Pressing a digit with no `target_sql` loaded leaves
+/// `pending_edit` unset and sets a status note instead of panicking.
+#[test]
+fn the_overlay_is_modal_and_esc_cancels() {
+    let d = pile();
+    std::fs::write(d.path().join("t.tdy.sql"), target_sql()).unwrap();
+    let (mut w, _) = t_pile_and_enter(&d, vec![gap_member("2025-02.csv")], 0);
+
+    // No target text loaded yet: the digit does nothing but note why.
+    let act = w.key(key(KeyCode::Char('1')));
+    assert_eq!(act, WbAction::None);
+    assert!(w.pending_edit.is_none());
+    assert!(!w.status.is_empty(), "a status note should explain the no-op");
+
+    w.set_target_sql(target_sql().to_string());
+    let act = w.key(key(KeyCode::Char('1')));
+    assert_eq!(act, WbAction::None);
+    assert!(w.pending_edit.is_some());
+
+    let before_focus = w.focus;
+    assert_eq!(w.key(key(KeyCode::Char('s'))), WbAction::None);
+    assert_eq!(w.key(key(KeyCode::Tab)), WbAction::None);
+    assert_eq!(w.focus, before_focus, "Tab must not move focus while modal");
+    assert!(w.pending_edit.is_some(), "an unrelated key must not clear the pending edit");
+
+    assert_eq!(w.key(key(KeyCode::Esc)), WbAction::None);
+    assert!(w.pending_edit.is_none(), "Esc cancels");
+    assert!(w.status.contains("cancelled"), "{}", w.status);
+}

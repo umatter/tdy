@@ -18,7 +18,7 @@ use tdy::console::{EntryStatus, RawHead, SpecSummary, Table};
 use tdy::report::{MemberReport, MemberStatus, PileReport};
 
 use crate::mark;
-use crate::remedy::Remedy;
+use crate::remedy::{Edit, Remedy};
 use crate::workbench::{Context, Focus, Workbench};
 
 const DIM: Color = Color::DarkGray;
@@ -56,7 +56,9 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("Esc (pile)", "close the pile"),
     ("↑ / ↓ (member)", "pick a remedy"),
     ("e (member)", "edit the file"),
+    ("1-9 (member)", "apply a remedy"),
     ("Esc (member)", "back to the pile"),
+    ("y / Esc (confirm)", "write the edit / cancel"),
     ("?", "show this help"),
 ];
 
@@ -87,6 +89,14 @@ fn draw_body(f: &mut Frame, area: Rect, w: &mut Workbench) {
 }
 
 fn draw_right(f: &mut Frame, area: Rect, w: &mut Workbench) {
+    // Checked first, ahead of `help` and `zoom`: a staged edit is modal (see
+    // `Workbench::key`), and the overlay confirming it must cover the whole
+    // right column exactly as the help overlay does, for the same reason —
+    // it can be open regardless of whether the console is zoomed.
+    if let Some((remedy, edit, ..)) = &w.pending_edit {
+        draw_confirm(f, area, remedy, edit);
+        return;
+    }
     // Checked before `zoom`: `?` opens help from Browser/Main focus
     // regardless of whether the console is currently zoomed (Tab still
     // moves focus off the console while zoomed), so the overlay must cover
@@ -130,6 +140,42 @@ fn draw_help(f: &mut Frame, area: Rect) {
         .map(|&(k, desc)| Line::raw(format!("{k:key_w$}  {desc}")))
         .collect();
     f.render_widget(Paragraph::new(lines), keys_area);
+}
+
+/// The staged-edit confirm overlay: a bordered ` confirm edit ` block over
+/// the main pane, mirroring `draw_help`'s mechanism — the remedy's label,
+/// then `Edit::diff()`'s lines (`-` red-ish, `+` green-ish), then a footer
+/// naming the two keys `Workbench::key`'s modal branch actually honours.
+/// `Workbench` owns when this is shown and what `y`/`Esc` do; this only
+/// draws it.
+fn draw_confirm(f: &mut Frame, area: Rect, remedy: &Remedy, edit: &Edit) {
+    let block = Block::bordered()
+        .title(" confirm edit ")
+        .border_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let [content, footer] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
+
+    let mut lines = vec![Line::raw(remedy.label()), Line::raw(String::new())];
+    for l in edit.diff().lines() {
+        // The diff line is `"{:>4} - {before}"` or `"{:>4} + {after}"` (see
+        // `Edit::diff`): the marker is always the second whitespace-split
+        // token, regardless of how wide the line-number field happened to
+        // print.
+        let style = match l.split_whitespace().nth(1) {
+            Some("-") => Style::new().fg(Color::Red),
+            Some("+") => Style::new().fg(Color::Green),
+            _ => Style::new(),
+        };
+        lines.push(Line::styled(l.to_string(), style));
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), content);
+    f.render_widget(
+        Paragraph::new(Line::styled("y writes the target · Esc cancels", Style::new().fg(DIM))),
+        footer,
+    );
 }
 
 /// The generated mark (`mark::GRID`) as 8 terminal rows of half-block
