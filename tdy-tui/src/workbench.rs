@@ -438,7 +438,28 @@ impl Workbench {
                     _ => None,
                 });
                 match target {
-                    Some(target) => self.context = Context::Pile { target, report: r, selected: 0 },
+                    Some(target) => {
+                        // Selection survives a refit: when the outgoing
+                        // context was a Pile or a Member over the SAME
+                        // target, remember which member's *path* (not
+                        // index — a refit can insert/remove members ahead
+                        // of it) was selected, before the report it points
+                        // into is replaced below. A different target, or no
+                        // prior selection, has nothing to preserve.
+                        let prev_member_path: Option<String> = match &self.context {
+                            Context::Pile { target: t, report, selected } if *t == target => {
+                                report.members.get(*selected).map(|m| m.path.clone())
+                            }
+                            Context::Member { target: t, report, member, .. } if *t == target => {
+                                report.members.get(*member).map(|m| m.path.clone())
+                            }
+                            _ => None,
+                        };
+                        let selected = prev_member_path
+                            .and_then(|p| r.members.iter().position(|m| m.path == p))
+                            .unwrap_or(0);
+                        self.context = Context::Pile { target, report: r, selected };
+                    }
                     None => self.status = "fitted, but no target known".to_string(),
                 }
                 None
@@ -509,6 +530,47 @@ impl Workbench {
             Context::File { path: p, preview, .. } if *p == path => preview.clone(),
             _ => None,
         };
+        self.show_file(path, raw, spec, preview, stale);
+    }
+
+    /// A `PreviewFile` action FAILED (computed off the UI thread). Same
+    /// gen+path staleness rules as `set_preview` — see its doc comment for
+    /// why `gen` is checked first — but instead of new content this fills
+    /// the matching File/Member context's raw with the reason, so the pane
+    /// says why rather than showing "loading…" forever.
+    pub fn preview_failed(&mut self, gen: u64, path: PathBuf, msg: String) {
+        if gen != self.preview_gen {
+            return;
+        }
+        let raw = RawHead {
+            lines: vec![format!("cannot read: {msg}")],
+            truncated: false,
+            sheets: vec![],
+            grid: vec![],
+        };
+        if let Context::Member { target, report, member, raw: r, .. } = &mut self.context {
+            let expected = report.members.get(*member).map(|m| member_preview_path(target, &m.path));
+            if expected.as_deref() == Some(path.as_path()) {
+                *r = Some(raw);
+                self.status = format!("preview unavailable: {msg}");
+            }
+            return;
+        }
+        let context_matches = matches!(&self.context, Context::File { path: p, .. } if *p == path);
+        let selection_matches = self.browser.selected_path().as_deref() == Some(path.as_path());
+        if !context_matches && !selection_matches {
+            return;
+        }
+        // Preserve whatever spec/preview a prior successful sniff already
+        // put here for this same path — a raw-head read failing later must
+        // not wipe an opinion that is still valid.
+        let (spec, preview, stale) = match &self.context {
+            Context::File { path: p, spec, preview, stale, .. } if *p == path => {
+                (spec.clone(), preview.clone(), *stale)
+            }
+            _ => (None, None, false),
+        };
+        self.status = format!("preview unavailable: {msg}");
         self.show_file(path, raw, spec, preview, stale);
     }
 
@@ -599,6 +661,15 @@ impl Workbench {
                 push(r, &mut out);
             }
         }
+        // The classic floor: a member waiting on a judgement or carrying a
+        // problem always has *something* to remedy, even when neither
+        // `proposals` nor `problems` gave the loops above anything to offer
+        // (a review-only member: `review: Some(_)`, `problems` empty) — the
+        // exclude-this-file remedy, so the menu is never blank for a member
+        // that plainly needs one.
+        if out.is_empty() && (m.review.is_some() || !m.problems.is_empty()) {
+            out.push(Remedy::ExcludeFile { rel: m.path.clone() });
+        }
         out
     }
 
@@ -643,6 +714,19 @@ impl Workbench {
         };
     }
 
+    /// The console scrollback's total rendered line count, flattened exactly
+    /// as `draw_console` lays it out: each cell contributes its echo's line
+    /// count (a multi-line echo prints one row per `\n`-split part, `tdy>`
+    /// then `   -> ` continuations) plus its text's line count. What
+    /// `key_console`'s `PageUp` clamps `scroll` against, so it cannot run
+    /// past real content into blank space.
+    pub fn scrollback_lines(&self) -> usize {
+        self.scrollback
+            .iter()
+            .map(|c| c.echo.split('\n').count() + c.text.lines().count())
+            .sum()
+    }
+
     fn key_console(&mut self, k: KeyEvent, ctrl: bool) -> WbAction {
         match (k.code, ctrl) {
             (KeyCode::Up, true) => {
@@ -654,7 +738,11 @@ impl Workbench {
                 WbAction::None
             }
             (KeyCode::PageUp, _) => {
-                self.scroll = self.scroll.saturating_add(5);
+                // Clamped to the flattened scrollback length: without this,
+                // holding PgUp on a short session scrolls the console into
+                // blank space that no key ever brings back into view (there
+                // is nothing to `PageDown` back onto except more blank).
+                self.scroll = (self.scroll + 5).min(self.scrollback_lines());
                 WbAction::None
             }
             (KeyCode::PageDown, _) => {
@@ -773,6 +861,28 @@ impl Workbench {
     }
 
     fn key_main(&mut self, k: KeyEvent) -> WbAction {
+        // PgUp/PgDn scroll the main pane in EVERY context, ahead of the
+        // context-specific dispatch below — Up/Down keep meaning selection
+        // in Pile/Member, so scrolling needs keys those contexts do not
+        // already claim. Checked first so it can never be shadowed by a
+        // context's own `_ => WbAction::None` arm. `main_scroll` is an
+        // offset from the TOP that grows as you move further into the
+        // content (see the fallback Up/Down arm below: `Down` adds, `Up`
+        // subtracts) — the opposite sense of the console's own `scroll`
+        // field (lines scrolled up FROM THE BOTTOM) — so PgDn is the one
+        // that adds here, mirroring `Down`, and PgUp subtracts, mirroring
+        // `Up`.
+        match k.code {
+            KeyCode::PageDown => {
+                self.main_scroll = (self.main_scroll + 5).min(self.main_scroll_bound());
+                return WbAction::None;
+            }
+            KeyCode::PageUp => {
+                self.main_scroll = self.main_scroll.saturating_sub(5);
+                return WbAction::None;
+            }
+            _ => {}
+        }
         if let Context::Pile { report, selected, .. } = &mut self.context {
             let len = report.members.len();
             return match k.code {
@@ -813,12 +923,19 @@ impl Workbench {
 
     /// A generous upper bound for `main_scroll`, from what the current
     /// context actually has to show — not an exact fit (a wrapped line, a
-    /// multi-row sheet header are not counted), just enough that `Down`
-    /// cannot run away into blank space forever. Only the fallback arm of
-    /// `key_main` reads this today (Pile and Member/Evidence answer Up/Down
-    /// themselves, earlier in that function); the Evidence and Pile arms
-    /// are here so whichever of them wires `main_scroll` in next does not
-    /// have to invent this from scratch.
+    /// multi-row sheet header are not counted), just enough that scrolling
+    /// cannot run away into blank space forever. `key_main`'s PgUp/PgDn (all
+    /// contexts) and its fallback Up/Down arm (File/Query/Empty) both read
+    /// this; Pile and Member answer Up/Down themselves (selection, not
+    /// scroll — see `key_main`/`key_member`), and Evidence's own Up/Down
+    /// (see `key_evidence`) reads it too.
+    ///
+    /// The Evidence multiplier is 9, not a round number: `draw_evidence`
+    /// prints, per row, one bold headline, up to 5 `head` lines, an optional
+    /// `smallest` and an optional `largest`, then a blank separator —
+    /// 1 + 5 + 1 + 1 + 1 = 9 in the worst case (a `Shift` with both extremes
+    /// present); `Frame` and the illustration-less variants print fewer, so
+    /// 9 stays an upper, not exact, bound.
     fn main_scroll_bound(&self) -> usize {
         match &self.context {
             Context::File { raw, preview, .. } => {
@@ -827,7 +944,7 @@ impl Workbench {
                     + preview.as_ref().map(|t| t.rows.len()).unwrap_or(0)
                     + 16
             }
-            Context::Evidence { rows, .. } => rows.len() * 8 + 16,
+            Context::Evidence { rows, .. } => rows.len() * 9 + 16,
             Context::Pile { report, .. } => report.members.len() + 16,
             _ => 16,
         }
@@ -870,7 +987,10 @@ impl Workbench {
     /// Keys over a Member context (Main focus): Up/Down pick a remedy,
     /// clamped to the current menu; `e` edits the file itself; `1`-`9` stage
     /// the corresponding remedy from `member_remedies()` for confirmation
-    /// (see `apply_remedy`); `a` dispatches `.accept` step one (see
+    /// (see `stage_remedy`); `Enter` stages whichever remedy `▸` currently
+    /// marks — the same call a digit makes, just reading the index off
+    /// `remedy_selected` instead of the key itself, so the marker stops
+    /// being decorative; `a` dispatches `.accept` step one (see
     /// `accept_member`).
     fn key_member(&mut self, k: KeyEvent) -> WbAction {
         match k.code {
@@ -882,9 +1002,16 @@ impl Workbench {
                 self.move_remedy_selection(1);
                 WbAction::None
             }
+            KeyCode::Enter => {
+                let Context::Member { remedy_selected, .. } = &self.context else {
+                    return WbAction::None;
+                };
+                let idx = *remedy_selected;
+                self.stage_remedy(idx)
+            }
             KeyCode::Char('e') => self.edit_member(),
             KeyCode::Char('t') => self.edit_target(),
-            KeyCode::Char(c @ '1'..='9') => self.apply_remedy((c as u8 - b'1') as usize),
+            KeyCode::Char(c @ '1'..='9') => self.stage_remedy((c as u8 - b'1') as usize),
             KeyCode::Char('a') => self.accept_member(),
             _ => WbAction::None,
         }
@@ -916,28 +1043,39 @@ impl Workbench {
     /// Keys over an Evidence context (Main focus): `a` re-dispatches the
     /// exact `.accept` line that produced this evidence, verbatim — the
     /// session recognises the repeat as step two (see the module doc on
-    /// `Context::Evidence`). Nothing else acts here; `Esc` is handled
-    /// earlier in `key()`, ahead of the focus dispatch, because it needs to
-    /// leave `Focus::Main` in place the same way Pile/Member's `Esc` does.
+    /// `Context::Evidence`). Evidence has no selection (unlike Pile/Member),
+    /// so Up/Down scroll `main_scroll` here rather than sit idle — the same
+    /// meaning File's fallback arm gives them. `Esc` is handled earlier in
+    /// `key()`, ahead of the focus dispatch, because it needs to leave
+    /// `Focus::Main` in place the same way Pile/Member's `Esc` does.
     fn key_evidence(&mut self, k: KeyEvent) -> WbAction {
         match k.code {
             KeyCode::Char('a') => match &self.context {
                 Context::Evidence { line, .. } => WbAction::Dispatch(line.clone()),
                 _ => WbAction::None,
             },
+            KeyCode::Up => {
+                self.main_scroll = self.main_scroll.saturating_sub(1);
+                WbAction::None
+            }
+            KeyCode::Down => {
+                self.main_scroll = (self.main_scroll + 1).min(self.main_scroll_bound());
+                WbAction::None
+            }
             _ => WbAction::None,
         }
     }
 
-    /// Digit `n` over a Member: stage `member_remedies()[n]` as a
-    /// `pending_edit` for the confirm overlay. Out of range and "no target
-    /// text loaded yet" both end in a status note rather than an edit — the
+    /// Stage `member_remedies()[idx]` as a `pending_edit` for the confirm
+    /// overlay — the one place both a digit key and `Enter` on the `▸`
+    /// marker end up (see `key_member`). Out of range and "no target text
+    /// loaded yet" both end in a status note rather than an edit — the
     /// second is real (a fit that never landed a `Fitted`, or one whose
     /// target could not be resolved) and must not panic or silently do
     /// nothing unexplained. `remedy::apply`'s own errors (a column the
     /// declaration does not have any more, an edit that would not parse or
     /// would change more than it says) surface the same way.
-    fn apply_remedy(&mut self, idx: usize) -> WbAction {
+    fn stage_remedy(&mut self, idx: usize) -> WbAction {
         let remedies = self.member_remedies();
         let Some(remedy) = remedies.get(idx).cloned() else {
             self.status = format!("no remedy {}", idx + 1);

@@ -41,6 +41,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("^L", "zoom the console"),
     ("^Up / ^Down", "resize the console"),
     ("↑ / ↓", "move selection / scroll"),
+    ("PgUp / PgDn (main)", "scroll the main pane"),
     ("Enter", "open file or directory"),
     ("Backspace", "go up a directory"),
     ("s", "sniff the selected file"),
@@ -55,8 +56,10 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("↑ / ↓ (member)", "pick a remedy"),
     ("e (member)", "edit the file"),
     ("1-9 (member)", "apply a remedy"),
+    ("Enter (member)", "apply the marked (▸) remedy"),
     ("a (member / evidence)", "accept — show evidence, then accept"),
     ("Esc (member)", "back to the pile"),
+    ("↑ / ↓ (evidence)", "scroll"),
     ("Esc (evidence)", "close (f re-opens the pile)"),
     ("y / Esc (confirm)", "write the edit / cancel"),
     ("?", "show this help"),
@@ -378,7 +381,7 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
                 }
             }
         }
-        Context::Evidence { rows, .. } => draw_evidence(f, area, block, rows),
+        Context::Evidence { rows, .. } => draw_evidence(f, area, block, rows, w.main_scroll),
     }
 }
 
@@ -390,7 +393,13 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
 /// wrong way is invisible in the head of a file and obvious at the ends.
 /// Never just the first judgement — accepting the rest unseen is exactly
 /// what this screen exists to prevent.
-fn draw_evidence(f: &mut Frame, area: Rect, block: Block<'static>, rows: &[tdy::evidence::Evidence]) {
+fn draw_evidence(
+    f: &mut Frame,
+    area: Rect,
+    block: Block<'static>,
+    rows: &[tdy::evidence::Evidence],
+    scroll: usize,
+) {
     use tdy::evidence::Evidence;
 
     let inner = block.inner(area);
@@ -429,7 +438,10 @@ fn draw_evidence(f: &mut Frame, area: Rect, block: Block<'static>, rows: &[tdy::
         }
         lines.push(Line::raw(""));
     }
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), content);
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll as u16, 0)),
+        content,
+    );
     f.render_widget(
         Paragraph::new(Line::styled("a accepts · Esc closes", Style::new().fg(DIM))),
         footer,

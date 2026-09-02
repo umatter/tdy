@@ -201,6 +201,11 @@ enum WbMsg {
     /// stays `None` for it exactly as before, this only adds the flag the
     /// footer needs to say why.
     Preview { gen: u64, path: PathBuf, raw: RawHead, spec: Option<SpecSummary>, stale: bool },
+    /// A `PreviewFile` action FAILED, computed off the UI thread. Same
+    /// `gen`/`path` staleness rules as `Preview` (see `Workbench::
+    /// preview_failed`) — sent instead of a bare `Note`, which left the
+    /// Member/File pane showing "loading…" forever with no way to tell why.
+    PreviewFailed { gen: u64, path: PathBuf, msg: String },
 }
 
 /// The worker: owns the one `Session` for this workbench and runs lines from
@@ -275,10 +280,12 @@ fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf
         let raw = match raw_head(&path, cfg.limits) {
             Ok(r) => r,
             // A preview is a convenience; its failure belongs on the status
-            // line, not in place of whatever the main pane already shows —
-            // and NOT as progress, which would leave the UI busy for good.
+            // line AND in the pane it was meant to fill — a bare `Note`
+            // (the previous behaviour) left the Member/File pane reading
+            // "loading…" forever with no way to tell why. NOT as progress,
+            // either, which would leave the UI busy for good.
             Err(e) => {
-                let _ = tx.send(WbMsg::Note(format!("preview unavailable: {e:#}")));
+                let _ = tx.send(WbMsg::PreviewFailed { gen, path, msg: format!("{e:#}") });
                 return;
             }
         };
@@ -469,6 +476,7 @@ async fn run_workbench(
                 WbMsg::Preview { gen, path, raw, spec, stale } => {
                     wb.set_preview(gen, path, raw, spec, stale)
                 }
+                WbMsg::PreviewFailed { gen, path, msg } => wb.preview_failed(gen, path, msg),
             }
         }
         if wb.should_quit {

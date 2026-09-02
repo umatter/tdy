@@ -230,6 +230,14 @@ fn zoom_resize_and_scroll_are_console_focus_keys() {
     assert_eq!(w.console_rows, 9);
     w.key(ctrl('l'));
     assert!(w.zoom);
+
+    // PageUp now clamps to `scrollback_lines()` — give it real content to
+    // scroll into first, or an empty scrollback would clamp it straight
+    // back to 0.
+    w.begin(".ls");
+    w.apply(outcome(".ls", "a\nb\nc\nd\ne\nf\ng\nh", Payload::Nothing), d.path());
+    assert!(w.scrollback_lines() >= 5);
+
     w.key(key(KeyCode::PageUp));
     assert_eq!(w.scroll, 5);
     type_line(&mut w, ".ls"); // any dispatch resets scroll
@@ -383,6 +391,59 @@ fn pile_navigation_and_enter_opens_a_member() {
     assert!(matches!(&w.context, Context::Empty), "{:?}", w.context);
 }
 
+/// A refit against the SAME target keeps the cursor on the member the user
+/// was looking at — matched by `path`, not index, since a refit can insert
+/// or remove members ahead of the one selected. When that member is gone
+/// from the new report, the selection falls back to 0 rather than an
+/// out-of-range or arbitrary index.
+#[test]
+fn selection_survives_a_refit_by_member_path() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report(
+        "sales.tdy.sql",
+        vec![
+            member("2025-01.csv", MemberStatus::Fits),
+            member("2025-02.csv", MemberStatus::Fits),
+            gap_member("2025-03.csv"),
+        ],
+    );
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    let Context::Pile { selected, .. } = &mut w.context else { panic!("expected Pile") };
+    *selected = 2;
+
+    // Same members, same target, re-fitted: 2025-03.csv is still at index 2,
+    // but the selection must be recovered by path, not merely survive
+    // because the index happens to match.
+    w.begin(".fit sales.tdy.sql");
+    let report_same = pile_report(
+        "sales.tdy.sql",
+        vec![
+            gap_member("2025-03.csv"),
+            member("2025-01.csv", MemberStatus::Fits),
+            member("2025-02.csv", MemberStatus::Fits),
+        ],
+    );
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report_same)), d.path());
+    match &w.context {
+        Context::Pile { selected, report, .. } => {
+            assert_eq!(*selected, 0, "2025-03.csv moved to index 0 in the new report");
+            assert_eq!(report.members[*selected].path, "2025-03.csv");
+        }
+        other => panic!("expected Pile, got {other:?}"),
+    }
+
+    // A refit missing that member falls back to 0.
+    w.begin(".fit sales.tdy.sql");
+    let report_missing = pile_report(
+        "sales.tdy.sql",
+        vec![member("2025-01.csv", MemberStatus::Fits), member("2025-02.csv", MemberStatus::Fits)],
+    );
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report_missing)), d.path());
+    assert!(matches!(&w.context, Context::Pile { selected: 0, .. }), "{:?}", w.context);
+}
+
 /// `f` re-dispatches a fit: from the Pile context (Main focus) it repeats
 /// the target that produced it; from the Browser, only on a `*.tdy.sql`
 /// entry — a data file keeps `s`.
@@ -479,6 +540,24 @@ fn member_remedies_come_from_the_problems() {
     // A fits-member (Enter on index 0) offers nothing.
     let (w2, _) = pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits)], 0);
     assert!(w2.member_remedies().is_empty());
+}
+
+/// A review-only member (`review: Some(_)`, no `problems`, no `proposals` —
+/// `member(.., MemberStatus::NeedsReview)` builds exactly this) has nothing
+/// for either loop in `member_remedies` to offer, but it plainly needs a
+/// remedy: the classic floor kicks in and the menu is exactly the one
+/// exclude-this-file entry, never empty.
+#[test]
+fn a_review_only_member_floors_to_exclude_file() {
+    let d = pile();
+    let (w, act) = pile_and_enter(&d, vec![member("2025-05.csv", MemberStatus::NeedsReview)], 0);
+    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    let remedies = w.member_remedies();
+    assert_eq!(
+        remedies,
+        vec![Remedy::ExcludeFile { rel: "2025-05.csv".into() }],
+        "{remedies:?}"
+    );
 }
 
 /// The menu is **ranked by `--propose`**, not listed in file order (design
@@ -579,6 +658,35 @@ fn a_member_preview_fills_raw_and_stale_paths_are_dropped() {
     assert!(matches!(&w.context, Context::Member { raw: Some(_), .. }));
 }
 
+/// `preview_failed` follows the same gen+path staleness rules as
+/// `set_preview` (stale generation dropped before the path is even
+/// checked), but on a match it fills `Context::Member.raw` with a message
+/// explaining why, so the pane stops reading "loading…" forever.
+#[test]
+fn preview_failed_fills_member_raw_and_drops_a_stale_generation() {
+    let d = pile();
+    let (mut w, act) =
+        pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")], 1);
+    let WbAction::PreviewFile(path) = act else { panic!("expected PreviewFile, got {act:?}") };
+    let gen = w.preview_gen;
+
+    // A stale generation is dropped before the path is even checked.
+    w.preview_failed(gen - 1, path.clone(), "permission denied".into());
+    assert!(matches!(&w.context, Context::Member { raw: None, .. }), "stale gen must not fill raw");
+
+    w.preview_failed(gen, path, "permission denied".into());
+    match &w.context {
+        Context::Member { raw: Some(r), .. } => {
+            assert!(
+                r.lines.iter().any(|l| l.contains("permission denied")),
+                "{:?}",
+                r.lines
+            );
+        }
+        other => panic!("expected Member with raw filled, got {other:?}"),
+    }
+}
+
 /// `e` in Member context dispatches `.edit <member rel>`.
 #[test]
 fn e_dispatches_edit_for_the_member() {
@@ -673,6 +781,32 @@ fn a_digit_stages_an_edit_and_y_writes_then_refits() {
     // next member's remedy menu (the fourth dispatch site the final review's
     // re-review caught missing).
     assert!(refit.contains("--propose"), "{refit}");
+}
+
+/// `Enter` stages whichever remedy `▸` currently marks — the same effect as
+/// pressing the digit for `remedy_selected + 1`, just reading the index off
+/// the cursor instead of the key. Move down to the second remedy, then
+/// press Enter: `pending_edit` must be staged from `member_remedies()[1]`,
+/// not `[0]`.
+#[test]
+fn enter_stages_the_selected_remedy() {
+    let d = pile();
+    std::fs::write(d.path().join("t.tdy.sql"), target_sql()).unwrap();
+    let (mut w, act) = t_pile_and_enter(&d, vec![gap_member("2025-02.csv")], 0);
+    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    w.set_target_sql(target_sql().to_string());
+
+    let remedies = w.member_remedies();
+    assert!(remedies.len() >= 2, "{remedies:?}");
+    let second = remedies[1].clone();
+
+    w.key(key(KeyCode::Down)); // remedy_selected: 0 -> 1
+    assert!(matches!(&w.context, Context::Member { remedy_selected: 1, .. }), "{:?}", w.context);
+
+    let act = w.key(key(KeyCode::Enter));
+    assert_eq!(act, WbAction::None);
+    let (staged_remedy, ..) = w.pending_edit.as_ref().expect("Enter should stage an edit");
+    assert_eq!(staged_remedy, &second, "Enter must stage the remedy the ▸ marker points at");
 }
 
 /// After `$EDITOR` returns, the runtime re-reads the target and hands the
@@ -994,4 +1128,58 @@ fn set_preview_drops_a_stale_generation_before_the_path_check() {
     let raw = RawHead { lines: vec!["fresh".into()], truncated: false, sheets: vec![], grid: vec![] };
     w.set_preview(2, d.path().join("a.csv"), raw, None, false);
     assert!(matches!(&w.context, Context::File { raw, .. } if raw.lines == ["fresh".to_string()]));
+}
+
+/// The console's `PageUp` used to be unbounded — holding it could scroll
+/// past every real line into blank space with no way back except `Home`,
+/// which does not exist. It must now clamp to `scrollback_lines()`, the
+/// flattened line count `draw_console` actually has to show, no matter how
+/// many times it is pressed.
+#[test]
+fn console_page_up_clamps_to_the_scrollback_length() {
+    let d = pile();
+    let mut w = wb(&d);
+    for i in 0..5 {
+        w.begin(&format!(".show a.csv {i}"));
+        w.apply(outcome(&format!(".show a.csv {i}"), "line one\nline two\nline three", Payload::Nothing), d.path());
+    }
+    assert!(w.scrollback_lines() > 0);
+
+    for _ in 0..100 {
+        w.key(key(KeyCode::PageUp));
+    }
+    assert!(
+        w.scroll <= w.scrollback_lines(),
+        "scroll {} must not exceed scrollback_lines() {}",
+        w.scroll,
+        w.scrollback_lines()
+    );
+}
+
+/// PgUp/PgDn scroll `main_scroll` in a Pile context too, without disturbing
+/// `selected` — Up/Down still mean member selection there (see `key_main`'s
+/// Pile arm), so PgDn is the only way to move the pane's own scroll.
+#[test]
+fn pile_page_down_scrolls_without_moving_the_selection() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report(
+        "sales.tdy.sql",
+        (0..30).map(|i| member(&format!("2025-{i:02}.csv"), MemberStatus::Fits)).collect(),
+    );
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    let Context::Pile { selected, .. } = &mut w.context else { panic!("expected Pile") };
+    *selected = 3;
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    assert_eq!(w.main_scroll, 0);
+
+    w.key(key(KeyCode::PageDown));
+    let after_down = w.main_scroll;
+    assert!(after_down > 0, "PageDown must advance main_scroll in a Pile context");
+    w.key(key(KeyCode::PageUp));
+    assert!(w.main_scroll < after_down, "PageUp must move main_scroll back up");
+
+    assert!(matches!(&w.context, Context::Pile { selected: 3, .. }), "{:?}", w.context);
 }

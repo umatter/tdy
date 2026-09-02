@@ -174,6 +174,11 @@ fn a_workbook_member_shows_its_grid() {
                 grid: vec![
                     vec!["Region".into(), "Betrag CHF".into()],
                     vec!["Ost".into(), "1'100.00".into()],
+                    // Longer than 14 chars — `raw_head_lines`'s cell
+                    // truncation must clip it to a 13-char prefix plus `…`
+                    // and never show the string whole. Pins the TUI's
+                    // 14-char-per-cell rule (slice-3 review minor #13).
+                    vec!["West".into(), "Umsatzübersicht_gesamt".into()],
                 ],
             },
             spec: None,
@@ -183,6 +188,8 @@ fn a_workbook_member_shows_its_grid() {
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("Betrag CHF"), "{text}");
     assert!(text.contains("1'100.00"), "{text}");
+    assert!(text.contains("Umsatzübersic…"), "the truncated prefix must appear: {text}");
+    assert!(!text.contains("Umsatzübersicht_gesamt"), "the full string must not appear: {text}");
 }
 
 #[test]
@@ -535,6 +542,57 @@ fn the_evidence_view_shows_raw_beside_parsed_and_the_extremes() {
     );
     assert!(text.contains("a accepts"), "{text}");
     assert!(text.contains("Esc closes"), "{text}");
+}
+
+/// Evidence gained scroll (Task 3, folded into slice 4): with enough rows
+/// that the pane cannot show them all, `PageDown` (Main focus) advances
+/// `main_scroll` AND the render actually shifts — the first judgement's
+/// headline scrolls out of view.
+#[test]
+fn evidence_scrolls_with_page_down() {
+    use tdy::console::{Outcome, Payload};
+    use tdy::evidence::{Evidence, Pair};
+
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.begin(".accept t.tdy.sql m.csv");
+    let rows: Vec<Evidence> = (0..40)
+        .map(|i| Evidence::Shift {
+            column: format!("col{i:02}"),
+            source: "Betrag".into(),
+            shift: -2,
+            head: vec![Pair { row: 1, raw: "100".into(), parsed: "1.00".into() }],
+            smallest: Some(Pair { row: 2, raw: "5".into(), parsed: "0.05".into() }),
+            largest: Some(Pair { row: 3, raw: "999999".into(), parsed: "9999.99".into() }),
+            rows: 10,
+        })
+        .collect();
+    w.apply(
+        Outcome {
+            echo: ".accept t.tdy.sql m.csv".into(),
+            text: String::new(),
+            ok: true,
+            payload: Payload::Evidence { target: d.path().join("t.tdy.sql"), member: "m.csv".into(), rows },
+        },
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    assert_eq!(w.main_scroll, 0);
+
+    let before = screen(&mut w, 100, 20).join("\n");
+    assert!(before.contains("col00"), "the first judgement must be visible before scrolling: {before}");
+
+    for _ in 0..5 {
+        w.key(key(KeyCode::PageDown));
+    }
+    assert!(w.main_scroll > 0, "PageDown must advance main_scroll");
+
+    let after = screen(&mut w, 100, 20).join("\n");
+    assert!(
+        !after.contains("col00"),
+        "the first judgement must have scrolled out of view: {after}"
+    );
 }
 
 /// A marked file's browser row carries a `*` — `wb_ui` reads `w.marked`
