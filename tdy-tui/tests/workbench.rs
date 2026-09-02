@@ -948,6 +948,48 @@ fn evidence_arrives_and_a_repeats_the_exact_line() {
     assert!(w.status.contains("evidence closed"), "{}", w.status);
 }
 
+/// A `.cd` between step one landing and `a` being pressed is a deliberate
+/// degradation — see `Context::Evidence`'s doc comment. `apply`'s
+/// `sync_dir` call (triggered by the `.cd` Done's different cwd) must not
+/// clear or otherwise disturb the Evidence context, and `a` afterward must
+/// still dispatch the exact stored line without panicking; whether the
+/// session then treats that as step two or degrades to a fresh step one is
+/// tested at the session's own layer, not here.
+#[test]
+fn evidence_survives_a_cd_between_steps_and_still_redispatches_the_line() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".accept t.tdy.sql m.csv");
+    let rows = vec![tdy::evidence::Evidence::Unillustrated { reason: "x".into() }];
+    w.apply(
+        outcome(
+            ".accept t.tdy.sql m.csv",
+            "evidence for m.csv (nothing written):\n",
+            Payload::Evidence { target: d.path().join("t.tdy.sql"), member: "m.csv".into(), rows },
+        ),
+        d.path(),
+    );
+    assert!(matches!(w.context, Context::Evidence { .. }), "{:?}", w.context);
+
+    // A `.cd sub` Done: a real cwd move, `Payload::Nothing` (the same
+    // payload `Command::Cd` actually returns), landing while Evidence is
+    // still on screen.
+    w.apply(outcome(".cd sub", "sub\n", Payload::Nothing), &d.path().join("sub"));
+
+    match &w.context {
+        Context::Evidence { line, member, .. } => {
+            assert_eq!(line, ".accept t.tdy.sql m.csv");
+            assert_eq!(member, "m.csv");
+        }
+        other => panic!("a `.cd` Done must not clear or replace the Evidence context, got {other:?}"),
+    }
+
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let act = w.key(key(KeyCode::Char('a')));
+    assert_eq!(act, WbAction::Dispatch(".accept t.tdy.sql m.csv".to_string()));
+}
+
 /// `d` marks/unmarks the selected DATA file only (a directory is a no-op);
 /// `D` dispatches `.draft` over every mark, space-joined, and clears them.
 #[test]
@@ -1182,4 +1224,42 @@ fn pile_page_down_scrolls_without_moving_the_selection() {
     assert!(w.main_scroll < after_down, "PageUp must move main_scroll back up");
 
     assert!(matches!(&w.context, Context::Pile { selected: 3, .. }), "{:?}", w.context);
+}
+
+/// `record_target` now goes through the console's own tokenizer, so a
+/// quoted target with a space in it resolves to the whole quoted string,
+/// not just the text before the first space.
+#[test]
+fn record_target_resolves_a_quoted_target_with_a_space() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit \"my target.tdy.sql\" --dry-run");
+    let last = w.last_target.expect("last_target should be set");
+    assert_eq!(last.file_name().unwrap(), "my target.tdy.sql");
+}
+
+/// A flag typed *before* the positional target must not be mistaken for
+/// it — `record_target` skips tokens starting with `--` when looking for
+/// the target.
+#[test]
+fn record_target_skips_a_leading_flag_to_find_the_positional() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit --dry-run t.tdy.sql");
+    let last = w.last_target.expect("last_target should be set");
+    assert_eq!(last.file_name().unwrap(), "t.tdy.sql");
+}
+
+/// An unterminated quote is the tokenizer's own error; `record_target`
+/// records nothing rather than falling back to a partial parse, leaving
+/// `last_target` exactly as it was.
+#[test]
+fn record_target_records_nothing_on_an_unterminated_quote() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql"); // establishes a baseline last_target
+    let before = w.last_target.clone();
+    w.busy = None; // begin() is idempotent while busy; reset so the next call runs
+    w.begin(".fit \"broken");
+    assert_eq!(w.last_target, before, "an unterminated quote must not change last_target");
 }

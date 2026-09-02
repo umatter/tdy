@@ -1108,3 +1108,95 @@ fn every_context_renders_at_hostile_sizes() {
         }
     }
 }
+
+/// The status bar's hint text depends on what Main is actually showing
+/// (Task 4 item 3): a Pile's status line names `f refit`, which does
+/// nothing in a Member's remedy menu.
+#[test]
+fn pile_status_hint_names_refit() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload};
+    w.begin(".fit sales.tdy.sql");
+    let report = PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: 1,
+        failed: 0,
+        needs_review: 0,
+        members: vec![member("2025-01.csv", MemberStatus::Fits)],
+        lock_written: None,
+        dry_run: false,
+    };
+    w.apply(
+        Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let text = screen(&mut w, 110, 30).join("\n");
+    assert!(text.contains("f refit"), "{text}");
+}
+
+/// `spec_lines`' `name ← "source" : TYPE` rows must never let TYPE clip off
+/// the right edge (Task 4 item 7): a very long SOURCE (the file's own
+/// header spelling, which can be arbitrarily long) is ellipsized so TYPE
+/// survives. 132 cols keeps the File view's right half (the spec pane,
+/// after the browser pane and the 50/50 raw/spec split) around 50
+/// columns — enough for the 24-char-capped source but nowhere near enough
+/// for the 60-plus-char raw source, so the assertion below is only true
+/// because the cap engaged.
+#[test]
+fn a_long_source_is_ellipsized_so_the_type_never_clips() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload, SpecSummary, Table};
+    w.begin(".sniff a.csv");
+    let long_source = "Umsatzübersicht_gesamt_nach_Kanton_und_Gemeinde_und_Jahr_2025";
+    let spec = SpecSummary {
+        method: "heuristic".into(), confidence: Some(0.6),
+        extraction: r#"{"format":"delimited"}"#.into(),
+        transforms: vec![],
+        columns: vec![("betrag".into(), long_source.into(), "DECIMAL(38,2)".into())],
+        notes: vec![],
+    };
+    let preview = Table { columns: vec!["betrag".into()], types: vec![], rows: vec![], total: 0, truncated: false };
+    w.apply(Outcome {
+        echo: ".sniff a.csv".into(), text: String::new(), ok: true,
+        payload: Payload::Sniffed { path: d.path().join("a.csv"), spec, preview, kept_existing: false },
+    }, d.path());
+    let text = screen(&mut w, 132, 30).join("\n");
+    assert!(text.contains("DECIMAL(38,2)"), "TYPE must survive at a narrow width: {text}");
+    assert!(!text.contains(long_source), "the full source must not appear: {text}");
+}
+
+/// …and a Member's remedy menu names `1-9` (the digit shortcuts that stage
+/// a ranked remedy), which a Pile's own status line does not mention.
+#[test]
+fn member_status_hint_names_digit_shortcuts() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload};
+    w.begin(".fit sales.tdy.sql");
+    let report = PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: 0,
+        failed: 1,
+        needs_review: 0,
+        members: vec![gap_member("2025-02.csv")],
+        lock_written: None,
+        dry_run: false,
+    };
+    w.apply(
+        Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    w.key(key(KeyCode::Enter)); // opens the Member context
+    let text = screen(&mut w, 110, 30).join("\n");
+    assert!(text.contains("1-9"), "{text}");
+}

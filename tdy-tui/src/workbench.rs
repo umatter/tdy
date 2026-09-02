@@ -68,6 +68,23 @@ pub enum Context {
     /// line repeated. Arriving here necessarily replaces whatever `Member`
     /// context sent the `a` that produced it — see `key_evidence` and
     /// `Esc`'s handling below for the consequence.
+    ///
+    /// A typed `.cd` (or any other line) between this screen appearing and
+    /// `a` being pressed is a deliberate degradation, not a bug this module
+    /// needs to guard against: `Session::run`'s own rule clears
+    /// `pending_accept` on any line that is not that exact `.accept`
+    /// repeated, `.cd` included, so redispatching `line` unchanged after
+    /// one just gets step one again — a fresh evidence render, nothing
+    /// written — rather than silently accepting against whatever the
+    /// session now considers current. This context still holds the same
+    /// `target`/`member`/`rows` it was built with (`apply`'s `sync_dir`
+    /// call updates `browser.dir` on a real cwd move, never the context),
+    /// so the screen itself does not go stale or need to be cleared; only
+    /// the *session's* answer to a second `a` does, and that is tested at
+    /// the session's own layer (`console::mod`), not here. See
+    /// `evidence_survives_a_cd_between_steps_and_still_redispatches_the_line`
+    /// in `tests/workbench.rs` for the pin: this module's job is only to
+    /// not panic and not wrongly clear the context.
     Evidence { target: PathBuf, member: String, rows: Vec<Evidence>, line: String },
 }
 
@@ -346,17 +363,20 @@ impl Workbench {
     /// `last_target` alone, so `Payload::Fitted` from an `.accept` after a
     /// `.fit` (or a re-`.fit` after browsing elsewhere) still resolves.
     ///
-    /// Deliberately tiny and fragile, per the design ledger: this is a
-    /// whitespace split plus trimming a matching pair of `"` off the second
-    /// token, not the console's own tokenizer — a target path containing a
-    /// space, or spelled with single quotes, is a known gap, not a bug to
-    /// chase here.
+    /// Uses the console's own tokenizer (`tdy::console::parse::tokenize`),
+    /// so a quoted target with spaces, or a flag typed before the
+    /// positional (`.fit --dry-run t.tdy.sql`), both resolve correctly —
+    /// the whitespace-split this replaced got both wrong. An unterminated
+    /// quote is the tokenizer's own error and is not this function's to
+    /// recover from: it records nothing, leaving `last_target` at whatever
+    /// it already was, the same as any other line that isn't `.fit`/
+    /// `.accept`/`.check`.
     fn record_target(&mut self, line: &str) {
-        let mut tokens = line.trim().split_whitespace();
-        let Some(cmd) = tokens.next() else { return };
-        if matches!(cmd, ".fit" | ".accept" | ".check") {
-            if let Some(tok) = tokens.next() {
-                let tok = tok.trim_matches('"');
+        let Ok(tokens) = tdy::console::parse::tokenize(line.trim()) else { return };
+        let mut it = tokens.iter();
+        let Some(cmd) = it.next() else { return };
+        if matches!(cmd.as_str(), ".fit" | ".accept" | ".check") {
+            if let Some(tok) = it.find(|t| !t.starts_with("--")) {
                 self.last_target = Some(self.browser.dir.join(tok));
             }
         }

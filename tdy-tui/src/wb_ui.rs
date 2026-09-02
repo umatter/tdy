@@ -710,7 +710,21 @@ fn spec_lines(spec: &SpecSummary, threshold: f32) -> Vec<Line<'static>> {
         None => Line::raw("confidence: —".to_string()),
     });
     lines.push(Line::raw(""));
+    // TYPE is the fact that matters here — whether a column round-trips at
+    // all — so it should never be the half that clips off the right edge
+    // of this pane's 50% split; SOURCE (the file's own header spelling,
+    // which can be arbitrarily long — a spreadsheet title row, an XML tag
+    // path) is what gives way, the same status-first policy `browser_row`
+    // applies to a browser entry's name vs. status. Unlike `browser_row`,
+    // this is a fixed cap rather than one computed from the pane's actual
+    // width — `spec_lines` is not handed one — so it is a mitigation for
+    // any real column header, not a proof for every terminal size; an
+    // exceptionally narrow window can still clip. 24 leaves room for the
+    // `name ← "…" : ` prefix plus a type like `DECIMAL(38,2)` at ordinary
+    // widths.
+    const SOURCE_MAX: usize = 24;
     for (name, source, ty) in &spec.columns {
+        let source = truncate(source, SOURCE_MAX);
         lines.push(Line::raw(format!("{name} ← \"{source}\" : {ty}")));
     }
     if !spec.notes.is_empty() {
@@ -792,7 +806,18 @@ fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
     let keys = match w.focus {
         Focus::Console => "Tab focus · ^L zoom · ^Q quit",
         Focus::Browser => "↑↓ move · enter open · s sniff · e edit · Tab focus · ^Q quit",
-        Focus::Main => "↑↓ scroll · Tab focus · ^Q quit",
+        // The keys that actually do something in Main depend on what Main
+        // is showing — a Pile's own keys (`f`, `t`) mean nothing in a
+        // Member's remedy menu and vice versa, so this mirrors `key_main`'s
+        // own match on `w.context` rather than giving every context the
+        // same generic "↑↓ scroll" hint.
+        Focus::Main => match &w.context {
+            Context::Pile { .. } => "↑↓ member · enter open · f refit · t edit target · ^Q quit",
+            Context::Member { .. } => "↑↓ remedy · enter/1-9 stage · a accept · e edit · Esc back",
+            Context::Evidence { .. } => "a accept · Esc close · PgUp/Dn scroll",
+            Context::File { .. } => "↑↓ scroll · Tab focus · ^Q quit",
+            Context::Query(_) | Context::Empty => "Tab focus · ^Q quit",
+        },
     };
     let [left, right] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(keys.len() as u16 + 2)])

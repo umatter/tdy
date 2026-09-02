@@ -392,13 +392,10 @@ fn act_on_wb(
             if let Err(e) = re {
                 anyhow::bail!("cannot take the terminal back after the editor: {e}");
             }
-            if let Err(e) = status {
-                wb.note(format!("{e:#}"));
-            }
             // The edit may have changed the file's sidecar status (or
             // nothing at all); either way a refresh is cheap and honest.
             wb.browser.refresh();
-            after_editing(wb, &path);
+            after_editing(wb, &path, status.is_ok());
         }
     }
     Ok(())
@@ -418,6 +415,21 @@ async fn run_workbench(
 
     let (tx, mut rx) = mpsc::unbounded_channel::<WbMsg>();
     let line_tx = spawn_console_worker(root, cfg.clone(), tx.clone());
+    // Deliberately NOT `dispatch_line` (slice-3's final review flagged this
+    // as a real, if unreachable, gap): the launch line is sent to the
+    // worker directly, without `begin`'s synchronous busy mark, because no
+    // `Workbench` — hence no `key()` gate — exists yet at this point in
+    // `main`. That leaves a window, open until this same line's own
+    // `WbMsg::Started` round-trips back through the loop below and calls
+    // `wb.begin` there (idempotent, so the eventual real mark is a no-op
+    // if this ever raced it): `wb.busy` reads `None` for those roughly
+    // 60 ms (one poll interval), so a keystroke landing in the window could
+    // take the busy slot first via `dispatch_line`'s synchronous `begin`,
+    // and only then see the launch line's `Started` arrive on top of it.
+    // Unreachable for human input: the terminal has not drawn its first
+    // frame yet, let alone been polled for a key, and the worker's
+    // `Started` for a freshly spawned task is not doing real work, so it
+    // beats any human reaction time back through the channel.
     if let Some(line) = initial {
         if line_tx.send(line).is_err() {
             wb.worker_died("the console worker is gone — restart the workbench");
@@ -496,8 +508,9 @@ async fn run_workbench(
     Ok(())
 }
 
-/// `$EDITOR` has returned. If what was edited is the pile's own target,
-/// two things must happen before the next keystroke.
+/// `$EDITOR` has returned. If what was edited is the pile's own target and
+/// the editor actually succeeded, two things must happen before the next
+/// keystroke.
 ///
 /// **Say the lock is stale** (spec §8 rule 2: "`.edit` is the honest
 /// exception… on return the browser status updates and the console notes
@@ -506,33 +519,62 @@ async fn run_workbench(
 /// `Command::Edit`'s arm in `console::dispatch` returns `Payload::Edit`
 /// *before* the editor runs — the console cannot know what the editor did,
 /// or whether it even exited cleanly. The runtime is the only place that
-/// knows the editor has returned, so it is the honest place to say so.
+/// knows the editor has returned, so it is the honest place to say so — and
+/// that includes an editor that exited non-zero or never launched at all
+/// (`run_editor`'s `Err`): calling this unconditionally used to overwrite a
+/// real failure with "target edited", the exact false-positive `WriteTarget`'s
+/// guard exists to avoid on the write side. `edit_outcome_note` is the
+/// decision table, pulled out so it is a plain function to test rather than
+/// something only provable by actually running an editor.
 ///
 /// **Re-read the declaration.** The remedy menu stages its edits against
 /// `wb.target_sql`, and `write_target`'s guard refuses to write when the
 /// file no longer matches that text. Leaving it stale would turn the very
 /// next remedy digit into a refusal ("changed since it was read"), which is
 /// safe but useless; re-reading makes the next remedy stage against what
-/// the human just wrote. A read failure is reported, not swallowed — and
+/// the human just wrote — but only when the editor succeeded, or there is
+/// nothing new to read. A read failure is reported, not swallowed — and
 /// leaves the old text in place, where the guard will catch it.
-fn after_editing(wb: &mut Workbench, edited: &Path) {
-    let Some(target) = wb.pile_target() else { return };
-    // Compare canonically: the dispatched `.edit` line is spelled relative
-    // to the session's cwd, the context's target is absolute.
-    let same = match (target.canonicalize(), edited.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => target == edited,
-    };
-    if !same {
-        return;
-    }
-    let target = target.to_path_buf();
-    match std::fs::read_to_string(&target) {
-        Ok(text) => {
-            wb.set_target_sql(text);
-            wb.note("target edited; lock is stale — `.fit` to re-prove".to_string());
+fn after_editing(wb: &mut Workbench, edited: &Path, editor_succeeded: bool) {
+    let is_pile_target = wb.pile_target().is_some_and(|target| {
+        // Compare canonically: the dispatched `.edit` line is spelled
+        // relative to the session's cwd, the context's target is absolute.
+        match (target.canonicalize(), edited.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => target == edited,
         }
-        Err(e) => wb.note(format!("cannot read {}: {e:#}", target.display())),
+    });
+    if editor_succeeded && is_pile_target {
+        let target = wb.pile_target().expect("checked above").to_path_buf();
+        match std::fs::read_to_string(&target) {
+            Ok(text) => wb.set_target_sql(text),
+            Err(e) => {
+                wb.note(format!("cannot read {}: {e:#}", target.display()));
+                return;
+            }
+        }
+    }
+    if let Some(note) = edit_outcome_note(editor_succeeded, is_pile_target) {
+        wb.note(note.to_string());
+    }
+}
+
+/// The decision half of `after_editing`: whether — and what — to tell the
+/// operator once an editor has returned, as a plain table so it can be
+/// tested without a subprocess.
+///
+/// - editor succeeded, editing the pile's own target: the write may have
+///   changed the declaration, so its lock is stale — `.fit` to re-prove.
+/// - editor failed, for any reason (never launched, or exited non-zero),
+///   whatever it was pointed at: nothing changed, so the target (if any)
+///   is exactly as it was.
+/// - editor succeeded editing something that is not the pile's target:
+///   no target-shaped news, so nothing to say here.
+fn edit_outcome_note(editor_succeeded: bool, is_pile_target: bool) -> Option<&'static str> {
+    match (editor_succeeded, is_pile_target) {
+        (true, true) => Some("target edited; lock is stale — `.fit` to re-prove"),
+        (false, _) => Some("editor exited with an error; target unchanged"),
+        (true, false) => None,
     }
 }
 
@@ -718,5 +760,38 @@ mod tests {
                 propose: true,
             }
         );
+    }
+
+    /// Several `.tdy.sql` files beside the working directory: a picker
+    /// screen would be the friendlier answer, but v1 declines to guess —
+    /// same plain-workbench arm as the zero-targets case above, not the
+    /// first (or any) one found silently.
+    #[test]
+    fn no_argument_and_several_targets_opens_the_plain_workbench() {
+        let _lock = CWD_TEST_LOCK.lock().unwrap();
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.tdy.sql"), target_sql()).unwrap();
+        std::fs::write(d.path().join("b.tdy.sql"), target_sql()).unwrap();
+        let _restore = RestoreCwd(std::env::current_dir().unwrap());
+        std::env::set_current_dir(d.path()).unwrap();
+        let Mode::Workbench { root, initial } = choose_mode(None).unwrap();
+        assert_eq!(root, d.path().canonicalize().unwrap());
+        assert_eq!(initial, None);
+    }
+
+    /// `edit_outcome_note`'s whole table (Task 4 item 2): the runtime's
+    /// only source of truth for what to say once an editor returns. This
+    /// is the pin against the bug this item fixes — `after_editing` used
+    /// to run unconditionally and could report "target edited" over an
+    /// editor that actually failed.
+    #[test]
+    fn edit_outcome_note_table() {
+        assert_eq!(
+            edit_outcome_note(true, true),
+            Some("target edited; lock is stale — `.fit` to re-prove")
+        );
+        assert_eq!(edit_outcome_note(false, true), Some("editor exited with an error; target unchanged"));
+        assert_eq!(edit_outcome_note(false, false), Some("editor exited with an error; target unchanged"));
+        assert_eq!(edit_outcome_note(true, false), None);
     }
 }
