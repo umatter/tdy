@@ -76,6 +76,11 @@ pub struct Workbench {
     pub should_quit: bool,
     /// Scroll position of the File view in the main pane.
     pub main_scroll: usize,
+    /// `?` (from Browser or Main focus) opens the key-help overlay; while
+    /// set, the *next* key just closes it again instead of acting normally
+    /// — see `key()`. Console focus never sets this, since `?` there is an
+    /// ordinary character for the line editor.
+    pub help: bool,
     /// Set when the last `apply`d outcome's payload was `Payload::Continue`;
     /// drives `prompt()`.
     sql_pending: bool,
@@ -96,6 +101,7 @@ impl Workbench {
             status: String::new(),
             should_quit: false,
             main_scroll: 0,
+            help: false,
             sql_pending: false,
         }
     }
@@ -111,6 +117,15 @@ impl Workbench {
         if ctrl && k.code == KeyCode::Char('q') {
             self.should_quit = true;
             return WbAction::Quit;
+        }
+        // The help overlay swallows exactly the next key, whatever it is,
+        // to close itself — that is the whole overlay contract, and it
+        // takes priority even over the busy gate below (help can only ever
+        // have been opened while not busy, but closing it must never
+        // depend on that).
+        if self.help {
+            self.help = false;
+            return WbAction::None;
         }
         // One command at a time, matching the console's one-Session
         // serialization: while busy, only quit and focus movement act.
@@ -129,6 +144,13 @@ impl Workbench {
             KeyCode::Char('q') if !ctrl && matches!(self.focus, Focus::Browser | Focus::Main) => {
                 self.should_quit = true;
                 return WbAction::Quit;
+            }
+            // Console focus needs `?` as an ordinary character (falls
+            // through to `key_console` below); Browser/Main have no use for
+            // a literal `?`, so there it opens the key-help overlay.
+            KeyCode::Char('?') if !ctrl && matches!(self.focus, Focus::Browser | Focus::Main) => {
+                self.help = true;
+                return WbAction::None;
             }
             _ => {}
         }

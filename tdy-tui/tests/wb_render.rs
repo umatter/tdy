@@ -5,9 +5,12 @@
 
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tdy_tui::browser::Browser;
 use tdy_tui::wb_ui;
 use tdy_tui::workbench::Workbench;
+
+fn key(c: KeyCode) -> KeyEvent { KeyEvent::new(c, KeyModifiers::NONE) }
 
 fn screen(w: &mut Workbench, cols: u16, rows: u16) -> Vec<String> {
     let mut t = Terminal::new(TestBackend::new(cols, rows)).unwrap();
@@ -151,6 +154,32 @@ fn a_query_context_shows_the_table_and_counts() {
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("region") && text.contains("14200.00"), "{text}");
     assert!(text.contains("500 row(s)") && text.contains("truncated"), "{text}");
+}
+
+/// The Empty view now draws the generated mark (half-block glyphs) above
+/// the orientation lines, in a pane tall enough to hold it.
+#[test]
+fn the_empty_view_draws_the_mark() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains('▀') || text.contains('▄'), "no mark glyph found: {text}");
+    assert!(text.contains("select a file"), "{text}");
+}
+
+/// `?` opens a bordered ` keys ` overlay over the main pane, listing the
+/// current key vocabulary and showing the mark again.
+#[test]
+fn the_help_overlay_lists_the_keys() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Char('?')));
+    assert!(w.help);
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains(" keys "), "{text}");
+    assert!(text.contains("Tab"), "{text}");
+    assert!(text.contains('▀') || text.contains('▄'), "no mark glyph in overlay: {text}");
 }
 
 /// Regression: the preview-table height heuristic used to apply its floor

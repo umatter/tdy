@@ -11,6 +11,7 @@ pub use tdy::evidence;
 
 pub mod app;
 pub mod browser;
+pub mod mark;
 pub mod remedy;
 pub mod ui;
 pub mod wb_ui;

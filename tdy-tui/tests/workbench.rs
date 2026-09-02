@@ -221,6 +221,34 @@ fn a_dead_worker_clears_busy_instead_of_wedging_the_ui() {
 /// rendered at the previous file's offset is a blank pane, which reads as
 /// an empty file — while a same-path update (the `.sniff` follow-up filling
 /// in the raw half) must keep the scroll the user set.
+/// `?` from Browser (or Main) focus opens the help overlay instead of
+/// acting as an ordinary key; whatever key comes next just closes it again
+/// rather than being dispatched — the overlay swallows one keystroke.
+#[test]
+fn question_mark_opens_help_from_browser_and_any_key_closes_it() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.key(key(KeyCode::Tab)); // Browser
+    assert_eq!(w.focus, Focus::Browser);
+    assert!(!w.help);
+    assert_eq!(w.key(key(KeyCode::Char('?'))), WbAction::None);
+    assert!(w.help);
+    assert_eq!(w.key(key(KeyCode::Char('x'))), WbAction::None);
+    assert!(!w.help, "any key closes the overlay");
+}
+
+/// In Console focus `?` is just a character for the line editor — the
+/// overlay would otherwise make it impossible to type a literal `?`.
+#[test]
+fn question_mark_in_console_is_just_a_character() {
+    let d = pile();
+    let mut w = wb(&d);
+    assert_eq!(w.focus, Focus::Console);
+    w.key(key(KeyCode::Char('?')));
+    assert!(!w.help);
+    assert!(w.editor.text().contains('?'), "{}", w.editor.text());
+}
+
 #[test]
 fn main_scroll_resets_on_a_new_file_and_survives_a_same_path_update() {
     let d = pile();

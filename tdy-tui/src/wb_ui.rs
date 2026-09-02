@@ -16,6 +16,7 @@ use ratatui::Frame;
 
 use tdy::console::{EntryStatus, RawHead, SpecSummary, Table};
 
+use crate::mark;
 use crate::workbench::{Context, Focus, Workbench};
 
 const DIM: Color = Color::DarkGray;
@@ -28,6 +29,26 @@ const BROWSER_WIDTH: u16 = 26;
 /// below this same number (see `infer.rs`), so it is mirrored here rather
 /// than invented.
 const ESCALATION: f32 = 0.8;
+/// Below this many inner rows the Empty view drops the mark rather than
+/// squeeze it against the orientation text beneath it.
+const MARK_MIN_HEIGHT: u16 = 10;
+
+/// The current key vocabulary, key then meaning, in one slice so later
+/// tasks (d/D/f/a/t) append a row here rather than hunting across the
+/// module for every place a key is explained. `draw_help` renders it.
+const HELP_KEYS: &[(&str, &str)] = &[
+    ("Tab", "cycle focus"),
+    ("Esc", "focus the console"),
+    ("^Q", "quit"),
+    ("^L", "zoom the console"),
+    ("^Up / ^Down", "resize the console"),
+    ("↑ / ↓", "move selection / scroll"),
+    ("Enter", "open file or directory"),
+    ("Backspace", "go up a directory"),
+    ("s", "sniff the selected file"),
+    ("e", "edit the selected file"),
+    ("?", "show this help"),
+];
 
 pub fn draw(f: &mut Frame, w: &mut Workbench) {
     let [header, body, status] =
@@ -65,8 +86,67 @@ fn draw_right(f: &mut Frame, area: Rect, w: &mut Workbench) {
         Constraint::Length(w.console_rows + 2),
     ])
     .areas(area);
-    draw_main(f, main, w);
+    // The overlay replaces the main pane's own drawing rather than layering
+    // on top of it — ratatui has no z-order, and "over the main pane area"
+    // just means "instead of it, for as long as help is up."
+    if w.help {
+        draw_help(f, main);
+    } else {
+        draw_main(f, main, w);
+    }
     draw_console(f, console, w);
+}
+
+/// The `?` overlay: a bordered ` keys ` block over the main pane, the mark
+/// beside the key vocabulary. `Workbench::key` owns when this is shown and
+/// how it closes; this only draws it.
+fn draw_help(f: &mut Frame, area: Rect) {
+    let block = Block::bordered()
+        .title(" keys ")
+        .border_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let [mark_area, keys_area] =
+        Layout::horizontal([Constraint::Length(mark::WIDTH as u16 + 2), Constraint::Fill(1)])
+            .areas(inner);
+    f.render_widget(Paragraph::new(mark_lines()), mark_area);
+
+    let key_w = HELP_KEYS.iter().map(|&(k, _)| k.chars().count()).max().unwrap_or(0);
+    let lines: Vec<Line<'static>> = HELP_KEYS
+        .iter()
+        .map(|&(k, desc)| Line::raw(format!("{k:key_w$}  {desc}")))
+        .collect();
+    f.render_widget(Paragraph::new(lines), keys_area);
+}
+
+/// The generated mark (`mark::GRID`) as 8 terminal rows of half-block
+/// glyphs: each text row packs two pixel rows into one `▀`/`▄` cell, using
+/// both the foreground (upper pixel) and background (lower pixel) colors —
+/// the same trick `assets/gen_logo.py`'s `ansi()` uses for `logo.ansi`,
+/// through ratatui's `Style` instead of raw escapes.
+fn mark_lines() -> Vec<Line<'static>> {
+    (0..mark::HEIGHT / 2)
+        .map(|r| {
+            let spans: Vec<Span<'static>> = (0..mark::WIDTH)
+                .map(|c| {
+                    let upper = mark::GRID[2 * r][c];
+                    let lower = mark::GRID[2 * r + 1][c];
+                    match (upper, lower) {
+                        (Some(u), Some(l)) => Span::styled("▀", Style::new().fg(rgb(u)).bg(rgb(l))),
+                        (Some(u), None) => Span::styled("▀", Style::new().fg(rgb(u))),
+                        (None, Some(l)) => Span::styled("▄", Style::new().fg(rgb(l))),
+                        (None, None) => Span::raw(" "),
+                    }
+                })
+                .collect();
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn rgb((r, g, b): (u8, u8, u8)) -> Color {
+    Color::Rgb(r, g, b)
 }
 
 fn pane_block(title: String, focused: bool) -> Block<'static> {
@@ -163,12 +243,20 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
 
     match &w.context {
         Context::Empty => {
-            let lines = vec![
-                Line::raw("select a file on the left, or type `.help`"),
-                Line::raw(w.browser.root().display().to_string()),
-                Line::raw("`tdy ui <target>` opens the classic review flow"),
-            ];
-            f.render_widget(Paragraph::new(lines).block(block), area);
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            let mut lines = Vec::new();
+            // Below MARK_MIN_HEIGHT there is nowhere to put 8 rows of mark
+            // plus a blank plus 3 lines of text without crowding all of
+            // it — drop the mark rather than draw an illegible sliver.
+            if inner.height >= MARK_MIN_HEIGHT {
+                lines.extend(mark_lines());
+                lines.push(Line::raw(""));
+            }
+            lines.push(Line::raw("select a file on the left, or type `.help`"));
+            lines.push(Line::raw(w.browser.root().display().to_string()));
+            lines.push(Line::raw("`tdy ui <target>` opens the classic review flow"));
+            f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
         }
         Context::File { raw, spec, preview, .. } => match spec {
             // No sidecar yet: the raw head as-is, and nothing that looks
