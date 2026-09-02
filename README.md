@@ -59,11 +59,15 @@ Datum;Region;Betrag
 ```
 
 Semicolons, day-first dates, and amounts grouped with an apostrophe — three
-things a stock CSV reader either gets wrong or hands back as strings. Ask
-tdy what it sees:
+things a stock CSV reader either gets wrong or hands back as strings. Open
+the console and ask tdy what it sees:
 
 ```bash
-tdy sniff 2025-01.csv --no-llm
+tdy
+```
+
+```
+tdy> .sniff 2025-01.csv --no-llm
 ```
 
 It prints the parsing spec it inferred and a preview. Trimmed:
@@ -104,10 +108,11 @@ preview (heuristic method, confidence 0.95):
 
 That spec is now on disk as `2025-01.csv.tdy.toml`, next to the file — plain
 text you can read, edit and commit. `messy('2025-01.csv')` in SQL uses it,
-so the query sees the tidy table from the preview, never the raw text:
+so the query sees the tidy table from the preview, never the raw text —
+still in the console, a statement ends with `;`:
 
-```bash
-tdy query "SELECT count(*) AS rows, sum(betrag) AS total_chf, max(datum) AS datum FROM messy('2025-01.csv')"
+```
+tdy> SELECT count(*) AS rows, sum(betrag) AS total_chf, max(datum) AS datum FROM messy('2025-01.csv');
 ```
 
 ```
@@ -125,10 +130,10 @@ both because the sidecar says so, and only because it says so.
 **2. The whole pile.** Step 1 took one file on its own terms. For a
 dataset you go the other way: declare the one table you *want*, and let tdy
 prove which files can become it. Start by letting tdy draft that
-declaration from the files:
+declaration from the files, still in the console:
 
-```bash
-tdy draft 2025-*.csv 2025-*.xlsx
+```
+tdy> .draft 2025-*.csv 2025-*.xlsx
 ```
 
 ```sql
@@ -162,8 +167,9 @@ refuses to guess that `Datum` and `Date`, or `Betrag`, `Betrag CHF` and
 `Amount`, mean the same thing — you know that; it cannot. (Its grouping
 note is wrong for the same reason: this *is* one dataset, in four
 vocabularies.) Collapsing it to the three columns you mean, each synonym
-carried as a `matches` spelling, is the human step. Write that as
-`sales.tdy.sql` beside the data:
+carried as a `matches` spelling, is the human step. The console has no way
+to write a file from a literal, so write that as `sales.tdy.sql` beside the
+data in your shell:
 
 ```bash
 cat > sales.tdy.sql <<'EOF'
@@ -180,27 +186,38 @@ EOF
 ```
 
 You write this once, review it in git like code, and never touch the
-files. `tdy fit` plans every file the glob matches onto it:
+files. `tdy fit` plans every file the glob matches onto it — back in the
+console:
 
-```bash
-tdy fit sales.tdy.sql
+```
+tdy> .fit sales.tdy.sql
 ```
 
 ```
+sales: 12 file(s) match, 3 declared column(s)
+
   2025-01.csv              fits      month<-"Datum"  region<-"Region"  amount_chf<-"Betrag"
   ...
   2025-07.csv              GAP
       `amount_chf` (DECIMAL(14,2)): no column of this file binds
           looked for "amount_chf", "Betrag", "Betrag CHF", "Amount", "Umsatz"
           the file has ["Datum", "Region", "Betrag Rp."]
+          If one of those supplies it, say so:
+            amount_chf DECIMAL(14,2) OPTIONS(matches = '…')
+          If none does, this file cannot join the dataset.
   2025-08.csv              GAP
       `amount_chf`: 2 columns of this file match, which is ambiguous
           column 3 named "Betrag" and column 4 named "Betrag"
           tdy will not choose between them — they may well mean different things.
   2025-09.xlsx             fits      month<-"Datum"  region<-"Region"  amount_chf<-"Betrag CHF"
-  2025-10.xlsx             fits      month<-"Date"   region<-"Region"  amount_chf<-"Amount"
+  2025-10.xlsx             fits      month<-"Date"  region<-"Region"  amount_chf<-"Amount"
   2025-11.csv              GAP
       `region` (TEXT): no column of this file binds
+          looked for "region", "Region", "Kanton", "Gebiet"
+          the file has ["Datum", "Betrag"]
+          If one of those supplies it, say so:
+            region TEXT OPTIONS(matches = '…')
+          If none does, this file cannot join the dataset.
   ...
 9 of 12 file(s) fit `sales`.
 Error: 3 file(s) cannot reach the declared schema; no lock written. Fix them, exclude them, or widen the target.
@@ -211,7 +228,7 @@ because a dataset silently missing three months is the outcome tdy exists
 to prevent. July is in Rappen, August has two `Betrag` columns and does not
 say which is meant, November has no region: none of that is tdy's to
 decide. Decide it — here, by leaving the three out — with one `exclude`
-line in the `WITH` block of `sales.tdy.sql`:
+line in the `WITH` block of `sales.tdy.sql`, in your shell again:
 
 ```bash
 cat > sales.tdy.sql <<'EOF'
@@ -228,11 +245,11 @@ WITH (
 EOF
 ```
 
-Fit again, and query the dataset as one table:
+Fit again, and query the dataset as one table — back in the console:
 
-```bash
-tdy fit sales.tdy.sql            # 9 of 9 fit; writes sales.tdy.lock
-tdy query "SELECT region, sum(amount_chf) AS total_chf FROM dataset('sales.tdy.sql') GROUP BY region ORDER BY region"
+```
+tdy> .fit sales.tdy.sql            # 9 of 9 fit; writes sales.tdy.lock
+tdy> SELECT region, sum(amount_chf) AS total_chf FROM dataset('sales.tdy.sql') GROUP BY region ORDER BY region;
 ```
 
 ```
@@ -253,9 +270,10 @@ each one was read is on disk, in git-diffable text, beside the data:
 bytes) and one `*.tdy.toml` per member.
 
 **3. Look around.** `tdy ui sales.tdy.sql` opens the same pile in the
-terminal UI, with each refusal next to the file's own rows. To point tdy at
-your own files, start with `tdy sniff <file>`; for a model to help with the
-hard cases, see [Two-tier inference](#two-tier-inference) and
+terminal UI, with each refusal next to the file's own rows (`tdy` alone does
+too, once `tdy-tui` is on your PATH). To point tdy at your own files, start
+with `tdy sniff <file>` or the console's `.sniff <file>`; for a model to
+help with the hard cases, see [Two-tier inference](#two-tier-inference) and
 `tdy config init`. (The repo keeps the same declaration as
 `testdata/drifting_exports/sales.tdy.sql` and `sales_ok.tdy.sql`, with
 commentary, for its tests.)
@@ -375,6 +393,36 @@ providers do not actually enforce a schema that shape (OpenAI's strict mode
 rejects it outright), and a model that has never seen the contract invents
 fields. `TDY_MAX_RETRIES` raises the correction budget — each round carries
 the exact failure back, so a hard file often converges given a few more.
+
+## The console
+
+`tdy` with nothing after it opens a console, the way `sqlite3` does. SQL
+runs as typed; a statement ends with `;` and may span lines. Everything else
+is a dot-command, one per CLI subcommand, with the CLI's flags:
+
+```
+tdy> .ls
+2025-01.csv    sniffed 0.95 (heuristic)
+2025-02.csv
+sales.tdy.sql  target, no lock
+tdy> .sniff 2025-02.csv
+tdy> SELECT region, sum(betrag) FROM messy('2025-02.csv') GROUP BY 1;
+tdy> .draft 2025-*.csv 2025-*.xlsx --to sales.tdy.sql
+tdy> .fit sales.tdy.sql
+tdy> .accept sales.tdy.sql 2025-07.csv      # shows the evidence; again to accept
+tdy> .output totals.parquet
+tdy> SELECT region, sum(amount_chf) FROM dataset('sales.tdy.sql') GROUP BY 1;
+```
+
+`.help` lists them. Globs are expanded by the console itself; every path is
+confined to the directory the console was started in. The text a command
+prints is the same text the subcommand prints — one function produces both,
+and a test holds them equal — so nothing you learn in one place is wrong in
+the other.
+
+Piped input makes it a batch runner: `tdy < setup.tdy` runs the lines and
+exits non-zero at the first error. `tdy console` forces the plain console;
+when the terminal UI is installed, `tdy` alone opens that instead.
 
 ## Commands
 
@@ -717,6 +765,12 @@ Int64-plus-Utf8-becomes-Utf8 widening an ordinary `UNION ALL` would do.
 tdy ui sales.tdy.sql        # or `tdy-tui sales.tdy.sql`
 ```
 
+`tdy` with no arguments at all opens this too, as long as `tdy-tui` is on
+your PATH and you're at a terminal — no separate `ui` subcommand needed for
+the everyday case. `tdy ui`/`tdy-tui` is how you point it at a target
+directly, and `tdy console` forces the plain console even when the terminal
+UI is installed.
+
 The review loop on one screen: the pile with each member's status and the
 *reason* beside it, a member view putting the gap next to the file's own rows
 (in the file's own spelling, which is what a `matches` clause needs), remedies
@@ -968,12 +1022,17 @@ cargo install --path .        # puts `tdy` on your PATH
 cargo install --path tdy-tui  # the terminal UI behind `tdy ui` (optional, separate binary)
 ```
 
+`tdy` with no arguments opens a console (batteries included, no second
+install); with `tdy-tui` also installed and a terminal attached, `tdy` alone
+opens that instead — see [The console](#the-console) and
+[For humans: `tdy ui`](#for-humans-tdy-ui).
+
 ## Build & test
 
 ```bash
 cargo build --release
-cargo test --lib --tests    # 355 tests; plain `cargo test` also runs doc-tests
-python3 gen_fixtures.py     # regenerate every fixture (needs openpyxl + xlwt)
+cargo test --workspace --lib --tests    # 485 tests; plain `cargo test` also runs doc-tests
+python3 gen_fixtures.py                 # regenerate every fixture (needs openpyxl + xlwt)
 ```
 
 The suite is in five parts: unit tests beside the code; `tests/e2e.rs` (the

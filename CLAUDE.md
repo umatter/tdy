@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 446 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 485 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -217,8 +217,8 @@ published crate keeps its small tree; **CI must say `--workspace`** or cargo bui
 root package alone). Everything that *decides* is in plain modules with plain tests —
 `app.rs` is a pure state machine (`Key` in, `Action` out, no terminal), `remedy.rs` edits the
 target **textually** and re-parses to prove the edit took effect (never re-serialises the AST,
-which would delete the human's comments), `evidence.rs` computes what a judgement does. `ui.rs`
-renders and mutates nothing, so `tests/render.rs` asserts on real drawn text via `TestBackend`.
+which would delete the human's comments). `ui.rs` renders and mutates nothing, so
+`tests/render.rs` asserts on real drawn text via `TestBackend`.
 Three rules are load-bearing: acceptance is reachable *only* from the evidence screen and only
 one member at a time (`a` elsewhere does nothing); every target write is preceded by a shown
 diff; and the remedy menu is ranked by `--propose` (which of the file's columns can actually
@@ -228,6 +228,24 @@ falls back to a sniff when the member has no sidecar, which is exactly the refus
 screen most needs it. `tdy::progress` (owned `Sink`, so a fit can run on a spawned task) is what
 lets the status line narrate; a transient remark must use `Msg::Note`, never `Msg::Progress`,
 or the UI stays busy forever and takes no keys but `q`.
+
+**The console is `src/console/`** (`parse` — pure grammar; `Session::run` — one line in, an
+`Outcome { echo, text, payload, ok }` out; `line` — the prompt's editor as a state machine;
+`repl` — the TTY loop and the piped batch runner). `tdy` with no subcommand opens it (or execs
+`tdy-tui` when that is on PATH and stdio is a terminal). Its `text` is the CLI's text because
+`src/commands.rs` produces both — the CLI arms print what `commands::*_text` return, and
+`tests/console.rs` asserts the console's `.fit`/`.sniff`/`.draft`/query text equals the
+binary's. The query context is deliberately **not** kept across statements (a re-sniff between
+two queries would serve a stale `MemTable`). `.accept` is two steps in the session itself
+(`pending_accept`), and any other command in between resets it. `evidence` now lives in the
+library (`src/evidence.rs`); `tdy-tui` re-exports it (`pub use tdy::evidence;` in
+`tdy-tui/src/lib.rs`) rather than keeping its own copy.
+
+The console's raw-mode line editor (`src/console/line.rs`, `src/console/repl.rs`) needs
+`crossterm` for key events, so `crossterm` is now a **direct** dependency of `tdy` itself —
+root `Cargo.toml`, not only `tdy-tui/Cargo.toml`. The root `Cargo.toml`'s workspace comment
+("ratatui and crossterm are the TUI's business, and keeping them out of `tdy`'s dependency
+tree...") is stale for crossterm specifically; ratatui alone stays `tdy-tui`-only.
 
 ## Real data
 
