@@ -37,7 +37,17 @@ pub enum Focus {
 pub enum Context {
     #[default]
     Empty,
-    File { path: PathBuf, raw: RawHead, spec: Option<SpecSummary>, preview: Option<Table> },
+    File {
+        path: PathBuf,
+        raw: RawHead,
+        spec: Option<SpecSummary>,
+        preview: Option<Table>,
+        /// The sidecar's fingerprint no longer matches the file
+        /// (`SidecarStatus::Stale`) — the footer names `--force` instead of
+        /// the plain "not sniffed" hint, which would send someone to re-run
+        /// a command that will just report the same staleness back.
+        stale: bool,
+    },
     Query(Table),
     Pile { target: PathBuf, report: PileReport, selected: usize },
     Member {
@@ -132,10 +142,29 @@ pub struct Workbench {
     /// the file to before writing — see `WbAction::WriteTarget`). Its mere
     /// presence makes `key()` modal — see the top of that function.
     pub pending_edit: Option<(Remedy, Edit, PathBuf, String)>,
+    /// Browser rows marked with `d` (rel paths, relative to `browser.dir`);
+    /// `D` drafts them. Cleared on any directory move — see `enter_browser`,
+    /// `key_browser`'s `Backspace` arm and `apply`'s `sync_dir` call — since
+    /// a rel path only means something inside the directory it was marked
+    /// in.
+    pub marked: Vec<String>,
+    /// Below this confidence a red confidence number / browser `✓` glyph.
+    /// `wb_ui` cannot reach `Config` on its own, so the runtime threads the
+    /// real value through here instead of the module inventing one — see
+    /// `spec.rs`'s escalation threshold, which this mirrors.
+    pub confidence_threshold: f32,
+    /// Bumped every time `key()`/`apply()` RETURNS a fresh `WbAction::
+    /// PreviewFile` — never on receipt. `WbMsg::Preview` carries the value
+    /// it was spawned for, and `set_preview` drops anything that does not
+    /// match the current counter: an arrow key can move on (or another
+    /// preview can be requested) before a spawned preview finishes, and
+    /// without this a slow, stale result landing after a fresher one would
+    /// silently overwrite it — the exact race the slice 2 review flagged.
+    pub preview_gen: u64,
 }
 
 impl Workbench {
-    pub fn new(browser: Browser, history: Vec<String>) -> Workbench {
+    pub fn new(browser: Browser, history: Vec<String>, confidence_threshold: f32) -> Workbench {
         Workbench {
             browser,
             focus: Focus::Console,
@@ -154,6 +183,9 @@ impl Workbench {
             last_target: None,
             target_sql: None,
             pending_edit: None,
+            marked: Vec::new(),
+            confidence_threshold,
+            preview_gen: 0,
         }
     }
 
@@ -258,6 +290,18 @@ impl Workbench {
                 self.help = true;
                 return WbAction::None;
             }
+            // Zoom is global, not Console-only: `Ctrl-L` from Browser/Main
+            // must still be able to turn it on (and, since zoom skips Main
+            // in the Tab cycle — see `cycle_focus` — toggling it on while
+            // Main is focused has nowhere left for Main to be, so focus
+            // moves to Console, the same place `Esc` would put it).
+            KeyCode::Char('l') if ctrl => {
+                self.zoom = !self.zoom;
+                if self.zoom && self.focus == Focus::Main {
+                    self.focus = Focus::Console;
+                }
+                return WbAction::None;
+            }
             _ => {}
         }
         match self.focus {
@@ -335,7 +379,14 @@ impl Workbench {
     /// `Done` carries the unchanged cwd and rolls the browser back).
     pub fn apply(&mut self, o: Outcome, cwd: &Path) -> Option<WbAction> {
         self.busy = None;
-        self.browser.sync_dir(cwd);
+        // A real move — including the rollback branch, which moves the
+        // browser right back to where marks were made and so is just as
+        // stale — invalidates any rel paths in `marked` (see its doc
+        // comment); `enter_browser`'s own directory branch covers the other
+        // way a directory move happens.
+        if self.browser.sync_dir(cwd) {
+            self.marked.clear();
+        }
         self.sql_pending = matches!(&o.payload, Payload::Continue);
         let Outcome { echo, text, payload, ok } = o;
         // `Payload::Evidence` wants the exact line that produced it (see
@@ -349,14 +400,21 @@ impl Workbench {
         }
         match payload {
             Payload::Shown { path, raw, spec } => {
-                self.show_file(path, raw, spec, None);
+                // `.show` names no staleness of its own (see `show_file`'s
+                // caller-supplied `stale` — this path has nothing to supply
+                // yet): a spec present here is fresh by construction
+                // (`Command::Show` only ever fills it from
+                // `SidecarStatus::Fresh`), so `false` is exactly right and
+                // not merely a placeholder.
+                self.show_file(path, raw, spec, None, false);
                 None
             }
             Payload::Sniffed { path, spec, preview, .. } => {
                 // The state machine does no I/O: the raw half is filled in
-                // by the runtime's own PreviewFile action.
-                self.show_file(path.clone(), RawHead::default(), Some(spec), Some(preview));
-                Some(WbAction::PreviewFile(path))
+                // by the runtime's own PreviewFile action. A spec just
+                // produced by `.sniff` is fresh by definition.
+                self.show_file(path.clone(), RawHead::default(), Some(spec), Some(preview), false);
+                Some(self.preview_action(path))
             }
             Payload::Query(t) => {
                 self.context = Context::Query(t);
@@ -404,12 +462,25 @@ impl Workbench {
     }
 
     /// A `PreviewFile` action's result arrived (computed off the UI
-    /// thread). Applies only when the context or the browser's current
-    /// selection still points at `path` — an arrow key can move on, or
-    /// another command can replace the context, before a spawned preview
-    /// finishes, and a stale result must be dropped rather than clobbering
-    /// whatever is now shown.
-    pub fn set_preview(&mut self, path: PathBuf, raw: RawHead, spec: Option<SpecSummary>) {
+    /// thread). `gen` is checked first, ahead of any path match: it is the
+    /// counter `preview_gen` held at the moment the request was spawned, and
+    /// a mismatch means something newer has been asked for since — another
+    /// arrow key, a fresh `.sniff` follow-up — so a slow result landing
+    /// late must never overwrite what is now on screen, even if it happens
+    /// to name the very same path. Past that, applies only when the context
+    /// or the browser's current selection still points at `path` — the
+    /// original staleness check this augments, not replaces.
+    pub fn set_preview(
+        &mut self,
+        gen: u64,
+        path: PathBuf,
+        raw: RawHead,
+        spec: Option<SpecSummary>,
+        stale: bool,
+    ) {
+        if gen != self.preview_gen {
+            return;
+        }
         // A Member context's preview is keyed on the one member being
         // examined, not on the browser's selection (which is elsewhere,
         // showing the pile's directory) — match or drop, and never fall
@@ -433,7 +504,7 @@ impl Workbench {
             Context::File { path: p, preview, .. } if *p == path => preview.clone(),
             _ => None,
         };
-        self.show_file(path, raw, spec, preview);
+        self.show_file(path, raw, spec, preview, stale);
     }
 
     /// Point the main pane at a file, resetting its scroll only when the
@@ -442,12 +513,28 @@ impl Workbench {
     /// blank pane, which reads as an empty file — while an update for the
     /// *same* path (a `.sniff`'s raw fill-in landing after the fact) must
     /// keep the scroll the user set.
-    fn show_file(&mut self, path: PathBuf, raw: RawHead, spec: Option<SpecSummary>, preview: Option<Table>) {
+    fn show_file(
+        &mut self,
+        path: PathBuf,
+        raw: RawHead,
+        spec: Option<SpecSummary>,
+        preview: Option<Table>,
+        stale: bool,
+    ) {
         let same = matches!(&self.context, Context::File { path: p, .. } if *p == path);
         if !same {
             self.main_scroll = 0;
         }
-        self.context = Context::File { path, raw, spec, preview };
+        self.context = Context::File { path, raw, spec, preview, stale };
+    }
+
+    /// The one place `WbAction::PreviewFile` is built: bumps `preview_gen`
+    /// every time one is handed back to the runtime, so the result — tagged
+    /// with the counter it read here — can be told apart from any later
+    /// request's, in `set_preview`.
+    fn preview_action(&mut self, path: PathBuf) -> WbAction {
+        self.preview_gen += 1;
+        WbAction::PreviewFile(path)
     }
 
     /// The member currently under the cursor — in a `Pile` the row at
@@ -511,9 +598,15 @@ impl Workbench {
         }
     }
 
+    /// `zoom` removes Main from the cycle entirely — with the console taking
+    /// the whole right column there is nowhere for Main to draw, so Browser
+    /// hands focus straight back to Console rather than through a pane that
+    /// is not on screen. (`key()`'s `Ctrl-L` arm handles the other half:
+    /// zoom turning on while Main already has focus.)
     fn cycle_focus(&mut self) {
         self.focus = match self.focus {
             Focus::Console => Focus::Browser,
+            Focus::Browser if self.zoom => Focus::Console,
             Focus::Browser => Focus::Main,
             Focus::Main => Focus::Console,
         };
@@ -527,10 +620,6 @@ impl Workbench {
             }
             (KeyCode::Down, true) => {
                 self.console_rows = self.console_rows.saturating_sub(1).max(3);
-                WbAction::None
-            }
-            (KeyCode::Char('l'), true) => {
-                self.zoom = !self.zoom;
                 WbAction::None
             }
             (KeyCode::PageUp, _) => {
@@ -550,9 +639,19 @@ impl Workbench {
                     WbAction::Dispatch(line)
                 }
                 LineEdit::Interrupt => {
-                    // Plain Ctrl-C on an empty prompt: hint, don't quit.
-                    self.status = "Ctrl-Q quits".to_string();
-                    WbAction::None
+                    // Ctrl-C on an empty prompt (the editor only reports
+                    // `Interrupt` when its buffer is empty — see
+                    // `LineEditor::key`): if a SQL statement is buffered,
+                    // this is exactly what `.abort` is for — dispatch it
+                    // through the ordinary console path, so it lands in the
+                    // scrollback and history like any typed line. Otherwise
+                    // there is nothing to abort; hint at the real quit key.
+                    if self.sql_pending {
+                        WbAction::Dispatch(".abort".to_string())
+                    } else {
+                        self.status = "Ctrl-Q quits".to_string();
+                        WbAction::None
+                    }
                 }
                 LineEdit::Redraw | LineEdit::Cleared | LineEdit::Eof | LineEdit::Nothing => WbAction::None,
             },
@@ -577,6 +676,7 @@ impl Workbench {
                 // dispatch that `Enter` on a directory issues. At the
                 // browser root, up() does nothing and nothing dispatches.
                 if self.browser.up() {
+                    self.marked.clear();
                     WbAction::Dispatch(".cd ..".into())
                 } else {
                     WbAction::None
@@ -590,8 +690,46 @@ impl Workbench {
                 Some(e) if e.kind == EntryKind::Target => self.shortcut(".fit"),
                 _ => WbAction::None,
             },
+            KeyCode::Char('d') => {
+                self.toggle_mark();
+                WbAction::None
+            }
+            KeyCode::Char('D') => self.draft_marked(),
             _ => WbAction::None,
         }
+    }
+
+    /// `d`: mark or unmark the selected entry — only a data file (a
+    /// directory or a target has no business in a `.draft` file list, so
+    /// selecting one is a no-op, not an error).
+    fn toggle_mark(&mut self) {
+        let Some(e) = self.browser.selected_entry() else { return };
+        if e.kind != EntryKind::File {
+            return;
+        }
+        let Some(rel) = self.browser.selected_rel() else { return };
+        match self.marked.iter().position(|m| *m == rel) {
+            Some(i) => {
+                self.marked.remove(i);
+            }
+            None => self.marked.push(rel),
+        }
+    }
+
+    /// `D`: dispatch `.draft` over every marked file, space-joined and each
+    /// quoted the way the console's own tokenizer reads it back — the same
+    /// `quote_rel` every other synthesized line uses. Clears the marks: a
+    /// `.draft` run over them is the whole point of marking, and stale
+    /// marks pointing at a directory the browser has since left would be
+    /// worse than none. No marks is a status note, not a silent no-op.
+    fn draft_marked(&mut self) -> WbAction {
+        if self.marked.is_empty() {
+            self.status = "no files marked — d marks a file, D drafts the marked files".to_string();
+            return WbAction::None;
+        }
+        let files = std::mem::take(&mut self.marked);
+        let line = files.iter().map(|f| quote_rel(f)).collect::<Vec<_>>().join(" ");
+        WbAction::Dispatch(format!(".draft {line}"))
     }
 
     fn key_main(&mut self, k: KeyEvent) -> WbAction {
@@ -625,10 +763,32 @@ impl Workbench {
                 WbAction::None
             }
             KeyCode::Down => {
-                self.main_scroll = self.main_scroll.saturating_add(1);
+                self.main_scroll = (self.main_scroll + 1).min(self.main_scroll_bound());
                 WbAction::None
             }
             _ => WbAction::None,
+        }
+    }
+
+    /// A generous upper bound for `main_scroll`, from what the current
+    /// context actually has to show — not an exact fit (a wrapped line, a
+    /// multi-row sheet header are not counted), just enough that `Down`
+    /// cannot run away into blank space forever. Only the fallback arm of
+    /// `key_main` reads this today (Pile and Member/Evidence answer Up/Down
+    /// themselves, earlier in that function); the Evidence and Pile arms
+    /// are here so whichever of them wires `main_scroll` in next does not
+    /// have to invent this from scratch.
+    fn main_scroll_bound(&self) -> usize {
+        match &self.context {
+            Context::File { raw, preview, .. } => {
+                raw.lines.len()
+                    + raw.sheets.len()
+                    + preview.as_ref().map(|t| t.rows.len()).unwrap_or(0)
+                    + 16
+            }
+            Context::Evidence { rows, .. } => rows.len() * 8 + 16,
+            Context::Pile { report, .. } => report.members.len() + 16,
+            _ => 16,
         }
     }
 
@@ -651,7 +811,7 @@ impl Workbench {
         let preview_path = member_preview_path(&target, &member_path);
         self.context =
             Context::Member { target, report, member: selected, raw: None, remedy_selected: 0 };
-        WbAction::PreviewFile(preview_path)
+        self.preview_action(preview_path)
     }
 
     /// Esc from a Member: back to the Pile it came from, `selected` on the
@@ -805,10 +965,10 @@ impl Workbench {
     /// After an arrow move, preview the newly selected entry — but only a
     /// data file: a directory has nothing to preview, and a target previews
     /// in slice 3.
-    fn preview_selected(&self) -> WbAction {
-        match self.browser.selected_entry() {
-            Some(e) if e.kind == EntryKind::File => match self.browser.selected_path() {
-                Some(p) => WbAction::PreviewFile(p),
+    fn preview_selected(&mut self) -> WbAction {
+        match self.browser.selected_entry().map(|e| e.kind) {
+            Some(EntryKind::File) => match self.browser.selected_path() {
+                Some(p) => self.preview_action(p),
                 None => WbAction::None,
             },
             _ => WbAction::None,
@@ -818,7 +978,10 @@ impl Workbench {
     /// `Enter`: a directory descends and dispatches `.cd <rel>` (the rel
     /// path is captured before `browser.enter()` mutates the dir — after
     /// the move, `selected_rel()` would answer from the wrong directory); a
-    /// file returns its path to preview.
+    /// file returns its path to preview. Marks are cleared here too — see
+    /// `marked`'s doc comment — since this is the one path a directory move
+    /// takes without ever reaching `apply`'s `sync_dir` call (the browser
+    /// moves synchronously, ahead of the session's own confirmation).
     fn enter_browser(&mut self) -> WbAction {
         let Some(kind) = self.browser.selected_entry().map(|e| e.kind) else {
             return WbAction::None;
@@ -826,6 +989,7 @@ impl Workbench {
         if kind == EntryKind::Dir {
             let rel = self.browser.selected_rel();
             self.browser.enter();
+            self.marked.clear();
             match rel {
                 Some(r) => WbAction::Dispatch(format!(".cd {}", quote_rel(&r))),
                 None => WbAction::None,
@@ -833,7 +997,7 @@ impl Workbench {
         } else {
             let p = self.browser.enter();
             match (kind, p) {
-                (EntryKind::File, Some(path)) => WbAction::PreviewFile(path),
+                (EntryKind::File, Some(path)) => self.preview_action(path),
                 _ => WbAction::None,
             }
         }

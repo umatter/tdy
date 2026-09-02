@@ -66,6 +66,7 @@ Console-only, for orientation without the workbench:
 | `.cd DIR` | change the working directory, within the root |
 | `.show FILE` | the raw head (or a sheet's grid) beside what the sidecar says, if there is one |
 | `.edit FILE` | `$EDITOR`; the workbench suspends the alternate screen and redraws on return |
+| `.abort` | discard a half-typed SQL statement |
 | `.help [CMD]`, `.quit` / `.exit` | as expected; Ctrl-D quits |
 
 **Selection as an implicit argument (workbench only).** `.sniff` with no file

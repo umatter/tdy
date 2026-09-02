@@ -36,7 +36,7 @@ fn pile() -> tempfile::TempDir {
     d
 }
 fn wb(d: &tempfile::TempDir) -> Workbench {
-    Workbench::new(Browser::new(d.path()).unwrap(), vec![])
+    Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8)
 }
 fn outcome(echo: &str, text: &str, payload: Payload) -> Outcome {
     Outcome { echo: echo.into(), text: text.into(), payload, ok: true }
@@ -440,7 +440,7 @@ fn main_scroll_resets_on_a_new_file_and_survives_a_same_path_update() {
     // The same file again (the preview's raw fill-in): the scroll stands.
     w.key(key(KeyCode::Down));
     assert_eq!(w.main_scroll, 1);
-    w.set_preview(d.path().join("b.csv"), raw(), None);
+    w.set_preview(w.preview_gen, d.path().join("b.csv"), raw(), None, false);
     assert_eq!(w.main_scroll, 1, "a same-path update must not throw away the user's scroll");
 }
 
@@ -516,11 +516,11 @@ fn a_member_preview_fills_raw_and_stale_paths_are_dropped() {
 
     let raw = RawHead { lines: vec!["Datum;Kanton".into()], truncated: false, sheets: vec![] };
     // A different, unrelated path must be dropped.
-    w.set_preview(d.path().join("a.csv"), raw.clone(), None);
+    w.set_preview(w.preview_gen, d.path().join("a.csv"), raw.clone(), None, false);
     assert!(matches!(&w.context, Context::Member { raw: None, .. }), "stale path must not fill raw");
 
     // The actual path Enter asked for fills it.
-    w.set_preview(path, raw, None);
+    w.set_preview(w.preview_gen, path, raw, None, false);
     assert!(matches!(&w.context, Context::Member { raw: Some(_), .. }));
 }
 
@@ -684,4 +684,186 @@ fn evidence_arrives_and_a_repeats_the_exact_line() {
     assert_eq!(act, WbAction::None);
     assert!(matches!(w.context, Context::Empty), "{:?}", w.context);
     assert!(w.status.contains("evidence closed"), "{}", w.status);
+}
+
+/// `d` marks/unmarks the selected DATA file only (a directory is a no-op);
+/// `D` dispatches `.draft` over every mark, space-joined, and clears them.
+#[test]
+fn d_marks_files_and_upper_d_dispatches_draft_then_clears_marks() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.key(key(KeyCode::Tab)); // Browser; entries are ["sub/", "a.csv", "b.csv"]
+
+    // `d` on the directory currently selected does nothing.
+    w.key(key(KeyCode::Char('d')));
+    assert!(w.marked.is_empty());
+
+    w.key(key(KeyCode::Down));
+    assert_eq!(w.browser.selected_rel().as_deref(), Some("a.csv"));
+    w.key(key(KeyCode::Char('d')));
+    assert_eq!(w.marked, vec!["a.csv".to_string()]);
+
+    w.key(key(KeyCode::Down));
+    assert_eq!(w.browser.selected_rel().as_deref(), Some("b.csv"));
+    w.key(key(KeyCode::Char('d')));
+    assert_eq!(w.marked, vec!["a.csv".to_string(), "b.csv".to_string()]);
+
+    // Marking a file already marked unmarks it.
+    w.key(key(KeyCode::Up));
+    w.key(key(KeyCode::Char('d')));
+    assert_eq!(w.marked, vec!["b.csv".to_string()]);
+    w.key(key(KeyCode::Char('d')));
+    assert_eq!(w.marked, vec!["b.csv".to_string(), "a.csv".to_string()]);
+
+    let act = w.key(key(KeyCode::Char('D')));
+    assert_eq!(act, WbAction::Dispatch(".draft b.csv a.csv".into()));
+    assert!(w.marked.is_empty(), "D clears the marks");
+}
+
+#[test]
+fn upper_d_with_no_marks_is_a_status_note_not_a_dispatch() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.key(key(KeyCode::Tab)); // Browser
+    let act = w.key(key(KeyCode::Char('D')));
+    assert_eq!(act, WbAction::None);
+    assert!(w.status.contains("no files marked"), "{}", w.status);
+}
+
+/// A rel path only means something inside the directory it was marked in —
+/// both ways a directory move happens (the browser's own `Enter`, and a
+/// typed `.cd` re-rooting the browser via `apply`'s `sync_dir`) must clear
+/// stale marks.
+#[test]
+fn marks_clear_on_any_directory_move() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Down)); // a.csv
+    w.key(key(KeyCode::Char('d')));
+    assert_eq!(w.marked.len(), 1);
+    w.key(key(KeyCode::Up)); // back to sub/
+    w.key(key(KeyCode::Enter)); // descend into sub/ — dispatches .cd sub
+    assert!(w.marked.is_empty(), "entering a directory must clear stale marks");
+
+    w.key(key(KeyCode::Char('d'))); // mark c.csv, the only file in sub/
+    assert_eq!(w.marked.len(), 1);
+    w.begin(".cd ..");
+    w.apply(outcome(".cd ..", ".\n", Payload::Nothing), d.path());
+    assert!(w.marked.is_empty(), "a typed `.cd` re-rooting via sync_dir must clear marks too");
+}
+
+/// `zoom` removes Main from the Tab cycle entirely (Browser hands focus
+/// straight back to Console); turning zoom on while Main already has focus
+/// moves focus to Console, the same place it would end up cycling to.
+#[test]
+fn zoom_skips_main_in_the_tab_cycle() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.key(ctrl('l')); // zoom on, from the default Console focus
+    assert!(w.zoom);
+    assert_eq!(w.focus, Focus::Console);
+    w.key(key(KeyCode::Tab)); // -> Browser
+    assert_eq!(w.focus, Focus::Browser);
+    w.key(key(KeyCode::Tab)); // zoomed: Main is skipped -> Console
+    assert_eq!(w.focus, Focus::Console);
+
+    // Focus Main first (zoom off), then turn zoom on: focus must move.
+    w.key(ctrl('l')); // zoom off
+    assert!(!w.zoom);
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    assert_eq!(w.focus, Focus::Main);
+    w.key(ctrl('l')); // zoom on while Main is focused
+    assert!(w.zoom);
+    assert_eq!(w.focus, Focus::Console, "zoom must move Main's focus to Console");
+}
+
+/// A SQL statement buffered (`Payload::Continue`, shown by the `   -> `
+/// continuation prompt) and Ctrl-C on the empty editor dispatches `.abort`
+/// — the console-only command that discards it — rather than the plain
+/// "Ctrl-Q quits" hint a Ctrl-C with nothing pending still gives.
+#[test]
+fn ctrl_c_aborts_pending_sql_from_the_console() {
+    let d = pile();
+    let mut w = wb(&d);
+    let act = type_line(&mut w, "SELECT 1");
+    assert_eq!(act, WbAction::Dispatch("SELECT 1".into()));
+    w.begin("SELECT 1");
+    w.apply(outcome("SELECT 1", "", Payload::Continue), d.path());
+    assert_eq!(w.prompt(), "   -> ", "the buffered statement changes the prompt");
+
+    let act = w.key(ctrl('c'));
+    assert_eq!(act, WbAction::Dispatch(".abort".into()));
+}
+
+#[test]
+fn ctrl_c_with_nothing_pending_only_hints_at_ctrl_q() {
+    let d = pile();
+    let mut w = wb(&d);
+    assert_eq!(w.prompt(), "tdy> ");
+    let act = w.key(ctrl('c'));
+    assert_eq!(act, WbAction::None);
+    assert!(w.status.contains("Ctrl-Q quits"), "{}", w.status);
+}
+
+/// `Down` in a File context cannot scroll past a generous bound computed
+/// from what that context actually has to show.
+#[test]
+fn main_scroll_is_clamped_to_a_generous_bound() {
+    let d = pile();
+    let mut w = wb(&d);
+    let raw = RawHead { lines: vec!["a".into(), "b".into(), "c".into()], truncated: false, sheets: vec![] };
+    w.begin(".show a.csv");
+    w.apply(
+        outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw, spec: None }),
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    for _ in 0..500 {
+        w.key(key(KeyCode::Down));
+    }
+    // 3 raw lines, no sheets, no preview: 3 + 0 + 0 + 16.
+    assert!(w.main_scroll <= 3 + 0 + 16, "{}", w.main_scroll);
+}
+
+/// `set_preview` drops a result tagged with an older generation before it
+/// ever checks the path — the fix for the stale-overwrite race the slice 2
+/// review flagged.
+#[test]
+fn set_preview_drops_a_stale_generation_before_the_path_check() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".show a.csv");
+    w.apply(
+        outcome(
+            ".show a.csv",
+            "",
+            Payload::Shown { path: d.path().join("a.csv"), raw: RawHead::default(), spec: None },
+        ),
+        d.path(),
+    );
+    assert_eq!(w.preview_gen, 0);
+
+    // Two arrow-key previews bump the counter to 2.
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Down)); // preview a.csv -> gen 1
+    w.key(key(KeyCode::Down)); // preview b.csv -> gen 2
+    assert_eq!(w.preview_gen, 2);
+
+    // A result for generation 1, even naming the path the context still
+    // shows, must be dropped — a newer request has since been made.
+    let raw = RawHead { lines: vec!["stale".into()], truncated: false, sheets: vec![] };
+    w.set_preview(1, d.path().join("a.csv"), raw, None, false);
+    assert!(
+        matches!(&w.context, Context::File { raw, .. } if raw.lines.is_empty()),
+        "a stale generation must not overwrite the context: {:?}",
+        w.context
+    );
+
+    // The current generation still applies.
+    let raw = RawHead { lines: vec!["fresh".into()], truncated: false, sheets: vec![] };
+    w.set_preview(2, d.path().join("a.csv"), raw, None, false);
+    assert!(matches!(&w.context, Context::File { raw, .. } if raw.lines == ["fresh".to_string()]));
 }

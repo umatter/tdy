@@ -26,6 +26,10 @@ pub enum Command {
     Show { file: String },
     Edit { file: String },
     Help { command: Option<String> },
+    /// Discard a half-typed SQL statement (console-only — a workbench
+    /// Ctrl-C dispatches this rather than a bespoke `WbAction`, so the
+    /// plain REPL gains it for free too).
+    Abort,
     Quit,
     /// Any line not starting with `.`. Multi-line assembly is the Session's job.
     Sql(String),
@@ -265,6 +269,10 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
             a.at_most(1)?;
             Command::Help { command: a.positional.first().cloned() }
         }
+        "abort" => {
+            Args::collect("abort", args, &[], &[])?.exactly(&[])?;
+            Command::Abort
+        }
         "quit" | "exit" => {
             Args::collect(name_static(name), args, &[], &[])?.exactly(&[])?;
             Command::Quit
@@ -376,6 +384,11 @@ mod tests {
         assert_eq!(p(".edit t.tdy.sql"), Command::Edit { file: "t.tdy.sql".into() });
         assert_eq!(p(".help"), Command::Help { command: None });
         assert_eq!(p(".help fit"), Command::Help { command: Some("fit".into()) });
+        assert_eq!(p(".abort"), Command::Abort);
+        assert_eq!(
+            parse(".abort now"),
+            Err(ParseError::Unexpected { command: "abort", token: "now".into() })
+        );
         assert_eq!(p(".quit"), Command::Quit);
         assert_eq!(p(".exit"), Command::Quit);
         assert_eq!(parse(".nope"), Err(ParseError::Unknown("nope".into())));

@@ -66,7 +66,7 @@ fn gap_member(path: &str) -> MemberReport {
 #[test]
 fn the_frame_shows_three_panes_and_the_status_vocabulary() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains(" files "), "{text}");
     assert!(text.contains(" console "), "{text}");
@@ -79,7 +79,7 @@ fn the_frame_shows_three_panes_and_the_status_vocabulary() {
 #[test]
 fn narrow_terminals_drop_the_browser_not_the_console() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     let text = screen(&mut w, 50, 20).join("\n");
     assert!(!text.contains(" files "), "{text}");
     assert!(text.contains("tdy>"), "{text}");
@@ -88,7 +88,7 @@ fn narrow_terminals_drop_the_browser_not_the_console() {
 #[test]
 fn scrollback_shows_echo_then_text_and_busy_shows_in_status() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     w.begin(".ls");
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains(".ls"), "{text}");
@@ -110,7 +110,7 @@ fn scrollback_shows_echo_then_text_and_busy_shows_in_status() {
 #[test]
 fn browser_status_uses_compact_glyphs_and_never_clips_even_with_a_long_name() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Entry, EntryKind, EntryStatus};
     w.browser.entries.push(Entry {
         name: "b.csv".into(),
@@ -132,7 +132,7 @@ fn browser_status_uses_compact_glyphs_and_never_clips_even_with_a_long_name() {
 #[test]
 fn a_file_without_a_sidecar_shows_raw_only_and_no_opinion() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload, RawHead};
     w.begin(".show a.csv");
     w.apply(Outcome {
@@ -153,7 +153,7 @@ fn a_file_without_a_sidecar_shows_raw_only_and_no_opinion() {
 #[test]
 fn a_sniffed_file_shows_raw_beside_the_spec_and_its_decisions() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload, SpecSummary, Table};
     w.begin(".sniff a.csv");
     let spec = SpecSummary {
@@ -178,7 +178,7 @@ fn a_sniffed_file_shows_raw_beside_the_spec_and_its_decisions() {
 #[test]
 fn a_query_context_shows_the_table_and_counts() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload, Table};
     w.begin("SELECT 1;");
     let t = Table {
@@ -196,7 +196,7 @@ fn a_query_context_shows_the_table_and_counts() {
 #[test]
 fn the_empty_view_draws_the_mark() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains('▀') || text.contains('▄'), "no mark glyph found: {text}");
     assert!(text.contains("select a file"), "{text}");
@@ -207,7 +207,7 @@ fn the_empty_view_draws_the_mark() {
 #[test]
 fn the_help_overlay_lists_the_keys() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     w.key(key(KeyCode::Tab)); // Browser
     w.key(key(KeyCode::Char('?')));
     assert!(w.help);
@@ -224,7 +224,7 @@ fn the_help_overlay_lists_the_keys() {
 #[test]
 fn the_help_overlay_renders_even_when_the_console_is_zoomed() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     w.key(ctrl('l')); // zoom, from the default Console focus
     assert!(w.zoom);
     w.key(key(KeyCode::Tab)); // Browser
@@ -245,7 +245,7 @@ fn the_help_overlay_renders_even_when_the_console_is_zoomed() {
 #[test]
 fn the_pile_context_lists_members_with_status_words() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload};
     w.begin(".fit sales.tdy.sql");
     let members = vec![
@@ -290,7 +290,7 @@ fn the_pile_context_lists_members_with_status_words() {
 #[test]
 fn a_short_pane_never_zeroes_the_spec_summary_for_the_preview_strip() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload, SpecSummary, Table};
     // At 30 total rows with a 22-row console, the main pane's inner height
     // lands at 2 — exactly the case the old code mishandled.
@@ -320,7 +320,7 @@ fn a_short_pane_never_zeroes_the_spec_summary_for_the_preview_strip() {
 #[test]
 fn the_member_context_shows_gap_beside_raw_and_the_menu() {
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload, RawHead};
     w.begin(".fit sales.tdy.sql");
     let report = PileReport {
@@ -345,7 +345,7 @@ fn the_member_context_shows_gap_beside_raw_and_the_menu() {
     let raw = RawHead { lines: vec!["Datum;Kanton;Betrag".into()], truncated: false, sheets: vec![] };
     if let tdy_tui::workbench::Context::Member { target, report, member, .. } = &w.context {
         let path = target.parent().unwrap().join(&report.members[*member].path);
-        w.set_preview(path, raw, None);
+        w.set_preview(w.preview_gen, path, raw, None, false);
     } else {
         panic!("expected Member context, got {:?}", w.context);
     }
@@ -367,7 +367,7 @@ fn the_confirm_overlay_shows_the_diff() {
     let target_sql =
         "CREATE TABLE t (\n  region TEXT NOT NULL OPTIONS(matches = 'Region')\n) WITH (files='*.csv');\n";
     std::fs::write(d.path().join("t.tdy.sql"), target_sql).unwrap();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload};
     w.begin(".fit sales.tdy.sql");
     let mut m = gap_member("2025-02.csv");
@@ -416,7 +416,7 @@ fn the_evidence_view_shows_raw_beside_parsed_and_the_extremes() {
     use tdy::evidence::{Evidence, Pair};
 
     let d = pile();
-    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     w.begin(".accept t.tdy.sql m.csv");
     let rows = vec![
         Evidence::Shift {
@@ -457,4 +457,169 @@ fn the_evidence_view_shows_raw_beside_parsed_and_the_extremes() {
     );
     assert!(text.contains("a accepts"), "{text}");
     assert!(text.contains("Esc closes"), "{text}");
+}
+
+/// A marked file's browser row carries a `*` — `wb_ui` reads `w.marked`
+/// directly, so this is the render-level half of the `d`/`D` state-machine
+/// tests in `tests/workbench.rs`.
+#[test]
+fn a_marked_file_shows_an_asterisk_in_the_browser_row() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.key(key(KeyCode::Tab)); // Browser; entries are ["a.csv", "t.tdy.sql"]
+    assert_eq!(w.browser.selected_rel().as_deref(), Some("a.csv"));
+    w.key(key(KeyCode::Char('d')));
+    assert_eq!(w.marked, vec!["a.csv".to_string()]);
+
+    let text = screen(&mut w, 100, 30).join("\n");
+    let row = text.lines().find(|l| l.contains("a.csv")).unwrap();
+    assert!(row.contains('*'), "{row}");
+    // The unmarked target's row carries no asterisk.
+    let other = text.lines().find(|l| l.contains("t.tdy.sql")).unwrap();
+    assert!(!other.contains('*'), "{other}");
+}
+
+/// A stale sidecar (fingerprint no longer matches the file) shows the
+/// `--force` hint in the footer instead of the plain "not sniffed" one,
+/// which would send someone to re-run a command that reports the same
+/// staleness right back. `spec` still stays `None` — only the footer text
+/// changes.
+#[test]
+fn a_stale_sidecar_shows_the_force_hint_instead_of_not_sniffed() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload, RawHead};
+    let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] };
+    w.begin(".show a.csv");
+    w.apply(
+        Outcome {
+            echo: ".show a.csv".into(),
+            text: String::new(),
+            ok: true,
+            payload: Payload::Shown { path: d.path().join("a.csv"), raw: raw(), spec: None },
+        },
+        d.path(),
+    );
+    // The runtime's own `PreviewFile` follow-up would carry `stale: true`
+    // here (from `spawn_wb_preview`'s `SidecarStatus::Stale` case); no
+    // arrow key fired one in this test, so `preview_gen` is still 0.
+    w.set_preview(0, d.path().join("a.csv"), raw(), None, true);
+
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("sidecar stale"), "{text}");
+    assert!(text.contains(".sniff --force"), "{text}");
+    assert!(!text.contains("not sniffed"), "{text}");
+}
+
+/// The plain "not sniffed" footer is unchanged when there is no staleness
+/// to report.
+#[test]
+fn a_file_with_no_sidecar_at_all_still_shows_the_plain_footer() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload, RawHead};
+    w.begin(".show a.csv");
+    w.apply(
+        Outcome {
+            echo: ".show a.csv".into(),
+            text: String::new(),
+            ok: true,
+            payload: Payload::Shown {
+                path: d.path().join("a.csv"),
+                raw: RawHead { lines: vec!["A;B".into()], truncated: false, sheets: vec![] },
+                spec: None,
+            },
+        },
+        d.path(),
+    );
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("not sniffed — press s"), "{text}");
+    assert!(!text.contains("sidecar stale"), "{text}");
+}
+
+/// The configured `confidence_threshold` (not a hard-coded constant) is
+/// what the File view's confidence line and the browser's `✓ x.xx` glyph
+/// are drawn against — a low threshold makes even a low confidence read as
+/// fine. Color itself is not assertable through `TestBackend`'s plain
+/// symbols, so this documents that the value on screen is the one that was
+/// configured, which is the property under test now that it is no longer a
+/// module-level constant.
+#[test]
+fn confidence_is_shown_against_the_configured_threshold_not_a_constant() {
+    let d = pile();
+    // A threshold of 0.0 means nothing is ever "below" it — proving the
+    // number drawn is `w.confidence_threshold`, not the old hard-coded 0.8
+    // (which would have nothing to do here either way, since only the
+    // color — not assertable — would differ).
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.0);
+    assert_eq!(w.confidence_threshold, 0.0);
+    use tdy::console::{Outcome, Payload, SpecSummary, Table};
+    w.begin(".sniff a.csv");
+    let spec = SpecSummary {
+        method: "heuristic".into(),
+        confidence: Some(0.42),
+        extraction: r#"{"format":"delimited"}"#.into(),
+        transforms: vec![],
+        columns: vec![],
+        notes: vec![],
+    };
+    let preview = Table { columns: vec![], types: vec![], rows: vec![], total: 0, truncated: false };
+    w.apply(
+        Outcome {
+            echo: ".sniff a.csv".into(),
+            text: String::new(),
+            ok: true,
+            payload: Payload::Sniffed { path: d.path().join("a.csv"), spec, preview, kept_existing: false },
+        },
+        d.path(),
+    );
+    let text = screen(&mut w, 110, 34).join("\n");
+    assert!(text.contains("0.42"), "{text}");
+}
+
+/// A multi-line echo (a SQL statement assembled across `   -> `
+/// continuation lines) is rendered the same way it was typed: `tdy> ` on
+/// the first line, `   -> ` on every continuation — never a single line
+/// with an embedded newline.
+#[test]
+fn a_multi_line_echo_renders_as_prompt_then_continuations() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload};
+    w.begin("SELECT count(*) AS n\nFROM messy('a.csv');");
+    w.apply(
+        Outcome {
+            echo: "SELECT count(*) AS n\nFROM messy('a.csv');".into(),
+            text: "| n |\n".into(),
+            ok: true,
+            payload: Payload::Nothing,
+        },
+        d.path(),
+    );
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("tdy> SELECT count(*) AS n"), "{text}");
+    assert!(text.contains("   -> FROM messy('a.csv');"), "{text}");
+}
+
+/// A failed command's echo line still shows (color is not assertable
+/// through `TestBackend`'s plain symbols — this documents that the text
+/// itself survives styling, which the code review checks by eye).
+#[test]
+fn a_failed_cells_echo_still_shows() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload};
+    w.begin(".nope");
+    w.apply(
+        Outcome {
+            echo: ".nope".into(),
+            text: "Error: unknown command `.nope`\n".into(),
+            ok: false,
+            payload: Payload::Error { message: "unknown command".into() },
+        },
+        d.path(),
+    );
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("tdy> .nope"), "{text}");
+    assert!(text.contains("Error: unknown command"), "{text}");
 }

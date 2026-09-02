@@ -312,6 +312,18 @@ impl Session {
         if !matches!(&dot_parsed, Some(Ok(Command::Accept { .. }))) {
             self.pending_accept = None;
         }
+        // `.abort` is the explicit spelling of "discard whatever SQL is
+        // buffered" — handled here, ahead of the generic "a dot-command
+        // interrupts a pending statement" note below, so it reports its own
+        // outcome (including "nothing pending") instead of that note firing
+        // first and stacking a second, redundant line under it.
+        if matches!(&dot_parsed, Some(Ok(Command::Abort))) {
+            let text = match self.discard_pending() {
+                Some(sql) => format!("note: discarded incomplete statement: {}\n", first_line(&sql)),
+                None => "nothing pending\n".to_string(),
+            };
+            return Outcome { echo: trimmed.to_string(), text, payload: Payload::Nothing, ok: true };
+        }
         if trimmed.trim().is_empty() && self.sql_buffer.is_empty() {
             return Outcome { echo: String::new(), text: String::new(), payload: Payload::Nothing, ok: true };
         }
@@ -757,6 +769,7 @@ impl Session {
             | Command::Schema
             | Command::ConfigInit
             | Command::Help { .. }
+            | Command::Abort
             | Command::Quit
             | Command::Sql(_) => {}
         }
@@ -1076,6 +1089,7 @@ Everything else is a dot-command:
   .accept TARGET MEMBER                                     show the evidence; again to accept
   .output [FILE] [--format parquet|csv] [--force]           route the next result to a file
   .show FILE          the raw head beside what the sidecar says
+  .abort              discard a half-typed SQL statement
   .ls [DIR]  .cd DIR  .edit FILE  .schema  .config init  .help [CMD]  .quit
 ";
     match command {

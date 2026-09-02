@@ -335,6 +335,29 @@ async fn sql_runs_when_the_statement_ends_and_spans_lines() {
     assert!(!o.ok && o.text.starts_with("Error: "));
 }
 
+/// `.abort` discards a buffered statement out loud, exactly like any other
+/// dot-command interrupting one — and says "nothing pending" rather than
+/// stacking a second note when there was nothing to discard. A line right
+/// after it must not still see the discard prefix (the buffer is gone).
+#[tokio::test]
+async fn abort_discards_pending_sql() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    s.run("SELECT 1", None).await;
+    assert!(s.sql_pending());
+    let o = s.run(".abort", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains("discarded"), "{}", o.text);
+    assert!(!s.sql_pending());
+
+    let o = s.run(".ls", None).await;
+    assert!(!o.text.starts_with("note: discarded"), "{}", o.text);
+
+    let o = s.run(".abort", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains("nothing pending"), "{}", o.text);
+}
+
 #[tokio::test]
 async fn output_routes_the_next_result_to_a_file() {
     let d = pile();

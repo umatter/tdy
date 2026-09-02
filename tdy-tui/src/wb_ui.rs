@@ -26,11 +26,6 @@ const DIM: Color = Color::DarkGray;
 /// (where typing still works) keeps the space instead.
 const MIN_WIDTH_FOR_BROWSER: u16 = 60;
 const BROWSER_WIDTH: u16 = 26;
-/// Below this confidence the File view colors the number red. `tdy::config`
-/// exports no threshold of its own — the engine escalates to the model
-/// below this same number (see `infer.rs`), so it is mirrored here rather
-/// than invented.
-const ESCALATION: f32 = 0.8;
 /// Below this many inner rows the Empty view drops the mark rather than
 /// squeeze it against the orientation text beneath it: mark = 9 rows incl.
 /// spacing + 3 orientation lines; at 10 the Paragraph clipped the tail.
@@ -51,6 +46,8 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("s", "sniff the selected file"),
     ("e", "edit the selected file"),
     ("f", "fit the selected target / re-fit the shown pile"),
+    ("d", "mark/unmark the selected file"),
+    ("D", "draft the marked files"),
     ("↑ / ↓ (pile)", "move the selected member"),
     ("Enter (pile)", "open the selected member"),
     ("Esc (pile)", "close the pile"),
@@ -255,7 +252,25 @@ fn draw_browser(f: &mut Frame, area: Rect, w: &Workbench) {
         .browser
         .entries
         .iter()
-        .map(|e| ListItem::new(browser_row(&e.name, entry_status_text(&e.status), inner_width)))
+        .map(|e| {
+            // A mark's rel path is the entry's own name with any trailing
+            // `/` stripped — the same spelling `toggle_mark` stores, and
+            // directories/targets never appear in `marked` in the first
+            // place (see `toggle_mark`'s doc comment).
+            let rel = e.name.strip_suffix('/').unwrap_or(&e.name);
+            let marked = w.marked.iter().any(|m| m == rel);
+            let name = if marked { format!("*{}", e.name) } else { e.name.clone() };
+            // Confidence below the configured threshold reads red here too
+            // (reviewer's §6 note) — the same rule the File view's own
+            // confidence line applies, just against the compact glyph.
+            let status_style = match &e.status {
+                EntryStatus::Sniffed { confidence: Some(c), .. } if *c < w.confidence_threshold => {
+                    Style::new().fg(Color::Red)
+                }
+                _ => Style::new(),
+            };
+            ListItem::new(browser_row(&name, entry_status_text(&e.status), status_style, inner_width))
+        })
         .collect();
 
     let mut state = ListState::default().with_selected(Some(w.browser.selected));
@@ -272,7 +287,7 @@ fn draw_browser(f: &mut Frame, area: Rect, w: &Workbench) {
 /// ellipsized to whatever room is left. With the compact vocabulary above,
 /// the longest form is `drift (99)` at 10 chars, well inside a 26-column
 /// pane's ~22 usable columns, so this only ever bites the name.
-fn browser_row(name: &str, status: String, width: usize) -> Line<'static> {
+fn browser_row(name: &str, status: String, status_style: Style, width: usize) -> Line<'static> {
     if status.is_empty() {
         return Line::raw(truncate(name, width));
     }
@@ -282,7 +297,10 @@ fn browser_row(name: &str, status: String, width: usize) -> Line<'static> {
     let name = truncate(name, avail_for_name);
     let used = name.chars().count() + sep + status_w;
     let pad = width.saturating_sub(used);
-    Line::raw(format!("{name}{}{status}", " ".repeat(pad)))
+    Line::from(vec![
+        Span::raw(format!("{name}{}", " ".repeat(pad))),
+        Span::styled(status, status_style),
+    ])
 }
 
 fn context_title(ctx: &Context) -> String {
@@ -328,14 +346,15 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
             lines.push(Line::raw("`tdy ui <target>` opens the classic review flow"));
             f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
         }
-        Context::File { raw, spec, preview, .. } => match spec {
+        Context::File { raw, spec, preview, stale, .. } => match spec {
             // No sidecar yet: the raw head as-is, and nothing that looks
             // like an opinion — no columns, no types, no arrows.
-            None => draw_file_no_spec(f, area, block, raw, w.main_scroll),
-            // A sidecar exists: raw beside the spec's own decisions.
-            Some(spec) => {
-                draw_file_with_spec(f, area, block, raw, spec, preview.as_ref(), w.main_scroll)
-            }
+            None => draw_file_no_spec(f, area, block, raw, w.main_scroll, *stale),
+            // A sidecar exists: raw beside the spec's own decisions. `w`
+            // itself (rather than unpacking `main_scroll`/
+            // `confidence_threshold` as separate parameters) is what keeps
+            // this under the too-many-arguments threshold.
+            Some(spec) => draw_file_with_spec(f, area, block, raw, spec, preview.as_ref(), w),
         },
         Context::Query(t) => {
             f.render_widget(Paragraph::new(table_lines(t)).block(block), area);
@@ -544,8 +563,19 @@ fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
 }
 
 /// No sidecar: raw head only, plus a footer naming the fact that it is
-/// unopinionated — never a column name, a type, or an arrow.
-fn draw_file_no_spec(f: &mut Frame, area: Rect, block: Block<'static>, raw: &RawHead, scroll: usize) {
+/// unopinionated — never a column name, a type, or an arrow. `stale` (a
+/// sidecar exists but its fingerprint no longer matches the file — see
+/// `Context::File::stale`) points at the fix that actually applies instead
+/// of the plain "not sniffed" hint, which would send someone to re-run a
+/// command that will just report the same staleness back.
+fn draw_file_no_spec(
+    f: &mut Frame,
+    area: Rect,
+    block: Block<'static>,
+    raw: &RawHead,
+    scroll: usize,
+    stale: bool,
+) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     let [content, footer] =
@@ -554,14 +584,17 @@ fn draw_file_no_spec(f: &mut Frame, area: Rect, block: Block<'static>, raw: &Raw
         Paragraph::new(raw_head_lines(raw)).scroll((scroll as u16, 0)),
         content,
     );
+    let footer_text = if stale { "sidecar stale — `.sniff --force`" } else { "not sniffed — press s" };
     f.render_widget(
-        Paragraph::new(Line::styled("not sniffed — press s", Style::new().fg(DIM))),
+        Paragraph::new(Line::styled(footer_text, Style::new().fg(DIM))),
         footer,
     );
 }
 
 /// A sidecar exists: raw beside the spec's decisions, two even columns,
-/// with the preview table (when there is one) spanning the bottom.
+/// with the preview table (when there is one) spanning the bottom. Takes
+/// `w` itself, rather than unpacking `main_scroll`/`confidence_threshold` as
+/// separate parameters, to stay under the too-many-arguments threshold.
 fn draw_file_with_spec(
     f: &mut Frame,
     area: Rect,
@@ -569,8 +602,9 @@ fn draw_file_with_spec(
     raw: &RawHead,
     spec: &SpecSummary,
     preview: Option<&Table>,
-    scroll: usize,
+    w: &Workbench,
 ) {
+    let scroll = w.main_scroll;
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -602,20 +636,22 @@ fn draw_file_with_spec(
         Paragraph::new(raw_head_lines(raw)).scroll((scroll as u16, 0)),
         left,
     );
-    f.render_widget(Paragraph::new(spec_lines(spec)), right);
+    f.render_widget(Paragraph::new(spec_lines(spec, w.confidence_threshold)), right);
 
     if let (Some(bottom), Some(t)) = (bottom, preview) {
         f.render_widget(Paragraph::new(table_lines(t)), bottom);
     }
 }
 
-/// The spec summary: method, confidence (red below `ESCALATION`), each
-/// column as `name ← "source" : TYPE`, then the notes as a decisions list.
-fn spec_lines(spec: &SpecSummary) -> Vec<Line<'static>> {
+/// The spec summary: method, confidence (red below `threshold` — the
+/// configured `confidence_threshold`, the same number the engine escalates
+/// to the model below), each column as `name ← "source" : TYPE`, then the
+/// notes as a decisions list.
+fn spec_lines(spec: &SpecSummary, threshold: f32) -> Vec<Line<'static>> {
     let mut lines = vec![Line::raw(format!("method: {}", spec.method))];
     lines.push(match spec.confidence {
         Some(c) => {
-            let style = if c < ESCALATION { Style::new().fg(Color::Red) } else { Style::new() };
+            let style = if c < threshold { Style::new().fg(Color::Red) } else { Style::new() };
             Line::styled(format!("confidence: {c:.2}"), style)
         }
         None => Line::raw("confidence: —".to_string()),
@@ -657,7 +693,20 @@ fn draw_console(f: &mut Frame, area: Rect, w: &Workbench) {
 
     let mut lines: Vec<Line> = Vec::new();
     for cell in &w.scrollback {
-        lines.push(Line::styled(format!("tdy> {}", cell.echo), Style::new().fg(DIM)));
+        // A failed command's echo line reads red — the field stays honest
+        // about what actually ran, styling only. A multi-line echo (a SQL
+        // statement assembled across several `   -> ` continuation prompts)
+        // is split the same way the real console showed it as it was
+        // typed: `tdy> ` on the first line, `   -> ` on the rest — never a
+        // single `tdy>` line embedding a raw newline.
+        let echo_style = if cell.ok { Style::new().fg(DIM) } else { Style::new().fg(Color::Red) };
+        let mut echo_lines = cell.echo.split('\n');
+        if let Some(first) = echo_lines.next() {
+            lines.push(Line::styled(format!("tdy> {first}"), echo_style));
+        }
+        for cont in echo_lines {
+            lines.push(Line::styled(format!("   -> {cont}"), echo_style));
+        }
         for l in cell.text.lines() {
             lines.push(Line::raw(l.to_string()));
         }

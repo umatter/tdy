@@ -340,8 +340,15 @@ enum WbMsg {
     /// A transient remark that does NOT mean work is running — see `Msg::Note`'s
     /// doc comment; the same trap applies here.
     Note(String),
-    /// A `PreviewFile` action's result, computed off the UI thread.
-    Preview { path: PathBuf, raw: RawHead, spec: Option<SpecSummary> },
+    /// A `PreviewFile` action's result, computed off the UI thread. `gen` is
+    /// the `preview_gen` the request was spawned for — `Workbench::
+    /// set_preview` drops anything that no longer matches the current
+    /// counter, since a slower, older request finishing after a fresher one
+    /// must not clobber it. `stale` is `SidecarStatus::Stale` (a sidecar
+    /// exists but its fingerprint no longer matches the file) — `spec`
+    /// stays `None` for it exactly as before, this only adds the flag the
+    /// footer needs to say why.
+    Preview { gen: u64, path: PathBuf, raw: RawHead, spec: Option<SpecSummary>, stale: bool },
 }
 
 /// The worker: owns the one `Session` for this workbench and runs lines from
@@ -407,7 +414,7 @@ fn wb_method_label(m: &tdy::spec::InferenceMethod) -> &'static str {
 /// `Command::Show` computes inside a `Session`, but a preview can fire (an
 /// arrow key, a completed `.sniff`'s follow-up) without a matching command
 /// ever going through the worker, so it is computed directly here instead.
-fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf) {
+fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf, gen: u64) {
     tokio::task::spawn_blocking(move || {
         let raw = match raw_head(&path, cfg.limits) {
             Ok(r) => r,
@@ -419,13 +426,20 @@ fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf
                 return;
             }
         };
+        let mut stale = false;
         let spec = match tdy::sidecar::load(&path) {
             Ok(tdy::sidecar::SidecarStatus::Fresh(sc)) => {
                 Some(spec_summary(&sc.spec, wb_method_label(&sc.provenance.method), sc.spec.confidence))
             }
+            // Kept as `None`, exactly as before — the footer is what
+            // distinguishes this from "never sniffed" now, not the spec.
+            Ok(tdy::sidecar::SidecarStatus::Stale(_)) => {
+                stale = true;
+                None
+            }
             _ => None,
         };
-        let _ = tx.send(WbMsg::Preview { path, raw, spec });
+        let _ = tx.send(WbMsg::Preview { gen, path, raw, spec, stale });
     });
 }
 
@@ -479,7 +493,12 @@ fn act_on_wb(
     match action {
         WbAction::None | WbAction::Quit => {}
         WbAction::Dispatch(line) => dispatch_line(wb, line, line_tx),
-        WbAction::PreviewFile(path) => spawn_wb_preview(preview_tx.clone(), cfg.clone(), path),
+        // `wb.preview_gen` was already bumped by the `Workbench` method that
+        // produced this very action (`preview_action` — see its doc
+        // comment), so it already names the generation this request is for.
+        WbAction::PreviewFile(path) => {
+            spawn_wb_preview(preview_tx.clone(), cfg.clone(), path, wb.preview_gen)
+        }
         // The remedy overlay's write: the ONE sanctioned non-console write
         // in the workbench (spec §8 rule 2), always behind the shown diff
         // `y` just confirmed. `write_target`'s guard refuses a stale write
@@ -530,7 +549,7 @@ async fn run_workbench(
 ) -> Result<()> {
     let cfg = tdy::config::load(&Default::default())?;
     let browser = Browser::new(&root)?;
-    let mut wb = Workbench::new(browser, load_history(1000));
+    let mut wb = Workbench::new(browser, load_history(1000), cfg.confidence_threshold);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<WbMsg>();
     let line_tx = spawn_console_worker(root, cfg.clone(), tx.clone());
@@ -589,7 +608,9 @@ async fn run_workbench(
                 }
                 WbMsg::Progress(what) => wb.progress(what),
                 WbMsg::Note(what) => wb.note(what),
-                WbMsg::Preview { path, raw, spec } => wb.set_preview(path, raw, spec),
+                WbMsg::Preview { gen, path, raw, spec, stale } => {
+                    wb.set_preview(gen, path, raw, spec, stale)
+                }
             }
         }
         if wb.should_quit {
