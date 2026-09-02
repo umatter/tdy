@@ -188,6 +188,28 @@ impl Workbench {
         self.status = what;
     }
 
+    /// A `PreviewFile` action's result arrived (computed off the UI
+    /// thread). Applies only when the context or the browser's current
+    /// selection still points at `path` — an arrow key can move on, or
+    /// another command can replace the context, before a spawned preview
+    /// finishes, and a stale result must be dropped rather than clobbering
+    /// whatever is now shown.
+    pub fn set_preview(&mut self, path: PathBuf, raw: RawHead, spec: Option<SpecSummary>) {
+        let context_matches = matches!(&self.context, Context::File { path: p, .. } if *p == path);
+        let selection_matches = self.browser.selected_path().as_deref() == Some(path.as_path());
+        if !context_matches && !selection_matches {
+            return;
+        }
+        // Preserve whatever query preview a prior `.sniff` already put here
+        // for this same path (this action's own job is only to fill in the
+        // raw half — see `apply`'s `Payload::Sniffed` arm).
+        let preview = match &self.context {
+            Context::File { path: p, preview, .. } if *p == path => preview.clone(),
+            _ => None,
+        };
+        self.context = Context::File { path, raw, spec, preview };
+    }
+
     pub fn prompt(&self) -> &'static str {
         if self.sql_pending {
             "   -> "

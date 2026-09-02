@@ -116,6 +116,24 @@ fn apply_updates_scrollback_and_context() {
     assert!(matches!(follow, Some(WbAction::Edit(_))));
 }
 
+/// The audit-trail property that survives refactors: a browser shortcut and
+/// the equivalent typed line must dispatch identically, even after a `.cd`
+/// has moved the session's directory.
+#[test]
+fn shortcut_and_typed_line_produce_identical_dispatches_after_cd() {
+    let d = pile();
+    let mut w1 = wb(&d);
+    let mut w2 = wb(&d);
+    // w1: navigate with the browser, sniff via shortcut.
+    w1.key(key(KeyCode::Tab));
+    w1.key(key(KeyCode::Enter)); // .cd sub
+    let a1 = w1.key(key(KeyCode::Char('s')));
+    // w2: type the same session.
+    let _ = type_line(&mut w2, ".cd sub");
+    let a2 = type_line(&mut w2, ".sniff c.csv");
+    assert_eq!(a1, a2);
+}
+
 #[test]
 fn zoom_resize_and_scroll_are_console_focus_keys() {
     let d = pile();

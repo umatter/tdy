@@ -21,13 +21,17 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 
 use tdy_tui::app::{Action, App, Key, Preview, QueryResult};
-use tdy_tui::{evidence, ui};
+use tdy_tui::browser::Browser;
+use tdy_tui::workbench::{WbAction, Workbench};
+use tdy_tui::{evidence, ui, wb_ui};
 use tdy::config::Config;
+use tdy::console::repl::{append_history, load_history};
+use tdy::console::{raw_head, spec_summary, Outcome, Payload, RawHead, Session, SpecSummary};
 use tdy::report::{FitOpts, PileReport};
 
 #[derive(Parser)]
@@ -37,8 +41,9 @@ use tdy::report::{FitOpts, PileReport};
     version
 )]
 struct Cli {
-    /// The target .tdy.sql file. Omit to find one beside the working
-    /// directory.
+    /// A `.tdy.sql` target (the classic review flow), a data file (the
+    /// workbench, rooted at its directory and showing it), or omitted
+    /// entirely (the workbench on the working directory).
     target: Option<PathBuf>,
 }
 
@@ -57,20 +62,50 @@ enum Msg {
     Error(String),
 }
 
+/// Which flow `main` runs: the classic single-target review, or the
+/// workbench (rooted at a directory, optionally with a line to run first).
+/// Resolved entirely before the terminal is touched — see the comment below
+/// on why that matters for `Mode::Classic`, and it costs `Mode::Workbench`
+/// nothing to keep the same property.
+enum Mode {
+    Classic(PathBuf, String),
+    Workbench { root: PathBuf, initial: Option<String> },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
-    let target = match cli.target {
-        Some(t) => t,
-        None => discover_target()?,
+    let mode = match cli.target {
+        Some(t) if t.to_string_lossy().ends_with(".tdy.sql") => {
+            let sql = std::fs::read_to_string(&t)
+                .with_context(|| format!("cannot read target {}", t.display()))?;
+            // Fail before touching the terminal: an unparseable target
+            // inside the alternate screen is an error nobody can read.
+            tdy::target::Target::parse(&sql).with_context(|| format!("in {}", t.display()))?;
+            Mode::Classic(t, sql)
+        }
+        Some(f) => {
+            // A data file: open the workbench in its directory, showing it.
+            let f = f.canonicalize().with_context(|| format!("cannot open {}", f.display()))?;
+            let root = f.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+            let name = f.file_name().unwrap().to_string_lossy().to_string();
+            Mode::Workbench { root, initial: Some(format!(".show {name}")) }
+        }
+        None => match discover_target() {
+            // Exactly one target here: the classic flow, today's behaviour.
+            Ok(t) => {
+                let sql = std::fs::read_to_string(&t)?;
+                tdy::target::Target::parse(&sql).with_context(|| format!("in {}", t.display()))?;
+                Mode::Classic(t, sql)
+            }
+            // No target, or several: the workbench is the answer now, not
+            // an error — `discover_target`'s own error text is written for
+            // the case where naming the file is the only fix, which no
+            // longer applies here.
+            Err(_) => Mode::Workbench { root: std::env::current_dir()?, initial: None },
+        },
     };
-    let sql = std::fs::read_to_string(&target)
-        .with_context(|| format!("cannot read target {}", target.display()))?;
-    // Fail before touching the terminal: an unparseable target inside the
-    // alternate screen is an error nobody can read.
-    tdy::target::Target::parse(&sql)
-        .with_context(|| format!("in {}", target.display()))?;
 
     let mut terminal = ratatui::init();
     // `ratatui::init` installs a panic hook that restores the terminal. That
@@ -88,7 +123,12 @@ fn main() -> Result<()> {
             previous(info);
         }));
     }
-    let result = rt.block_on(run(&mut terminal, target, sql, torn_down));
+    let result = match mode {
+        Mode::Classic(target, sql) => rt.block_on(run(&mut terminal, target, sql, torn_down)),
+        Mode::Workbench { root, initial } => {
+            rt.block_on(run_workbench(&mut terminal, root, initial, torn_down))
+        }
+    };
     ratatui::restore();
     result
 }
@@ -107,10 +147,10 @@ fn discover_target() -> Result<PathBuf> {
     found.sort();
     match found.len() {
         1 => Ok(found.remove(0)),
-        0 => anyhow::bail!(
-            "no .tdy.sql target here. Write one, or draft a scaffold:\n  \
-             tdy draft *.csv > sales.tdy.sql"
-        ),
+        // This message is never shown: `main` falls into the workbench
+        // instead of printing it (see `Mode::Workbench`'s `Err(_)` arm) —
+        // kept short now that the draft hint it used to carry is dead text.
+        0 => anyhow::bail!("no .tdy.sql target here"),
         _ => anyhow::bail!(
             // `tdy ui` is the documented door and forwards its argument here,
             // so the hint spells that form even when tdy-tui was run directly.
@@ -258,6 +298,239 @@ fn apply_msg(app: &mut App, msg: Msg) {
         }
         Msg::Error(e) => app.set_error(e),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The workbench (Task 5): a console `Session` runs on its own worker task,
+// one line at a time; the UI thread only ever decides (`Workbench::key`,
+// `::apply`) and draws. Everything here mirrors `run()`/`Msg`/`apply_msg`
+// above by design — the two flows share the same shape on purpose, so a
+// change to one is a change someone will think to make to the other.
+// ---------------------------------------------------------------------------
+
+/// Anything the console worker has to say to the workbench.
+enum WbMsg {
+    /// The worker began running this line.
+    Started(String),
+    Done(Box<Outcome>),
+    /// Work is happening, and this is what it is.
+    Progress(String),
+    /// A transient remark that does NOT mean work is running — see `Msg::Note`'s
+    /// doc comment; the same trap applies here.
+    Note(String),
+    /// A `PreviewFile` action's result, computed off the UI thread.
+    Preview { path: PathBuf, raw: RawHead, spec: Option<SpecSummary> },
+}
+
+/// The worker: owns the one `Session` for this workbench and runs lines from
+/// `line_rx` one at a time, in order — the console's own serialization (one
+/// statement finishes before the next starts), mirrored here as a plain
+/// queue rather than anything fancier. Returns the sender the UI dispatches
+/// lines on.
+fn spawn_console_worker(
+    root: PathBuf,
+    cfg: Config,
+    tx: mpsc::UnboundedSender<WbMsg>,
+) -> mpsc::UnboundedSender<String> {
+    let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        let mut session = match Session::new(&root, cfg) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(WbMsg::Note(format!("{e:#}")));
+                return;
+            }
+        };
+        while let Some(line) = line_rx.recv().await {
+            let _ = tx.send(WbMsg::Started(line.clone()));
+            let sink_tx = tx.clone();
+            let sink: tdy::progress::Sink = Arc::new(move |e| {
+                use tdy::progress::Event;
+                let what = match e {
+                    Event::MemberStarted { path, index, total } => {
+                        format!("fitting {path} ({} of {total})", index + 1)
+                    }
+                    Event::MemberFinished { .. } => return,
+                    Event::Consulting { path, backend, model, bytes } => {
+                        format!("asking {model} via {backend} about {path} ({bytes} bytes sent)")
+                    }
+                };
+                let _ = sink_tx.send(WbMsg::Progress(what));
+            });
+            let o = session.run(&line, Some(&sink)).await;
+            let quit = session.wants_quit();
+            let _ = tx.send(WbMsg::Done(Box::new(o)));
+            if quit {
+                break;
+            }
+        }
+    });
+    line_tx
+}
+
+/// `InferenceMethod` as the lowercase word its TOML uses — the same mapping
+/// `tdy::console`'s own (private) `method_label` applies, reproduced here
+/// because it is not exported and this task does not touch that module.
+fn wb_method_label(m: &tdy::spec::InferenceMethod) -> &'static str {
+    match m {
+        tdy::spec::InferenceMethod::Heuristic => "heuristic",
+        tdy::spec::InferenceMethod::Llm => "llm",
+        tdy::spec::InferenceMethod::Manual => "manual",
+    }
+}
+
+/// A `WbAction::PreviewFile`, satisfied off the UI thread: the raw head,
+/// plus — if a fresh sidecar exists — the spec it describes. Mirrors what
+/// `Command::Show` computes inside a `Session`, but a preview can fire (an
+/// arrow key, a completed `.sniff`'s follow-up) without a matching command
+/// ever going through the worker, so it is computed directly here instead.
+fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf) {
+    tokio::task::spawn_blocking(move || {
+        let raw = match raw_head(&path, cfg.limits) {
+            Ok(r) => r,
+            // A preview is a convenience; its failure belongs on the status
+            // line, not in place of whatever the main pane already shows —
+            // and NOT as progress, which would leave the UI busy for good.
+            Err(e) => {
+                let _ = tx.send(WbMsg::Note(format!("preview unavailable: {e:#}")));
+                return;
+            }
+        };
+        let spec = match tdy::sidecar::load(&path) {
+            Ok(tdy::sidecar::SidecarStatus::Fresh(sc)) => {
+                Some(spec_summary(&sc.spec, wb_method_label(&sc.provenance.method), sc.spec.confidence))
+            }
+            _ => None,
+        };
+        let _ = tx.send(WbMsg::Preview { path, raw, spec });
+    });
+}
+
+/// One key, filtered the same way `read_key` filters for the classic flow —
+/// but unlike `Key`, the workbench needs the *whole* crossterm event
+/// (Ctrl-Up, Ctrl-L, Ctrl-Q all carry modifiers `Key` throws away), so this
+/// hands the event back unnarrowed. `Workbench::key` re-checks
+/// `KeyEventKind::Press` itself; double-filtering is fine.
+fn read_wb_key() -> Result<Option<KeyEvent>> {
+    let Event::Key(k) = event::read()? else { return Ok(None) };
+    if k.kind != KeyEventKind::Press {
+        return Ok(None);
+    }
+    Ok(Some(k))
+}
+
+/// Act on what the workbench decided: send a line to the worker, kick off a
+/// preview, or run `$EDITOR` — the same suspend/reenter dance the classic
+/// flow's `OpenEditor` arm does (see `run`), since a workbench member can be
+/// opened for editing too. `WbAction::None`/`Quit` need nothing here:
+/// `Workbench` itself already set `should_quit`, which the caller checks
+/// after every action.
+fn act_on_wb(
+    action: WbAction,
+    wb: &mut Workbench,
+    terminal: &mut DefaultTerminal,
+    line_tx: &mpsc::UnboundedSender<String>,
+    preview_tx: &mpsc::UnboundedSender<WbMsg>,
+    cfg: &Config,
+) -> Result<()> {
+    match action {
+        WbAction::None | WbAction::Quit => {}
+        WbAction::Dispatch(line) => {
+            let _ = line_tx.send(line);
+        }
+        WbAction::PreviewFile(path) => spawn_wb_preview(preview_tx.clone(), cfg.clone(), path),
+        WbAction::Edit(path) => {
+            // The editor owns the terminal while it runs; taking it back
+            // afterwards must restore raw mode and the alternate screen, or
+            // every subsequent keystroke lands in the shell. See `run`'s
+            // identical `OpenEditor` arm for the rest of the reasoning.
+            let _ = terminal.show_cursor();
+            ratatui::restore();
+            let status = run_editor(&path);
+            let re = reenter();
+            terminal.clear()?;
+            if let Err(e) = re {
+                anyhow::bail!("cannot take the terminal back after the editor: {e}");
+            }
+            if let Err(e) = status {
+                wb.note(format!("{e:#}"));
+            }
+            // The edit may have changed the file's sidecar status (or
+            // nothing at all); either way a refresh is cheap and honest.
+            wb.browser.refresh();
+        }
+    }
+    Ok(())
+}
+
+/// The workbench loop: same shape as `run()` — 60 ms poll, drain worker
+/// messages before reading a key — over a `Workbench` instead of an `App`.
+async fn run_workbench(
+    terminal: &mut DefaultTerminal,
+    root: PathBuf,
+    initial: Option<String>,
+    torn_down: Arc<AtomicBool>,
+) -> Result<()> {
+    let cfg = tdy::config::load(&Default::default())?;
+    let browser = Browser::new(&root)?;
+    let mut wb = Workbench::new(browser, load_history(1000));
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<WbMsg>();
+    let line_tx = spawn_console_worker(root, cfg.clone(), tx.clone());
+    if let Some(line) = initial {
+        let _ = line_tx.send(line);
+    }
+
+    loop {
+        if torn_down.load(Ordering::SeqCst) {
+            anyhow::bail!("a background task panicked; the terminal was restored");
+        }
+        terminal.draw(|f| wb_ui::draw(f, &mut wb))?;
+
+        // Drain everything the worker has said, then wait briefly for a key
+        // — see `run`'s identical comment on why polling rather than
+        // selecting, and why 60 ms.
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                WbMsg::Started(line) => wb.begin(&line),
+                WbMsg::Done(o) => {
+                    // Taken before `apply` consumes `o`: the history file
+                    // gets the echo exactly when `apply`'s own in-memory
+                    // recall (`editor.remember`, inside `begin`) would have
+                    // — non-empty, and not a buffered-SQL `Continue`.
+                    let echo = o.echo.clone();
+                    let is_continue = matches!(o.payload, Payload::Continue);
+                    let action = wb.apply(*o);
+                    if !echo.is_empty() && !is_continue {
+                        append_history(&echo);
+                    }
+                    // A sniff/fit/edit may have changed sidecar status;
+                    // refreshing is one read_dir + sidecar headers.
+                    wb.browser.refresh();
+                    if let Some(action) = action {
+                        act_on_wb(action, &mut wb, terminal, &line_tx, &tx, &cfg)?;
+                    }
+                }
+                WbMsg::Progress(what) => wb.progress(what),
+                WbMsg::Note(what) => wb.note(what),
+                WbMsg::Preview { path, raw, spec } => wb.set_preview(path, raw, spec),
+            }
+        }
+        if wb.should_quit {
+            break;
+        }
+
+        if !event::poll(Duration::from_millis(60))? {
+            continue;
+        }
+        let Some(key) = read_wb_key()? else { continue };
+        let action = wb.key(key);
+        act_on_wb(action, &mut wb, terminal, &line_tx, &tx, &cfg)?;
+        if wb.should_quit {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// Write the target, but only onto the bytes we last read.
