@@ -236,15 +236,26 @@ fn draw_file_with_spec(
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    // The spec summary (method, confidence, columns, decisions) is this
+    // view's primary content; the preview strip is secondary and must
+    // never take rows from it. Reserve a floor for the summary first, then
+    // size the strip from what's left — and skip the strip entirely rather
+    // than draw a sliver too short to read, so a too-short pane degrades to
+    // "summary only," never "summary squeezed to nothing."
+    const TOP_MIN: u16 = 4;
     let (top, bottom) = match preview {
-        Some(t) => {
+        Some(t) if inner.height > TOP_MIN => {
             let want = t.rows.len() as u16 + 2;
-            let h = want.min(inner.height.saturating_sub(3)).max(2);
-            let [top, bottom] =
-                Layout::vertical([Constraint::Fill(1), Constraint::Length(h)]).areas(inner);
-            (top, Some(bottom))
+            let h = want.min(inner.height - TOP_MIN);
+            if h >= 2 {
+                let [top, bottom] =
+                    Layout::vertical([Constraint::Fill(1), Constraint::Length(h)]).areas(inner);
+                (top, Some(bottom))
+            } else {
+                (inner, None)
+            }
         }
-        None => (inner, None),
+        _ => (inner, None),
     };
 
     let [left, right] =

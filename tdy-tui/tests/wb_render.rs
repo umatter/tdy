@@ -152,3 +152,36 @@ fn a_query_context_shows_the_table_and_counts() {
     assert!(text.contains("region") && text.contains("14200.00"), "{text}");
     assert!(text.contains("500 row(s)") && text.contains("truncated"), "{text}");
 }
+
+/// Regression: the preview-table height heuristic used to apply its floor
+/// (`.max(2)`) AFTER capping to available space, so a short pane could give
+/// the strip 2 rows while the `Fill(1)` spec summary above it got zero. The
+/// summary (method, confidence, columns, decisions) is primary; the
+/// preview is secondary and must never take rows from it — a pane too
+/// short for both must drop the preview strip, never squeeze the summary.
+#[test]
+fn a_short_pane_never_zeroes_the_spec_summary_for_the_preview_strip() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    use tdy::console::{Outcome, Payload, SpecSummary, Table};
+    // At 30 total rows with a 22-row console, the main pane's inner height
+    // lands at 2 — exactly the case the old code mishandled.
+    w.console_rows = 22;
+    w.begin(".sniff a.csv");
+    let spec = SpecSummary {
+        method: "heuristic".into(), confidence: Some(0.6),
+        extraction: r#"{"format":"delimited"}"#.into(),
+        transforms: vec![],
+        columns: vec![("betrag".into(), "Betrag".into(), "DECIMAL(38,2)".into())],
+        notes: vec!["ambiguous date order".into()],
+    };
+    let preview = Table { columns: vec!["betrag".into()], types: vec![], rows: vec![vec!["1.00".into()]], total: 1, truncated: false };
+    w.apply(Outcome {
+        echo: ".sniff a.csv".into(), text: String::new(), ok: true,
+        payload: Payload::Sniffed { path: d.path().join("a.csv"), spec, preview, kept_existing: false },
+    });
+    // No panic reaching here is itself part of what this test checks.
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("0.60"), "spec summary must still render, not be squeezed to nothing: {text}");
+    assert!(!text.contains("1.00"), "preview strip should be dropped when the pane is too short for both: {text}");
+}
