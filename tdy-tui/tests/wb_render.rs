@@ -90,3 +90,65 @@ fn browser_status_uses_compact_glyphs_and_never_clips_even_with_a_long_name() {
     assert!(text.contains("drift (99)"), "{text}");
     assert!(!text.contains(long_name), "the full long name should be ellipsized: {text}");
 }
+
+#[test]
+fn a_file_without_a_sidecar_shows_raw_only_and_no_opinion() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    use tdy::console::{Outcome, Payload, RawHead};
+    w.begin(".show a.csv");
+    w.apply(Outcome {
+        echo: ".show a.csv".into(), text: String::new(), ok: true,
+        payload: Payload::Shown {
+            path: d.path().join("a.csv"),
+            raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: true, sheets: vec![] },
+            spec: None,
+        },
+    });
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("A;B") && text.contains("1;2"), "{text}");
+    assert!(text.contains("…"), "truncation marker: {text}");
+    assert!(text.contains("not sniffed"), "{text}");
+    assert!(!text.contains("TEXT") && !text.contains("<-"), "no opinion yet: {text}");
+}
+
+#[test]
+fn a_sniffed_file_shows_raw_beside_the_spec_and_its_decisions() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    use tdy::console::{Outcome, Payload, SpecSummary, Table};
+    w.begin(".sniff a.csv");
+    let spec = SpecSummary {
+        method: "heuristic".into(), confidence: Some(0.6),
+        extraction: r#"{"format":"delimited"}"#.into(),
+        transforms: vec![r#"{"op":"promote_header"}"#.into()],
+        columns: vec![("betrag".into(), "Betrag".into(), "DECIMAL(38,2)".into())],
+        notes: vec!["ambiguous date order".into()],
+    };
+    let preview = Table { columns: vec!["betrag".into()], types: vec![], rows: vec![vec!["1.00".into()]], total: 1, truncated: false };
+    let follow = w.apply(Outcome {
+        echo: ".sniff a.csv".into(), text: String::new(), ok: true,
+        payload: Payload::Sniffed { path: d.path().join("a.csv"), spec, preview, kept_existing: false },
+    });
+    assert!(follow.is_some(), "sniffed context asks the runtime for the raw half");
+    let text = screen(&mut w, 110, 34).join("\n");
+    assert!(text.contains("betrag") && text.contains("Betrag") && text.contains("DECIMAL(38,2)"), "{text}");
+    assert!(text.contains("ambiguous date order"), "the decisions list: {text}");
+    assert!(text.contains("0.60"), "confidence shown: {text}");
+}
+
+#[test]
+fn a_query_context_shows_the_table_and_counts() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    use tdy::console::{Outcome, Payload, Table};
+    w.begin("SELECT 1;");
+    let t = Table {
+        columns: vec!["region".into(), "total".into()], types: vec![],
+        rows: vec![vec!["Ost".into(), "14200.00".into()]], total: 500, truncated: true,
+    };
+    w.apply(Outcome { echo: "SELECT 1;".into(), text: String::new(), ok: true, payload: Payload::Query(t) });
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("region") && text.contains("14200.00"), "{text}");
+    assert!(text.contains("500 row(s)") && text.contains("truncated"), "{text}");
+}

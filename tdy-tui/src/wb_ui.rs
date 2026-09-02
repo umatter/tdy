@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use tdy::console::EntryStatus;
+use tdy::console::{EntryStatus, RawHead, SpecSummary, Table};
 
 use crate::workbench::{Context, Focus, Workbench};
 
@@ -23,6 +23,11 @@ const DIM: Color = Color::DarkGray;
 /// (where typing still works) keeps the space instead.
 const MIN_WIDTH_FOR_BROWSER: u16 = 60;
 const BROWSER_WIDTH: u16 = 26;
+/// Below this confidence the File view colors the number red. `tdy::config`
+/// exports no threshold of its own — the engine escalates to the model
+/// below this same number (see `infer.rs`), so it is mirrored here rather
+/// than invented.
+const ESCALATION: f32 = 0.8;
 
 pub fn draw(f: &mut Frame, w: &mut Workbench) {
     let [header, body, status] =
@@ -143,8 +148,11 @@ fn browser_row(name: &str, status: String, width: usize) -> Line<'static> {
 fn context_title(ctx: &Context) -> String {
     match ctx {
         Context::Empty => "main".to_string(),
-        Context::File { path, .. } => path.display().to_string(),
-        Context::Query(_) => "query".to_string(),
+        Context::File { path, .. } => path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string()),
+        Context::Query(_) => "result".to_string(),
     }
 }
 
@@ -162,26 +170,134 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
             ];
             f.render_widget(Paragraph::new(lines).block(block), area);
         }
-        // The full two-column "what tdy sees / what tdy makes of it" view
-        // is Task 4's; this task renders the raw lines only, so the
-        // context switches without a blank pane while that view lands.
-        Context::File { raw, .. } => {
-            let lines: Vec<Line> = if raw.lines.is_empty() {
-                vec![Line::styled("reading…", Style::new().fg(DIM))]
-            } else {
-                raw.lines.iter().map(|l| Line::raw(l.clone())).collect()
-            };
-            f.render_widget(Paragraph::new(lines).block(block), area);
-        }
+        Context::File { raw, spec, preview, .. } => match spec {
+            // No sidecar yet: the raw head as-is, and nothing that looks
+            // like an opinion — no columns, no types, no arrows.
+            None => draw_file_no_spec(f, area, block, raw, w.main_scroll),
+            // A sidecar exists: raw beside the spec's own decisions.
+            Some(spec) => {
+                draw_file_with_spec(f, area, block, raw, spec, preview.as_ref(), w.main_scroll)
+            }
+        },
         Context::Query(t) => {
-            let lines: Vec<Line> = t
-                .rows
-                .iter()
-                .map(|r| Line::raw(r.join("  ")))
-                .collect();
-            f.render_widget(Paragraph::new(lines).block(block), area);
+            f.render_widget(Paragraph::new(table_lines(t)).block(block), area);
         }
     }
+}
+
+/// The raw head, verbatim: file lines, or (for a workbook) one
+/// `sheet "Name": R row(s) x C col(s)` line per sheet, then the file's own
+/// lines if any were also sampled. A trailing `…` marks a truncated read.
+fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
+    if raw.lines.is_empty() && raw.sheets.is_empty() {
+        return vec![Line::styled("reading…", Style::new().fg(DIM))];
+    }
+    let mut lines = Vec::new();
+    for (name, rows, cols) in &raw.sheets {
+        lines.push(Line::raw(format!("sheet \"{name}\": {rows} row(s) x {cols} col(s)")));
+    }
+    for l in &raw.lines {
+        lines.push(Line::raw(l.clone()));
+    }
+    if raw.truncated {
+        lines.push(Line::styled("…", Style::new().fg(DIM)));
+    }
+    lines
+}
+
+/// No sidecar: raw head only, plus a footer naming the fact that it is
+/// unopinionated — never a column name, a type, or an arrow.
+fn draw_file_no_spec(f: &mut Frame, area: Rect, block: Block<'static>, raw: &RawHead, scroll: usize) {
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let [content, footer] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
+    f.render_widget(
+        Paragraph::new(raw_head_lines(raw)).scroll((scroll as u16, 0)),
+        content,
+    );
+    f.render_widget(
+        Paragraph::new(Line::styled("not sniffed — press s", Style::new().fg(DIM))),
+        footer,
+    );
+}
+
+/// A sidecar exists: raw beside the spec's decisions, two even columns,
+/// with the preview table (when there is one) spanning the bottom.
+fn draw_file_with_spec(
+    f: &mut Frame,
+    area: Rect,
+    block: Block<'static>,
+    raw: &RawHead,
+    spec: &SpecSummary,
+    preview: Option<&Table>,
+    scroll: usize,
+) {
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let (top, bottom) = match preview {
+        Some(t) => {
+            let want = t.rows.len() as u16 + 2;
+            let h = want.min(inner.height.saturating_sub(3)).max(2);
+            let [top, bottom] =
+                Layout::vertical([Constraint::Fill(1), Constraint::Length(h)]).areas(inner);
+            (top, Some(bottom))
+        }
+        None => (inner, None),
+    };
+
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
+    f.render_widget(
+        Paragraph::new(raw_head_lines(raw)).scroll((scroll as u16, 0)),
+        left,
+    );
+    f.render_widget(Paragraph::new(spec_lines(spec)), right);
+
+    if let (Some(bottom), Some(t)) = (bottom, preview) {
+        f.render_widget(Paragraph::new(table_lines(t)), bottom);
+    }
+}
+
+/// The spec summary: method, confidence (red below `ESCALATION`), each
+/// column as `name ← "source" : TYPE`, then the notes as a decisions list.
+fn spec_lines(spec: &SpecSummary) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::raw(format!("method: {}", spec.method))];
+    lines.push(match spec.confidence {
+        Some(c) => {
+            let style = if c < ESCALATION { Style::new().fg(Color::Red) } else { Style::new() };
+            Line::styled(format!("confidence: {c:.2}"), style)
+        }
+        None => Line::raw("confidence: —".to_string()),
+    });
+    lines.push(Line::raw(""));
+    for (name, source, ty) in &spec.columns {
+        lines.push(Line::raw(format!("{name} ← \"{source}\" : {ty}")));
+    }
+    if !spec.notes.is_empty() {
+        lines.push(Line::raw(""));
+        for note in &spec.notes {
+            lines.push(Line::raw(format!("• {note}")));
+        }
+    }
+    lines
+}
+
+/// A `Table`, rendered as a header row, its data rows, then a count line —
+/// shared by the File view's preview and a bare query's result.
+fn table_lines(t: &Table) -> Vec<Line<'static>> {
+    let mut lines =
+        vec![Line::styled(t.columns.join("  "), Style::new().add_modifier(Modifier::BOLD))];
+    for r in &t.rows {
+        lines.push(Line::raw(r.join("  ")));
+    }
+    let mut count = format!("{} row(s)", t.total);
+    if t.truncated {
+        count.push_str(" (truncated)");
+    }
+    lines.push(Line::styled(count, Style::new().fg(DIM)));
+    lines
 }
 
 fn draw_console(f: &mut Frame, area: Rect, w: &Workbench) {
