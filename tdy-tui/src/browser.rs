@@ -52,13 +52,13 @@ impl Browser {
 
     /// Navigate up one directory, unless already at root.
     /// Returns true if moved, false if already at root.
+    /// Selection is clamped by refresh(), not reset.
     pub fn up(&mut self) -> bool {
         if self.dir == self.root {
             return false;
         }
         self.dir.pop();
         self.refresh();
-        self.selected = 0;
         true
     }
 
@@ -83,9 +83,8 @@ impl Browser {
     /// Move selection up or down by delta, clamping to [0, entries.len()).
     pub fn move_sel(&mut self, delta: i32) {
         let current = self.selected as i32;
-        let max = self.entries.len() as i32;
-        let new = (current + delta).max(0).min(max - 1).max(0) as usize;
-        self.selected = new.min(self.entries.len().saturating_sub(1));
+        let max = self.entries.len().max(1) as i32;
+        self.selected = ((current + delta).max(0).min(max - 1)) as usize;
     }
 
     /// Return the currently selected entry, or None if no entries.
@@ -131,6 +130,7 @@ mod tests {
         std::fs::write(d.path().join("a.csv.tdy.toml"), "junk").unwrap(); // companion: never an entry
         std::fs::create_dir(d.path().join("sub")).unwrap();
         std::fs::write(d.path().join("sub/c.csv"), "A\n1\n").unwrap();
+        std::fs::write(d.path().join("sub/d.csv"), "A\n2\n").unwrap();
         d
     }
 
@@ -145,7 +145,7 @@ mod tests {
         // Enter the directory; selection resets; up() returns to root.
         assert_eq!(b.enter(), None);
         assert_eq!(b.title(), "sub");
-        assert_eq!(b.entries.len(), 1);
+        assert_eq!(b.entries.len(), 2);
         assert!(b.up());
         assert!(!b.up(), "cannot go above the root");
 
@@ -176,5 +176,26 @@ mod tests {
         let mut b = Browser::new(d.path()).unwrap();
         b.enter(); // into sub/
         assert_eq!(b.selected_rel().as_deref(), Some("c.csv"));
+    }
+
+    #[test]
+    fn up_clamps_selection_without_resetting() {
+        let d = pile();
+        let mut b = Browser::new(d.path()).unwrap();
+        // Root has 4 entries: ["sub/", "a.csv", "b.csv", "t.tdy.sql"]
+        assert_eq!(b.entries.len(), 4);
+        // Enter sub/ at index 0 (resets selection to 0)
+        assert_eq!(b.enter(), None);
+        assert_eq!(b.selected, 0);
+        // sub/ now has 2 entries: ["c.csv", "d.csv"]
+        assert_eq!(b.entries.len(), 2);
+        // Move selection to 1 within sub/
+        b.move_sel(1);
+        assert_eq!(b.selected, 1);
+        // Go back up to root (4 entries)
+        assert!(b.up());
+        assert_eq!(b.entries.len(), 4);
+        // Selection should be clamped but not reset to 0; it was 1, still valid
+        assert_eq!(b.selected, 1);
     }
 }
