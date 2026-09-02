@@ -210,7 +210,12 @@ impl Workbench {
             return match k.code {
                 KeyCode::Char('y') => {
                     let (_, edit, target, expected) = self.pending_edit.take().unwrap();
-                    let refit = format!(".fit {}", quote_rel(&self.rel_spelling(&target)));
+                    // --propose, like every other fit the workbench dispatches:
+                    // the proposals are what ranks the next member's remedy
+                    // menu, and the post-write refit is the fit most likely to
+                    // land the user on one.
+                    let refit =
+                        format!(".fit {} --propose", quote_rel(&self.rel_spelling(&target)));
                     WbAction::WriteTarget { path: target, expected, new_text: edit.new_text, refit }
                 }
                 KeyCode::Esc | KeyCode::Char('n') => {

@@ -669,6 +669,10 @@ fn a_digit_stages_an_edit_and_y_writes_then_refits() {
     assert!(tdy::target::Target::parse(&new_text).is_ok(), "{new_text}");
     assert!(refit.starts_with(".fit "), "{refit}");
     assert!(refit.contains("t.tdy.sql"), "{refit}");
+    // The post-write refit must keep asking for proposals — they rank the
+    // next member's remedy menu (the fourth dispatch site the final review's
+    // re-review caught missing).
+    assert!(refit.contains("--propose"), "{refit}");
 }
 
 /// After `$EDITOR` returns, the runtime re-reads the target and hands the
