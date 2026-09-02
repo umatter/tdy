@@ -385,7 +385,7 @@ fn act_on_wb(
             // The edit may have changed the file's sidecar status (or
             // nothing at all); either way a refresh is cheap and honest.
             wb.browser.refresh();
-            after_editing(wb, &path, status.is_ok());
+            after_editing(wb, &path, status);
         }
     }
     Ok(())
@@ -525,7 +525,8 @@ async fn run_workbench(
 /// the human just wrote — but only when the editor succeeded, or there is
 /// nothing new to read. A read failure is reported, not swallowed — and
 /// leaves the old text in place, where the guard will catch it.
-fn after_editing(wb: &mut Workbench, edited: &Path, editor_succeeded: bool) {
+fn after_editing(wb: &mut Workbench, edited: &Path, editor: Result<()>) {
+    let editor_succeeded = editor.is_ok();
     let is_pile_target = wb.pile_target().is_some_and(|target| {
         // Compare canonically: the dispatched `.edit` line is spelled
         // relative to the session's cwd, the context's target is absolute.
@@ -545,7 +546,16 @@ fn after_editing(wb: &mut Workbench, edited: &Path, editor_succeeded: bool) {
         }
     }
     if let Some(note) = edit_outcome_note(editor_succeeded, is_pile_target) {
-        wb.note(note.to_string());
+        // The table says *what* happened; the error says *why*, and only
+        // the error tells "no $EDITOR set" apart from "the editor exited
+        // non-zero" — the one is fixed by an env var, the other by looking
+        // at what was typed. The table stays a `&'static str` table (still
+        // testable without a subprocess); the detail is appended here,
+        // where the concrete error actually is.
+        match &editor {
+            Err(e) => wb.note(format!("{note} ({e:#})")),
+            Ok(()) => wb.note(note.to_string()),
+        }
     }
 }
 

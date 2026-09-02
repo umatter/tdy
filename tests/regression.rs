@@ -995,3 +995,35 @@ fn quick_skips_verification_and_records_that_it_did() {
     // behaviour the flag is opting into.
     assert!(text.contains("int64"), "the unverified guess is not visible: {text}");
 }
+
+/// `sheet_grid` reads a bounded window of a sheet — 20 rows x 12 columns for
+/// `.show`'s raw view — and used to hand that window back indistinguishable
+/// from a whole small sheet. A reader who takes twelve columns for the file's
+/// full header writes a `matches` clause for a column that is not the one
+/// they saw: a wrong answer arrived at silently, which is the failure this
+/// project exists to prevent. The clip is now marked *in the grid*, where
+/// every renderer (console text, the TUI's raw panel) shows it for free.
+#[test]
+fn a_clipped_sheet_grid_says_that_it_was_clipped() {
+    let p = fixture("umsatz.xlsx");
+    let sheet = tdy::engine::excel_sheet_shapes(&p, Limits::default()).unwrap()[0].name.clone();
+
+    // The whole sheet fits inside the real cap: no markers anywhere.
+    let full = tdy::engine::sheet_grid(&p, &sheet, Limits::default(), 20, 12).unwrap();
+    assert!(
+        !full.iter().any(|r| r.iter().any(|c| c == "…")),
+        "an unclipped read must carry no marker: {full:?}"
+    );
+
+    // The same read clipped to 2x2: every emitted row ends in a `…` cell
+    // (columns were cut) and a final `…` row says the rows were too.
+    let clipped = tdy::engine::sheet_grid(&p, &sheet, Limits::default(), 2, 2).unwrap();
+    assert_eq!(clipped.len(), 3, "2 rows plus the marker row: {clipped:?}");
+    assert_eq!(clipped[0].len(), 3, "2 cells plus the marker cell: {clipped:?}");
+    assert_eq!(clipped[0][2], "…");
+    assert_eq!(clipped[1][2], "…");
+    assert_eq!(clipped[2], vec!["…".to_string()]);
+    // The cells that *were* read come back unchanged — the marker is an
+    // addition, never a replacement.
+    assert_eq!(clipped[0][..2], full[0][..2]);
+}

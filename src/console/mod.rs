@@ -119,6 +119,12 @@ pub struct RawHead {
     /// The first sheet's raw grid — the file's own header spelling and raw
     /// values, up to a small cap. First sheet only; empty for text files
     /// (tab-per-sheet is future work).
+    ///
+    /// A read the cap clipped says so *in here*: `engine::sheet_grid`
+    /// appends a `…` cell to every row when it cut columns and a final
+    /// `["…"]` row when it cut rows, so `truncated` above keeps its
+    /// text-file meaning and every renderer marks a clipped grid without
+    /// knowing what the cap was.
     pub grid: Vec<Vec<String>>,
 }
 
@@ -1057,7 +1063,13 @@ fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>, stale: bo
         // Unlike the TUI's raw panel (`wb_ui::raw_head_lines`), console text
         // is not width-constrained, so cells print in full — a title cell
         // like "Muster AG — Umsatzübersicht" is exactly what `.show` exists
-        // to surface verbatim.
+        // to surface verbatim. The grid is the FIRST sheet's, and a
+        // workbook may list a dozen: say which one, or the rows below read
+        // as the whole book.
+        let grid_sheet = if raw.grid.is_empty() { None } else { raw.sheets.first() };
+        if let Some((n, ..)) = grid_sheet {
+            let _ = writeln!(s, "  grid of sheet {n:?}:");
+        }
         for row in &raw.grid {
             let _ = writeln!(s, "  {}", row.join(" | "));
         }

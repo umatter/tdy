@@ -591,9 +591,12 @@ fn member_detail(m: &MemberReport) -> &str {
 
 /// The raw head, verbatim: file lines, or (for a workbook) one
 /// `sheet "Name": R row(s) x C col(s)` line per sheet, then the file's own
-/// lines if any were also sampled, then the first sheet's grid (its own
-/// header spelling and raw values — tab-per-sheet stays future work).
-/// A trailing `…` marks a truncated read.
+/// lines if any were also sampled, then the first sheet's grid under a line
+/// naming that sheet (its own header spelling and raw values —
+/// tab-per-sheet stays future work). A trailing `…` marks a truncated text
+/// read; a grid clipped by its own cap carries its markers inside the grid,
+/// put there by `engine::sheet_grid`, which is the only place that knows
+/// both the cap and the sheet's true extent.
 fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
     if raw.lines.is_empty() && raw.sheets.is_empty() && raw.grid.is_empty() {
         return vec![Line::styled("reading…", Style::new().fg(DIM))];
@@ -604,6 +607,13 @@ fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
     }
     for l in &raw.lines {
         lines.push(Line::raw(l.clone()));
+    }
+    // The grid is the FIRST sheet's; a workbook may list a dozen above it,
+    // so name the one these rows came from rather than let them read as the
+    // whole book.
+    let grid_sheet = if raw.grid.is_empty() { None } else { raw.sheets.first() };
+    if let Some((name, ..)) = grid_sheet {
+        lines.push(Line::raw(format!("grid of sheet \"{name}\":")));
     }
     for row in &raw.grid {
         let cells: Vec<String> = row.iter().map(|c| truncate(c, 14)).collect();
@@ -824,7 +834,11 @@ fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
             Context::Member { .. } => "↑↓ remedy · enter/1-9 stage · a accept · e edit · Esc back · ^Q quit",
             Context::Evidence { .. } => "a accept · Esc close · PgUp/Dn scroll · ^Q quit",
             Context::File { .. } => "↑↓ scroll · Tab focus · ^Q quit",
-            Context::Query(_) | Context::Empty => "Tab focus · ^Q quit",
+            // A result table scrolls now (`key_main`'s fallback arm), so
+            // it advertises the keys that move it; `Empty` has nothing to
+            // scroll and keeps the bare hint.
+            Context::Query(_) => "↑↓ scroll · Tab focus · ^Q quit",
+            Context::Empty => "Tab focus · ^Q quit",
         },
     };
     let [left, right] =

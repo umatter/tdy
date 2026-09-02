@@ -238,7 +238,12 @@ most needs it) gets it too. For a **workbook** member, `raw_head` also carries `
 bounded 20x12 read of the first sheet (xlguard-bounded, extraction's own `render_cell`), so that
 panel shows the spreadsheet's own header spellings and raw values, not just its shape; a tab
 per sheet is still future work, so a workbook with the fitting sheet elsewhere still falls
-back to `Problem.header`, which the remedy menu is built from regardless. `tdy::progress`
+back to `Problem.header`, which the remedy menu is built from regardless. That read is
+**bounded, and says so**: `sheet_grid` is the only place that knows both the cap and the
+sheet's true extent, so it appends a `…` cell per row when it clips columns and a final `…`
+row when it clips rows — a window shown as if it were the whole sheet is how someone writes a
+`matches` clause for a column they never saw. Both renderers also name the sheet the grid came
+from (`grid of sheet "N":`), since the panel lists every sheet directly above it. `tdy::progress`
 (owned `Sink`, so a fit can run on a spawned task) is what lets the status line narrate; a
 transient remark must use `Msg::Note`, never `Msg::Progress`, or the UI stays busy forever and
 takes no keys but `q`. The same discipline now reaches query results too:
@@ -253,7 +258,11 @@ root); `workbench.rs` is the frame's pure state machine — `Key` in, `WbAction`
 and owns focus (`Tab` cycles console → browser → main), the main pane's `Context`
 (`Empty`, `File` with or without a sidecar, `Query`, `Pile`, `Member`, `Evidence`), and every
 keyboard shortcut; `wb_ui.rs` reads that state and changes nothing, so `tests/wb_render.rs`
-asserts on real drawn text via `TestBackend`. **One code path**: a browser or main-pane
+asserts on real drawn text via `TestBackend`. `main_scroll` is **one** offset shared by every
+context that scrolls (all of them now), so it resets on every context *change* — Pile↔Member,
+into Evidence, into a fresh Query — while a same-path `show_file` update keeps the scroll the
+user set. Carrying an offset across is not cosmetic: a paged-down pile then opens a short raw
+head past its end, and a blank pane reads as an empty file. **One code path**: a browser or main-pane
 shortcut (`s` → `.sniff <selected>`, `f` on a target → `.fit <it>`, `t` → `.edit` the target,
 `d`/`D` → mark/`.draft` the marked files, Enter on a directory → `.cd`, Backspace → `.cd ..`)
 never acts directly — it produces the identical `WbAction::Dispatch(line)` a typed line would,

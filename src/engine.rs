@@ -1481,6 +1481,15 @@ pub fn excel_sheet_shapes(path: &Path, limits: Limits) -> Result<Vec<SheetShape>
 /// opinion of what they mean. Goes through the same guard sequence as every
 /// other workbook-touching path: `xlguard::preflight` before the workbook is
 /// opened at all, then `checked_worksheet_range` for the one sheet read.
+///
+/// A clipped read says so **in the grid**: this is the only place that knows
+/// both the cap and the sheet's true extent, so an `…` cell is appended to
+/// every row when columns were cut, and a final `["…"]` row when rows were.
+/// A silently clipped grid is a small version of the failure this project
+/// exists to prevent — someone reads twelve columns as the whole sheet and
+/// writes a `matches` clause for a column that is not the one they saw.
+/// Marking here also means every renderer (console `.show`, the TUI's raw
+/// panel) shows it without knowing the cap.
 pub fn sheet_grid(
     path: &Path,
     sheet: &str,
@@ -1492,11 +1501,23 @@ pub fn sheet_grid(
     let mut wb = open_workbook_auto(path)
         .with_context(|| format!("cannot open workbook {}", path.display()))?;
     let range = checked_worksheet_range(&mut wb, sheet, &limits)?;
-    Ok(range
+    let clipped_cols = range.width() > max_cols;
+    let clipped_rows = range.height() > max_rows;
+    let mut out: Vec<Vec<String>> = range
         .rows()
         .take(max_rows)
-        .map(|row| row.iter().take(max_cols).map(render_cell).collect())
-        .collect())
+        .map(|row| {
+            let mut cells: Vec<String> = row.iter().take(max_cols).map(render_cell).collect();
+            if clipped_cols {
+                cells.push("…".to_string());
+            }
+            cells
+        })
+        .collect();
+    if clipped_rows {
+        out.push(vec!["…".to_string()]);
+    }
+    Ok(out)
 }
 
 /// The same pipeline, but producing at most `max_rows` output rows.

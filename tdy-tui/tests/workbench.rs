@@ -516,6 +516,131 @@ fn main_scroll_resets_on_a_new_file_and_survives_a_same_path_update() {
     assert_eq!(w.main_scroll, 1, "a same-path update must not throw away the user's scroll");
 }
 
+/// `main_scroll` is ONE offset shared by every context that scrolls — and
+/// since slice 4 that is all of them (Pile, a Member's raw column,
+/// Evidence, Query). So it must reset on every context CHANGE, not only in
+/// `show_file`: a paged-down Pile followed by `Enter` used to open the
+/// member's raw column already scrolled past a short raw head, drawing a
+/// blank pane that reads as an empty file. Same leak Pile → Evidence, back
+/// out again, and into a fresh query result.
+#[test]
+fn main_scroll_resets_on_every_context_change() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report(
+        "sales.tdy.sql",
+        vec![
+            member("2025-01.csv", MemberStatus::Fits),
+            member("2025-02.csv", MemberStatus::NeedsReview),
+        ],
+    );
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+
+    // Pile → Member.
+    w.key(key(KeyCode::PageDown));
+    w.key(key(KeyCode::PageDown));
+    assert!(w.main_scroll > 0, "PageDown must scroll the Pile");
+    w.key(key(KeyCode::Enter));
+    assert!(matches!(w.context, Context::Member { .. }), "{:?}", w.context);
+    assert_eq!(w.main_scroll, 0, "a member's raw column opens at its first line");
+
+    // Member → Pile.
+    w.key(key(KeyCode::PageDown));
+    assert!(w.main_scroll > 0);
+    w.key(key(KeyCode::Esc));
+    assert!(matches!(w.context, Context::Pile { .. }), "{:?}", w.context);
+    assert_eq!(w.main_scroll, 0, "back at a list of members, at its top");
+
+    // Pile → Evidence.
+    w.key(key(KeyCode::PageDown));
+    assert!(w.main_scroll > 0);
+    w.begin(".accept sales.tdy.sql 2025-02.csv");
+    let rows = vec![tdy::evidence::Evidence::Unillustrated { reason: "x".into() }];
+    w.apply(
+        outcome(
+            ".accept sales.tdy.sql 2025-02.csv",
+            "",
+            Payload::Evidence {
+                target: d.path().join("sales.tdy.sql"),
+                member: "2025-02.csv".into(),
+                rows,
+            },
+        ),
+        d.path(),
+    );
+    assert_eq!(w.main_scroll, 0, "evidence opens at its first line");
+
+    // Evidence → Query.
+    w.key(key(KeyCode::Down));
+    w.key(key(KeyCode::Down));
+    assert!(w.main_scroll > 0);
+    w.begin("SELECT 1;");
+    let t = Table {
+        columns: vec!["a".into()],
+        types: vec![],
+        rows: vec![vec!["1".into()]],
+        total: 1,
+        truncated: false,
+    };
+    w.apply(outcome("SELECT 1;", "| a |\n", Payload::Query(t)), d.path());
+    assert_eq!(w.main_scroll, 0, "a fresh result set starts at its first row");
+}
+
+/// `.accept` is two steps, and the second one's `Done` is a refit: the
+/// selection-preservation match must therefore know `Evidence` as an
+/// outgoing context too. Without that arm the member you just accepted is
+/// the one member the new Pile does not have selected — the cursor jumps to
+/// row 0 exactly when you want to see what your judgement did.
+#[test]
+fn the_accepted_member_stays_selected_after_step_two() {
+    let d = pile();
+    let members = || {
+        vec![
+            member("2025-01.csv", MemberStatus::Fits),
+            member("2025-02.csv", MemberStatus::Fits),
+            member("2025-03.csv", MemberStatus::NeedsReview),
+        ]
+    };
+    // Pile → Enter on the reviewable member → `a` (step one).
+    let (mut w, _) = pile_and_enter(&d, members(), 2);
+    let act = w.key(key(KeyCode::Char('a')));
+    let WbAction::Dispatch(line) = act else { panic!("expected Dispatch, got {act:?}") };
+    w.begin(&line);
+    let rows = vec![tdy::evidence::Evidence::Unillustrated { reason: "x".into() }];
+    w.apply(
+        outcome(
+            &line,
+            "",
+            Payload::Evidence {
+                target: d.path().join("sales.tdy.sql"),
+                member: "2025-03.csv".into(),
+                rows,
+            },
+        ),
+        d.path(),
+    );
+
+    // Step two: the same line again, whose Done is the refit.
+    let act = w.key(key(KeyCode::Char('a')));
+    assert_eq!(act, WbAction::Dispatch(line.clone()));
+    w.begin(&line);
+    let mut refitted = members();
+    refitted[2].accepted = true;
+    w.apply(outcome(&line, "", Payload::Fitted(pile_report("sales.tdy.sql", refitted))), d.path());
+
+    match &w.context {
+        Context::Pile { selected, report, .. } => {
+            assert_eq!(*selected, 2, "the accepted member must still be selected");
+            assert_eq!(report.members[*selected].path, "2025-03.csv");
+            assert!(report.members[*selected].accepted);
+        }
+        other => panic!("expected Pile, got {other:?}"),
+    }
+}
+
 /// `member_remedies()` reads the current Member's problems through
 /// `remedy::remedies_for`: a gap member (declared `region`, the file's own
 /// header is `Datum`/`Kanton`) offers at least the two headers as

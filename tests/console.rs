@@ -253,6 +253,19 @@ async fn show_on_a_workbook_carries_the_grid() {
         raw.grid[0]
     );
     assert!(o.text.contains("Umsatzübersicht"), "{}", o.text);
+    // umsatz.xlsx is 6 columns x ~9 rows — well inside `raw_head`'s 20x12
+    // window — so the read was NOT clipped and must carry no `…` marker.
+    // (`sheet_grid` appends one per row when it cuts columns, and a final
+    // `["…"]` row when it cuts rows: see
+    // `regression::a_clipped_sheet_grid_says_that_it_was_clipped`.)
+    assert!(
+        !raw.grid.iter().any(|r| r.iter().any(|c| c == "…")),
+        "an unclipped grid must carry no truncation marker: {:?}",
+        raw.grid
+    );
+    // The grid is the FIRST sheet's, and a workbook may hold a dozen: the
+    // text says which one those rows came from.
+    assert!(o.text.contains("grid of sheet \"Umsatz\""), "{}", o.text);
 }
 
 #[tokio::test]

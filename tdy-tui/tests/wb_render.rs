@@ -186,6 +186,9 @@ fn a_workbook_member_shows_its_grid() {
         },
     }, d.path());
     let text = screen(&mut w, 100, 30).join("\n");
+    // The grid is the first sheet's, and the panel says so above the rows —
+    // a workbook may list a dozen sheets right there.
+    assert!(text.contains("grid of sheet \"Umsatz\""), "{text}");
     assert!(text.contains("Betrag CHF"), "{text}");
     assert!(text.contains("1'100.00"), "{text}");
     assert!(text.contains("Umsatzübersic…"), "the truncated prefix must appear: {text}");
@@ -231,6 +234,15 @@ fn a_query_context_shows_the_table_and_counts() {
     let text = screen(&mut w, 100, 30).join("\n");
     assert!(text.contains("region") && text.contains("14200.00"), "{text}");
     assert!(text.contains("500 row(s)") && text.contains("truncated"), "{text}");
+
+    // A result table scrolls (slice 4 wired `main_scroll` through
+    // `table_lines`), so the status hint must advertise the keys that move
+    // it rather than the bare "Tab focus" it used to show.
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("↑↓ scroll"), "a scrollable result must say so: {text}");
+    assert!(text.contains("^Q"), "quit must stay advertised in every context: {text}");
 }
 
 /// The Empty view now draws the generated mark (half-block glyphs) above

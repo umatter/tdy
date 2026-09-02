@@ -443,6 +443,13 @@ impl Workbench {
             }
             Payload::Query(t) => {
                 self.context = Context::Query(t);
+                // A fresh result set starts at its first row. Every
+                // context now *consumes* `main_scroll`, so an offset left
+                // over from a long Pile would open a short answer scrolled
+                // past its last row — a blank pane, which reads as "no
+                // rows". The rule: a context CHANGE resets, a same-context
+                // update (`show_file` on the same path) preserves.
+                self.main_scroll = 0;
                 None
             }
             Payload::Fitted(r) => {
@@ -473,12 +480,25 @@ impl Workbench {
                             Context::Member { target: t, report, member, .. } if *t == target => {
                                 report.members.get(*member).map(|m| m.path.clone())
                             }
+                            // Evidence is the outgoing context of `.accept`
+                            // step two, whose `Done` carries the refit —
+                            // and it already names the member by its
+                            // report-relative path, the very key the
+                            // lookup below wants. Without this arm the
+                            // member you just accepted is the one member
+                            // the new Pile does not have selected.
+                            Context::Evidence { target: t, member, .. } if *t == target => {
+                                Some(member.clone())
+                            }
                             _ => None,
                         };
                         let selected = prev_member_path
                             .and_then(|p| r.members.iter().position(|m| m.path == p))
                             .unwrap_or(0);
                         self.context = Context::Pile { target, report: r, selected };
+                        // A Pile drawn from a fresh report starts at its
+                        // first row (see the `Payload::Query` arm).
+                        self.main_scroll = 0;
                     }
                     None => self.status = "fitted, but no target known".to_string(),
                 }
@@ -486,6 +506,10 @@ impl Workbench {
             }
             Payload::Evidence { target, member, rows } => {
                 self.context = Context::Evidence { target, member, rows, line };
+                // Evidence is what a judgement rests on: it opens at its
+                // first line, never at wherever the Pile behind it was
+                // scrolled to (see the `Payload::Query` arm).
+                self.main_scroll = 0;
                 None
             }
             Payload::Edit(p) => Some(WbAction::Edit(p)),
@@ -1011,6 +1035,11 @@ impl Workbench {
         let preview_path = member_preview_path(&target, &member_path);
         self.context =
             Context::Member { target, report, member: selected, raw: None, remedy_selected: 0 };
+        // A member's raw column opens at its first line. The Pile this came
+        // from consumes the same `main_scroll`, so a paged-down pile would
+        // otherwise open a short raw head scrolled past its end — a blank
+        // pane, indistinguishable from an empty file.
+        self.main_scroll = 0;
         self.preview_action(preview_path)
     }
 
@@ -1024,6 +1053,10 @@ impl Workbench {
             return;
         };
         self.context = Context::Pile { target, report, selected: member };
+        // Back to a list of members, at its top: the offset on screen was
+        // the member's raw column's, and means nothing here (see
+        // `enter_pile_member`).
+        self.main_scroll = 0;
     }
 
     /// Keys over a Member context (Main focus): Up/Down pick a remedy,
