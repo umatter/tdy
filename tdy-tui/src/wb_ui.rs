@@ -73,18 +73,22 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
     Block::bordered().title(title).border_style(style)
 }
 
-/// Exactly `render_listing`'s vocabulary (`src/console/mod.rs`) — the
-/// browser row and the text console must never disagree about what a file
-/// is.
+/// The browser's own compact vocabulary (design doc §6's mock: `✓ 0.95`,
+/// `✗ stale`, `locked` / `drift`) — not `render_listing`'s long-form text.
+/// The 26-column pane cannot carry `sniffed 0.95 (heuristic)` (24 chars
+/// against ~22 usable columns after borders and the highlight-symbol
+/// reservation) without clipping the far more common case; the method stays
+/// out of the browser entirely, since the File view (Task 4) is where it
+/// belongs.
 fn entry_status_text(status: &EntryStatus) -> String {
     match status {
         EntryStatus::None => String::new(),
-        EntryStatus::Sniffed { confidence: Some(c), method } => format!("sniffed {c:.2} ({method})"),
-        EntryStatus::Sniffed { confidence: None, method } => format!("sniffed ({method})"),
-        EntryStatus::Stale => "stale".into(),
-        EntryStatus::NoLock => "target, no lock".into(),
-        EntryStatus::Locked => "target, locked".into(),
-        EntryStatus::Drift(n) => format!("target, drift ({n})"),
+        EntryStatus::Sniffed { confidence: Some(c), .. } => format!("✓ {c:.2}"),
+        EntryStatus::Sniffed { confidence: None, .. } => "✓".into(),
+        EntryStatus::Stale => "✗ stale".into(),
+        EntryStatus::NoLock => "no lock".into(),
+        EntryStatus::Locked => "locked".into(),
+        EntryStatus::Drift(n) => format!("drift ({n})"),
     }
 }
 
@@ -118,16 +122,21 @@ fn draw_browser(f: &mut Frame, area: Rect, w: &Workbench) {
 }
 
 /// Name left, status right, within `width` columns (the pane's inner
-/// width) — `render_listing`'s two columns, laid out for a fixed-width
-/// pane instead of a name-aligned block of text.
+/// width). The status is the fact that matters — whether a file will fit,
+/// whether it needs attention — so it never gives way; the name is
+/// ellipsized to whatever room is left. With the compact vocabulary above,
+/// the longest form is `drift (99)` at 10 chars, well inside a 26-column
+/// pane's ~22 usable columns, so this only ever bites the name.
 fn browser_row(name: &str, status: String, width: usize) -> Line<'static> {
     if status.is_empty() {
-        return Line::raw(name.to_string());
+        return Line::raw(truncate(name, width));
     }
     let status_w = status.chars().count();
-    let avail_for_name = width.saturating_sub(status_w + 1).max(1);
+    let sep = if width > status_w { 1 } else { 0 };
+    let avail_for_name = width.saturating_sub(status_w + sep);
     let name = truncate(name, avail_for_name);
-    let pad = width.saturating_sub(name.chars().count() + status_w).max(1);
+    let used = name.chars().count() + sep + status_w;
+    let pad = width.saturating_sub(used);
     Line::raw(format!("{name}{}{status}", " ".repeat(pad)))
 }
 
@@ -210,7 +219,7 @@ fn draw_console(f: &mut Frame, area: Rect, w: &Workbench) {
 
 fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
     let (text, style) = match &w.busy {
-        Some(what) => (format!(" {what}…"), Style::new().fg(Color::Yellow)),
+        Some(what) => (format!(" {what}"), Style::new().fg(Color::Yellow)),
         None => (format!(" {}", w.status), Style::new().fg(DIM)),
     };
     let keys = match w.focus {

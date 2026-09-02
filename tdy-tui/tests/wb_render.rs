@@ -33,7 +33,7 @@ fn the_frame_shows_three_panes_and_the_status_vocabulary() {
     assert!(text.contains(" files "), "{text}");
     assert!(text.contains(" console "), "{text}");
     assert!(text.contains("a.csv"), "{text}");
-    assert!(text.contains("target, no lock"), "{text}");
+    assert!(text.contains("no lock"), "{text}");
     assert!(text.contains("tdy>"), "{text}");
     assert!(text.contains("select a file"), "{text}");
 }
@@ -61,4 +61,32 @@ fn scrollback_shows_echo_then_text_and_busy_shows_in_status() {
     assert!(text.contains("tdy> .ls"), "{text}");
     assert!(text.contains("a.csv  sniffed"), "{text}");
     assert!(text.contains("fitting a.csv (1 of 9)"), "{text}");
+}
+
+/// The 26-column browser pane cannot carry `render_listing`'s long-form
+/// text (`sniffed 0.95 (heuristic)` is 24 chars against ~22 usable
+/// columns) without silently clipping — the bug this test exists to catch.
+/// The browser uses its own compact vocabulary instead (design doc §6:
+/// `✓ 0.95`, `drift (N)`, …), and the status never gives way to a long
+/// name; the name is what gets ellipsized.
+#[test]
+fn browser_status_uses_compact_glyphs_and_never_clips_even_with_a_long_name() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    use tdy::console::{Entry, EntryKind, EntryStatus};
+    w.browser.entries.push(Entry {
+        name: "b.csv".into(),
+        kind: EntryKind::File,
+        status: EntryStatus::Sniffed { confidence: Some(0.95), method: "heuristic".into() },
+    });
+    let long_name = "a_very_long_filename_that_cannot_possibly_fit_in_a_twenty_six_column_pane.csv";
+    w.browser.entries.push(Entry {
+        name: long_name.into(),
+        kind: EntryKind::File,
+        status: EntryStatus::Drift(99),
+    });
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("✓ 0.95"), "{text}");
+    assert!(text.contains("drift (99)"), "{text}");
+    assert!(!text.contains(long_name), "the full long name should be ellipsized: {text}");
 }
