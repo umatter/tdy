@@ -924,11 +924,15 @@ impl Workbench {
     /// A generous upper bound for `main_scroll`, from what the current
     /// context actually has to show — not an exact fit (a wrapped line, a
     /// multi-row sheet header are not counted), just enough that scrolling
-    /// cannot run away into blank space forever. `key_main`'s PgUp/PgDn (all
-    /// contexts) and its fallback Up/Down arm (File/Query/Empty) both read
-    /// this; Pile and Member answer Up/Down themselves (selection, not
-    /// scroll — see `key_main`/`key_member`), and Evidence's own Up/Down
-    /// (see `key_evidence`) reads it too.
+    /// cannot run away into blank space forever. Every arm here now names a
+    /// context whose renderer actually reads `main_scroll` (`wb_ui`'s
+    /// `draw_file_no_spec`/`draw_file_with_spec`, `draw_pile`, `draw_member`
+    /// (left column only — see its own doc comment), `draw_evidence`, and
+    /// the `Query` arm of `draw_main`) — `key_main`'s PgUp/PgDn read this in
+    /// every context, and the fallback Up/Down arm (File/Query/Empty) does
+    /// too; Pile and Member answer plain Up/Down with selection instead of
+    /// scroll (see `key_main`/`key_member`), and Evidence's own Up/Down
+    /// (see `key_evidence`) reads this too.
     ///
     /// The Evidence multiplier is 9, not a round number: `draw_evidence`
     /// prints, per row, one bold headline, up to 5 `head` lines, an optional
@@ -936,6 +940,17 @@ impl Workbench {
     /// 1 + 5 + 1 + 1 + 1 = 9 in the worst case (a `Shift` with both extremes
     /// present); `Frame` and the illustration-less variants print fewer, so
     /// 9 stays an upper, not exact, bound.
+    ///
+    /// Pile's `+ 16` slack covers `draw_pile`'s own 2-line header (bold
+    /// summary + a blank), which scrolls along with the member rows — no
+    /// separate term needed, 16 is generous enough on its own. Member's
+    /// bound is sized off the raw head alone (`lines` + `sheets` + `grid`
+    /// rows), matching exactly what `draw_member`'s left column — the only
+    /// half of that view `main_scroll` offsets — actually prints; the right
+    /// column (status/review/remedies) is unscrolled, the same trade
+    /// `draw_file_with_spec` already makes for its own two columns. Query's
+    /// bound is sized off the table's row count (`table_lines` also prints
+    /// a header and a count line, covered by the `+ 16` slack).
     fn main_scroll_bound(&self) -> usize {
         match &self.context {
             Context::File { raw, preview, .. } => {
@@ -946,6 +961,13 @@ impl Workbench {
             }
             Context::Evidence { rows, .. } => rows.len() * 9 + 16,
             Context::Pile { report, .. } => report.members.len() + 16,
+            Context::Member { raw, .. } => {
+                raw.as_ref()
+                    .map(|r| r.lines.len() + r.sheets.len() + r.grid.len())
+                    .unwrap_or(0)
+                    + 16
+            }
+            Context::Query(t) => t.rows.len() + 16,
             _ => 16,
         }
     }

@@ -365,15 +365,23 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
             Some(spec) => draw_file_with_spec(f, area, block, raw, spec, preview.as_ref(), w),
         },
         Context::Query(t) => {
-            f.render_widget(Paragraph::new(table_lines(t)).block(block), area);
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            f.render_widget(
+                Paragraph::new(table_lines(t)).scroll((w.main_scroll as u16, 0)),
+                inner,
+            );
         }
         Context::Pile { report, selected, .. } => {
-            draw_pile(f, area, block, report, *selected);
+            draw_pile(f, area, block, report, *selected, w.main_scroll);
         }
-        Context::Member { report, member, raw, remedy_selected, .. } => {
-            let remedies = w.member_remedies();
+        Context::Member { report, member, .. } => {
             match report.members.get(*member) {
-                Some(m) => draw_member(f, area, block, m, raw.as_ref(), *remedy_selected, &remedies),
+                // `w` itself, rather than unpacking `raw`/`remedy_selected`/
+                // `main_scroll` as separate parameters — the same reason
+                // `draw_file_with_spec` takes it, and for the same
+                // too-many-arguments threshold.
+                Some(m) => draw_member(f, area, block, m, w),
                 None => {
                     let inner = block.inner(area);
                     f.render_widget(block, area);
@@ -451,23 +459,31 @@ fn draw_evidence(
 /// The Member view: the gap beside the file's own rows. Left column is the
 /// member's raw head, verbatim — the file's own header spelling, which is
 /// exactly what a `matches` clause needs to be written against, and "loading…"
-/// until the runtime's `PreviewFile` result lands. Right column is the
+/// until the runtime's `PreviewFile` result lands, scrolled by `main_scroll`
+/// the same way `draw_file_no_spec` scrolls a `File` context's raw head —
+/// the right column (status/review/remedy menu) is not scrolled, mirroring
+/// `draw_file_with_spec`'s own left-only scroll. Right column is the
 /// member's status, its review reason (if a judgement is what it is waiting
 /// on), each problem's message, then a blank line and the numbered remedy
 /// menu — `▸` marks `remedy_selected`. An accepted member's status word
 /// already covers "accepted" (see `status_word`), and naturally has no
 /// remedies to list.
-fn draw_member(
-    f: &mut Frame,
-    area: Rect,
-    block: Block<'static>,
-    m: &MemberReport,
-    raw: Option<&RawHead>,
-    remedy_selected: usize,
-    remedies: &[Remedy],
-) {
+///
+/// Takes `w` itself, rather than unpacking `raw`/`remedy_selected`/
+/// `main_scroll` as separate parameters, to stay under the
+/// too-many-arguments threshold — the same reason `draw_file_with_spec`
+/// does.
+fn draw_member(f: &mut Frame, area: Rect, block: Block<'static>, m: &MemberReport, w: &Workbench) {
     let inner = block.inner(area);
     f.render_widget(block, area);
+    let Context::Member { raw, remedy_selected, .. } = &w.context else {
+        // The caller already matched `w.context` to get here — this is
+        // unreachable in practice, but drawing must still be total.
+        f.render_widget(Paragraph::new(Line::styled("?", Style::new().fg(DIM))), inner);
+        return;
+    };
+    let remedy_selected = *remedy_selected;
+    let remedies = w.member_remedies();
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
 
@@ -475,7 +491,10 @@ fn draw_member(
         Some(r) => raw_head_lines(r),
         None => vec![Line::styled("loading…", Style::new().fg(DIM))],
     };
-    f.render_widget(Paragraph::new(left_lines), left);
+    f.render_widget(
+        Paragraph::new(left_lines).scroll((w.main_scroll as u16, 0)),
+        left,
+    );
 
     let mut lines = Vec::new();
     let status_style = if m.accepted {
@@ -507,8 +526,19 @@ fn draw_member(
 }
 
 /// Header (target name, counts, lock state) then one row per member —
-/// `▸ path  status  detail`, truncated to the pane's width.
-fn draw_pile(f: &mut Frame, area: Rect, block: Block<'static>, report: &PileReport, selected: usize) {
+/// `▸ path  status  detail`, truncated to the pane's width. `scroll` offsets
+/// the whole block (header included) the way `draw_evidence` offsets
+/// its own lines — a long pile scrolls the header out of view along with
+/// early members, which is the same trade `draw_file_no_spec` already makes
+/// for its raw head.
+fn draw_pile(
+    f: &mut Frame,
+    area: Rect,
+    block: Block<'static>,
+    report: &PileReport,
+    selected: usize,
+    scroll: usize,
+) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -528,7 +558,7 @@ fn draw_pile(f: &mut Frame, area: Rect, block: Block<'static>, report: &PileRepo
         let row = format!("{marker}{}  {}  {detail}", m.path, status_word(m));
         lines.push(Line::raw(truncate(&row, inner.width as usize)));
     }
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
 }
 
 /// `accepted` wins over `REVIEW` — a reviewed-and-accepted member is no

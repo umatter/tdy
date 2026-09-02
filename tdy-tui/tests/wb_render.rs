@@ -595,6 +595,110 @@ fn evidence_scrolls_with_page_down() {
     );
 }
 
+/// The Pile view was the widest gap the review found: `main_scroll` moved
+/// (item 5's state machine wiring) but `draw_pile` never read it, so PgDn
+/// over a long pile — a documented key per the `?` overlay — visibly did
+/// nothing. With ~30 members and a pane too short to show them all,
+/// `PageDown` must scroll the FIRST VISIBLE member row past index 0.
+#[test]
+fn pile_scrolls_past_the_first_member_with_page_down() {
+    use tdy::console::{Outcome, Payload};
+
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.begin(".fit sales.tdy.sql");
+    let members: Vec<MemberReport> =
+        (0..30).map(|i| member(&format!("m{i:02}.csv"), MemberStatus::Fits)).collect();
+    let report = PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: members.len(),
+        failed: 0,
+        needs_review: 0,
+        members,
+        lock_written: None,
+        dry_run: false,
+    };
+    w.apply(
+        Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    assert_eq!(w.main_scroll, 0);
+
+    let before = screen(&mut w, 100, 20).join("\n");
+    assert!(before.contains("m00.csv"), "the first member must be visible before scrolling: {before}");
+
+    for _ in 0..5 {
+        w.key(key(KeyCode::PageDown));
+    }
+    assert!(w.main_scroll > 0, "PageDown must advance main_scroll in a Pile context");
+    // `Up`/`Down` still mean member selection here, not scroll — confirm
+    // PageDown left it alone.
+    assert!(matches!(&w.context, tdy_tui::workbench::Context::Pile { selected: 0, .. }), "{:?}", w.context);
+
+    let after = screen(&mut w, 100, 20).join("\n");
+    assert!(!after.contains("m00.csv"), "the first member must have scrolled out of view: {after}");
+}
+
+/// The Member view's own gap: `draw_member`'s left column (the file's raw
+/// head) never read `main_scroll` either. With a raw head longer than the
+/// pane and a pane too short to show it all, `PageDown` must scroll the
+/// FIRST VISIBLE raw line past line 0.
+#[test]
+fn member_raw_head_scrolls_with_page_down() {
+    use tdy::console::{Outcome, Payload, RawHead};
+
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.begin(".fit sales.tdy.sql");
+    let report = PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: 1,
+        failed: 0,
+        needs_review: 0,
+        members: vec![member("2025-02.csv", MemberStatus::Fits)],
+        lock_written: None,
+        dry_run: false,
+    };
+    w.apply(
+        Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    w.key(key(KeyCode::Enter)); // opens the Member context
+
+    let raw = RawHead {
+        lines: (0..40).map(|i| format!("line{i:02}")).collect(),
+        truncated: false,
+        sheets: vec![],
+        grid: vec![],
+    };
+    if let tdy_tui::workbench::Context::Member { target, report, member, .. } = &w.context {
+        let path = target.parent().unwrap().join(&report.members[*member].path);
+        w.set_preview(w.preview_gen, path, raw, None, false);
+    } else {
+        panic!("expected Member context, got {:?}", w.context);
+    }
+    assert_eq!(w.main_scroll, 0);
+
+    let before = screen(&mut w, 100, 20).join("\n");
+    assert!(before.contains("line00"), "the first raw line must be visible before scrolling: {before}");
+
+    for _ in 0..5 {
+        w.key(key(KeyCode::PageDown));
+    }
+    assert!(w.main_scroll > 0, "PageDown must advance main_scroll in a Member context");
+
+    let after = screen(&mut w, 100, 20).join("\n");
+    assert!(!after.contains("line00"), "the first raw line must have scrolled out of view: {after}");
+}
+
 /// A marked file's browser row carries a `*` — `wb_ui` reads `w.marked`
 /// directly, so this is the render-level half of the `d`/`D` state-machine
 /// tests in `tests/workbench.rs`.
