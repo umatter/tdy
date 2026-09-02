@@ -110,7 +110,7 @@ pub struct Table {
 
 /// The raw head of a file, for `.show` — what tdy sees before any spec is
 /// applied.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RawHead {
     pub lines: Vec<String>,
     pub truncated: bool,

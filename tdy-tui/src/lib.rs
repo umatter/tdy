@@ -13,3 +13,4 @@ pub mod app;
 pub mod browser;
 pub mod remedy;
 pub mod ui;
+pub mod workbench;
