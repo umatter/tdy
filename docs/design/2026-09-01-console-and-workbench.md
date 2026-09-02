@@ -326,6 +326,14 @@ The rules that hold today, restated for the console:
    `Context::Empty` and the two File views; `tdy` with no args opens it when
    installed. The old screens still reachable behind a target argument so
    nothing regresses mid-slice.
+   *Done 2026-09-02 with one scope change: bare `tdy` still opens the console
+   (see §5 revision); the workbench's doors are `tdy ui`/`tdy-tui`.
+   Pile/Member/Evidence contexts and the browser's `f`/`d`/`D` shortcuts move
+   to slice 3. Two more rulings made in the building: the browser's status
+   column uses §6's compact glyphs, not `render_listing`'s long form, which
+   stays `.ls`'s; and a completed query's results render in the main pane
+   (`Context::Query`) rather than staying scrollback-only, a deliberate
+   widening of this section's "Empty and the two File views."*
 3. **Views.** Pile, Member, Evidence and Query move behind `Context`; the
    remedy overlay; the two-step accept; the old screens deleted. The mark on
    the Empty and help views.

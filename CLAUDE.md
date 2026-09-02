@@ -229,12 +229,38 @@ screen most needs it. `tdy::progress` (owned `Sink`, so a fit can run on a spawn
 lets the status line narrate; a transient remark must use `Msg::Note`, never `Msg::Progress`,
 or the UI stays busy forever and takes no keys but `q`.
 
+**The workbench is `tdy-tui`'s other door — `browser.rs`, `workbench.rs`, `wb_ui.rs`.**
+`browser.rs` is a tree over `console::list_dir` (dirs first, companions folded, confined at the
+root); `workbench.rs` is `app.rs`'s sibling for the new frame — pure, `Key` in, `WbAction` out,
+no I/O — and owns focus (`Tab` cycles console → browser → main), the main pane's `Context`
+(`Empty`, `File` with or without a sidecar, `Query`), and every keyboard shortcut; `wb_ui.rs`
+reads that state and changes nothing, the same discipline `ui.rs` already keeps for the classic
+screens. **One code path**: a browser shortcut (`s` → `.sniff <selected>`, Enter on a directory
+→ `.cd`, Backspace → `.cd ..`) never acts directly — it produces the identical
+`WbAction::Dispatch(line)` a typed line would, so the two cannot drift and the console
+scrollback is a complete, literal audit trail of the session. `tests/workbench.rs` pins this as
+an equality, not a description (`shortcut_and_typed_line_produce_identical_dispatches_after_cd`
+and its sibling). The browser's status column is its own compact glyph vocabulary (`✓ 0.95`,
+`✗ stale`, `no lock` / `locked` / `drift (N)`) — deliberately not `render_listing`'s long form
+(`sniffed 0.95 (heuristic)`, `stale`, …), which stays what `.ls` prints; a 26-column pane has no
+room for the long form, and the ruling this slice made is that the browser and `.ls` are allowed
+to say the same fact two different ways. **A single background task owns the `Session`**
+(`spawn_console_worker` in `tdy-tui/src/main.rs`): the UI sends lines over an unbounded channel
+and the worker runs them one at a time, in arrival order — a plain queue standing in for the
+console's own one-statement-at-a-time serialization, so two shortcuts fired before the first
+finishes cannot run out of order or against two different `SessionContext`s. A `.tdy.sql`
+target — named, or the one discoverable file when none is named — still opens the classic
+Pile/Member/Evidence screens from before the workbench existed; anything else (no target and
+none or several discoverable, a directory, or a data file) opens the workbench instead, rooted
+at the directory or, for a data file, its directory, showing it. The classic screens stay behind
+a target argument until slice 3 moves them behind `Context` too.
+
 **The console is `src/console/`** (`parse` — pure grammar; `Session::run` — one line in, an
 `Outcome { echo, text, payload, ok }` out; `line` — the prompt's editor as a state machine;
 `repl` — the TTY loop and the piped batch runner). `tdy` with no subcommand opens it,
-unconditionally — the design's route-to-workbench default is deferred until the workbench IS
-the console plus panes (slice 3); today's tdy-tui without a target is an error, the wrong
-landing place. Its `text` is the CLI's text because
+unconditionally, even now that the workbench exists: bare `tdy` stays the console (design doc
+§5, revised 2026-09-02) and `tdy ui`/`tdy-tui` are the workbench's own doors — routing a bare
+`tdy` there too is deferred again, to slice 3. Its `text` is the CLI's text because
 `src/commands.rs` produces both — the CLI arms print what `commands::*_text` return, and
 `tests/console.rs` asserts the console's `.fit`/`.sniff`/`.draft`/query text equals the
 binary's. The query context is deliberately **not** kept across statements (a re-sniff between

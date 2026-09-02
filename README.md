@@ -270,8 +270,11 @@ each one was read is on disk, in git-diffable text, beside the data:
 bytes) and one `*.tdy.toml` per member.
 
 **3. Look around.** `tdy ui sales.tdy.sql` opens the same pile in the
-terminal UI, with each refusal next to the file's own rows (`tdy` alone does
-too, once `tdy-tui` is on your PATH). To point tdy at your own files, start
+terminal UI, with each refusal next to the file's own rows (so does `tdy ui`
+alone, here — `sales.tdy.sql` is the only target in the directory). Point it
+at a directory with no target, or several, and you get the workbench
+instead — three panes over the files themselves, described in
+[For humans: `tdy ui`](#for-humans-tdy-ui). To point tdy at your own files, start
 with `tdy sniff <file>` or the console's `.sniff <file>`; for a model to
 help with the hard cases, see [Two-tier inference](#two-tier-inference) and
 `tdy config init`. (The repo keeps the same declaration as
@@ -762,14 +765,28 @@ Int64-plus-Utf8-becomes-Utf8 widening an ordinary `UNION ALL` would do.
 ## For humans: `tdy ui`
 
 ```bash
-tdy ui sales.tdy.sql        # or `tdy-tui sales.tdy.sql`
+tdy ui                       # or `tdy-tui` — the workbench, rooted here
+tdy ui sales.tdy.sql         # or `tdy-tui sales.tdy.sql` — the classic screens below
 ```
 
-`tdy` with no arguments at all opens this too, as long as `tdy-tui` is on
-your PATH and you're at a terminal — no separate `ui` subcommand needed for
-the everyday case. `tdy ui`/`tdy-tui` is how you point it at a target
-directly, and `tdy console` forces the plain console even when the terminal
-UI is installed.
+Point `tdy ui` at a `.tdy.sql` target — or leave it bare in a directory
+holding exactly one — and it opens the classic pile-review screens described
+below, unchanged from before the workbench existed. Anywhere else — no
+target, several, a directory, or a plain data file — it opens the workbench
+instead: three panes over the directory (or, for a data file, its directory,
+already showing that file). A file browser on the left lists everything tdy
+can read plus any targets, each with a one-glance status (`✓ 0.95` sniffed,
+`✗ stale`, and for a target `no lock` / `locked` / `drift (N)`); a main pane
+on the right shows whatever you're looking at — a file's raw head, or, once
+it's sniffed, that head beside what tdy made of it and why; and underneath
+both, the same console as `tdy console` — a `tdy>` prompt taking
+dot-commands (`.sniff`, `.fit`, `.cd`, …) and SQL. Every keyboard shortcut in
+the browser or main pane — `s` to sniff the selected file, Enter on a
+directory, Backspace to go up — dispatches the equivalent console line and
+echoes it into the scrollback exactly as if you had typed it, so the
+transcript at the bottom is a complete, literal record of the session rather
+than a UI you have to trust separately from it. `tdy console` forces the
+plain console even when the terminal UI is installed.
 
 The review loop on one screen: the pile with each member's status and the
 *reason* beside it, a member view putting the gap next to the file's own rows
