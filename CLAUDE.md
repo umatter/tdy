@@ -242,10 +242,20 @@ library (`src/evidence.rs`); `tdy-tui` re-exports it (`pub use tdy::evidence;` i
 `tdy-tui/src/lib.rs`) rather than keeping its own copy.
 
 The console's raw-mode line editor (`src/console/line.rs`, `src/console/repl.rs`) needs
-`crossterm` for key events, so `crossterm` is now a **direct** dependency of `tdy` itself —
-root `Cargo.toml`, not only `tdy-tui/Cargo.toml`. The root `Cargo.toml`'s workspace comment
-("ratatui and crossterm are the TUI's business, and keeping them out of `tdy`'s dependency
-tree...") is stale for crossterm specifically; ratatui alone stays `tdy-tui`-only.
+`crossterm` for key events, so `crossterm` is a **direct** dependency of `tdy` itself — root
+`Cargo.toml`, not only `tdy-tui/Cargo.toml`. `ratatui` alone stays `tdy-tui`-only, and that
+is what the root `Cargo.toml`'s workspace comment now says.
+
+A relative path inside console SQL — `messy('x.csv')`, `dataset('t.tdy.sql')` — joins onto
+the **session's** cwd, the one `.cd` moves, not onto the root. That is
+`provider::Confinement { root, base }`: `base` is where a relative reference is joined,
+`root` is the whole of what is allowed, and `Confinement::at_root` (the MCP server, every
+older caller) makes them the same directory. Splitting them is not a convenience — with
+`base` fixed at the root, a `.cd sub` followed by `SELECT ... FROM messy('x.csv')` read a
+same-named file at the root instead of the one `.ls` had just listed, and exited 0. The
+confinement is enforced in `MessyFunc`/`DatasetFunc`, where the file is opened;
+`run_sql`'s `RestoreCwd` exists because `prepare_specs` reaches the same file by ordinary
+relative I/O against the *process's* directory, and the two routes have to agree.
 
 ## Real data
 

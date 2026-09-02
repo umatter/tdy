@@ -127,10 +127,25 @@ pub fn hash_file(path: &Path) -> Result<(String, u64)> {
 ///
 /// `root` must itself be canonical (the server canonicalises it at startup).
 pub fn confine(path: &Path, root: &Path) -> Result<PathBuf> {
+    confine_from(path, root, root)
+}
+
+/// [`confine`], with a separate directory for a *relative* path to join
+/// onto.
+///
+/// The two are the same thing for the MCP server, whose working directory
+/// *is* its root, and different for the console, where `.cd` moves a working
+/// directory that stays inside the root. A relative `messy('x.csv')` there
+/// means the `x.csv` the user would see in `.ls` — joining it onto the root
+/// instead would silently read a different file of the same name, which is
+/// the one thing this project refuses to do. `base` is only the join point;
+/// `root` is still the whole of what is allowed, so a `base` inside the root
+/// cannot widen it.
+pub fn confine_from(path: &Path, base: &Path, root: &Path) -> Result<PathBuf> {
     let joined = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        root.join(path)
+        base.join(path)
     };
     let canon = joined.canonicalize().with_context(|| {
         format!("{} does not exist under {}", path.display(), root.display())

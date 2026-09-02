@@ -57,8 +57,10 @@ tempfile = "3"
 [profile.dev]
 debug = false
 
-# A workspace with the CLI at its root and the terminal UI beside it: ratatui
-# and crossterm are the TUI's business, and keeping them out of `tdy`'s
-# dependency tree is what keeps the published crate (and its build) small.
+# A workspace with the CLI at its root and the terminal UI beside it. ratatui
+# is the TUI's business alone, and keeping it out of `tdy`'s dependency tree
+# is what keeps the published crate (and its build) small. crossterm is a
+# direct dependency of `tdy` itself — the console's line editor needs raw
+# mode and key events — so it is shared, not excluded.
 [workspace]
 members = [".", "tdy-tui"]

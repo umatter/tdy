@@ -44,16 +44,50 @@ use crate::stream;
 // The messy() table function
 // ---------------------------------------------------------------------------
 
+/// Where a query's relative file references are resolved from, and what
+/// every reference must stay under.
+///
+/// The MCP server's two are the same directory; the console's are not — it
+/// has a `.cd` that moves a working directory around inside a fixed root, and
+/// a relative `messy('x.csv')` there has to mean the same `x.csv` that `.ls`
+/// and `.sniff` mean. Resolving one against the working directory and the
+/// other against the root gave the console two path universes and let SQL
+/// read a same-named decoy at the root, quietly, with exit 0.
+#[derive(Debug, Clone)]
+pub struct Confinement {
+    /// Every path the query names must resolve under this. Must be canonical.
+    pub root: PathBuf,
+    /// A relative reference joins onto this. Must itself be under `root`.
+    pub base: PathBuf,
+}
+
+impl Confinement {
+    /// Working directory = root: the MCP server, and every caller that used
+    /// to pass a bare root.
+    pub fn at_root(root: PathBuf) -> Confinement {
+        Confinement { base: root.clone(), root }
+    }
+
+    /// A working directory somewhere inside `root` — the console after `.cd`.
+    pub fn new(root: PathBuf, base: PathBuf) -> Confinement {
+        Confinement { root, base }
+    }
+
+    fn resolve(&self, path: &Path) -> Result<PathBuf> {
+        crate::fileio::confine_from(path, &self.base, &self.root)
+    }
+}
+
 #[derive(Debug)]
 pub struct MessyFunc {
     pub frozen: bool,
     pub limits: Limits,
-    /// When set (the MCP server), every path is proved to resolve under this
-    /// directory *here*, where the file is opened — not only in the pre-pass
-    /// over the SQL text. The pre-pass and DataFusion parse the query
-    /// independently, and a check that lives only on one side of that split
-    /// is a check the other side can walk past.
-    root: Option<PathBuf>,
+    /// When set (the MCP server, the console), every path is proved to
+    /// resolve under this confinement's root *here*, where the file is
+    /// opened — not only in the pre-pass over the SQL text. The pre-pass and
+    /// DataFusion parse the query independently, and a check that lives only
+    /// on one side of that split is a check the other side can walk past.
+    root: Option<Confinement>,
     /// One parse per file per query. A self-join over `messy('big.csv')`
     /// otherwise reads and parses the whole file once per reference.
     ///
@@ -145,7 +179,11 @@ impl MessyFunc {
     }
 
     pub fn rooted(frozen: bool, limits: Limits, root: PathBuf) -> Self {
-        MessyFunc { frozen, limits, root: Some(root), cache: Mutex::new(HashMap::new()) }
+        Self::confined(frozen, limits, Confinement::at_root(root))
+    }
+
+    pub fn confined(frozen: bool, limits: Limits, c: Confinement) -> Self {
+        MessyFunc { frozen, limits, root: Some(c), cache: Mutex::new(HashMap::new()) }
     }
 }
 
@@ -159,16 +197,18 @@ impl TableFunctionImpl for MessyFunc {
         // Optional second literal (a hint) is consumed by the pre-pass; the
         // planner just tolerates it here.
         let path = PathBuf::from(&path_str);
-        // `./data/x.csv` and `data/x.csv` are one file and must be parsed once.
-        let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         // Confined mode: prove the resolved path is under the root, and then
         // read *that* path — checking one path and opening another is how a
-        // symlink swapped between the two escapes.
+        // symlink swapped between the two escapes. Done before the cache key
+        // is taken, so the key names the file that will actually be read.
         let path = match &self.root {
-            Some(root) => crate::fileio::confine(&path, root)
+            Some(c) => c
+                .resolve(&path)
                 .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?,
             None => path,
         };
+        // `./data/x.csv` and `data/x.csv` are one file and must be parsed once.
+        let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
 
         if let Some(hit) = self
             .cache
@@ -476,13 +516,20 @@ pub fn session(cfg: &Config, frozen: bool) -> SessionContext {
 /// path DataFusion's own parser hands them — not only for the references the
 /// pre-pass happened to find.
 pub fn session_rooted(cfg: &Config, frozen: bool, root: Option<PathBuf>) -> SessionContext {
+    session_confined(cfg, frozen, root.map(Confinement::at_root))
+}
+
+/// [`session_rooted`], with a working directory of its own: a relative
+/// `messy('x.csv')` joins onto `confine.base` instead of onto the root. See
+/// [`Confinement`].
+pub fn session_confined(cfg: &Config, frozen: bool, confine: Option<Confinement>) -> SessionContext {
     let ctx = SessionContext::new();
-    let messy = match root.clone() {
-        Some(r) => MessyFunc::rooted(frozen, cfg.limits, r),
+    let messy = match confine.clone() {
+        Some(c) => MessyFunc::confined(frozen, cfg.limits, c),
         None => MessyFunc::new(frozen, cfg.limits),
     };
     ctx.register_udtf("messy", Arc::new(messy));
-    ctx.register_udtf("dataset", Arc::new(DatasetFunc { limits: cfg.limits, root }));
+    ctx.register_udtf("dataset", Arc::new(DatasetFunc { limits: cfg.limits, root: confine }));
     ctx
 }
 
@@ -498,7 +545,10 @@ pub struct DatasetFunc {
     limits: Limits,
     /// See [`MessyFunc::root`]. For a dataset the root also confines what the
     /// target *reaches* — its lock's member paths — inside `dataset::resolve`.
-    root: Option<PathBuf>,
+    /// Only the target path named in the SQL joins onto `base`; a member is
+    /// joined onto the target's own directory, which is a fact about the
+    /// lock and not about where the reader happens to stand.
+    root: Option<Confinement>,
 }
 
 impl TableFunctionImpl for DatasetFunc {
@@ -510,11 +560,12 @@ impl TableFunctionImpl for DatasetFunc {
         })?;
         let path = std::path::PathBuf::from(&path);
         let path = match &self.root {
-            Some(root) => crate::fileio::confine(&path, root)
+            Some(c) => c
+                .resolve(&path)
                 .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?,
             None => path,
         };
-        crate::dataset::provider(&path, self.limits, self.root.as_deref())
+        crate::dataset::provider(&path, self.limits, self.root.as_ref().map(|c| c.root.as_path()))
             .map_err(|e| DataFusionError::External(format!("{e:#}").into()))
     }
 }
@@ -540,18 +591,33 @@ pub async fn run_query_rooted(
     frozen: bool,
     root: Option<PathBuf>,
 ) -> Result<(Arc<Schema>, Vec<RecordBatch>)> {
-    if let Some(r) = &root {
+    run_query_confined(sql, cfg, frozen, root.map(Confinement::at_root)).await
+}
+
+/// [`run_query_rooted`], with a working directory of its own for relative
+/// references — the console's, which `.cd` moves. The pre-pass below reaches
+/// the file by ordinary relative I/O against the *process's* directory, so a
+/// caller passing a `base` that is not the process's directory must align the
+/// two for the duration of the call; `console::Session::run_sql` does exactly
+/// that, and says why.
+pub async fn run_query_confined(
+    sql: &str,
+    cfg: &Config,
+    frozen: bool,
+    confine: Option<Confinement>,
+) -> Result<(Arc<Schema>, Vec<RecordBatch>)> {
+    if let Some(c) = &confine {
         for m in sqlscan::find_messy_refs(sql) {
-            crate::fileio::confine(Path::new(&m.path), r)?;
+            c.resolve(Path::new(&m.path))?;
         }
         for d in sqlscan::find_dataset_refs(sql) {
-            crate::fileio::confine(Path::new(&d), r)?;
+            c.resolve(Path::new(&d))?;
         }
     }
     if !frozen {
         report(&prepare_specs(sql, cfg).await?, cfg);
     }
-    let ctx = session_rooted(cfg, frozen, root);
+    let ctx = session_confined(cfg, frozen, confine);
     // Planning is where messy() runs, so our own errors surface here; unwrap
     // them so the user reads the sentence we wrote rather than DataFusion's
     // adapter chain repeating it.

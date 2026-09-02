@@ -72,3 +72,20 @@ fn quit_ends_the_script_cleanly() {
     assert_eq!(code, 0);
     assert!(!out.contains("2025-01.csv"));
 }
+
+/// Input that ends mid-statement is an error, not silence. `printf 'SELECT
+/// 1 AS one' | tdy` used to exit 0 having printed nothing at all: a script
+/// missing one semicolon looked exactly like a query that ran and matched
+/// no rows.
+#[test]
+fn an_unterminated_trailing_statement_is_an_error_not_a_silent_drop() {
+    let d = pile();
+    let (code, out, _) = run_script(d.path(), "SELECT 1 AS one", &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("Error: incomplete statement at end of input: SELECT 1 AS one"), "{out}");
+
+    // The same text with its semicolon runs and prints, as before.
+    let (code, out, _) = run_script(d.path(), "SELECT 1 AS one;", &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("| one |") && out.contains("| 1   |"), "{out}");
+}

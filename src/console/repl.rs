@@ -64,6 +64,10 @@ fn one_line_for_history(line: &str) -> String {
 /// there). `.quit` stops cleanly with exit 0; a `.edit` payload in batch
 /// mode is not runnable (there is no terminal to hand to an editor), so it
 /// prints a message explaining that and exits 1.
+///
+/// Input that ends mid-statement — no `;` before EOF — is an error, not a
+/// no-op: `printf 'SELECT 1 AS one' | tdy` used to exit 0 having printed
+/// nothing, which is a script that looks like it ran and produced no rows.
 pub async fn run_batch(session: &mut Session, input: impl BufRead, out: &mut impl Write) -> Result<i32> {
     for line in input.lines() {
         let line = line.context("reading input")?;
@@ -80,6 +84,11 @@ pub async fn run_batch(session: &mut Session, input: impl BufRead, out: &mut imp
         if session.wants_quit() {
             break;
         }
+    }
+    if let Some(buf) = session.discard_pending() {
+        writeln!(out, "Error: incomplete statement at end of input: {}", first_line(&buf))?;
+        out.flush()?;
+        return Ok(1);
     }
     Ok(0)
 }
@@ -100,7 +109,14 @@ pub async fn run_interactive(session: &mut Session) -> Result<()> {
                 }
                 continue;
             }
-            Read::Eof => break,
+            Read::Eof => {
+                // Ctrl-D at the continuation prompt: say what was dropped,
+                // for the same reason a dot-command does.
+                if let Some(buf) = session.discard_pending() {
+                    writeln!(stdout, "note: discarded incomplete statement: {}", first_line(&buf))?;
+                }
+                break;
+            }
         };
         let o = session.run(&line, Some(&sink)).await;
         if !o.echo.trim().is_empty() && !matches!(o.payload, Payload::Continue) {

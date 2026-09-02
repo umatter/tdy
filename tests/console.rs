@@ -272,7 +272,10 @@ async fn check_schema_config_edit() {
     let o = s.run(".schema", None).await;
     assert!(o.ok && o.text.trim_start().starts_with('{'));
     let o = s.run(".config init", None).await;
-    assert!(o.ok && o.text.contains("[backend]") || o.text.contains("backend"));
+    assert!(o.ok, "{}", o.text);
+    // The real sample config, not a paraphrase of it: `[inference]` is its
+    // first section and `backend = "local"` the setting people come for.
+    assert!(o.text.contains("[inference]") && o.text.contains("backend = \"local\""), "{}", o.text);
     let o = s.run(".edit sales.tdy.sql", None).await;
     assert!(o.ok);
     assert!(matches!(o.payload, Payload::Edit(ref p) if p.ends_with("sales.tdy.sql")));
@@ -314,6 +317,17 @@ async fn sql_runs_when_the_statement_ends_and_spans_lines() {
     s.run("SELECT 1", None).await;
     let o = s.run(".ls", None).await;
     assert!(o.ok && o.text.starts_with("note: discarded incomplete statement"));
+    assert!(!s.sql_pending());
+
+    // ... and so does a dot-command that does not even parse: the buffer is
+    // gone either way, so the note is owed on the error path too.
+    s.run("SELECT 2", None).await;
+    let o = s.run(".nope", None).await;
+    assert!(!o.ok, "{}", o.text);
+    assert_eq!(
+        o.text,
+        "note: discarded incomplete statement: SELECT 2\nError: unknown command `.nope` — `.help` lists them\n"
+    );
     assert!(!s.sql_pending());
 
     // A bad statement is an error outcome, not a crash.
@@ -507,4 +521,55 @@ async fn draft_text_equals_the_binary() {
     let mut s = session(d.path()).await;
     let o = s.run(".draft 2025-01.csv 2025-02.csv 2025-12.csv", None).await;
     assert_eq!(o.text, String::from_utf8_lossy(&cli.stdout));
+}
+
+/// `.cd` must move the SQL surface too, or the console has two path
+/// universes and the query answers from the wrong one.
+///
+/// The experiment is a decoy: the same file name at the root and in a
+/// subdirectory, carrying different numbers. After `.cd sub`, `.ls` and
+/// `.sniff` speak about `sub/x.csv`; a relative `messy('x.csv')` used to be
+/// joined onto the *root* instead and answered 100.00 — sub's file sniffed
+/// and sidecar'd a line earlier, the root's file read and summed, exit 0, no
+/// warning. That is the silent wrong value the whole project is built to
+/// refuse, so the sum is asserted exactly, and so is the absence of a
+/// sidecar beside the decoy: nothing may have read it at all.
+#[tokio::test]
+async fn cd_moves_the_sql_surface_not_only_the_dot_commands() {
+    let d = tempfile::tempdir().unwrap();
+    let sub = d.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(d.path().join("x.csv"), "Datum;Region;Betrag\n31.01.2025;Ost;100.00\n").unwrap();
+    std::fs::write(sub.join("x.csv"), "Datum;Region;Betrag\n31.01.2025;Ost;999.00\n").unwrap();
+    std::fs::write(sub.join("only_in_sub.csv"), "Datum;Region;Betrag\n31.01.2025;Ost;7.00\n").unwrap();
+
+    let mut s = session(d.path()).await;
+    let o = s.run(".cd sub", None).await;
+    assert!(o.ok, "{}", o.text);
+
+    let o = s.run(".sniff x.csv --no-llm", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(sub.join("x.csv.tdy.toml").exists(), "sniffed the wrong x.csv");
+
+    let o = s.run("SELECT sum(betrag) AS total FROM messy('x.csv');", None).await;
+    assert!(o.ok, "{}", o.text);
+    let Payload::Query(t) = &o.payload else { panic!("{}", o.text) };
+    assert_eq!(t.rows, [["999.00"]], "read the root's decoy, not sub's file: {}", o.text);
+
+    // The decoy was never opened: no sidecar was written beside it, so the
+    // query did not quietly sniff it on the fly either.
+    assert!(!d.path().join("x.csv.tdy.toml").exists(), "the query touched the root's decoy");
+
+    // And a file that exists *only* under the session's cwd is reachable at
+    // all — joined onto the root it was "does not exist under ..." while
+    // `.ls` was listing it.
+    let o = s.run("SELECT sum(betrag) AS total FROM messy('only_in_sub.csv');", None).await;
+    assert!(o.ok, "{}", o.text);
+    let Payload::Query(t) = &o.payload else { panic!("{}", o.text) };
+    assert_eq!(t.rows, [["7.00"]], "{}", o.text);
+
+    // Confinement still holds: the root is still the whole of what is
+    // allowed, and `base` cannot widen it.
+    let o = s.run("SELECT 1 FROM messy('/etc/passwd');", None).await;
+    assert!(!o.ok && o.text.contains("outside"), "{}", o.text);
 }

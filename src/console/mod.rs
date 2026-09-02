@@ -343,7 +343,16 @@ impl Session {
         }
         let cmd = match dot_parsed.expect("is_dot implies dot_parsed is Some") {
             Ok(c) => c,
-            Err(e) => return Outcome::error(trimmed, e.to_string()),
+            Err(e) => {
+                // The buffer is already gone by here (a dot-line discards
+                // it whether or not it parses), so this path owes the same
+                // note the success path prints — otherwise a typo'd
+                // dot-command is the one way to lose buffered SQL in
+                // silence.
+                let mut o = Outcome::error(trimmed, e.to_string());
+                o.text = prefix + &o.text;
+                return o;
+            }
         };
         let echo = trimmed.to_string();
         let mut o = match self.dispatch(cmd, progress).await {
@@ -386,17 +395,26 @@ impl Session {
     /// design doc §4): a `.sniff --force` or a rewritten export between two
     /// statements must not serve a `MemTable` built from the old spec.
     async fn run_sql(&mut self, sql: &str) -> Result<Outcome> {
-        // A relative `messy('2025-01.csv')` inside the SQL text is resolved
-        // two ways: `MessyFunc` confines it against `self.root` regardless
-        // of the process's actual directory, but `provider::prepare_specs`'s
-        // pre-pass (sniffing, sidecar I/O) uses plain relative-path I/O —
-        // the same assumption the plain CLI makes, that process cwd *is*
-        // the working directory. `RestoreCwd` (shared with `.draft`) holds
-        // the realignment across the whole call, since the pre-pass and the
-        // query it feeds are one `.await`.
+        // A relative `messy('2025-01.csv')` inside the SQL text has to mean
+        // the file `.ls` and `.sniff` would mean — the one in *this
+        // session's* directory — and it is reached by two different routes
+        // that must agree on that. `Confinement` is the first: it joins a
+        // relative reference onto `self.cwd` and then proves the result is
+        // under `self.root`, in the table functions themselves, where the
+        // file is opened. (Joining onto the root instead is what let a
+        // same-named file at the root answer a query typed after `.cd sub`,
+        // silently and with exit 0.) The second is
+        // `provider::prepare_specs`'s pre-pass (sniffing, sidecar I/O),
+        // which uses plain relative-path I/O — the same assumption the
+        // plain CLI makes, that process cwd *is* the working directory — so
+        // `RestoreCwd` (shared with `.draft`) points the process at the same
+        // directory for the whole call, since the pre-pass and the query it
+        // feeds are one `.await`.
         let (schema, batches) = {
             let _restore = RestoreCwd::to(&self.cwd).await?;
-            crate::provider::run_query_rooted(sql, &self.cfg, false, Some(self.root.clone())).await?
+            let confine =
+                crate::provider::Confinement::new(self.root.clone(), self.cwd.clone());
+            crate::provider::run_query_confined(sql, &self.cfg, false, Some(confine)).await?
         };
         let table = table_of(&schema, &batches, QUERY_ROWS_CAP);
         let text = match self.output.take() {
@@ -786,10 +804,17 @@ fn first_line(s: &str) -> &str {
 }
 
 /// Quote a root-relative path the way the console's own tokenizer expects
-/// to read it back: `Debug` wraps a name carrying whitespace in double
-/// quotes with the same escaping `tokenize` already handles, so it
-/// round-trips through `.draft`'s echo — spec §4 wants `Outcome.echo` to be
-/// the line as actually run, globs and defaults expanded.
+/// to read it back, so it round-trips through `.draft`'s echo — spec §4
+/// wants `Outcome.echo` to be the line as actually run, globs and defaults
+/// expanded.
+///
+/// The case this exists for is whitespace, and `Debug`'s double quotes are
+/// exactly what `tokenize` strips back off. It is not a general shell
+/// quoter: `tokenize` has no escape character at all (a `\` inside quotes
+/// is a literal `\`), so a file name containing a `"` or a `\` echoes as
+/// something that would not tokenize back to itself. Nothing depends on
+/// that round trip — the echo is display — and adding escapes here without
+/// adding them to `tokenize` would only move the disagreement.
 fn quote_rel(s: &str) -> String {
     if s.chars().any(char::is_whitespace) { format!("{s:?}") } else { s.to_string() }
 }
