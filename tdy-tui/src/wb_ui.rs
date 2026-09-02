@@ -11,13 +11,14 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 use tdy::console::{EntryStatus, RawHead, SpecSummary, Table};
 use tdy::report::{MemberReport, MemberStatus, PileReport};
 
 use crate::mark;
+use crate::remedy::Remedy;
 use crate::workbench::{Context, Focus, Workbench};
 
 const DIM: Color = Color::DarkGray;
@@ -53,6 +54,9 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("↑ / ↓ (pile)", "move the selected member"),
     ("Enter (pile)", "open the selected member"),
     ("Esc (pile)", "close the pile"),
+    ("↑ / ↓ (member)", "pick a remedy"),
+    ("e (member)", "edit the file"),
+    ("Esc (member)", "back to the pile"),
     ("?", "show this help"),
 ];
 
@@ -290,20 +294,76 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
         Context::Pile { report, selected, .. } => {
             draw_pile(f, area, block, report, *selected);
         }
-        // Task 3 fills this in (the raw head, sources, problems, and the
-        // ranked remedy menu); for now, enough to prove Enter got here
-        // without a panic.
-        Context::Member { report, member, raw, .. } => {
-            let inner = block.inner(area);
-            f.render_widget(block, area);
-            let path = report.members.get(*member).map(|m| m.path.as_str()).unwrap_or("?");
-            let status = if raw.is_none() { "loading…" } else { "" };
-            f.render_widget(
-                Paragraph::new(vec![Line::raw(path.to_string()), Line::styled(status, Style::new().fg(DIM))]),
-                inner,
-            );
+        Context::Member { report, member, raw, remedy_selected, .. } => {
+            let remedies = w.member_remedies();
+            match report.members.get(*member) {
+                Some(m) => draw_member(f, area, block, m, raw.as_ref(), *remedy_selected, &remedies),
+                None => {
+                    let inner = block.inner(area);
+                    f.render_widget(block, area);
+                    f.render_widget(Paragraph::new(Line::styled("?", Style::new().fg(DIM))), inner);
+                }
+            }
         }
     }
+}
+
+/// The Member view: the gap beside the file's own rows. Left column is the
+/// member's raw head, verbatim — the file's own header spelling, which is
+/// exactly what a `matches` clause needs to be written against, and "loading…"
+/// until the runtime's `PreviewFile` result lands. Right column is the
+/// member's status, its review reason (if a judgement is what it is waiting
+/// on), each problem's message, then a blank line and the numbered remedy
+/// menu — `▸` marks `remedy_selected`. An accepted member's status word
+/// already covers "accepted" (see `status_word`), and naturally has no
+/// remedies to list.
+fn draw_member(
+    f: &mut Frame,
+    area: Rect,
+    block: Block<'static>,
+    m: &MemberReport,
+    raw: Option<&RawHead>,
+    remedy_selected: usize,
+    remedies: &[Remedy],
+) {
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
+
+    let left_lines = match raw {
+        Some(r) => raw_head_lines(r),
+        None => vec![Line::styled("loading…", Style::new().fg(DIM))],
+    };
+    f.render_widget(Paragraph::new(left_lines), left);
+
+    let mut lines = Vec::new();
+    let status_style = if m.accepted {
+        Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().add_modifier(Modifier::BOLD)
+    };
+    lines.push(Line::styled(status_word(m), status_style));
+    if let Some(review) = &m.review {
+        lines.push(Line::raw(""));
+        for l in review.lines() {
+            lines.push(Line::raw(l.to_string()));
+        }
+    }
+    for p in &m.problems {
+        lines.push(Line::raw(""));
+        for l in p.message.lines() {
+            lines.push(Line::raw(l.to_string()));
+        }
+    }
+    if !remedies.is_empty() {
+        lines.push(Line::raw(""));
+        for (i, r) in remedies.iter().enumerate() {
+            let marker = if i == remedy_selected { "▸ " } else { "  " };
+            lines.push(Line::raw(format!("{marker}{}. {}", i + 1, r.label())));
+        }
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), right);
 }
 
 /// Header (target name, counts, lock state) then one row per member —

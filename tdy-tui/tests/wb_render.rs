@@ -313,3 +313,47 @@ fn a_short_pane_never_zeroes_the_spec_summary_for_the_preview_strip() {
     assert!(text.contains("0.60"), "spec summary must still render, not be squeezed to nothing: {text}");
     assert!(!text.contains("1.00"), "preview strip should be dropped when the pane is too short for both: {text}");
 }
+
+/// The Member context: the file's own raw head on the left (once `raw` is
+/// filled), the gap's problem message, and the numbered remedy menu with the
+/// selection marker on the right.
+#[test]
+fn the_member_context_shows_gap_beside_raw_and_the_menu() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    use tdy::console::{Outcome, Payload, RawHead};
+    w.begin(".fit sales.tdy.sql");
+    let report = PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: 0,
+        failed: 1,
+        needs_review: 0,
+        members: vec![gap_member("2025-02.csv")],
+        lock_written: None,
+        dry_run: false,
+    };
+    w.apply(
+        Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    w.key(key(KeyCode::Enter)); // opens the Member context
+
+    let raw = RawHead { lines: vec!["Datum;Kanton;Betrag".into()], truncated: false, sheets: vec![] };
+    if let tdy_tui::workbench::Context::Member { target, report, member, .. } = &w.context {
+        let path = target.parent().unwrap().join(&report.members[*member].path);
+        w.set_preview(path, raw, None);
+    } else {
+        panic!("expected Member context, got {:?}", w.context);
+    }
+
+    let text = screen(&mut w, 110, 34).join("\n");
+    assert!(text.contains("no column of this file"), "problem message: {text}");
+    assert!(text.contains("Datum;Kanton;Betrag"), "the file's own raw header: {text}");
+    let has_remedy_line = text.lines().any(|l| l.contains("1.") && (l.contains("region") || l.contains("Datum") || l.contains("Kanton")));
+    assert!(has_remedy_line, "numbered remedy menu: {text}");
+    assert!(text.contains('▸'), "selection marker: {text}");
+}

@@ -17,6 +17,7 @@ use tdy::console::{EntryKind, Outcome, Payload, RawHead, SpecSummary, Table};
 use tdy::report::{MemberReport, PileReport};
 
 use crate::browser::Browser;
+use crate::remedy::{self, Remedy};
 
 /// Which pane keys are routed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,11 +45,8 @@ pub enum Context {
         member: usize,
         /// Filled in by the runtime's `PreviewFile` follow-up, the way
         /// `File`'s raw head is — the state machine does no I/O.
-        // Task 3 renders this alongside the report's own fields.
-        #[allow(dead_code)]
         raw: Option<RawHead>,
-        /// Which remedy is highlighted in the (Task 3) remedy menu.
-        #[allow(dead_code)]
+        /// Which remedy is highlighted in the ranked remedy menu.
         remedy_selected: usize,
     },
 }
@@ -167,11 +165,21 @@ impl Workbench {
                 // Empty (the same key a person would use to escape any
                 // other overlay) rather than jumping focus to the console —
                 // that would leave the report on screen but unreachable
-                // without retyping `.fit`.
+                // without retyping `.fit`. Over a Member, Esc backs out one
+                // level only, to the Pile row this member came from — the
+                // same report, moved rather than cloned, with `selected`
+                // pointing back at the member just examined.
                 if self.focus == Focus::Main {
-                    if let Context::Pile { .. } = &self.context {
-                        self.context = Context::Empty;
-                        return WbAction::None;
+                    match &self.context {
+                        Context::Pile { .. } => {
+                            self.context = Context::Empty;
+                            return WbAction::None;
+                        }
+                        Context::Member { .. } => {
+                            self.leave_member();
+                            return WbAction::None;
+                        }
+                        _ => {}
                     }
                 }
                 self.focus = Focus::Console;
@@ -332,6 +340,17 @@ impl Workbench {
     /// finishes, and a stale result must be dropped rather than clobbering
     /// whatever is now shown.
     pub fn set_preview(&mut self, path: PathBuf, raw: RawHead, spec: Option<SpecSummary>) {
+        // A Member context's preview is keyed on the one member being
+        // examined, not on the browser's selection (which is elsewhere,
+        // showing the pile's directory) — match or drop, and never fall
+        // through to the File-view logic below.
+        if let Context::Member { target, report, member, raw: r, .. } = &mut self.context {
+            let expected = report.members.get(*member).map(|m| member_preview_path(target, &m.path));
+            if expected.as_deref() == Some(path.as_path()) {
+                *r = Some(raw);
+            }
+            return;
+        }
         let context_matches = matches!(&self.context, Context::File { path: p, .. } if *p == path);
         let selection_matches = self.browser.selected_path().as_deref() == Some(path.as_path());
         if !context_matches && !selection_matches {
@@ -371,6 +390,28 @@ impl Workbench {
             Context::Member { report, member, .. } => report.members.get(*member),
             _ => None,
         }
+    }
+
+    /// Every remedy every problem of the current Member offers, in order,
+    /// deduplicated by first occurrence — `remedy::remedies_for` is fed each
+    /// problem's own JSON (the same shape the old classic app's
+    /// `refresh_remedies` builds via `serde_json::to_value`), so a remedy
+    /// this module invents and one `remedy.rs` actually knows how to apply
+    /// can never drift apart. Empty outside a `Member` context, or for a
+    /// member with no problems (nothing to fit is nothing to remedy).
+    pub fn member_remedies(&self) -> Vec<Remedy> {
+        let Context::Member { report, member, .. } = &self.context else { return Vec::new() };
+        let Some(m) = report.members.get(*member) else { return Vec::new() };
+        let mut out: Vec<Remedy> = Vec::new();
+        for p in &m.problems {
+            let value = serde_json::to_value(p).unwrap_or_default();
+            for r in remedy::remedies_for(&value, &m.path) {
+                if !out.contains(&r) {
+                    out.push(r);
+                }
+            }
+        }
+        out
     }
 
     pub fn prompt(&self) -> &'static str {
@@ -483,6 +524,9 @@ impl Workbench {
                 _ => WbAction::None,
             };
         }
+        if matches!(&self.context, Context::Member { .. }) {
+            return self.key_member(k);
+        }
         match k.code {
             KeyCode::Up => {
                 self.main_scroll = self.main_scroll.saturating_sub(1);
@@ -512,11 +556,66 @@ impl Workbench {
             self.context = Context::Pile { target, report, selected };
             return WbAction::None;
         };
-        let target_dir = target.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-        let preview_path = target_dir.join(member_path);
+        let preview_path = member_preview_path(&target, &member_path);
         self.context =
             Context::Member { target, report, member: selected, raw: None, remedy_selected: 0 };
         WbAction::PreviewFile(preview_path)
+    }
+
+    /// Esc from a Member: back to the Pile it came from, `selected` on the
+    /// same member — moving the report out with `mem::take` rather than
+    /// cloning it, exactly as `enter_pile_member` moves it the other way.
+    fn leave_member(&mut self) {
+        let ctx = std::mem::take(&mut self.context);
+        let Context::Member { target, report, member, .. } = ctx else {
+            self.context = ctx;
+            return;
+        };
+        self.context = Context::Pile { target, report, selected: member };
+    }
+
+    /// Keys over a Member context (Main focus): Up/Down pick a remedy,
+    /// clamped to the current menu; `e` edits the file itself. `a` and the
+    /// digit shortcuts land in later tasks.
+    fn key_member(&mut self, k: KeyEvent) -> WbAction {
+        match k.code {
+            KeyCode::Up => {
+                self.move_remedy_selection(-1);
+                WbAction::None
+            }
+            KeyCode::Down => {
+                self.move_remedy_selection(1);
+                WbAction::None
+            }
+            KeyCode::Char('e') => self.edit_member(),
+            _ => WbAction::None,
+        }
+    }
+
+    /// Moves `remedy_selected` by `delta`, clamped to `[0, len - 1]` (`0`
+    /// when the menu is empty — an accepted or otherwise remedy-less member
+    /// has nothing to select).
+    fn move_remedy_selection(&mut self, delta: i32) {
+        let len = self.member_remedies().len();
+        let Context::Member { remedy_selected, .. } = &mut self.context else { return };
+        if len == 0 {
+            *remedy_selected = 0;
+            return;
+        }
+        let next = (*remedy_selected as i32 + delta).clamp(0, len as i32 - 1);
+        *remedy_selected = next as usize;
+    }
+
+    /// `e` over a Member: the same `.edit <rel>` a browser shortcut would
+    /// dispatch, spelled relative to `browser.dir` — the member's own file,
+    /// not the target.
+    fn edit_member(&self) -> WbAction {
+        let Context::Member { target, report, member, .. } = &self.context else {
+            return WbAction::None;
+        };
+        let Some(m) = report.members.get(*member) else { return WbAction::None };
+        let path = member_preview_path(target, &m.path);
+        WbAction::Dispatch(format!(".edit {}", quote_rel(&self.rel_spelling(&path))))
     }
 
     /// `f` from the Pile context: re-dispatch the same `.fit` that produced
@@ -583,6 +682,15 @@ impl Workbench {
             None => WbAction::None,
         }
     }
+}
+
+/// A member's path, spelled how the target sees it (relative to its own
+/// declaration), resolved to an absolute path a preview or an edit can open.
+/// Shared by `enter_pile_member`, `set_preview` and `edit_member` so all
+/// three agree on what "the member's file" means.
+fn member_preview_path(target: &Path, member_rel: &str) -> PathBuf {
+    let target_dir = target.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    target_dir.join(member_rel)
 }
 
 /// Quote a rel path the way the console's own tokenizer expects to read it

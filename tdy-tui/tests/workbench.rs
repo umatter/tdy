@@ -4,6 +4,22 @@ use tdy::report::{MemberReport, MemberStatus, PileReport, Problem, SourceBinding
 use tdy_tui::browser::Browser;
 use tdy_tui::workbench::{Context, Focus, WbAction, Workbench};
 
+/// From a Pile with the given members, focus Main and press Enter on
+/// `selected` — the state shared by the Member tests below.
+fn pile_and_enter(d: &tempfile::TempDir, members: Vec<MemberReport>, selected: usize) -> (Workbench, WbAction) {
+    let mut w = wb(d);
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report("sales.tdy.sql", members);
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    if let Context::Pile { selected: sel, .. } = &mut w.context {
+        *sel = selected;
+    }
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let act = w.key(key(KeyCode::Enter));
+    (w, act)
+}
+
 fn key(c: KeyCode) -> KeyEvent { KeyEvent::new(c, KeyModifiers::NONE) }
 fn ctrl(c: char) -> KeyEvent { KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL) }
 fn type_line(w: &mut Workbench, s: &str) -> WbAction {
@@ -426,4 +442,96 @@ fn main_scroll_resets_on_a_new_file_and_survives_a_same_path_update() {
     assert_eq!(w.main_scroll, 1);
     w.set_preview(d.path().join("b.csv"), raw(), None);
     assert_eq!(w.main_scroll, 1, "a same-path update must not throw away the user's scroll");
+}
+
+/// `member_remedies()` reads the current Member's problems through
+/// `remedy::remedies_for`: a gap member (declared `region`, the file's own
+/// header is `Datum`/`Kanton`) offers at least the two headers as
+/// candidates, first-label-first; a member that fits has nothing to offer.
+#[test]
+fn member_remedies_come_from_the_problems() {
+    let d = pile();
+    let (w, act) = pile_and_enter(
+        &d,
+        vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")],
+        1,
+    );
+    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    let remedies = w.member_remedies();
+    assert!(!remedies.is_empty(), "a gap member must offer remedies");
+    let first = remedies[0].label();
+    assert!(
+        first.contains("region") || first.contains("Datum") || first.contains("Kanton"),
+        "{first}"
+    );
+
+    // A fits-member (Enter on index 0) offers nothing.
+    let (w2, _) = pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits)], 0);
+    assert!(w2.member_remedies().is_empty());
+}
+
+/// Up/Down move `remedy_selected`, clamped to the remedy count; Esc returns
+/// to `Context::Pile` with `selected` pointing at the member just examined —
+/// the very report, moved rather than cloned.
+#[test]
+fn member_navigation_and_escape_preserve_the_pile() {
+    let d = pile();
+    let (mut w, _) = pile_and_enter(
+        &d,
+        vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")],
+        1,
+    );
+    let n = w.member_remedies().len();
+    assert!(n > 0);
+
+    // Down repeatedly clamps at n - 1.
+    for _ in 0..(n + 3) {
+        w.key(key(KeyCode::Down));
+    }
+    assert!(matches!(&w.context, Context::Member { remedy_selected, .. } if *remedy_selected == n - 1));
+    // Up repeatedly clamps at 0.
+    for _ in 0..(n + 3) {
+        w.key(key(KeyCode::Up));
+    }
+    assert!(matches!(&w.context, Context::Member { remedy_selected: 0, .. }));
+
+    w.key(key(KeyCode::Esc));
+    match &w.context {
+        Context::Pile { selected, report, .. } => {
+            assert_eq!(*selected, 1);
+            assert_eq!(report.members.len(), 2, "the same report, not a fresh one");
+        }
+        other => panic!("expected Pile, got {other:?}"),
+    }
+}
+
+/// The `PreviewFile` path Enter asked for is exactly what `set_preview` must
+/// match to fill `Context::Member.raw`; any other path is dropped silently.
+#[test]
+fn a_member_preview_fills_raw_and_stale_paths_are_dropped() {
+    let d = pile();
+    let (mut w, act) =
+        pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")], 1);
+    let WbAction::PreviewFile(path) = act else { panic!("expected PreviewFile, got {act:?}") };
+
+    let raw = RawHead { lines: vec!["Datum;Kanton".into()], truncated: false, sheets: vec![] };
+    // A different, unrelated path must be dropped.
+    w.set_preview(d.path().join("a.csv"), raw.clone(), None);
+    assert!(matches!(&w.context, Context::Member { raw: None, .. }), "stale path must not fill raw");
+
+    // The actual path Enter asked for fills it.
+    w.set_preview(path, raw, None);
+    assert!(matches!(&w.context, Context::Member { raw: Some(_), .. }));
+}
+
+/// `e` in Member context dispatches `.edit <member rel>`.
+#[test]
+fn e_dispatches_edit_for_the_member() {
+    let d = pile();
+    let (mut w, _) =
+        pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")], 1);
+    let act = w.key(key(KeyCode::Char('e')));
+    let WbAction::Dispatch(line) = act else { panic!("expected Dispatch, got {act:?}") };
+    assert!(line.starts_with(".edit"), "{line}");
+    assert!(line.contains("2025-02.csv"), "{line}");
 }
