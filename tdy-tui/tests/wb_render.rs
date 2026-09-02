@@ -1111,7 +1111,9 @@ fn every_context_renders_at_hostile_sizes() {
 
 /// The status bar's hint text depends on what Main is actually showing
 /// (Task 4 item 3): a Pile's status line names `f refit`, which does
-/// nothing in a Member's remedy menu.
+/// nothing in a Member's remedy menu. `^Q quit` is universal, so both this
+/// and the Member test below also pin that it stays advertised regardless
+/// of context.
 #[test]
 fn pile_status_hint_names_refit() {
     let d = pile();
@@ -1137,16 +1139,18 @@ fn pile_status_hint_names_refit() {
     w.key(key(KeyCode::Tab)); // Main
     let text = screen(&mut w, 110, 30).join("\n");
     assert!(text.contains("f refit"), "{text}");
+    assert!(text.contains("^Q"), "quit must stay advertised in every context: {text}");
 }
 
 /// `spec_lines`' `name ← "source" : TYPE` rows must never let TYPE clip off
 /// the right edge (Task 4 item 7): a very long SOURCE (the file's own
 /// header spelling, which can be arbitrarily long) is ellipsized so TYPE
 /// survives. 132 cols keeps the File view's right half (the spec pane,
-/// after the browser pane and the 50/50 raw/spec split) around 50
-/// columns — enough for the 24-char-capped source but nowhere near enough
-/// for the 60-plus-char raw source, so the assertion below is only true
-/// because the cap engaged.
+/// after the browser pane and the 50/50 raw/spec split) at ~52 columns —
+/// the ellipsized `betrag ← "…" : DECIMAL(38,2)` row comes out to ~51,
+/// about one column of slack, nowhere near the 89-plus the un-truncated
+/// 60-plus-char raw source would need — so the assertion below is only
+/// true because the cap engaged, not because there was room to spare.
 #[test]
 fn a_long_source_is_ellipsized_so_the_type_never_clips() {
     let d = pile();
@@ -1199,4 +1203,5 @@ fn member_status_hint_names_digit_shortcuts() {
     w.key(key(KeyCode::Enter)); // opens the Member context
     let text = screen(&mut w, 110, 30).join("\n");
     assert!(text.contains("1-9"), "{text}");
+    assert!(text.contains("^Q"), "quit must stay advertised in every context: {text}");
 }

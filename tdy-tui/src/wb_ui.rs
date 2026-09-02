@@ -718,10 +718,15 @@ fn spec_lines(spec: &SpecSummary, threshold: f32) -> Vec<Line<'static>> {
     // applies to a browser entry's name vs. status. Unlike `browser_row`,
     // this is a fixed cap rather than one computed from the pane's actual
     // width — `spec_lines` is not handed one — so it is a mitigation for
-    // any real column header, not a proof for every terminal size; an
-    // exceptionally narrow window can still clip. 24 leaves room for the
-    // `name ← "…" : ` prefix plus a type like `DECIMAL(38,2)` at ordinary
-    // widths.
+    // any real column header, not a proof for every terminal size.
+    // `tests/wb_render.rs::a_long_source_is_ellipsized_so_the_type_never_clips`
+    // measures the margin this actually buys at a realistic 132-column
+    // frame: a `betrag ← "…" : DECIMAL(38,2)` row comes out to ~51
+    // characters against a spec-pane half of ~52 there — about one column
+    // of slack, not headroom. A longer column name or a longer TYPE
+    // (`TIMESTAMP(3)` with a timezone note, say) at that same width would
+    // still clip; the fixed cap is an accepted trade-off against a real
+    // width-aware truncation like `browser_row`'s, not a guarantee.
     const SOURCE_MAX: usize = 24;
     for (name, source, ty) in &spec.columns {
         let source = truncate(source, SOURCE_MAX);
@@ -810,11 +815,14 @@ fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
         // is showing — a Pile's own keys (`f`, `t`) mean nothing in a
         // Member's remedy menu and vice versa, so this mirrors `key_main`'s
         // own match on `w.context` rather than giving every context the
-        // same generic "↑↓ scroll" hint.
+        // same generic "↑↓ scroll" hint. `^Q quit` is the one key that
+        // works everywhere regardless of context, so every arm advertises
+        // it — consistent with `Console`/`Browser`/`File` above, none of
+        // which drop it either.
         Focus::Main => match &w.context {
             Context::Pile { .. } => "↑↓ member · enter open · f refit · t edit target · ^Q quit",
-            Context::Member { .. } => "↑↓ remedy · enter/1-9 stage · a accept · e edit · Esc back",
-            Context::Evidence { .. } => "a accept · Esc close · PgUp/Dn scroll",
+            Context::Member { .. } => "↑↓ remedy · enter/1-9 stage · a accept · e edit · Esc back · ^Q quit",
+            Context::Evidence { .. } => "a accept · Esc close · PgUp/Dn scroll · ^Q quit",
             Context::File { .. } => "↑↓ scroll · Tab focus · ^Q quit",
             Context::Query(_) | Context::Empty => "Tab focus · ^Q quit",
         },
