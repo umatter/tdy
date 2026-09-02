@@ -46,6 +46,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("s", "sniff the selected file"),
     ("e", "edit the selected file"),
     ("f", "fit the selected target / re-fit the shown pile"),
+    ("t (pile / member)", "edit the target"),
     ("d", "mark/unmark the selected file"),
     ("D", "draft the marked files"),
     ("↑ / ↓ (pile)", "move the selected member"),

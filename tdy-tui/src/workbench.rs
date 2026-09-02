@@ -748,6 +748,7 @@ impl Workbench {
                 }
                 KeyCode::Enter => self.enter_pile_member(),
                 KeyCode::Char('f') => self.refit_pile(),
+                KeyCode::Char('t') => self.edit_target(),
                 _ => WbAction::None,
             };
         }
@@ -842,6 +843,7 @@ impl Workbench {
                 WbAction::None
             }
             KeyCode::Char('e') => self.edit_member(),
+            KeyCode::Char('t') => self.edit_target(),
             KeyCode::Char(c @ '1'..='9') => self.apply_remedy((c as u8 - b'1') as usize),
             KeyCode::Char('a') => self.accept_member(),
             _ => WbAction::None,
@@ -943,6 +945,20 @@ impl Workbench {
         let Some(m) = report.members.get(*member) else { return WbAction::None };
         let path = member_preview_path(target, &m.path);
         WbAction::Dispatch(format!(".edit {}", quote_rel(&self.rel_spelling(&path))))
+    }
+
+    /// `t` over a Pile or Member (Main focus): open the target itself in
+    /// $EDITOR — `.edit <target rel>`, spelled the same way `f`/`e` already
+    /// spell their own paths. Both contexts carry `target`, so this reads
+    /// straight off whichever one is current rather than duplicating the
+    /// match per caller.
+    fn edit_target(&self) -> WbAction {
+        let target = match &self.context {
+            Context::Pile { target, .. } => target,
+            Context::Member { target, .. } => target,
+            _ => return WbAction::None,
+        };
+        WbAction::Dispatch(format!(".edit {}", quote_rel(&self.rel_spelling(target))))
     }
 
     /// `f` from the Pile context: re-dispatch the same `.fit` that produced

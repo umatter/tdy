@@ -21,18 +21,16 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 
-use tdy_tui::app::{Action, App, Key, Preview, QueryResult};
 use tdy_tui::browser::Browser;
+use tdy_tui::wb_ui;
 use tdy_tui::workbench::{WbAction, Workbench};
-use tdy_tui::{evidence, ui, wb_ui};
 use tdy::config::Config;
 use tdy::console::repl::{append_history, load_history};
 use tdy::console::{raw_head, spec_summary, Outcome, Payload, RawHead, Session, SpecSummary};
-use tdy::report::{FitOpts, PileReport};
 
 #[derive(Parser)]
 #[command(
@@ -41,35 +39,20 @@ use tdy::report::{FitOpts, PileReport};
     version
 )]
 struct Cli {
-    /// A `.tdy.sql` target (the classic review flow), a data file (the
-    /// workbench, rooted at its directory and showing it), or omitted
-    /// entirely (the workbench on the working directory).
+    /// A `.tdy.sql` target (the workbench, rooted at its directory, with the
+    /// first fit dispatched as a dry run), a data file (the workbench,
+    /// rooted at its directory and showing it), or omitted entirely (the
+    /// workbench on the working directory).
     target: Option<PathBuf>,
 }
 
-/// Anything a worker has to say to the screen.
-enum Msg {
-    Report(Box<PileReport>),
-    /// Work is happening, and this is what it is.
-    Progress(String),
-    /// A remark for the status line that does NOT mean work is running.
-    /// Sending a `Progress` for this would leave the UI busy forever — and a
-    /// busy UI takes no orders but quit.
-    Note(String),
-    Evidence(Vec<evidence::Evidence>),
-    Preview(Preview),
-    Query(QueryResult),
-    Error(String),
-}
-
-/// Which flow `main` runs: the classic single-target review, or the
-/// workbench (rooted at a directory, optionally with a line to run first).
-/// Resolved entirely before the terminal is touched — see the comment below
-/// on why that matters for `Mode::Classic`, and it costs `Mode::Workbench`
-/// nothing to keep the same property.
+/// Which flow `main` runs — today just the one, the workbench (rooted at a
+/// directory, optionally with a line to run first). Kept as an enum rather
+/// than the two fields alone because `choose_mode` is what decides this
+/// *before* the terminal is touched, and matching on it at the one call
+/// site in `main` is what keeps that ordering visible there.
 #[derive(Debug)]
 enum Mode {
-    Classic(PathBuf, String),
     Workbench { root: PathBuf, initial: Option<String> },
 }
 
@@ -88,14 +71,7 @@ fn choose_mode(arg: Option<PathBuf>) -> Result<Mode> {
             let root = t.canonicalize().with_context(|| format!("cannot open {}", t.display()))?;
             Ok(Mode::Workbench { root, initial: None })
         }
-        Some(t) if t.to_string_lossy().ends_with(".tdy.sql") => {
-            let sql = std::fs::read_to_string(&t)
-                .with_context(|| format!("cannot read target {}", t.display()))?;
-            // Fail before touching the terminal: an unparseable target
-            // inside the alternate screen is an error nobody can read.
-            tdy::target::Target::parse(&sql).with_context(|| format!("in {}", t.display()))?;
-            Ok(Mode::Classic(t, sql))
-        }
+        Some(t) if t.to_string_lossy().ends_with(".tdy.sql") => dry_run_target_mode(t),
         Some(f) => {
             // A data file: open the workbench in its directory, showing it.
             let f = f.canonicalize().with_context(|| format!("cannot open {}", f.display()))?;
@@ -103,19 +79,56 @@ fn choose_mode(arg: Option<PathBuf>) -> Result<Mode> {
             let name = f.file_name().unwrap().to_string_lossy().to_string();
             Ok(Mode::Workbench { root, initial: Some(format!(".show {name}")) })
         }
-        None => match discover_target() {
-            // Exactly one target here: the classic flow, today's behaviour.
-            Ok(t) => {
-                let sql = std::fs::read_to_string(&t)?;
-                tdy::target::Target::parse(&sql).with_context(|| format!("in {}", t.display()))?;
-                Ok(Mode::Classic(t, sql))
+        None => {
+            // The one `.tdy.sql` beside the working directory, if there is
+            // exactly one — a picker screen is the friendlier answer for
+            // zero or several, and deliberately not v1: naming the file is
+            // one word, and a menu that appears before you have seen
+            // anything is a menu you cannot yet answer. An unreadable
+            // directory falls into the same "plain workbench" arm as zero
+            // or several targets, rather than erroring here.
+            let mut found: Vec<PathBuf> = std::fs::read_dir(".")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.to_string_lossy().ends_with(".tdy.sql"))
+                .collect();
+            found.sort();
+            match found.len() {
+                1 => dry_run_target_mode(found.remove(0)),
+                _ => Ok(Mode::Workbench { root: std::env::current_dir()?, initial: None }),
             }
-            // No target, or several: the workbench is the answer now, not
-            // an error — `discover_target`'s own error text is written for
-            // the case where naming the file is the only fix, which no
-            // longer applies here.
-            Err(_) => Ok(Mode::Workbench { root: std::env::current_dir()?, initial: None }),
-        },
+        }
+    }
+}
+
+/// A `.tdy.sql` target, named on the command line or the lone one found in
+/// the working directory: the workbench rooted at its directory, with the
+/// first fit synthesized as a DRY RUN. Opening a review tool to look must
+/// not write — a person who opens it, looks at a pile, and quits should
+/// leave the directory exactly as they found it; `f` is the key that writes
+/// for real (see `Workbench::refit_pile`).
+fn dry_run_target_mode(t: PathBuf) -> Result<Mode> {
+    let t = t.canonicalize().with_context(|| format!("cannot open {}", t.display()))?;
+    let sql = std::fs::read_to_string(&t)
+        .with_context(|| format!("cannot read target {}", t.display()))?;
+    // Fail before touching the terminal: an unparseable target inside the
+    // alternate screen is an error nobody can read.
+    tdy::target::Target::parse(&sql).with_context(|| format!("in {}", t.display()))?;
+    let root = t.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let name = t.file_name().unwrap().to_string_lossy().to_string();
+    Ok(Mode::Workbench { root, initial: Some(format!(".fit {} --dry-run", quote_name(&name))) })
+}
+
+/// Quote a bare file name the way the console's tokenizer reads it back —
+/// mirrors `workbench::quote_rel` (private, and this is a separate crate
+/// from the library), Debug-quoting only when the name contains whitespace.
+fn quote_name(s: &str) -> String {
+    if s.chars().any(char::is_whitespace) {
+        format!("{s:?}")
+    } else {
+        s.to_string()
     }
 }
 
@@ -140,189 +153,16 @@ fn main() -> Result<()> {
             previous(info);
         }));
     }
-    let result = match mode {
-        Mode::Classic(target, sql) => rt.block_on(run(&mut terminal, target, sql, torn_down)),
-        Mode::Workbench { root, initial } => {
-            rt.block_on(run_workbench(&mut terminal, root, initial, torn_down))
-        }
-    };
+    let Mode::Workbench { root, initial } = mode;
+    let result = rt.block_on(run_workbench(&mut terminal, root, initial, torn_down));
     ratatui::restore();
     result
 }
 
-/// The one `.tdy.sql` beside the working directory, or an error naming the
-/// candidates. A picker screen is the friendlier answer and is deliberately
-/// not v1: naming the file is one word, and a menu that appears before you
-/// have seen anything is a menu you cannot yet answer.
-fn discover_target() -> Result<PathBuf> {
-    let mut found: Vec<PathBuf> = std::fs::read_dir(".")
-        .context("cannot read the working directory")?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.to_string_lossy().ends_with(".tdy.sql"))
-        .collect();
-    found.sort();
-    match found.len() {
-        1 => Ok(found.remove(0)),
-        // This message is never shown: `main` falls into the workbench
-        // instead of printing it (see `Mode::Workbench`'s `Err(_)` arm) —
-        // kept short now that the draft hint it used to carry is dead text.
-        0 => anyhow::bail!("no .tdy.sql target here"),
-        _ => anyhow::bail!(
-            // `tdy ui` is the documented door and forwards its argument here,
-            // so the hint spells that form even when tdy-tui was run directly.
-            "several targets here; name the one you mean:\n{}",
-            found.iter().map(|p| format!("  tdy ui {}", p.display())).collect::<Vec<_>>().join("\n")
-        ),
-    }
-}
-
-async fn run(
-    terminal: &mut DefaultTerminal,
-    target: PathBuf,
-    sql: String,
-    torn_down: Arc<AtomicBool>,
-) -> Result<()> {
-    let cfg = tdy::config::load(&Default::default())?;
-    let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
-    let mut app = App::new(target.clone(), sql);
-
-    // The first fit is a DRY RUN. Opening a review tool must not write: a
-    // person who opens it to look at a pile and quits should leave the
-    // directory exactly as they found it. `f` is the key that writes.
-    spawn_fit(&tx, &cfg, &target, Vec::new(), true);
-
-    loop {
-        if torn_down.load(Ordering::SeqCst) {
-            anyhow::bail!("a background task panicked; the terminal was restored");
-        }
-        terminal.draw(|f| ui::draw(f, &mut app))?;
-
-        // Drain everything the workers have said, then wait briefly for a
-        // key. Polling rather than selecting keeps the loop obvious, and
-        // 60 ms is under the threshold where a keystroke feels delayed.
-        while let Ok(msg) = rx.try_recv() {
-            apply_msg(&mut app, msg);
-        }
-        if !event::poll(Duration::from_millis(60))? {
-            continue;
-        }
-        let Some(key) = read_key()? else { continue };
-
-        let action = app.handle(key);
-        match action {
-            Action::None => {}
-            Action::Quit => break,
-            Action::Refit { accept } => spawn_fit(&tx, &cfg, &target, accept, false),
-            Action::WriteTarget { text } => match write_target(&target, &app.target_sql, &text) {
-                Ok(()) => {
-                    // Only now is the in-memory copy the file's copy. Setting
-                    // it before the write would leave the next diff quoting a
-                    // "before" line that is not in the file, and smuggle the
-                    // failed edit into the following one.
-                    app.target_sql = text;
-                    spawn_fit(&tx, &cfg, &target, Vec::new(), false);
-                }
-                Err(e) => app.set_error(format!("{e:#}")),
-            },
-            Action::ComputeEvidence { member } => {
-                spawn_evidence(&tx, &cfg, &app, &member);
-            }
-            Action::ComputePreview { member } => {
-                spawn_preview(&tx, &cfg, &app, &member);
-            }
-            Action::RunQuery(sql) => spawn_query(&tx, &cfg, sql),
-            Action::OpenEditor(path) => {
-                // The editor owns the terminal while it runs; taking it back
-                // afterwards must restore raw mode and the alternate screen,
-                // or every subsequent keystroke lands in the shell. The
-                // cursor has to come back too — ratatui hides it, and an
-                // editor with no cursor is unusable.
-                let _ = terminal.show_cursor();
-                ratatui::restore();
-                let status = run_editor(&path);
-                // `ratatui::init` would install ANOTHER panic hook on top of
-                // ours, once per editor session. Rebuild the terminal
-                // directly instead.
-                let re = reenter();
-                terminal.clear()?;
-                if let Err(e) = re {
-                    anyhow::bail!("cannot take the terminal back after the editor: {e}");
-                }
-                match status {
-                    Ok(()) => {
-                        if path == target {
-                            match std::fs::read_to_string(&target) {
-                                Ok(s) => app.target_sql = s,
-                                Err(e) => app.set_error(format!("{e}")),
-                            }
-                        }
-                        app.busy = Some("re-fitting".into());
-                        spawn_fit(&tx, &cfg, &target, Vec::new(), false);
-                    }
-                    Err(e) => app.set_error(format!("{e:#}")),
-                }
-            }
-        }
-        if app.should_quit {
-            break;
-        }
-    }
-    Ok(())
-}
-
-/// Crossterm keys, narrowed to the ones the app understands.
-///
-/// The `KeyEventKind::Press` guard is what stops one keystroke counting
-/// twice on terminals that also report releases.
-fn read_key() -> Result<Option<Key>> {
-    let Event::Key(k) = event::read()? else { return Ok(None) };
-    if k.kind != KeyEventKind::Press {
-        return Ok(None);
-    }
-    // Ctrl-C leaves, wherever you are: a TUI that traps it is a TUI people
-    // learn to kill from another window.
-    if k.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('C'))
-    {
-        return Ok(Some(Key::Interrupt));
-    }
-    Ok(match k.code {
-        KeyCode::Up => Some(Key::Up),
-        KeyCode::Down => Some(Key::Down),
-        KeyCode::Enter => Some(Key::Enter),
-        KeyCode::Esc => Some(Key::Esc),
-        KeyCode::Tab => Some(Key::Tab),
-        KeyCode::Backspace => Some(Key::Backspace),
-        KeyCode::Char(c) => Some(Key::Char(c)),
-        _ => None,
-    })
-}
-
-fn apply_msg(app: &mut App, msg: Msg) {
-    match msg {
-        Msg::Report(r) => app.set_report(*r),
-        Msg::Progress(what) => app.busy = Some(what),
-        Msg::Note(what) => app.note(what),
-        Msg::Evidence(e) => {
-            app.evidence = Some(e);
-            app.busy = None;
-        }
-        Msg::Preview(p) => app.preview = Some(p),
-        Msg::Query(q) => {
-            app.query_result = Some(q);
-            app.busy = None;
-        }
-        Msg::Error(e) => app.set_error(e),
-    }
-}
-
 // ---------------------------------------------------------------------------
-// The workbench (Task 5): a console `Session` runs on its own worker task,
-// one line at a time; the UI thread only ever decides (`Workbench::key`,
-// `::apply`) and draws. Everything here mirrors `run()`/`Msg`/`apply_msg`
-// above by design — the two flows share the same shape on purpose, so a
-// change to one is a change someone will think to make to the other.
+// The workbench: a console `Session` runs on its own worker task, one line
+// at a time; the UI thread only ever decides (`Workbench::key`, `::apply`)
+// and draws.
 // ---------------------------------------------------------------------------
 
 /// Anything the console worker has to say to the workbench.
@@ -337,8 +177,9 @@ enum WbMsg {
     Done { outcome: Box<Outcome>, cwd: PathBuf },
     /// Work is happening, and this is what it is.
     Progress(String),
-    /// A transient remark that does NOT mean work is running — see `Msg::Note`'s
-    /// doc comment; the same trap applies here.
+    /// A transient remark that does NOT mean work is running. Sending a
+    /// `Progress` for this would leave the UI busy forever — a busy UI
+    /// takes no orders but quit.
     Note(String),
     /// A `PreviewFile` action's result, computed off the UI thread. `gen` is
     /// the `preview_gen` the request was spawned for — `Workbench::
@@ -443,11 +284,11 @@ fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf
     });
 }
 
-/// One key, filtered the same way `read_key` filters for the classic flow —
-/// but unlike `Key`, the workbench needs the *whole* crossterm event
-/// (Ctrl-Up, Ctrl-L, Ctrl-Q all carry modifiers `Key` throws away), so this
-/// hands the event back unnarrowed. `Workbench::key` re-checks
-/// `KeyEventKind::Press` itself; double-filtering is fine.
+/// One key, filtered down to a real press: the workbench needs the *whole*
+/// crossterm event (Ctrl-Up, Ctrl-L, Ctrl-Q all carry modifiers a narrower
+/// type would throw away), so this hands the event back unnarrowed.
+/// `Workbench::key` re-checks `KeyEventKind::Press` itself; double-filtering
+/// is fine.
 fn read_wb_key() -> Result<Option<KeyEvent>> {
     let Event::Key(k) = event::read()? else { return Ok(None) };
     if k.kind != KeyEventKind::Press {
@@ -477,11 +318,11 @@ fn dispatch_line(wb: &mut Workbench, line: String, line_tx: &mpsc::UnboundedSend
 }
 
 /// Act on what the workbench decided: send a line to the worker, kick off a
-/// preview, run `$EDITOR` — the same suspend/reenter dance the classic
-/// flow's `OpenEditor` arm does (see `run`), since a workbench member can be
-/// opened for editing too — or write a confirmed remedy edit. `WbAction::
-/// None`/`Quit` need nothing here: `Workbench` itself already set
-/// `should_quit`, which the caller checks after every action.
+/// preview, run `$EDITOR` — suspending the terminal and re-entering it
+/// afterwards, since a workbench member can be opened for editing too — or
+/// write a confirmed remedy edit. `WbAction::None`/`Quit` need nothing
+/// here: `Workbench` itself already set `should_quit`, which the caller
+/// checks after every action.
 fn act_on_wb(
     action: WbAction,
     wb: &mut Workbench,
@@ -518,8 +359,9 @@ fn act_on_wb(
         WbAction::Edit(path) => {
             // The editor owns the terminal while it runs; taking it back
             // afterwards must restore raw mode and the alternate screen, or
-            // every subsequent keystroke lands in the shell. See `run`'s
-            // identical `OpenEditor` arm for the rest of the reasoning.
+            // every subsequent keystroke lands in the shell. The cursor has
+            // to come back too — ratatui hides it, and an editor with no
+            // cursor is unusable.
             let _ = terminal.show_cursor();
             ratatui::restore();
             let status = run_editor(&path);
@@ -539,8 +381,8 @@ fn act_on_wb(
     Ok(())
 }
 
-/// The workbench loop: same shape as `run()` — 60 ms poll, drain worker
-/// messages before reading a key — over a `Workbench` instead of an `App`.
+/// The workbench loop: draw, drain whatever the worker has said, poll for a
+/// key (60 ms — under the threshold where a keystroke feels delayed), act.
 async fn run_workbench(
     terminal: &mut DefaultTerminal,
     root: PathBuf,
@@ -565,9 +407,9 @@ async fn run_workbench(
         }
         terminal.draw(|f| wb_ui::draw(f, &mut wb))?;
 
-        // Drain everything the worker has said, then wait briefly for a key
-        // — see `run`'s identical comment on why polling rather than
-        // selecting, and why 60 ms.
+        // Drain everything the worker has said, then wait briefly for a
+        // key. Polling rather than selecting keeps the loop obvious, and
+        // 60 ms is under the threshold where a keystroke feels delayed.
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 WbMsg::Started(line) => wb.begin(&line),
@@ -650,222 +492,6 @@ fn write_target(path: &Path, expected: &str, new_text: &str) -> Result<()> {
         .with_context(|| format!("cannot write {}", path.display()))
 }
 
-fn spawn_fit(
-    tx: &mpsc::UnboundedSender<Msg>,
-    cfg: &Config,
-    target: &Path,
-    accept: Vec<String>,
-    dry_run: bool,
-) {
-    let (tx, cfg, target) = (tx.clone(), cfg.clone(), target.to_path_buf());
-    tokio::spawn(async move {
-        let sink_tx = tx.clone();
-        let sink: tdy::progress::Sink = Arc::new(move |e| {
-            use tdy::progress::Event;
-            let what = match e {
-                Event::MemberStarted { path, index, total } => {
-                    format!("fitting {path} ({} of {total})", index + 1)
-                }
-                Event::MemberFinished { .. } => return,
-                Event::Consulting { path, backend, model, bytes } => {
-                    format!("asking {model} via {backend} about {path} ({bytes} bytes sent)")
-                }
-            };
-            let _ = sink_tx.send(Msg::Progress(what));
-        });
-        let accept_paths: Vec<PathBuf> = accept.iter().map(PathBuf::from).collect();
-        let msg = match tdy::report::fit_pile(
-            &target,
-            &cfg,
-            FitOpts {
-                dry_run,
-                accept: &accept_paths,
-                // The proposals ARE the remedy menu's ranking: which of the
-                // file's columns could actually produce the declared type.
-                propose: true,
-                progress: Some(sink),
-                root: None,
-            },
-        )
-        .await
-        {
-            Ok(r) => Msg::Report(Box::new(r)),
-            Err(e) => Msg::Error(format!("{e:#}")),
-        };
-        let _ = tx.send(msg);
-    });
-}
-
-/// The spec a member is currently planned with, for the read-only screens.
-fn member_spec(app: &App, member: &str) -> Result<(PathBuf, tdy::spec::ParseSpec)> {
-    let path = app.target_dir().join(member);
-    let spec = tdy::sidecar::load(&path)?
-        .fresh_spec()
-        .context("this member has no fresh spec yet — re-fit first")?;
-    Ok((path, spec))
-}
-
-/// A spec good enough to *look* at the file with.
-///
-/// A refused member has no sidecar — `fit_pile` writes one only for members
-/// that fit — and a refused member is exactly the one whose screen most needs
-/// to show the file: "no column of this file binds" is a question answered by
-/// looking. So when there is no plan, fall back to the sniffer's own view,
-/// which is what tdy sees before any target is applied.
-fn preview_spec(app: &App, member: &str, limits: tdy::config::Limits) -> Result<(PathBuf, tdy::spec::ParseSpec)> {
-    if let Ok(planned) = member_spec(app, member) {
-        return Ok(planned);
-    }
-    let path = app.target_dir().join(member);
-    let sample = tdy::sample::build(&path, 16 * 1024, limits)?;
-    let sniffed = tdy::sniff::sniff_opts(
-        &path,
-        &sample,
-        limits,
-        // The whole-file type check is a fit's business, not a preview's:
-        // this only needs the frame and the first rows.
-        tdy::sniff::SniffOpts { verify: false },
-    )?;
-    Ok((path, sniffed.spec))
-}
-
-fn spawn_evidence(tx: &mpsc::UnboundedSender<Msg>, cfg: &Config, app: &App, member: &str) {
-    let review = app
-        .selected_member()
-        .and_then(|m| m.review.clone())
-        .unwrap_or_default();
-    // Whether a model chose the frame is a recorded fact, not something to
-    // infer from the wording of the review reason.
-    let model_framed = app.selected_member().and_then(|m| m.via.as_deref()) == Some("llm");
-    let found = member_spec(app, member);
-    let (tx, limits) = (tx.clone(), cfg.limits);
-    tokio::task::spawn_blocking(move || {
-        let msg = match found.and_then(|(path, spec)| {
-            evidence::for_spec(&spec, &path, limits, &review, model_framed)
-        }) {
-            Ok(e) => Msg::Evidence(e),
-            Err(e) => Msg::Error(format!("{e:#}")),
-        };
-        let _ = tx.send(msg);
-    });
-}
-
-fn spawn_preview(tx: &mpsc::UnboundedSender<Msg>, cfg: &Config, app: &App, member: &str) {
-    let found = preview_spec(app, member, cfg.limits);
-    let (tx, limits) = (tx.clone(), cfg.limits);
-    tokio::task::spawn_blocking(move || {
-        let msg = match found.and_then(|(path, spec)| {
-            // Shown as the FILE spells it, and as text. This panel answers
-            // "which of these columns supplies my declared column?", and the
-            // answer is written into a `matches = '…'` clause — which needs
-            // the file's own header, not tdy's sanitised version of it, and
-            // the raw value, not the value after a type it has not agreed to
-            // yet.
-            let spec = tdy::spec::ParseSpec {
-                extraction: spec.extraction,
-                transforms: spec.transforms,
-                columns: spec
-                    .columns
-                    .iter()
-                    .map(|c| tdy::spec::ColumnSpec {
-                        name: c.source_name().to_string(),
-                        source: Some(c.source_name().to_string()),
-                        dtype: tdy::spec::DType::Utf8,
-                        nullable: true,
-                        parse: tdy::spec::ValueParsing::default(),
-                    })
-                    .collect(),
-                confidence: None,
-                notes: vec![],
-            };
-            let batch = tdy::engine::preview(&spec, &path, limits, 12)?;
-            Ok(Preview {
-                header: batch
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.name().clone())
-                    .collect(),
-                rows: (0..batch.num_rows())
-                    .map(|i| {
-                        (0..batch.num_columns())
-                            .map(|c| cell(batch.column(c), i))
-                            .collect()
-                    })
-                    .collect(),
-            })
-        }) {
-            Ok(p) => Msg::Preview(p),
-            // A preview is a convenience; its failure belongs on the status
-            // line, not in place of the gap report the user came to read —
-            // and NOT as progress, which would leave the UI busy for good.
-            Err(e) => Msg::Note(format!("preview unavailable: {e:#}")),
-        };
-        let _ = tx.send(msg);
-    });
-}
-
-/// Does this statement already bound its own result?
-///
-/// A textual check, deliberately conservative: `limit` inside a string
-/// literal is not a LIMIT clause, and anything this misses only costs the
-/// scratchpad a bound it would have added anyway.
-fn has_limit(sql: &str) -> bool {
-    let mut in_str = false;
-    let mut code = String::new();
-    for c in sql.chars() {
-        match c {
-            '\'' => in_str = !in_str,
-            _ if !in_str => code.push(c.to_ascii_lowercase()),
-            _ => {}
-        }
-    }
-    code.split_whitespace().any(|w| w.trim_matches(|c: char| !c.is_alphabetic()) == "limit")
-}
-
-fn spawn_query(tx: &mpsc::UnboundedSender<Msg>, cfg: &Config, sql: String) {
-    const CAP: usize = 500;
-    // A scratchpad is for looking. Without a bound, `SELECT *` over a
-    // year of exports materialises every row inside the UI process to show
-    // twenty of them — so one is added when the statement has none, and
-    // respected when it has its own.
-    let sql = if has_limit(&sql) { sql } else { format!("{sql} LIMIT {CAP}") };
-    let (tx, cfg) = (tx.clone(), cfg.clone());
-    tokio::spawn(async move {
-        let msg = match tdy::provider::run_query(&sql, &cfg, false).await {
-            Ok((schema, batches)) => {
-                let total: usize = batches.iter().map(|b| b.num_rows()).sum();
-                let mut rows = Vec::new();
-                'outer: for b in &batches {
-                    for i in 0..b.num_rows() {
-                        if rows.len() >= CAP {
-                            break 'outer;
-                        }
-                        rows.push(
-                            (0..b.num_columns()).map(|c| cell(b.column(c), i)).collect(),
-                        );
-                    }
-                }
-                Msg::Query(QueryResult {
-                    columns: schema.fields().iter().map(|f| f.name().clone()).collect(),
-                    truncated: total > rows.len(),
-                    rows,
-                    total,
-                })
-            }
-            Err(e) => Msg::Error(format!("{e:#}")),
-        };
-        let _ = tx.send(msg);
-    });
-}
-
-fn cell(col: &dyn datafusion::arrow::array::Array, i: usize) -> String {
-    if col.is_null(i) {
-        return String::new();
-    }
-    datafusion::arrow::util::display::array_value_to_string(col, i).unwrap_or_default()
-}
-
 /// Re-enter the alternate screen and raw mode after an editor, without
 /// installing a second panic hook (which `ratatui::init` would do, once per
 /// editor session, until the stack is deep enough to matter).
@@ -921,16 +547,18 @@ mod tests {
     /// crate for the same reason.
     static CWD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// A named `.tdy.sql` argument opens the workbench rooted at the
+    /// target's own directory, with the first fit synthesized as a DRY RUN
+    /// — opening a review tool to look must not write; `f` is the key that
+    /// writes for real.
     #[test]
-    fn a_tdy_sql_argument_is_classic() {
+    fn a_tdy_sql_argument_opens_the_workbench_with_a_dry_run_fit() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("t.tdy.sql");
         std::fs::write(&p, target_sql()).unwrap();
-        let Mode::Classic(path, sql) = choose_mode(Some(p.clone())).unwrap() else {
-            panic!("expected Mode::Classic");
-        };
-        assert_eq!(path, p);
-        assert_eq!(sql, target_sql());
+        let Mode::Workbench { root, initial } = choose_mode(Some(p.clone())).unwrap();
+        assert_eq!(root, d.path().canonicalize().unwrap());
+        assert_eq!(initial.as_deref(), Some(".fit t.tdy.sql --dry-run"));
     }
 
     #[test]
@@ -938,9 +566,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.csv");
         std::fs::write(&p, "A;B\n1;2\n").unwrap();
-        let Mode::Workbench { root, initial } = choose_mode(Some(p)).unwrap() else {
-            panic!("expected Mode::Workbench");
-        };
+        let Mode::Workbench { root, initial } = choose_mode(Some(p)).unwrap();
         assert_eq!(root, d.path().canonicalize().unwrap());
         assert_eq!(initial.as_deref(), Some(".show a.csv"));
     }
@@ -954,10 +580,8 @@ mod tests {
     #[test]
     fn a_directory_argument_roots_the_workbench_at_itself_not_its_parent() {
         let d = tempfile::tempdir().unwrap();
-        let Mode::Workbench { root, initial } = choose_mode(Some(d.path().to_path_buf())).unwrap()
-        else {
-            panic!("expected Mode::Workbench");
-        };
+        let Mode::Workbench { root, initial } =
+            choose_mode(Some(d.path().to_path_buf())).unwrap();
         assert_eq!(root, d.path().canonicalize().unwrap());
         assert_eq!(initial, None);
     }
@@ -968,25 +592,36 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let _restore = RestoreCwd(std::env::current_dir().unwrap());
         std::env::set_current_dir(d.path()).unwrap();
-        let Mode::Workbench { root, initial } = choose_mode(None).unwrap() else {
-            panic!("expected Mode::Workbench");
-        };
+        let Mode::Workbench { root, initial } = choose_mode(None).unwrap();
         assert_eq!(root, d.path().canonicalize().unwrap());
         assert_eq!(initial, None);
     }
 
     #[test]
-    fn no_argument_and_exactly_one_target_is_classic() {
+    fn no_argument_and_exactly_one_target_opens_the_workbench_with_a_dry_run_fit() {
         let _lock = CWD_TEST_LOCK.lock().unwrap();
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("only.tdy.sql");
         std::fs::write(&p, target_sql()).unwrap();
         let _restore = RestoreCwd(std::env::current_dir().unwrap());
         std::env::set_current_dir(d.path()).unwrap();
-        let Mode::Classic(path, sql) = choose_mode(None).unwrap() else {
-            panic!("expected Mode::Classic");
-        };
-        assert_eq!(path.file_name().unwrap(), "only.tdy.sql");
-        assert_eq!(sql, target_sql());
+        let Mode::Workbench { root, initial } = choose_mode(None).unwrap();
+        assert_eq!(root, d.path().canonicalize().unwrap());
+        assert_eq!(initial.as_deref(), Some(".fit only.tdy.sql --dry-run"));
+    }
+
+    /// However the single target was found — named on the command line, or
+    /// the lone `*.tdy.sql` discovered in the working directory — the fit
+    /// `main` dispatches first must be a dry run: opening a review tool to
+    /// look and quitting must leave the directory exactly as found.
+    #[test]
+    fn the_initial_fit_line_always_ends_dry_run() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("t.tdy.sql");
+        std::fs::write(&p, target_sql()).unwrap();
+        let Mode::Workbench { initial, .. } = choose_mode(Some(p)).unwrap();
+        let line = initial.expect("expected an initial line");
+        assert!(line.ends_with("--dry-run"), "{line}");
+        assert!(line.starts_with(".fit "), "{line}");
     }
 }

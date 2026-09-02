@@ -1,7 +1,9 @@
 //! What the workbench frame actually shows, rendered into a headless buffer.
 //!
-//! Mirrors `tests/render.rs`'s approach: draw into a `TestBackend`, read the
-//! text back, assert on what a person would see.
+//! Draw into a `TestBackend`, read the text back, assert on what a person
+//! would see — the approach the classic screens' `tests/render.rs` used
+//! before every review behaviour moved into the workbench and that file
+//! was deleted (slice 3 Task 7).
 
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -30,7 +32,7 @@ fn pile() -> tempfile::TempDir {
     d
 }
 
-// Copied from the old `tests/render.rs:40-75` (that file dies in Task 7).
+// Copied from the old `tests/render.rs:40-75`, now deleted (Task 7).
 fn member(path: &str, status: MemberStatus) -> MemberReport {
     MemberReport {
         path: path.into(),

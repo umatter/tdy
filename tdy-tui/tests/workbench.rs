@@ -42,8 +42,8 @@ fn outcome(echo: &str, text: &str, payload: Payload) -> Outcome {
     Outcome { echo: echo.into(), text: text.into(), payload, ok: true }
 }
 
-// Copied from the old `tests/render.rs:40-75` (that file dies in Task 7) —
-// the member-builder pattern a synthetic `PileReport` needs.
+// Copied from the old `tests/render.rs:40-75`, now deleted (Task 7) — the
+// member-builder pattern a synthetic `PileReport` needs.
 fn member(path: &str, status: MemberStatus) -> MemberReport {
     MemberReport {
         path: path.into(),
@@ -534,6 +534,28 @@ fn e_dispatches_edit_for_the_member() {
     let WbAction::Dispatch(line) = act else { panic!("expected Dispatch, got {act:?}") };
     assert!(line.starts_with(".edit"), "{line}");
     assert!(line.contains("2025-02.csv"), "{line}");
+}
+
+/// `t` in Pile or Member context (Main focus) opens the target itself in
+/// $EDITOR — the same `.edit <rel>` shape `f`/`e` already dispatch, but
+/// naming the declaration rather than a member. Reachable from either
+/// context, since both carry the target path.
+#[test]
+fn t_dispatches_edit_for_the_target_from_pile_and_member() {
+    let d = pile();
+    let (mut w, _) = pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits)], 0);
+    assert!(matches!(&w.context, Context::Member { .. }), "{:?}", w.context);
+    assert_eq!(
+        w.key(key(KeyCode::Char('t'))),
+        WbAction::Dispatch(".edit sales.tdy.sql".into())
+    );
+
+    w.key(key(KeyCode::Esc)); // back to Pile
+    assert!(matches!(&w.context, Context::Pile { .. }), "{:?}", w.context);
+    assert_eq!(
+        w.key(key(KeyCode::Char('t'))),
+        WbAction::Dispatch(".edit sales.tdy.sql".into())
+    );
 }
 
 /// The target text a Member's remedy menu edits — written for real, so the
