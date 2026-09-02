@@ -108,6 +108,13 @@ impl Browser {
         })
     }
 
+    /// The canonical root the browser is confined to (the Empty context's
+    /// orientation line names it, since `title()` only ever gives a
+    /// root-relative path).
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Return a title for the pane: root-relative path, or "." if at root.
     pub fn title(&self) -> String {
         match self.dir.strip_prefix(&self.root) {
