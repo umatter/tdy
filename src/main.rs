@@ -90,14 +90,18 @@ enum Command {
         #[arg(long)]
         stamp: bool,
     },
-    /// Open the terminal UI for a target (requires `tdy-tui` on PATH).
+    /// Open the terminal UI (requires `tdy-tui` on PATH).
+    ///
+    /// A `.tdy.sql` target opens the classic review flow; a data file opens
+    /// the workbench rooted at its directory and showing that file; omitted
+    /// opens the workbench on the working directory.
     ///
     /// A thin shim, the way cargo finds its subcommands: the UI is a separate
     /// binary so that ratatui and crossterm stay out of `tdy`'s dependency
     /// tree, and this is here so nobody has to remember that.
     Ui {
-        /// The target .tdy.sql file. Omit to find one beside the working
-        /// directory.
+        /// The target .tdy.sql file, a data file to show, or directory. Omit
+        /// for the workbench on the current directory.
         target: Option<PathBuf>,
     },
     /// Serve tdy's tools over the Model Context Protocol (stdio).
