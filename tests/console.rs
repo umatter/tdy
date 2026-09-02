@@ -228,6 +228,33 @@ async fn validate_and_show() {
     );
 }
 
+/// A workbook member's raw view used to show only per-sheet shapes — no
+/// header spelling, no raw values, though spec §7 promises "the sheet grid
+/// for a workbook". `.show` on a workbook must now carry the first sheet's
+/// grid, both on the payload (for the workbench to render) and in the text
+/// (for the console itself) — the file's own content, not a paraphrase.
+#[tokio::test]
+async fn show_on_a_workbook_carries_the_grid() {
+    let d = pile();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join("umsatz.xlsx"),
+        d.path().join("umsatz.xlsx"),
+    )
+    .unwrap();
+    let mut s = session(d.path()).await;
+
+    let o = s.run(".show umsatz.xlsx", None).await;
+    assert!(o.ok, "{}", o.text);
+    let Payload::Shown { raw, .. } = o.payload else { panic!() };
+    assert!(!raw.grid.is_empty(), "grid must not be empty for a readable workbook");
+    assert!(
+        raw.grid[0][0].contains("Umsatzübersicht"),
+        "first row's first cell should be the file's own title cell: {:?}",
+        raw.grid[0]
+    );
+    assert!(o.text.contains("Umsatzübersicht"), "{}", o.text);
+}
+
 #[tokio::test]
 async fn draft_prints_or_writes_and_never_overwrites() {
     let d = pile();

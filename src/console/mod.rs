@@ -116,6 +116,10 @@ pub struct RawHead {
     pub truncated: bool,
     /// Excel/ODS only: (sheet name, rows, cols) per sheet.
     pub sheets: Vec<(String, usize, usize)>,
+    /// The first sheet's raw grid — the file's own header spelling and raw
+    /// values, up to a small cap. First sheet only; empty for text files
+    /// (tab-per-sheet is future work).
+    pub grid: Vec<Vec<String>>,
 }
 
 /// A rendered `ParseSpec`, for `.sniff` and `.show`.
@@ -989,11 +993,21 @@ const WORKBOOK_EXT: [&str; 5] = ["xlsx", "xlsm", "xls", "xlsb", "ods"];
 pub fn raw_head(path: &Path, limits: crate::config::Limits) -> Result<RawHead> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if WORKBOOK_EXT.contains(&ext.as_str()) {
-        let sheets = crate::engine::excel_sheet_shapes(path, limits)?
+        let sheets: Vec<(String, usize, usize)> = crate::engine::excel_sheet_shapes(path, limits)?
             .into_iter()
             .map(|s| (s.name, s.rows, s.cols))
             .collect();
-        return Ok(RawHead { lines: Vec::new(), truncated: false, sheets });
+        let mut lines = Vec::new();
+        let mut grid = Vec::new();
+        if let Some((name, ..)) = sheets.first() {
+            match crate::engine::sheet_grid(path, name, limits, 20, 12) {
+                Ok(g) => grid = g,
+                // Never render an unreadable sheet as an empty grid — say
+                // so, and fall back to the shapes-only view.
+                Err(e) => lines.push(format!("cannot read sheet {name:?}: {e:#}")),
+            }
+        }
+        return Ok(RawHead { lines, truncated: false, sheets, grid });
     }
     use std::io::Read;
     let mut f = std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
@@ -1007,7 +1021,7 @@ pub fn raw_head(path: &Path, limits: crate::config::Limits) -> Result<RawHead> {
     }
     let truncated = more || lines.len() > HEAD_LINES;
     lines.truncate(HEAD_LINES);
-    Ok(RawHead { lines, truncated, sheets: Vec::new() })
+    Ok(RawHead { lines, truncated, sheets: Vec::new(), grid: Vec::new() })
 }
 
 /// The `.show` text: the raw head (or sheet shapes), then the sidecar
@@ -1025,6 +1039,18 @@ fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>, stale: bo
     } else {
         for (n, r, c) in &raw.sheets {
             let _ = writeln!(s, "  sheet {n:?}: {r} row(s) x {c} col(s)");
+        }
+        // An unreadable sheet degrades to the shapes-only view above, plus a
+        // line saying so — never a silently empty grid.
+        for l in &raw.lines {
+            let _ = writeln!(s, "  {l}");
+        }
+        // Unlike the TUI's raw panel (`wb_ui::raw_head_lines`), console text
+        // is not width-constrained, so cells print in full — a title cell
+        // like "Muster AG — Umsatzübersicht" is exactly what `.show` exists
+        // to surface verbatim.
+        for row in &raw.grid {
+            let _ = writeln!(s, "  {}", row.join(" | "));
         }
     }
     match spec {

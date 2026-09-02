@@ -141,7 +141,7 @@ fn a_file_without_a_sidecar_shows_raw_only_and_no_opinion() {
         echo: ".show a.csv".into(), text: String::new(), ok: true,
         payload: Payload::Shown {
             path: d.path().join("a.csv"),
-            raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: true, sheets: vec![] },
+            raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: true, sheets: vec![], grid: vec![] },
             spec: None,
             stale: false,
         },
@@ -151,6 +151,38 @@ fn a_file_without_a_sidecar_shows_raw_only_and_no_opinion() {
     assert!(text.contains("…"), "truncation marker: {text}");
     assert!(text.contains("not sniffed"), "{text}");
     assert!(!text.contains("TEXT") && !text.contains("<-"), "no opinion yet: {text}");
+}
+
+/// A workbook member's raw view used to show only `sheet "N": R row(s) x C
+/// col(s)` — no header spelling, no raw values. The grid is the deleted
+/// preview.rs's load-bearing property brought back: the file's own
+/// spelling and its own thousands separator, not a paraphrase of them.
+#[test]
+fn a_workbook_member_shows_its_grid() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    use tdy::console::{Outcome, Payload, RawHead};
+    w.begin(".show umsatz.xlsx");
+    w.apply(Outcome {
+        echo: ".show umsatz.xlsx".into(), text: String::new(), ok: true,
+        payload: Payload::Shown {
+            path: d.path().join("umsatz.xlsx"),
+            raw: RawHead {
+                lines: vec![],
+                truncated: false,
+                sheets: vec![("Umsatz".into(), 9, 6)],
+                grid: vec![
+                    vec!["Region".into(), "Betrag CHF".into()],
+                    vec!["Ost".into(), "1'100.00".into()],
+                ],
+            },
+            spec: None,
+            stale: false,
+        },
+    }, d.path());
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains("Betrag CHF"), "{text}");
+    assert!(text.contains("1'100.00"), "{text}");
 }
 
 #[test]
@@ -388,7 +420,7 @@ fn the_member_context_shows_gap_beside_raw_and_the_menu() {
     w.key(key(KeyCode::Tab)); // Main
     w.key(key(KeyCode::Enter)); // opens the Member context
 
-    let raw = RawHead { lines: vec!["Datum;Kanton;Betrag".into()], truncated: false, sheets: vec![] };
+    let raw = RawHead { lines: vec!["Datum;Kanton;Betrag".into()], truncated: false, sheets: vec![], grid: vec![] };
     if let tdy_tui::workbench::Context::Member { target, report, member, .. } = &w.context {
         let path = target.parent().unwrap().join(&report.members[*member].path);
         w.set_preview(w.preview_gen, path, raw, None, false);
@@ -535,7 +567,7 @@ fn a_stale_sidecar_shows_the_force_hint_instead_of_not_sniffed() {
     let d = pile();
     let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload, RawHead};
-    let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] };
+    let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![], grid: vec![] };
     w.begin(".show a.csv");
     w.apply(
         Outcome {
@@ -575,7 +607,7 @@ fn a_typed_show_on_a_stale_sidecar_shows_the_force_hint_too() {
             ok: true,
             payload: Payload::Shown {
                 path: d.path().join("a.csv"),
-                raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] },
+                raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![], grid: vec![] },
                 spec: None,
                 stale: true,
             },
@@ -603,7 +635,7 @@ fn a_file_with_no_sidecar_at_all_still_shows_the_plain_footer() {
             ok: true,
             payload: Payload::Shown {
                 path: d.path().join("a.csv"),
-                raw: RawHead { lines: vec!["A;B".into()], truncated: false, sheets: vec![] },
+                raw: RawHead { lines: vec!["A;B".into()], truncated: false, sheets: vec![], grid: vec![] },
                 spec: None,
                 stale: false,
             },
@@ -726,6 +758,7 @@ fn every_context_renders_at_hostile_sizes() {
             lines: vec!["Datum;Kanton;Betrag".into(), "2025-01-01;BE;1.00".into()],
             truncated: true,
             sheets: vec![],
+            grid: vec![],
         }
     }
     fn spec() -> SpecSummary {

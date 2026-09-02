@@ -549,9 +549,11 @@ fn member_detail(m: &MemberReport) -> &str {
 
 /// The raw head, verbatim: file lines, or (for a workbook) one
 /// `sheet "Name": R row(s) x C col(s)` line per sheet, then the file's own
-/// lines if any were also sampled. A trailing `…` marks a truncated read.
+/// lines if any were also sampled, then the first sheet's grid (its own
+/// header spelling and raw values — tab-per-sheet stays future work).
+/// A trailing `…` marks a truncated read.
 fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
-    if raw.lines.is_empty() && raw.sheets.is_empty() {
+    if raw.lines.is_empty() && raw.sheets.is_empty() && raw.grid.is_empty() {
         return vec![Line::styled("reading…", Style::new().fg(DIM))];
     }
     let mut lines = Vec::new();
@@ -560,6 +562,10 @@ fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
     }
     for l in &raw.lines {
         lines.push(Line::raw(l.clone()));
+    }
+    for row in &raw.grid {
+        let cells: Vec<String> = row.iter().map(|c| truncate(c, 14)).collect();
+        lines.push(Line::raw(cells.join(" | ")));
     }
     if raw.truncated {
         lines.push(Line::styled("…", Style::new().fg(DIM)));

@@ -1475,6 +1475,30 @@ pub fn excel_sheet_shapes(path: &Path, limits: Limits) -> Result<Vec<SheetShape>
     Ok(out)
 }
 
+/// The first `max_rows` rows x `max_cols` cells of one sheet, formatted
+/// exactly as `extract_excel` formats them (`render_cell`) — the raw view's
+/// job is to show the file's own spelling and separators, not a second
+/// opinion of what they mean. Goes through the same guard sequence as every
+/// other workbook-touching path: `xlguard::preflight` before the workbook is
+/// opened at all, then `checked_worksheet_range` for the one sheet read.
+pub fn sheet_grid(
+    path: &Path,
+    sheet: &str,
+    limits: Limits,
+    max_rows: usize,
+    max_cols: usize,
+) -> Result<Vec<Vec<String>>> {
+    crate::xlguard::preflight(path, &limits)?;
+    let mut wb = open_workbook_auto(path)
+        .with_context(|| format!("cannot open workbook {}", path.display()))?;
+    let range = checked_worksheet_range(&mut wb, sheet, &limits)?;
+    Ok(range
+        .rows()
+        .take(max_rows)
+        .map(|row| row.iter().take(max_cols).map(render_cell).collect())
+        .collect())
+}
+
 /// The same pipeline, but producing at most `max_rows` output rows.
 ///
 /// The cap is on *output*, not on extraction: a spec that skips a four-line

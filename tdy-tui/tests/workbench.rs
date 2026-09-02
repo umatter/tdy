@@ -165,7 +165,7 @@ fn apply_updates_scrollback_and_context() {
     let d = pile();
     let mut w = wb(&d);
     w.begin(".show a.csv");
-    let raw = RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] };
+    let raw = RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![], grid: vec![] };
     let follow = w.apply(outcome(".show a.csv", "a.csv:\n  A;B\n", Payload::Shown {
         path: d.path().join("a.csv"), raw, spec: None, stale: false,
     }), d.path());
@@ -432,7 +432,7 @@ fn f_dispatches_a_refit_from_pile_and_from_a_browser_target() {
 fn main_scroll_resets_on_a_new_file_and_survives_a_same_path_update() {
     let d = pile();
     let mut w = wb(&d);
-    let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![] };
+    let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![], grid: vec![] };
     w.begin(".show a.csv");
     w.apply(outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw: raw(), spec: None, stale: false }), d.path());
 
@@ -569,7 +569,7 @@ fn a_member_preview_fills_raw_and_stale_paths_are_dropped() {
         pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")], 1);
     let WbAction::PreviewFile(path) = act else { panic!("expected PreviewFile, got {act:?}") };
 
-    let raw = RawHead { lines: vec!["Datum;Kanton".into()], truncated: false, sheets: vec![] };
+    let raw = RawHead { lines: vec!["Datum;Kanton".into()], truncated: false, sheets: vec![], grid: vec![] };
     // A different, unrelated path must be dropped.
     w.set_preview(w.preview_gen, d.path().join("a.csv"), raw.clone(), None, false);
     assert!(matches!(&w.context, Context::Member { raw: None, .. }), "stale path must not fill raw");
@@ -941,7 +941,7 @@ fn ctrl_c_with_nothing_pending_only_hints_at_ctrl_q() {
 fn main_scroll_is_clamped_to_a_generous_bound() {
     let d = pile();
     let mut w = wb(&d);
-    let raw = RawHead { lines: vec!["a".into(), "b".into(), "c".into()], truncated: false, sheets: vec![] };
+    let raw = RawHead { lines: vec!["a".into(), "b".into(), "c".into()], truncated: false, sheets: vec![], grid: vec![] };
     w.begin(".show a.csv");
     w.apply(
         outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw, spec: None, stale: false }),
@@ -982,7 +982,7 @@ fn set_preview_drops_a_stale_generation_before_the_path_check() {
 
     // A result for generation 1, even naming the path the context still
     // shows, must be dropped — a newer request has since been made.
-    let raw = RawHead { lines: vec!["stale".into()], truncated: false, sheets: vec![] };
+    let raw = RawHead { lines: vec!["stale".into()], truncated: false, sheets: vec![], grid: vec![] };
     w.set_preview(1, d.path().join("a.csv"), raw, None, false);
     assert!(
         matches!(&w.context, Context::File { raw, .. } if raw.lines.is_empty()),
@@ -991,7 +991,7 @@ fn set_preview_drops_a_stale_generation_before_the_path_check() {
     );
 
     // The current generation still applies.
-    let raw = RawHead { lines: vec!["fresh".into()], truncated: false, sheets: vec![] };
+    let raw = RawHead { lines: vec!["fresh".into()], truncated: false, sheets: vec![], grid: vec![] };
     w.set_preview(2, d.path().join("a.csv"), raw, None, false);
     assert!(matches!(&w.context, Context::File { raw, .. } if raw.lines == ["fresh".to_string()]));
 }
