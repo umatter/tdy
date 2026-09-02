@@ -138,7 +138,23 @@ impl Workbench {
     }
 
     /// A dispatched line has started running (echo it, mark busy).
+    ///
+    /// Idempotent while already busy: the runtime calls this synchronously
+    /// the moment a line is dispatched (before it ever reaches the worker,
+    /// so a fast key burst cannot slip a second `Dispatch` past `key()`'s
+    /// busy gate — see the runtime's `act_on_wb`), and the worker's own
+    /// `Started` message for that same line calls this again once it
+    /// round-trips. Without the guard that second call would remember the
+    /// line twice; with it, it is a no-op, and a line dispatched the one
+    /// other way — straight to the worker, bypassing this synchronous call
+    /// entirely (the workbench's initial `.show`, sent before any key can
+    /// reach the runtime) — still gets marked busy and remembered exactly
+    /// once, by its own `Started` round trip, because `busy` is `None` when
+    /// that arrives.
     pub fn begin(&mut self, line: &str) {
+        if self.busy.is_some() {
+            return;
+        }
         self.busy = Some(line.to_string());
         self.editor.remember(line);
     }

@@ -67,45 +67,62 @@ enum Msg {
 /// Resolved entirely before the terminal is touched — see the comment below
 /// on why that matters for `Mode::Classic`, and it costs `Mode::Workbench`
 /// nothing to keep the same property.
+#[derive(Debug)]
 enum Mode {
     Classic(PathBuf, String),
     Workbench { root: PathBuf, initial: Option<String> },
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-
-    let mode = match cli.target {
+/// What `arg` (the CLI's optional positional target) resolves to. Pulled out
+/// of `main` so it can be unit-tested without a terminal: `main` itself
+/// can't be tested (it ends by taking over the screen), but everything it
+/// decides *before* that can be.
+fn choose_mode(arg: Option<PathBuf>) -> Result<Mode> {
+    match arg {
+        // A directory: the workbench, rooted at the directory itself — not
+        // its parent, which is what the data-file arm below would do if
+        // this guard did not come first. `is_dir` is checked before the
+        // `.tdy.sql` suffix check for the same reason: a directory is never
+        // a target no matter what its name ends with.
+        Some(t) if t.is_dir() => {
+            let root = t.canonicalize().with_context(|| format!("cannot open {}", t.display()))?;
+            Ok(Mode::Workbench { root, initial: None })
+        }
         Some(t) if t.to_string_lossy().ends_with(".tdy.sql") => {
             let sql = std::fs::read_to_string(&t)
                 .with_context(|| format!("cannot read target {}", t.display()))?;
             // Fail before touching the terminal: an unparseable target
             // inside the alternate screen is an error nobody can read.
             tdy::target::Target::parse(&sql).with_context(|| format!("in {}", t.display()))?;
-            Mode::Classic(t, sql)
+            Ok(Mode::Classic(t, sql))
         }
         Some(f) => {
             // A data file: open the workbench in its directory, showing it.
             let f = f.canonicalize().with_context(|| format!("cannot open {}", f.display()))?;
             let root = f.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
             let name = f.file_name().unwrap().to_string_lossy().to_string();
-            Mode::Workbench { root, initial: Some(format!(".show {name}")) }
+            Ok(Mode::Workbench { root, initial: Some(format!(".show {name}")) })
         }
         None => match discover_target() {
             // Exactly one target here: the classic flow, today's behaviour.
             Ok(t) => {
                 let sql = std::fs::read_to_string(&t)?;
                 tdy::target::Target::parse(&sql).with_context(|| format!("in {}", t.display()))?;
-                Mode::Classic(t, sql)
+                Ok(Mode::Classic(t, sql))
             }
             // No target, or several: the workbench is the answer now, not
             // an error — `discover_target`'s own error text is written for
             // the case where naming the file is the only fix, which no
             // longer applies here.
-            Err(_) => Mode::Workbench { root: std::env::current_dir()?, initial: None },
+            Err(_) => Ok(Mode::Workbench { root: std::env::current_dir()?, initial: None }),
         },
-    };
+    }
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let mode = choose_mode(cli.target)?;
 
     let mut terminal = ratatui::init();
     // `ratatui::init` installs a panic hook that restores the terminal. That
@@ -436,6 +453,14 @@ fn act_on_wb(
     match action {
         WbAction::None | WbAction::Quit => {}
         WbAction::Dispatch(line) => {
+            // Mark busy synchronously, before the line ever reaches the
+            // worker: `key()` reads `busy` to gate further input, and the
+            // worker's own `Started` round trip is a whole poll cycle away
+            // — a fast key burst (or a paste) could otherwise slip a second
+            // `Dispatch` past the gate before the first shows busy.
+            // `begin` is idempotent (see its doc comment), so the `Started`
+            // message this same line produces later is a harmless no-op.
+            wb.begin(&line);
             let _ = line_tx.send(line);
         }
         WbAction::PreviewFile(path) => spawn_wb_preview(preview_tx.clone(), cfg.clone(), path),
@@ -795,4 +820,101 @@ fn run_editor(path: &Path) -> Result<()> {
         anyhow::bail!("{editor} exited with {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target_sql() -> &'static str {
+        "CREATE TABLE t (a TEXT) WITH (files='*.csv');"
+    }
+
+    /// Restores the process's current directory on drop — used by the two
+    /// tests below that exercise `choose_mode(None)`, which reads it
+    /// (`discover_target`, `std::env::current_dir`). Restoring even when an
+    /// assertion inside the test panics keeps a failure in one test from
+    /// stranding every test after it in a deleted `tempdir`.
+    struct RestoreCwd(PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    /// Process current directory is one piece of real OS state shared by
+    /// every thread in this test binary (`cargo test` runs `#[test]` fns
+    /// concurrently by default) — this serializes the two tests that touch
+    /// it, the same problem `console::CWD_LOCK` exists to solve in the root
+    /// crate for the same reason.
+    static CWD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_tdy_sql_argument_is_classic() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("t.tdy.sql");
+        std::fs::write(&p, target_sql()).unwrap();
+        let Mode::Classic(path, sql) = choose_mode(Some(p.clone())).unwrap() else {
+            panic!("expected Mode::Classic");
+        };
+        assert_eq!(path, p);
+        assert_eq!(sql, target_sql());
+    }
+
+    #[test]
+    fn a_data_file_argument_roots_the_workbench_at_its_parent_and_shows_it() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.csv");
+        std::fs::write(&p, "A;B\n1;2\n").unwrap();
+        let Mode::Workbench { root, initial } = choose_mode(Some(p)).unwrap() else {
+            panic!("expected Mode::Workbench");
+        };
+        assert_eq!(root, d.path().canonicalize().unwrap());
+        assert_eq!(initial.as_deref(), Some(".show a.csv"));
+    }
+
+    /// The defect the reviewer caught: a bare directory argument used to
+    /// fall into the data-file arm above and root the workbench one level
+    /// too high (the directory's *parent*), then dispatch a `.show` of the
+    /// directory itself, which fails. The `is_dir` guard in `choose_mode`
+    /// must come first and root at the directory, not its parent, with no
+    /// initial line.
+    #[test]
+    fn a_directory_argument_roots_the_workbench_at_itself_not_its_parent() {
+        let d = tempfile::tempdir().unwrap();
+        let Mode::Workbench { root, initial } = choose_mode(Some(d.path().to_path_buf())).unwrap()
+        else {
+            panic!("expected Mode::Workbench");
+        };
+        assert_eq!(root, d.path().canonicalize().unwrap());
+        assert_eq!(initial, None);
+    }
+
+    #[test]
+    fn no_argument_and_no_single_target_opens_the_workbench_on_the_working_directory() {
+        let _lock = CWD_TEST_LOCK.lock().unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let _restore = RestoreCwd(std::env::current_dir().unwrap());
+        std::env::set_current_dir(d.path()).unwrap();
+        let Mode::Workbench { root, initial } = choose_mode(None).unwrap() else {
+            panic!("expected Mode::Workbench");
+        };
+        assert_eq!(root, d.path().canonicalize().unwrap());
+        assert_eq!(initial, None);
+    }
+
+    #[test]
+    fn no_argument_and_exactly_one_target_is_classic() {
+        let _lock = CWD_TEST_LOCK.lock().unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("only.tdy.sql");
+        std::fs::write(&p, target_sql()).unwrap();
+        let _restore = RestoreCwd(std::env::current_dir().unwrap());
+        std::env::set_current_dir(d.path()).unwrap();
+        let Mode::Classic(path, sql) = choose_mode(None).unwrap() else {
+            panic!("expected Mode::Classic");
+        };
+        assert_eq!(path.file_name().unwrap(), "only.tdy.sql");
+        assert_eq!(sql, target_sql());
+    }
 }

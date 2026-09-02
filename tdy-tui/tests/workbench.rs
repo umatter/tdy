@@ -134,6 +134,23 @@ fn shortcut_and_typed_line_produce_identical_dispatches_after_cd() {
     assert_eq!(a1, a2);
 }
 
+/// The runtime now calls `begin` synchronously the moment a `Dispatch`
+/// action is produced — before the line ever reaches the worker — so that
+/// `key()`'s busy gate is up immediately, not a whole `Started` round trip
+/// later. A key arriving right after that synchronous `begin` (long before
+/// any worker message could possibly come back) must already be swallowed.
+#[test]
+fn begin_called_synchronously_after_dispatch_blocks_the_next_key() {
+    let d = pile();
+    let mut w = wb(&d);
+    let action = type_line(&mut w, ".sniff a.csv");
+    let WbAction::Dispatch(line) = action else { panic!("expected Dispatch, got {action:?}") };
+    // What the runtime's `act_on_wb` now does before sending on `line_tx`.
+    w.begin(&line);
+    assert!(w.busy.is_some());
+    assert_eq!(w.key(key(KeyCode::Char('x'))), WbAction::None);
+}
+
 #[test]
 fn zoom_resize_and_scroll_are_console_focus_keys() {
     let d = pile();
