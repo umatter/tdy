@@ -11,6 +11,7 @@ use tdy_tui::wb_ui;
 use tdy_tui::workbench::Workbench;
 
 fn key(c: KeyCode) -> KeyEvent { KeyEvent::new(c, KeyModifiers::NONE) }
+fn ctrl(c: char) -> KeyEvent { KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL) }
 
 fn screen(w: &mut Workbench, cols: u16, rows: u16) -> Vec<String> {
     let mut t = Terminal::new(TestBackend::new(cols, rows)).unwrap();
@@ -180,6 +181,23 @@ fn the_help_overlay_lists_the_keys() {
     assert!(text.contains(" keys "), "{text}");
     assert!(text.contains("Tab"), "{text}");
     assert!(text.contains('▀') || text.contains('▄'), "no mark glyph in overlay: {text}");
+}
+
+/// Regression: `draw_right` used to check `zoom` before `help`, so `?`
+/// while zoomed (Tab still moves focus off the console) set an invisible
+/// overlay — nothing drawn, and the next keystroke was silently swallowed
+/// closing a help screen nobody saw. `help` must win regardless of `zoom`.
+#[test]
+fn the_help_overlay_renders_even_when_the_console_is_zoomed() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    w.key(ctrl('l')); // zoom, from the default Console focus
+    assert!(w.zoom);
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Char('?')));
+    assert!(w.help);
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains(" keys "), "{text}");
 }
 
 /// Regression: the preview-table height heuristic used to apply its floor

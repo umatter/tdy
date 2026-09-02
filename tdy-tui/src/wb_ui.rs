@@ -30,8 +30,9 @@ const BROWSER_WIDTH: u16 = 26;
 /// than invented.
 const ESCALATION: f32 = 0.8;
 /// Below this many inner rows the Empty view drops the mark rather than
-/// squeeze it against the orientation text beneath it.
-const MARK_MIN_HEIGHT: u16 = 10;
+/// squeeze it against the orientation text beneath it: mark = 9 rows incl.
+/// spacing + 3 orientation lines; at 10 the Paragraph clipped the tail.
+const MARK_MIN_HEIGHT: u16 = 13;
 
 /// The current key vocabulary, key then meaning, in one slice so later
 /// tasks (d/D/f/a/t) append a row here rather than hunting across the
@@ -77,6 +78,15 @@ fn draw_body(f: &mut Frame, area: Rect, w: &mut Workbench) {
 }
 
 fn draw_right(f: &mut Frame, area: Rect, w: &mut Workbench) {
+    // Checked before `zoom`: `?` opens help from Browser/Main focus
+    // regardless of whether the console is currently zoomed (Tab still
+    // moves focus off the console while zoomed), so the overlay must cover
+    // the whole right column here rather than a `main` sub-area that may
+    // not have been computed — the zoom branch below never runs one.
+    if w.help {
+        draw_help(f, area);
+        return;
+    }
     if w.zoom {
         draw_console(f, area, w);
         return;
@@ -86,14 +96,7 @@ fn draw_right(f: &mut Frame, area: Rect, w: &mut Workbench) {
         Constraint::Length(w.console_rows + 2),
     ])
     .areas(area);
-    // The overlay replaces the main pane's own drawing rather than layering
-    // on top of it — ratatui has no z-order, and "over the main pane area"
-    // just means "instead of it, for as long as help is up."
-    if w.help {
-        draw_help(f, main);
-    } else {
-        draw_main(f, main, w);
-    }
+    draw_main(f, main, w);
     draw_console(f, console, w);
 }
 
