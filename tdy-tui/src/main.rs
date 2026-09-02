@@ -112,8 +112,10 @@ fn discover_target() -> Result<PathBuf> {
              tdy draft *.csv > sales.tdy.sql"
         ),
         _ => anyhow::bail!(
+            // `tdy ui` is the documented door and forwards its argument here,
+            // so the hint spells that form even when tdy-tui was run directly.
             "several targets here; name the one you mean:\n{}",
-            found.iter().map(|p| format!("  tdy-tui {}", p.display())).collect::<Vec<_>>().join("\n")
+            found.iter().map(|p| format!("  tdy ui {}", p.display())).collect::<Vec<_>>().join("\n")
         ),
     }
 }
