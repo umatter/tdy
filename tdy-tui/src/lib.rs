@@ -10,5 +10,6 @@ pub use tdy::target::TargetColumn;
 pub use tdy::evidence;
 
 pub mod app;
+pub mod browser;
 pub mod remedy;
 pub mod ui;
