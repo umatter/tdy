@@ -14,6 +14,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use tdy::console::line::{Edit, LineEditor};
 use tdy::console::{EntryKind, Outcome, Payload, RawHead, SpecSummary, Table};
+use tdy::report::{MemberReport, PileReport};
 
 use crate::browser::Browser;
 
@@ -27,12 +28,29 @@ pub enum Focus {
 
 /// What the main pane shows. Slice 2: Empty and the File views; a completed
 /// query's Table also lands here so SQL results are not scrollback-only.
-#[derive(Debug, Clone, Default)]
+/// Slice 3 Task 2 adds `Pile` (a `.fit`/`.check`/`.accept` report) and the
+/// shell of `Member` (one member of it, opened with `Enter`) — Task 3 fills
+/// in the Member view's own rendering and remedy flow.
+#[derive(Debug, Default)]
 pub enum Context {
     #[default]
     Empty,
     File { path: PathBuf, raw: RawHead, spec: Option<SpecSummary>, preview: Option<Table> },
     Query(Table),
+    Pile { target: PathBuf, report: PileReport, selected: usize },
+    Member {
+        target: PathBuf,
+        report: PileReport,
+        member: usize,
+        /// Filled in by the runtime's `PreviewFile` follow-up, the way
+        /// `File`'s raw head is — the state machine does no I/O.
+        // Task 3 renders this alongside the report's own fields.
+        #[allow(dead_code)]
+        raw: Option<RawHead>,
+        /// Which remedy is highlighted in the (Task 3) remedy menu.
+        #[allow(dead_code)]
+        remedy_selected: usize,
+    },
 }
 
 /// One scrollback cell: the echoed line, then its text.
@@ -84,6 +102,12 @@ pub struct Workbench {
     /// Set when the last `apply`d outcome's payload was `Payload::Continue`;
     /// drives `prompt()`.
     sql_pending: bool,
+    /// The target `.fit`/`.accept`/`.check` last named, resolved against
+    /// `browser.dir` at the moment the line was dispatched — `Payload::Fitted`
+    /// carries no path of its own, so this is how it knows which file it
+    /// fitted. Set in `begin()`; every other command leaves it alone.
+    /// Deliberately fragile (see `record_target`'s doc comment).
+    pub last_target: Option<PathBuf>,
 }
 
 impl Workbench {
@@ -103,6 +127,7 @@ impl Workbench {
             main_scroll: 0,
             help: false,
             sql_pending: false,
+            last_target: None,
         }
     }
 
@@ -138,6 +163,17 @@ impl Workbench {
                 return WbAction::None;
             }
             KeyCode::Esc => {
+                // Main focus over a Pile: Esc backs out of the report to
+                // Empty (the same key a person would use to escape any
+                // other overlay) rather than jumping focus to the console —
+                // that would leave the report on screen but unreachable
+                // without retyping `.fit`.
+                if self.focus == Focus::Main {
+                    if let Context::Pile { .. } = &self.context {
+                        self.context = Context::Empty;
+                        return WbAction::None;
+                    }
+                }
                 self.focus = Focus::Console;
                 return WbAction::None;
             }
@@ -181,6 +217,30 @@ impl Workbench {
         }
         self.busy = Some(line.to_string());
         self.editor.remember(line);
+        self.record_target(line);
+    }
+
+    /// `.fit`, `.accept` and `.check` all name a target as their first
+    /// argument; remember it (resolved against the browser's current
+    /// directory) so a later `Payload::Fitted` — which carries no path of
+    /// its own — knows which file produced it. Any other line leaves
+    /// `last_target` alone, so `Payload::Fitted` from an `.accept` after a
+    /// `.fit` (or a re-`.fit` after browsing elsewhere) still resolves.
+    ///
+    /// Deliberately tiny and fragile, per the design ledger: this is a
+    /// whitespace split plus trimming a matching pair of `"` off the second
+    /// token, not the console's own tokenizer — a target path containing a
+    /// space, or spelled with single quotes, is a known gap, not a bug to
+    /// chase here.
+    fn record_target(&mut self, line: &str) {
+        let mut tokens = line.trim().split_whitespace();
+        let Some(cmd) = tokens.next() else { return };
+        if matches!(cmd, ".fit" | ".accept" | ".check") {
+            if let Some(tok) = tokens.next() {
+                let tok = tok.trim_matches('"');
+                self.last_target = Some(self.browser.dir.join(tok));
+            }
+        }
     }
 
     /// The console worker is gone (the `Session` failed to build, or the
@@ -226,6 +286,24 @@ impl Workbench {
             }
             Payload::Query(t) => {
                 self.context = Context::Query(t);
+                None
+            }
+            Payload::Fitted(r) => {
+                // `Payload::Fitted` names no path of its own: prefer the
+                // target `begin()` just recorded, and fall back to the
+                // target a Pile already on screen was fitted from (a re-fit
+                // that, for whatever reason, `record_target` missed). If
+                // neither exists — should not happen for a real `.fit`, but
+                // this must still be total — leave the context as it is and
+                // say so rather than guess a path.
+                let target = self.last_target.clone().or_else(|| match &self.context {
+                    Context::Pile { target, .. } => Some(target.clone()),
+                    _ => None,
+                });
+                match target {
+                    Some(target) => self.context = Context::Pile { target, report: r, selected: 0 },
+                    None => self.status = "fitted, but no target known".to_string(),
+                }
                 None
             }
             Payload::Edit(p) => Some(WbAction::Edit(p)),
@@ -281,6 +359,18 @@ impl Workbench {
             self.main_scroll = 0;
         }
         self.context = Context::File { path, raw, spec, preview };
+    }
+
+    /// The member currently under the cursor — in a `Pile` the row at
+    /// `selected`, in a `Member` the one being examined. `None` in every
+    /// other context, or if the index is somehow out of range (a stale
+    /// selection surviving a report replaced by a shorter one).
+    pub fn pile_selected_member(&self) -> Option<&MemberReport> {
+        match &self.context {
+            Context::Pile { report, selected, .. } => report.members.get(*selected),
+            Context::Member { report, member, .. } => report.members.get(*member),
+            _ => None,
+        }
     }
 
     pub fn prompt(&self) -> &'static str {
@@ -364,11 +454,35 @@ impl Workbench {
             }
             KeyCode::Char('s') => self.shortcut(".sniff"),
             KeyCode::Char('e') => self.shortcut(".edit"),
+            // `f` fits a target — only meaningful on a `*.tdy.sql` entry; a
+            // data file's shortcut stays `s`.
+            KeyCode::Char('f') => match self.browser.selected_entry() {
+                Some(e) if e.kind == EntryKind::Target => self.shortcut(".fit"),
+                _ => WbAction::None,
+            },
             _ => WbAction::None,
         }
     }
 
     fn key_main(&mut self, k: KeyEvent) -> WbAction {
+        if let Context::Pile { report, selected, .. } = &mut self.context {
+            let len = report.members.len();
+            return match k.code {
+                KeyCode::Up => {
+                    *selected = selected.saturating_sub(1);
+                    WbAction::None
+                }
+                KeyCode::Down => {
+                    if len > 0 {
+                        *selected = (*selected + 1).min(len - 1);
+                    }
+                    WbAction::None
+                }
+                KeyCode::Enter => self.enter_pile_member(),
+                KeyCode::Char('f') => self.refit_pile(),
+                _ => WbAction::None,
+            };
+        }
         match k.code {
             KeyCode::Up => {
                 self.main_scroll = self.main_scroll.saturating_sub(1);
@@ -379,6 +493,46 @@ impl Workbench {
                 WbAction::None
             }
             _ => WbAction::None,
+        }
+    }
+
+    /// `Enter` on the selected Pile row: open it as a `Member` and ask the
+    /// runtime to preview the file (the raw half is filled in by that
+    /// action's own result, same as `File`'s). Moves the report out of
+    /// `Pile` rather than cloning it — `PileReport` carries no `Clone`, on
+    /// purpose, so a "current" and a "stale copy" version can never quietly
+    /// disagree.
+    fn enter_pile_member(&mut self) -> WbAction {
+        let ctx = std::mem::take(&mut self.context);
+        let Context::Pile { target, report, selected } = ctx else {
+            self.context = ctx;
+            return WbAction::None;
+        };
+        let Some(member_path) = report.members.get(selected).map(|m| m.path.clone()) else {
+            self.context = Context::Pile { target, report, selected };
+            return WbAction::None;
+        };
+        let target_dir = target.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let preview_path = target_dir.join(member_path);
+        self.context =
+            Context::Member { target, report, member: selected, raw: None, remedy_selected: 0 };
+        WbAction::PreviewFile(preview_path)
+    }
+
+    /// `f` from the Pile context: re-dispatch the same `.fit` that produced
+    /// it, spelled relative to the browser's current directory when the
+    /// target lives under it (the common case) and as its full path
+    /// otherwise — the dispatched line must still resolve from the
+    /// session's cwd even after a `.cd` has moved the browser elsewhere.
+    fn refit_pile(&self) -> WbAction {
+        let Context::Pile { target, .. } = &self.context else { return WbAction::None };
+        WbAction::Dispatch(format!(".fit {}", quote_rel(&self.rel_spelling(target))))
+    }
+
+    fn rel_spelling(&self, path: &Path) -> String {
+        match path.strip_prefix(&self.browser.dir) {
+            Ok(rel) => rel.display().to_string(),
+            Err(_) => path.display().to_string(),
         }
     }
 

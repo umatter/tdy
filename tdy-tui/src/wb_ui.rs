@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use tdy::console::{EntryStatus, RawHead, SpecSummary, Table};
+use tdy::report::{MemberReport, MemberStatus, PileReport};
 
 use crate::mark;
 use crate::workbench::{Context, Focus, Workbench};
@@ -48,6 +49,10 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("Backspace", "go up a directory"),
     ("s", "sniff the selected file"),
     ("e", "edit the selected file"),
+    ("f", "fit the selected target / re-fit the shown pile"),
+    ("↑ / ↓ (pile)", "move the selected member"),
+    ("Enter (pile)", "open the selected member"),
+    ("Esc (pile)", "close the pile"),
     ("?", "show this help"),
 ];
 
@@ -236,6 +241,15 @@ fn context_title(ctx: &Context) -> String {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.display().to_string()),
         Context::Query(_) => "result".to_string(),
+        Context::Pile { target, .. } => target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| target.display().to_string()),
+        Context::Member { report, member, .. } => report
+            .members
+            .get(*member)
+            .map(|m| m.path.clone())
+            .unwrap_or_else(|| "member".to_string()),
     }
 }
 
@@ -273,7 +287,76 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
         Context::Query(t) => {
             f.render_widget(Paragraph::new(table_lines(t)).block(block), area);
         }
+        Context::Pile { report, selected, .. } => {
+            draw_pile(f, area, block, report, *selected);
+        }
+        // Task 3 fills this in (the raw head, sources, problems, and the
+        // ranked remedy menu); for now, enough to prove Enter got here
+        // without a panic.
+        Context::Member { report, member, raw, .. } => {
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            let path = report.members.get(*member).map(|m| m.path.as_str()).unwrap_or("?");
+            let status = if raw.is_none() { "loading…" } else { "" };
+            f.render_widget(
+                Paragraph::new(vec![Line::raw(path.to_string()), Line::styled(status, Style::new().fg(DIM))]),
+                inner,
+            );
+        }
     }
+}
+
+/// Header (target name, counts, lock state) then one row per member —
+/// `▸ path  status  detail`, truncated to the pane's width.
+fn draw_pile(f: &mut Frame, area: Rect, block: Block<'static>, report: &PileReport, selected: usize) {
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut header = format!(
+        "{} fitted · {} failed · {} need review",
+        report.fitted, report.failed, report.needs_review
+    );
+    header.push_str(if report.lock_written.is_some() { " · lock written" } else { " · no lock" });
+    if report.dry_run {
+        header.push_str(" · dry run");
+    }
+
+    let mut lines = vec![Line::styled(header, Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
+    for (i, m) in report.members.iter().enumerate() {
+        let marker = if i == selected { "▸ " } else { "  " };
+        let detail = member_detail(m);
+        let row = format!("{marker}{}  {}  {detail}", m.path, status_word(m));
+        lines.push(Line::raw(truncate(&row, inner.width as usize)));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// `accepted` wins over `REVIEW` — a reviewed-and-accepted member is no
+/// longer waiting on anyone. `Contradicts` and `Error` both read as `GAP`:
+/// from this list they are all "does not fit," and the row's detail text
+/// (the review note or the first problem's message) is where the
+/// distinction actually lives.
+fn status_word(m: &MemberReport) -> &'static str {
+    if m.accepted {
+        return "accepted";
+    }
+    match m.status {
+        MemberStatus::Fits => "fits",
+        MemberStatus::NeedsReview => "REVIEW",
+        MemberStatus::Gaps | MemberStatus::Contradicts | MemberStatus::Error => "GAP",
+    }
+}
+
+/// The first line of the member's review note, or (failing that) its first
+/// problem's message — whichever explains the status word.
+fn member_detail(m: &MemberReport) -> &str {
+    m.review
+        .as_deref()
+        .or_else(|| m.problems.first().map(|p| p.message.as_str()))
+        .unwrap_or("")
+        .lines()
+        .next()
+        .unwrap_or("")
 }
 
 /// The raw head, verbatim: file lines, or (for a workbook) one

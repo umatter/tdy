@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tdy::console::{Outcome, Payload, RawHead, Table};
+use tdy::report::{MemberReport, MemberStatus, PileReport, Problem, SourceBinding};
 use tdy_tui::browser::Browser;
 use tdy_tui::workbench::{Context, Focus, WbAction, Workbench};
 
@@ -23,6 +24,56 @@ fn wb(d: &tempfile::TempDir) -> Workbench {
 }
 fn outcome(echo: &str, text: &str, payload: Payload) -> Outcome {
     Outcome { echo: echo.into(), text: text.into(), payload, ok: true }
+}
+
+// Copied from the old `tests/render.rs:40-75` (that file dies in Task 7) —
+// the member-builder pattern a synthetic `PileReport` needs.
+fn member(path: &str, status: MemberStatus) -> MemberReport {
+    MemberReport {
+        path: path.into(),
+        status,
+        via: Some("heuristic".into()),
+        sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
+        review: (status == MemberStatus::NeedsReview).then(|| {
+            "`amount_chf` applies decimal_shift = -2, which changes every value".into()
+        }),
+        accepted: false,
+        notes: vec![],
+        problems: vec![],
+        proposals: vec![],
+    }
+}
+
+fn gap_member(path: &str) -> MemberReport {
+    let mut m = member(path, MemberStatus::Gaps);
+    m.problems = vec![Problem {
+        kind: "no_candidate".into(),
+        column: Some("region".into()),
+        message: "`region` (TEXT): no column of this file binds\n    looked for \"region\""
+            .into(),
+        want: Some("TEXT".into()),
+        tried: vec!["region".into()],
+        header: vec!["Datum".into(), "Kanton".into()],
+        choices: vec![],
+        field: None,
+    }];
+    m
+}
+
+fn pile_report(target_file: &str, members: Vec<MemberReport>) -> PileReport {
+    let failed = members.iter().filter(|m| m.status == MemberStatus::Gaps).count();
+    let needs_review = members.iter().filter(|m| m.status == MemberStatus::NeedsReview).count();
+    PileReport {
+        target: "sales".into(),
+        target_file: target_file.into(),
+        declared_columns: 3,
+        fitted: members.len() - failed,
+        failed,
+        needs_review,
+        members,
+        lock_written: None,
+        dry_run: false,
+    }
 }
 
 #[test]
@@ -247,6 +298,107 @@ fn question_mark_in_console_is_just_a_character() {
     w.key(key(KeyCode::Char('?')));
     assert!(!w.help);
     assert!(w.editor.text().contains('?'), "{}", w.editor.text());
+}
+
+/// `.fit`'s report lands in the main pane as `Context::Pile`, targeted at
+/// the file `begin()` remembered from the dispatched line.
+#[test]
+fn a_fit_report_becomes_the_pile_context() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits)]);
+    let follow = w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    assert!(follow.is_none());
+    match &w.context {
+        Context::Pile { target, report, selected } => {
+            assert!(target.ends_with("sales.tdy.sql"), "{target:?}");
+            assert_eq!(report.members.len(), 1);
+            assert_eq!(*selected, 0);
+        }
+        other => panic!("expected Pile, got {other:?}"),
+    }
+}
+
+/// Up/Down move the selection (clamped), Enter opens the selected member
+/// (returning a `PreviewFile` for it), and Esc from a Pile drops back to
+/// Empty.
+#[test]
+fn pile_navigation_and_enter_opens_a_member() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report(
+        "sales.tdy.sql",
+        vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")],
+    );
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    assert_eq!(w.focus, Focus::Main);
+
+    // Up from 0 clamps at 0.
+    w.key(key(KeyCode::Up));
+    assert!(matches!(&w.context, Context::Pile { selected: 0, .. }));
+    // Down moves to 1; a further Down clamps at the last member.
+    w.key(key(KeyCode::Down));
+    assert!(matches!(&w.context, Context::Pile { selected: 1, .. }));
+    w.key(key(KeyCode::Down));
+    assert!(matches!(&w.context, Context::Pile { selected: 1, .. }));
+
+    let act = w.key(key(KeyCode::Enter));
+    assert!(matches!(&act, WbAction::PreviewFile(p) if p.ends_with("2025-02.csv")), "{act:?}");
+    match &w.context {
+        Context::Member { member, .. } => assert_eq!(*member, 1),
+        other => panic!("expected Member, got {other:?}"),
+    }
+
+    // Esc from a Pile drops back to Empty (re-derive a fresh Pile context
+    // rather than reuse the Member one above).
+    w.begin(".fit sales.tdy.sql");
+    let report2 =
+        pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits)]);
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report2)), d.path());
+    assert!(matches!(&w.context, Context::Pile { .. }));
+    w.key(key(KeyCode::Esc));
+    assert!(matches!(&w.context, Context::Empty), "{:?}", w.context);
+}
+
+/// `f` re-dispatches a fit: from the Pile context (Main focus) it repeats
+/// the target that produced it; from the Browser, only on a `*.tdy.sql`
+/// entry — a data file keeps `s`.
+#[test]
+fn f_dispatches_a_refit_from_pile_and_from_a_browser_target() {
+    let d = pile();
+    std::fs::write(d.path().join("t.tdy.sql"), "CREATE TABLE t (a TEXT) WITH (files='*.csv');")
+        .unwrap();
+    let mut w = wb(&d);
+
+    // From Pile + Main focus.
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits)]);
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let act = w.key(key(KeyCode::Char('f')));
+    let WbAction::Dispatch(line) = act else { panic!("expected Dispatch, got {act:?}") };
+    assert!(line.contains(".fit"), "{line}");
+    assert!(line.contains("sales.tdy.sql"), "{line}");
+
+    // From Browser, on a target entry.
+    let mut w2 = wb(&d);
+    w2.key(key(KeyCode::Tab)); // Browser; entries sorted dirs-first then files/targets
+    while w2.browser.selected_entry().map(|e| e.name.as_str()) != Some("t.tdy.sql") {
+        w2.key(key(KeyCode::Down));
+    }
+    assert_eq!(w2.key(key(KeyCode::Char('f'))), WbAction::Dispatch(".fit t.tdy.sql".into()));
+
+    // `f` on a data file does nothing; `s` still sniffs.
+    w2.key(key(KeyCode::Up));
+    while w2.browser.selected_entry().map(|e| e.kind) != Some(tdy::console::EntryKind::File) {
+        w2.key(key(KeyCode::Down));
+    }
+    assert_eq!(w2.key(key(KeyCode::Char('f'))), WbAction::None);
 }
 
 #[test]

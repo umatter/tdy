@@ -6,6 +6,7 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use tdy::report::{MemberReport, MemberStatus, PileReport, Problem, SourceBinding};
 use tdy_tui::browser::Browser;
 use tdy_tui::wb_ui;
 use tdy_tui::workbench::Workbench;
@@ -27,6 +28,39 @@ fn pile() -> tempfile::TempDir {
     std::fs::write(d.path().join("a.csv"), "A;B\n1;2\n").unwrap();
     std::fs::write(d.path().join("t.tdy.sql"), "CREATE TABLE t (a TEXT) WITH (files='*.csv');").unwrap();
     d
+}
+
+// Copied from the old `tests/render.rs:40-75` (that file dies in Task 7).
+fn member(path: &str, status: MemberStatus) -> MemberReport {
+    MemberReport {
+        path: path.into(),
+        status,
+        via: Some("heuristic".into()),
+        sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
+        review: (status == MemberStatus::NeedsReview).then(|| {
+            "`amount_chf` applies decimal_shift = -2, which changes every value".into()
+        }),
+        accepted: false,
+        notes: vec![],
+        problems: vec![],
+        proposals: vec![],
+    }
+}
+
+fn gap_member(path: &str) -> MemberReport {
+    let mut m = member(path, MemberStatus::Gaps);
+    m.problems = vec![Problem {
+        kind: "no_candidate".into(),
+        column: Some("region".into()),
+        message: "`region` (TEXT): no column of this file binds\n    looked for \"region\""
+            .into(),
+        want: Some("TEXT".into()),
+        tried: vec!["region".into()],
+        header: vec!["Datum".into(), "Kanton".into()],
+        choices: vec![],
+        field: None,
+    }];
+    m
 }
 
 #[test]
@@ -206,6 +240,53 @@ fn the_help_overlay_renders_even_when_the_console_is_zoomed() {
 /// summary (method, confidence, columns, decisions) is primary; the
 /// preview is secondary and must never take rows from it — a pane too
 /// short for both must drop the preview strip, never squeeze the summary.
+/// The Pile context lists each member's path and status word, a counts
+/// line, and marks the selected row.
+#[test]
+fn the_pile_context_lists_members_with_status_words() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![]);
+    use tdy::console::{Outcome, Payload};
+    w.begin(".fit sales.tdy.sql");
+    let members = vec![
+        member("2025-01.csv", MemberStatus::Fits),
+        gap_member("2025-02.csv"),
+        member("2025-03.csv", MemberStatus::NeedsReview),
+    ];
+    let failed = 1;
+    let needs_review = 1;
+    let report = PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: members.len() - failed,
+        failed,
+        needs_review,
+        members,
+        lock_written: None,
+        dry_run: false,
+    };
+    w.apply(
+        Outcome {
+            echo: ".fit sales.tdy.sql".into(),
+            text: String::new(),
+            ok: true,
+            payload: Payload::Fitted(report),
+        },
+        d.path(),
+    );
+    let text = screen(&mut w, 110, 30).join("\n");
+    assert!(text.contains("2025-01.csv"), "{text}");
+    assert!(text.contains("2025-02.csv"), "{text}");
+    assert!(text.contains("2025-03.csv"), "{text}");
+    assert!(text.contains("GAP"), "{text}");
+    assert!(text.contains("REVIEW"), "{text}");
+    assert!(text.contains("2 fitted") && text.contains("1 failed") && text.contains("1 need review"), "{text}");
+    // The selected row (index 0) is marked.
+    let row0 = text.lines().find(|l| l.contains("2025-01.csv")).unwrap();
+    assert!(row0.contains('▸'), "{row0}");
+}
+
 #[test]
 fn a_short_pane_never_zeroes_the_spec_summary_for_the_preview_strip() {
     let d = pile();
