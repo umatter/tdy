@@ -611,8 +611,7 @@ fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
     // The grid is the FIRST sheet's; a workbook may list a dozen above it,
     // so name the one these rows came from rather than let them read as the
     // whole book.
-    let grid_sheet = if raw.grid.is_empty() { None } else { raw.sheets.first() };
-    if let Some((name, ..)) = grid_sheet {
+    if let Some(name) = &raw.grid_sheet {
         lines.push(Line::raw(format!("grid of sheet \"{name}\":")));
     }
     for row in &raw.grid {

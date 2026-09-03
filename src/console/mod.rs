@@ -126,6 +126,12 @@ pub struct RawHead {
     /// text-file meaning and every renderer marks a clipped grid without
     /// knowing what the cap was.
     pub grid: Vec<Vec<String>>,
+    /// Which sheet `grid` shows — the first sheet unless `.show --sheet`
+    /// (or the workbench's `[`/`]`) picked another. `None` when `grid` is
+    /// empty or the file is not a workbook. Renderers print this, never
+    /// re-infer `sheets.first()`: once the grid is selectable, inferring
+    /// would caption the wrong sheet — a silently wrong answer.
+    pub grid_sheet: Option<String>,
 }
 
 /// A rendered `ParseSpec`, for `.sniff` and `.show`.
@@ -519,9 +525,9 @@ impl Session {
                 let path = self.resolve(&file)?;
                 Outcome::ok(crate::commands::validate_text(&path, &self.cfg, stamp)?, Payload::Nothing)
             }
-            Command::Show { file } => {
+            Command::Show { file, sheet } => {
                 let path = self.resolve(&file)?;
-                let raw = raw_head(&path, self.cfg.limits)?;
+                let raw = raw_head(&path, self.cfg.limits, sheet.as_deref())?;
                 // `sidecar::load` already tells `Fresh`/`Stale`/`Absent` apart
                 // — carrying that through (rather than folding `Stale` into
                 // the same `None` a never-sniffed file gets) is what lets the
@@ -761,7 +767,7 @@ impl Session {
         match cmd {
             Command::Sniff { file, .. }
             | Command::Validate { file, .. }
-            | Command::Show { file }
+            | Command::Show { file, .. }
             | Command::Edit { file } => {
                 self.resolve(file)?;
             }
@@ -1005,24 +1011,46 @@ const WORKBOOK_EXT: [&str; 5] = ["xlsx", "xlsm", "xls", "xlsb", "ods"];
 /// The raw head of a file, for `.show` — what tdy sees before any spec is
 /// applied. Workbooks report per-sheet shape instead of lines (a sheet has
 /// no single "head" worth printing).
-pub fn raw_head(path: &Path, limits: crate::config::Limits) -> Result<RawHead> {
+pub fn raw_head(path: &Path, limits: crate::config::Limits, sheet: Option<&str>) -> Result<RawHead> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if WORKBOOK_EXT.contains(&ext.as_str()) {
         let sheets: Vec<(String, usize, usize)> = crate::engine::excel_sheet_shapes(path, limits)?
             .into_iter()
             .map(|s| (s.name, s.rows, s.cols))
             .collect();
+        let chosen: Option<String> = match sheet {
+            Some(want) => match sheets.iter().find(|(n, ..)| n == want) {
+                Some((n, ..)) => Some(n.clone()),
+                None => {
+                    let names: Vec<String> =
+                        sheets.iter().map(|(n, ..)| format!("{n:?}")).collect();
+                    anyhow::bail!(
+                        "no sheet {want:?} in {} — sheets: {}",
+                        path.display(),
+                        names.join(", ")
+                    );
+                }
+            },
+            None => sheets.first().map(|(n, ..)| n.clone()),
+        };
         let mut lines = Vec::new();
         let mut grid = Vec::new();
-        if let Some((name, ..)) = sheets.first() {
+        let mut grid_sheet = None;
+        if let Some(name) = &chosen {
             match crate::engine::sheet_grid(path, name, limits, 20, 12) {
-                Ok(g) => grid = g,
+                Ok(g) => {
+                    grid = g;
+                    grid_sheet = Some(name.clone());
+                }
                 // Never render an unreadable sheet as an empty grid — say
                 // so, and fall back to the shapes-only view.
                 Err(e) => lines.push(format!("cannot read sheet {name:?}: {e:#}")),
             }
         }
-        return Ok(RawHead { lines, truncated: false, sheets, grid });
+        return Ok(RawHead { lines, truncated: false, sheets, grid, grid_sheet });
+    }
+    if let Some(want) = sheet {
+        anyhow::bail!("--sheet {want:?} applies to workbooks; {} is not one", path.display());
     }
     use std::io::Read;
     let mut f = std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
@@ -1036,7 +1064,7 @@ pub fn raw_head(path: &Path, limits: crate::config::Limits) -> Result<RawHead> {
     }
     let truncated = more || lines.len() > HEAD_LINES;
     lines.truncate(HEAD_LINES);
-    Ok(RawHead { lines, truncated, sheets: Vec::new(), grid: Vec::new() })
+    Ok(RawHead { lines, truncated, sheets: Vec::new(), grid: Vec::new(), grid_sheet: None })
 }
 
 /// The `.show` text: the raw head (or sheet shapes), then the sidecar
@@ -1066,8 +1094,7 @@ fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>, stale: bo
         // to surface verbatim. The grid is the FIRST sheet's, and a
         // workbook may list a dozen: say which one, or the rows below read
         // as the whole book.
-        let grid_sheet = if raw.grid.is_empty() { None } else { raw.sheets.first() };
-        if let Some((n, ..)) = grid_sheet {
+        if let Some(n) = &raw.grid_sheet {
             let _ = writeln!(s, "  grid of sheet {n:?}:");
         }
         for row in &raw.grid {
@@ -1148,7 +1175,7 @@ Everything else is a dot-command:
   .check TARGET [--against FILE…]                           the CI gate
   .accept TARGET MEMBER                                     show the evidence; again to accept
   .output [FILE] [--format parquet|csv] [--force]           route the next result to a file
-  .show FILE          the raw head beside what the sidecar says
+  .show FILE [--sheet NAME]  the raw head beside what the sidecar says
   .abort              discard a half-typed SQL statement
   .ls [DIR]  .cd DIR  .edit FILE  .schema  .config init  .help [CMD]  .quit
 ";

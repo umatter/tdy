@@ -23,7 +23,7 @@ pub enum Command {
     ConfigInit,
     Ls { dir: Option<String> },
     Cd { dir: String },
-    Show { file: String },
+    Show { file: String, sheet: Option<String> },
     Edit { file: String },
     Help { command: Option<String> },
     /// Discard a half-typed SQL statement (console-only — a workbench
@@ -255,9 +255,9 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
             Command::Cd { dir: a.positional[0].clone() }
         }
         "show" => {
-            let a = Args::collect("show", args, &[], &[])?;
+            let a = Args::collect("show", args, &[], &["--sheet"])?;
             a.exactly(&["FILE"])?;
-            Command::Show { file: a.positional[0].clone() }
+            Command::Show { file: a.positional[0].clone(), sheet: a.value("--sheet") }
         }
         "edit" => {
             let a = Args::collect("edit", args, &[], &[])?;
@@ -380,7 +380,7 @@ mod tests {
         assert_eq!(p(".ls"), Command::Ls { dir: None });
         assert_eq!(p(".ls sub"), Command::Ls { dir: Some("sub".into()) });
         assert_eq!(p(".cd .."), Command::Cd { dir: "..".into() });
-        assert_eq!(p(".show a.csv"), Command::Show { file: "a.csv".into() });
+        assert_eq!(p(".show a.csv"), Command::Show { file: "a.csv".into(), sheet: None });
         assert_eq!(p(".edit t.tdy.sql"), Command::Edit { file: "t.tdy.sql".into() });
         assert_eq!(p(".help"), Command::Help { command: None });
         assert_eq!(p(".help fit"), Command::Help { command: Some("fit".into()) });
@@ -392,6 +392,19 @@ mod tests {
         assert_eq!(p(".quit"), Command::Quit);
         assert_eq!(p(".exit"), Command::Quit);
         assert_eq!(parse(".nope"), Err(ParseError::Unknown("nope".into())));
+    }
+
+    #[test]
+    fn show_takes_a_sheet_flag() {
+        assert_eq!(
+            p(".show book.xlsx --sheet Two"),
+            Command::Show { file: "book.xlsx".into(), sheet: Some("Two".into()) }
+        );
+        assert_eq!(p(".show book.xlsx"), Command::Show { file: "book.xlsx".into(), sheet: None });
+        assert_eq!(
+            parse(".show book.xlsx --sheet"),
+            Err(ParseError::FlagNeedsValue { command: "show", flag: "--sheet".into() })
+        );
     }
 
     #[test]

@@ -141,7 +141,7 @@ fn a_file_without_a_sidecar_shows_raw_only_and_no_opinion() {
         echo: ".show a.csv".into(), text: String::new(), ok: true,
         payload: Payload::Shown {
             path: d.path().join("a.csv"),
-            raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: true, sheets: vec![], grid: vec![] },
+            raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: true, sheets: vec![], grid: vec![], grid_sheet: None },
             spec: None,
             stale: false,
         },
@@ -180,6 +180,7 @@ fn a_workbook_member_shows_its_grid() {
                     // 14-char-per-cell rule (slice-3 review minor #13).
                     vec!["West".into(), "Umsatzübersicht_gesamt".into()],
                 ],
+                grid_sheet: Some("Umsatz".into()),
             },
             spec: None,
             stale: false,
@@ -439,7 +440,7 @@ fn the_member_context_shows_gap_beside_raw_and_the_menu() {
     w.key(key(KeyCode::Tab)); // Main
     w.key(key(KeyCode::Enter)); // opens the Member context
 
-    let raw = RawHead { lines: vec!["Datum;Kanton;Betrag".into()], truncated: false, sheets: vec![], grid: vec![] };
+    let raw = RawHead { lines: vec!["Datum;Kanton;Betrag".into()], truncated: false, sheets: vec![], grid: vec![], grid_sheet: None };
     if let tdy_tui::workbench::Context::Member { target, report, member, .. } = &w.context {
         let path = target.parent().unwrap().join(&report.members[*member].path);
         w.set_preview(w.preview_gen, path, raw, None, false);
@@ -690,6 +691,7 @@ fn member_raw_head_scrolls_with_page_down() {
         truncated: false,
         sheets: vec![],
         grid: vec![],
+        grid_sheet: None,
     };
     if let tdy_tui::workbench::Context::Member { target, report, member, .. } = &w.context {
         let path = target.parent().unwrap().join(&report.members[*member].path);
@@ -741,7 +743,7 @@ fn a_stale_sidecar_shows_the_force_hint_instead_of_not_sniffed() {
     let d = pile();
     let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     use tdy::console::{Outcome, Payload, RawHead};
-    let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![], grid: vec![] };
+    let raw = || RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![], grid: vec![], grid_sheet: None };
     w.begin(".show a.csv");
     w.apply(
         Outcome {
@@ -781,7 +783,7 @@ fn a_typed_show_on_a_stale_sidecar_shows_the_force_hint_too() {
             ok: true,
             payload: Payload::Shown {
                 path: d.path().join("a.csv"),
-                raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![], grid: vec![] },
+                raw: RawHead { lines: vec!["A;B".into(), "1;2".into()], truncated: false, sheets: vec![], grid: vec![], grid_sheet: None },
                 spec: None,
                 stale: true,
             },
@@ -809,7 +811,7 @@ fn a_file_with_no_sidecar_at_all_still_shows_the_plain_footer() {
             ok: true,
             payload: Payload::Shown {
                 path: d.path().join("a.csv"),
-                raw: RawHead { lines: vec!["A;B".into()], truncated: false, sheets: vec![], grid: vec![] },
+                raw: RawHead { lines: vec!["A;B".into()], truncated: false, sheets: vec![], grid: vec![], grid_sheet: None },
                 spec: None,
                 stale: false,
             },
@@ -933,6 +935,7 @@ fn every_context_renders_at_hostile_sizes() {
             truncated: true,
             sheets: vec![],
             grid: vec![],
+            grid_sheet: None,
         }
     }
     fn spec() -> SpecSummary {

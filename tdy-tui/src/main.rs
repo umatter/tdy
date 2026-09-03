@@ -267,7 +267,7 @@ fn spawn_console_worker(
 /// ever going through the worker, so it is computed directly here instead.
 fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf, gen: u64) {
     tokio::task::spawn_blocking(move || {
-        let raw = match raw_head(&path, cfg.limits) {
+        let raw = match raw_head(&path, cfg.limits, None) {
             Ok(r) => r,
             // A preview is a convenience; its failure belongs on the status
             // line AND in the pane it was meant to fill — a bare `Note`

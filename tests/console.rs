@@ -268,6 +268,62 @@ async fn show_on_a_workbook_carries_the_grid() {
     assert!(o.text.contains("grid of sheet \"Umsatz\""), "{}", o.text);
 }
 
+/// `.show FILE --sheet NAME` picks a sheet other than the first — the grid
+/// names whichever sheet it actually shows (`RawHead::grid_sheet`), never
+/// the first sheet unconditionally. `sheet_frames_one_fits.xlsx` is
+/// multi-sheet by construction, with the cover page (sheet 0) deliberately
+/// the biggest sheet — so this test does not hard-code which sheet is
+/// "second", it learns it from the default `.show` first.
+#[tokio::test]
+async fn show_sheet_flag_selects_the_named_sheet() {
+    let d = pile();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join("sheet_frames_one_fits.xlsx"),
+        d.path().join("sheet_frames_one_fits.xlsx"),
+    )
+    .unwrap();
+    let mut s = session(d.path()).await;
+
+    let all = s.run(".show sheet_frames_one_fits.xlsx", None).await;
+    assert!(all.ok, "{}", all.text);
+    let Payload::Shown { raw, .. } = all.payload else { panic!() };
+    assert!(raw.sheets.len() > 1, "fixture must be multi-sheet: {:?}", raw.sheets);
+    let second = raw.sheets[1].0.clone();
+
+    let o = s.run(&format!(".show sheet_frames_one_fits.xlsx --sheet {second:?}"), None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains(&format!("grid of sheet {second:?}:")), "{}", o.text);
+    let Payload::Shown { raw, .. } = o.payload else { panic!() };
+    assert_eq!(raw.grid_sheet, Some(second));
+}
+
+/// An unknown sheet name is a loud error naming the real ones (never a
+/// silently empty or wrong grid); `--sheet` on a non-workbook is refused
+/// too, rather than silently ignored.
+#[tokio::test]
+async fn show_sheet_flag_rejects_unknown_and_text_files() {
+    let d = pile();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join("sheet_frames_one_fits.xlsx"),
+        d.path().join("sheet_frames_one_fits.xlsx"),
+    )
+    .unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join("enc_late_1252_byte.csv"),
+        d.path().join("enc_late_1252_byte.csv"),
+    )
+    .unwrap();
+    let mut s = session(d.path()).await;
+
+    let o = s.run(".show sheet_frames_one_fits.xlsx --sheet nope", None).await;
+    assert!(!o.ok);
+    assert!(o.text.contains("no sheet \"nope\""), "{}", o.text);
+
+    let o = s.run(".show enc_late_1252_byte.csv --sheet nope", None).await;
+    assert!(!o.ok);
+    assert!(o.text.contains("applies to workbooks"), "{}", o.text);
+}
+
 #[tokio::test]
 async fn draft_prints_or_writes_and_never_overwrites() {
     let d = pile();

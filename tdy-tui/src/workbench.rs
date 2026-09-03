@@ -591,6 +591,7 @@ impl Workbench {
             truncated: false,
             sheets: vec![],
             grid: vec![],
+            grid_sheet: None,
         };
         if let Context::Member { target, report, member, raw: r, .. } = &mut self.context {
             let expected = report.members.get(*member).map(|m| member_preview_path(target, &m.path));
