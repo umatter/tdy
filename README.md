@@ -271,6 +271,16 @@ each one was read is on disk, in git-diffable text, beside the data:
 `sales.tdy.sql` (yours), `sales.tdy.lock` (what fit proved, and over which
 bytes) and one `*.tdy.toml` per member.
 
+Those member sidecars are also why step 1 no longer replays verbatim:
+`.fit` rewrote each one to speak the declaration's vocabulary, so
+`messy('2025-01.csv')` now serves `month`, `region` and `amount_chf`, and
+`.sniff` keeps a fresh sidecar rather than second-guessing it — showing
+`confidence n/a`, because a planned binding is proved, not scored.
+`.sniff 2025-01.csv --force` re-infers the file's own view (`datum`,
+`betrag`, 0.95 again) — after which `dataset()` refuses that member,
+naming the mismatch, until a `.fit` re-plans it. The pile speaks one
+vocabulary, or it says so loudly.
+
 **3. Look around.** `tdy ui sales.tdy.sql` opens the same pile in the
 workbench, fitted as a dry run, with each refusal next to the file's own
 rows (so does `tdy ui` alone, here — `sales.tdy.sql` is the only target in
