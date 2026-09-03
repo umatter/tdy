@@ -1064,7 +1064,7 @@ console explicitly — see [The console](#the-console) and
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests    # 581 tests; plain `cargo test` also runs doc-tests
+cargo test --workspace --lib --tests    # 584 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py                 # regenerate every fixture (needs openpyxl + xlwt)
 ```
 
