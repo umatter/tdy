@@ -784,15 +784,19 @@ already fit: as a **dry run** (`.fit <target> --dry-run`), because looking
 must not write a lock or carry over an acceptance. `f` on the pile refits
 for real. Anywhere else — no target, several, a directory, or a plain data
 file — it opens the same workbench with nothing fit yet (a data file starts
-with `.show` of it). A workbook member's raw view shows its first sheet as a
-grid, in the file's own header spelling and values, not just its shape.
-Every keyboard shortcut — `s` to sniff the selected
-file, `f` to fit a target, `d`/`D` to mark files and draft over the marks,
-`t` to edit the target, Enter on a directory, Backspace to go up — dispatches
-the equivalent console line and echoes it into the scrollback exactly as if
-you had typed it, so the transcript at the bottom is a complete, literal
-record of the session rather than a UI you have to trust separately from it.
-`?` shows the key list for whichever pane has focus. `tdy console` forces the
+with `.show` of it). A workbook's raw view — File pane or Member pane alike
+— shows one sheet as a grid, in the file's own header spelling and values,
+not just its shape: the first sheet by default, `[`/`]` in the workbench (or
+`.show FILE --sheet NAME` in the console) stepping to another, clamped, not
+wrapping. Every keyboard shortcut — `s` to sniff the selected file, `f` to
+fit a target, `d`/`D` to mark files and draft over the marks, `t` to edit
+the target, Enter on a directory, Backspace to go up — dispatches the
+equivalent console line and echoes it into the scrollback exactly as if you
+had typed it, so the transcript at the bottom is a complete, literal record
+of the session rather than a UI you have to trust separately from it. `[`/`]`
+is the one exception: it changes the view, the same way arrow-key movement
+previews a browser selection, and leaves no scrollback line behind. `?`
+shows the key list for whichever pane has focus. `tdy console` forces the
 plain console even when the terminal UI is installed.
 
 A member view puts the gap next to the file's own rows, in the file's own
@@ -1060,7 +1064,7 @@ console explicitly — see [The console](#the-console) and
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests    # 565 tests; plain `cargo test` also runs doc-tests
+cargo test --workspace --lib --tests    # 581 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py                 # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

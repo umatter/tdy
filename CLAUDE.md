@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 565 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 581 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -235,10 +235,13 @@ The "what tdy sees" panel is the **raw head**, read as bytes and shown as text
 (`console::raw_head`) — the file's own header spelling and unparsed values, which is what a
 `matches` clause needs — and it needs no sidecar, so a refused member (the one whose screen
 most needs it) gets it too. For a **workbook** member, `raw_head` also carries `grid`, a
-bounded 20x12 read of the first sheet (xlguard-bounded, extraction's own `render_cell`), so that
-panel shows the spreadsheet's own header spellings and raw values, not just its shape; a tab
-per sheet is still future work, so a workbook with the fitting sheet elsewhere still falls
-back to `Problem.header`, which the remedy menu is built from regardless. That read is
+bounded 20x12 read of one sheet (xlguard-bounded, extraction's own `render_cell`), so that
+panel shows the spreadsheet's own header spellings and raw values, not just its shape — the
+first sheet by default, `[`/`]` in the workbench (File and Member views alike, clamped not
+wrapping) or `--sheet NAME` on `.show` stepping to another; "a tab per sheet" is done in this
+keyboard form, not as rendered tabs, since two keys already page the one grid the panel has
+room for. The remedy menu still falls back to `Problem.header`, which it is built from
+regardless of which sheet the panel shows. That read is
 **bounded, and says so**: `sheet_grid` is the only place that knows both the cap and the
 sheet's true extent, so it appends a `…` cell per row when it clips columns and a final `…`
 row when it clips rows — a window shown as if it were the whole sheet is how someone writes a

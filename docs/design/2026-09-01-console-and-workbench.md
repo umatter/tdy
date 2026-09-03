@@ -64,7 +64,7 @@ Console-only, for orientation without the workbench:
 |---|---|
 | `.ls [DIR]` | the directory as the browser shows it (section 6): data files and targets with their sidecar/lock status; companions hidden |
 | `.cd DIR` | change the working directory, within the root |
-| `.show FILE` | the raw head (or a sheet's grid) beside what the sidecar says, if there is one |
+| `.show FILE [--sheet NAME]` | the raw head (or a sheet's grid) beside what the sidecar says, if there is one |
 | `.edit FILE` | `$EDITOR`; the workbench suspends the alternate screen and redraws on return |
 | `.abort` | discard a half-typed SQL statement |
 | `.help [CMD]`, `.quit` / `.exit` | as expected; Ctrl-D quits |
@@ -228,10 +228,15 @@ one level: Evidence → Member → Pile.
 
 - **Empty** — the root path, three lines of orientation, and (later) the mark.
 - **File, no sidecar** — the *raw* file: the first screenful of lines as
-  bytes-as-text, or the sheet grid for a workbook with a tab per sheet; then
-  what is cheap to know without committing to anything — size, guessed format
-  and encoding, whether the last row looks like a total. Footer: "not sniffed —
-  `s`". This view must never look as though tdy has an opinion yet.
+  bytes-as-text, or, for a workbook, sheet shapes followed by the grid of one
+  sheet — the first by default, any other via `[`/`]` in the workbench or
+  `--sheet NAME` in the console. "A tab per sheet" is done in this keyboard
+  form, not as rendered tabs: two keys already page the one grid the panel
+  has room for, and a tab bar would only add a second selection widget for
+  what they already do. Then what is cheap to know without committing to
+  anything — size, guessed format and encoding, whether the last row looks
+  like a total. Footer: "not sniffed — `s`". This view must never look as
+  though tdy has an opinion yet.
 - **File, with sidecar** — two columns. Left: the same raw head, in the file's
   own header spelling (what a `matches` clause needs). Right: *what tdy makes
   of it* — the spec summary (extraction, transforms in order, each column as
@@ -374,7 +379,7 @@ back-stepping, the two-step accept, the audit-trail property), and
    closed for the first sheet: `RawHead.grid` carries a bounded 20×12 grid in
    the file's own header spelling and separators (extraction's own
    `render_cell`, xlguard-bounded), shown as full cells in console text and 14-char-truncated
-   cells in the TUI; a tab per sheet remains future work. Selection and scroll
+   cells in the TUI; a tab per sheet remains future work, closed in slice 5 below. Selection and scroll
    position, previously lost on every refit and every pane switch, now
    survive: a refit keeps the member selected by path rather than by index,
    Enter stages the marked remedy, a failed preview renders its error in the
@@ -386,6 +391,29 @@ back-stepping, the two-step accept, the audit-trail property), and
    status hints are per-context, every one ending `^Q quit`. Two duplicated
    helpers, `quote_rel` and `method_label`, were unified into one copy each,
    public in `tdy::console`.*
+5. **Sheets, paged; the pile scroll follows.**
+   *Done 2026-09-03. The §7 workbook gap closes for real: `[`/`]` steps the
+   grid to the previous/next sheet, in the workbench's File view and its
+   Member view alike (`workbench.rs`'s `switch_sheet`, clamped, not wrapping
+   — `[` on the first sheet is a no-op, the same visible-honesty rule
+   scrolling already follows elsewhere), and `.show FILE --sheet NAME` picks
+   one directly from the console. `RawHead.grid_sheet` names which sheet the
+   grid holds, and both renderers print that name rather than assuming the
+   first sheet, as they did before this slice. "A tab per sheet" is done in
+   this keyboard form, not as rendered tabs — see §7 for why a tab bar would
+   only duplicate what two keys already do. Separately, the pile's scroll
+   now follows the selection (`follow_pile_selection`, fed the real main-pane
+   height every draw by `wb_ui::main_inner_rows`): it fires on every Up/Down
+   move in the Pile view, and again after a refit restores a selection by
+   path, which closes the slice-4 deferral that a refit always returned the
+   pile to its top even when the selection it restored was deep in the list.
+   Two smaller fixes rode along: `remedy.rs`'s `column_line` now tells a
+   hand-minified (single-line) target apart from a genuinely absent column —
+   the error for the former names the real limitation ("shares a line with
+   other declarations … reformat the target … or edit it by hand") instead
+   of falsely claiming the column was never declared; and the status line's
+   key-hint width is counted in characters rather than bytes, so multi-byte
+   glyphs (`↑↓·`) no longer starve the status text on the left.*
 
 ## 12. Decisions taken along the way
 
