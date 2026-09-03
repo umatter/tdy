@@ -30,7 +30,7 @@ Five minutes, no API key, on data that ships with the repo.
 git clone https://github.com/umatter/tdy.git
 cd tdy
 cargo install --path .          # `tdy` on your PATH (Rust ≥ 1.88)
-cargo install --path tdy-tui    # optional: the terminal UI behind `tdy ui`
+cargo install --path tdy-tui    # optional: the workbench that bare `tdy` and `tdy ui` open
 ```
 
 The example is `testdata/drifting_exports/`: twelve monthly sales exports
@@ -60,10 +60,12 @@ Datum;Region;Betrag
 
 Semicolons, day-first dates, and amounts grouped with an apostrophe — three
 things a stock CSV reader either gets wrong or hands back as strings. Open
-the console and ask tdy what it sees:
+the plain console and ask tdy what it sees — `tdy console`, because with
+`tdy-tui` installed a bare `tdy` opens the full workbench instead, which is
+step 3's subject:
 
 ```bash
-tdy
+tdy console
 ```
 
 ```
@@ -272,7 +274,9 @@ bytes) and one `*.tdy.toml` per member.
 **3. Look around.** `tdy ui sales.tdy.sql` opens the same pile in the
 workbench, fitted as a dry run, with each refusal next to the file's own
 rows (so does `tdy ui` alone, here — `sales.tdy.sql` is the only target in
-the directory). Point it at a directory with no target, or several, and you
+the directory). Open one of the `.xlsx` members and its raw pane shows the
+sheet itself as a grid of the file's own cells — and when a workbook has
+several sheets, `[`/`]` pages between them. Point it at a directory with no target, or several, and you
 get the same workbench with nothing fitted yet — three panes over the files
 themselves, described in [For humans: `tdy ui`](#for-humans-tdy-ui). To
 point tdy at your own files, start
