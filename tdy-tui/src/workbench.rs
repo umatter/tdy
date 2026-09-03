@@ -182,6 +182,12 @@ pub struct Workbench {
     /// without this a slow, stale result landing after a fresher one would
     /// silently overwrite it — the exact race the slice 2 review flagged.
     pub preview_gen: u64,
+    /// Rows the main pane can actually show, told to us by the runtime
+    /// (`wb_ui::main_inner_rows` after each draw) — the state machine does
+    /// no terminal I/O, so this is how "keep the selection visible" learns
+    /// what visible means. Default 20: close enough for the first frame,
+    /// corrected before the first key can move a selection.
+    pub main_view_rows: usize,
 }
 
 impl Workbench {
@@ -207,6 +213,35 @@ impl Workbench {
             marked: Vec::new(),
             confidence_threshold,
             preview_gen: 0,
+            main_view_rows: 20,
+        }
+    }
+
+    /// Told by the runtime, once per draw, how many rows the main pane
+    /// actually has (`wb_ui::main_inner_rows`). 0 means the main pane is
+    /// not on screen (console zoomed) — ignored, so the follow window
+    /// keeps the last real height rather than collapse to nothing.
+    pub fn set_main_view_rows(&mut self, rows: usize) {
+        if rows > 0 {
+            self.main_view_rows = rows;
+        }
+    }
+
+    /// Keep the selected pile row visible: `draw_pile` renders member `i`
+    /// on line `2 + i` (bold header + blank). Selection 0 goes back to a
+    /// scroll of 0 so the header is visible again at the top.
+    fn follow_pile_selection(&mut self) {
+        let Context::Pile { selected, .. } = &self.context else { return };
+        if *selected == 0 {
+            self.main_scroll = 0;
+            return;
+        }
+        let line = 2 + *selected;
+        let rows = self.main_view_rows.max(1);
+        if line < self.main_scroll {
+            self.main_scroll = line;
+        } else if line >= self.main_scroll + rows {
+            self.main_scroll = line + 1 - rows;
         }
     }
 
@@ -501,8 +536,11 @@ impl Workbench {
                             .unwrap_or(0);
                         self.context = Context::Pile { target, report: r, selected };
                         // A Pile drawn from a fresh report starts at its
-                        // first row (see the `Payload::Query` arm).
+                        // first row (see the `Payload::Query` arm) — then
+                        // the follow moves the window onto the restored
+                        // selection when it landed somewhere deep.
                         self.main_scroll = 0;
+                        self.follow_pile_selection();
                     }
                     None => self.status = "fitted, but no target known".to_string(),
                 }
@@ -976,12 +1014,14 @@ impl Workbench {
             return match k.code {
                 KeyCode::Up => {
                     *selected = selected.saturating_sub(1);
+                    self.follow_pile_selection();
                     WbAction::None
                 }
                 KeyCode::Down => {
                     if len > 0 {
                         *selected = (*selected + 1).min(len - 1);
                     }
+                    self.follow_pile_selection();
                     WbAction::None
                 }
                 KeyCode::Enter => self.enter_pile_member(),

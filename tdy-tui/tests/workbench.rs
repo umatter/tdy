@@ -1462,3 +1462,69 @@ fn bracket_keys_flip_sheets_in_member_context() {
         WbAction::PreviewFile { path, sheet: Some("Two".into()) }
     );
 }
+
+/// The Pile view's scroll follows the selection down a long list, and
+/// snaps back to the top (header included) coming back up to member 0.
+#[test]
+fn pile_selection_drags_the_scroll_with_it() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report(
+        "sales.tdy.sql",
+        (0..20).map(|i| member(&format!("2025-{i:02}.csv"), MemberStatus::Fits)).collect(),
+    );
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    w.set_main_view_rows(5);
+    for _ in 0..10 {
+        w.key(key(KeyCode::Down));
+    }
+    // selected = 10 renders on line 2 + 10 = 12; with 5 visible rows the
+    // scroll must have advanced so that line is on screen.
+    let Context::Pile { selected, .. } = &w.context else { panic!("not a pile") };
+    assert_eq!(*selected, 10);
+    assert!(w.main_scroll + 5 > 12, "selected line scrolled off: scroll={}", w.main_scroll);
+    assert!(w.main_scroll <= 12);
+    // Coming back up to the top restores the header too.
+    for _ in 0..10 {
+        w.key(key(KeyCode::Up));
+    }
+    assert_eq!(w.main_scroll, 0);
+}
+
+/// After a refit lands, the restored selection (by member path, deep in
+/// the new list) must be on screen — not merely non-negative — or a refit
+/// on a long pile silently strands the cursor above or below the window.
+#[test]
+fn refit_follows_the_restored_selection_into_view() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let members: Vec<MemberReport> =
+        (0..20).map(|i| member(&format!("2025-{i:02}.csv"), MemberStatus::Fits)).collect();
+    let report = pile_report("sales.tdy.sql", members);
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    let Context::Pile { selected, .. } = &mut w.context else { panic!("expected Pile") };
+    *selected = 15;
+    w.set_main_view_rows(5);
+
+    // Re-fit with the same member set (order preserved): the selection by
+    // path should land back on index 15.
+    w.begin(".fit sales.tdy.sql");
+    let members2: Vec<MemberReport> =
+        (0..20).map(|i| member(&format!("2025-{i:02}.csv"), MemberStatus::Fits)).collect();
+    let report2 = pile_report("sales.tdy.sql", members2);
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report2)), d.path());
+
+    let Context::Pile { selected, .. } = &w.context else { panic!("expected Pile") };
+    assert_eq!(*selected, 15);
+    let line = 2 + *selected;
+    assert!(
+        w.main_scroll <= line && line < w.main_scroll + 5,
+        "restored selection off screen: scroll={} line={}",
+        w.main_scroll,
+        line
+    );
+}

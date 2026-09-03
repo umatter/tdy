@@ -76,6 +76,20 @@ pub fn draw(f: &mut Frame, w: &mut Workbench) {
     draw_status(f, status, w);
 }
 
+/// How many rows of content the main pane can show at `height` terminal
+/// rows — the same arithmetic `draw`/`draw_right` perform with Layout:
+/// 1 header row + 1 status row around the body, `console_rows + 2` for the
+/// console pane, 2 for the main block's own borders. 0 when the console is
+/// zoomed (no main pane on screen) — `set_main_view_rows` ignores 0.
+pub fn main_inner_rows(height: u16, w: &Workbench) -> usize {
+    if w.zoom {
+        return 0;
+    }
+    let body = height.saturating_sub(2);
+    let main = body.saturating_sub(w.console_rows + 2);
+    main.saturating_sub(2) as usize
+}
+
 fn draw_header(f: &mut Frame, area: Rect, w: &Workbench) {
     let line = format!(" tdy — {}", w.browser.title());
     f.render_widget(Paragraph::new(Span::styled(line, Style::new().bold())), area);

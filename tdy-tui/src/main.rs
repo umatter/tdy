@@ -437,6 +437,8 @@ async fn run_workbench(
             anyhow::bail!("a background task panicked; the terminal was restored");
         }
         terminal.draw(|f| wb_ui::draw(f, &mut wb))?;
+        let size = terminal.size()?;
+        wb.set_main_view_rows(wb_ui::main_inner_rows(size.height, &wb));
 
         // Drain everything the worker has said, then wait briefly for a
         // key. Polling rather than selecting keeps the loop obvious, and
