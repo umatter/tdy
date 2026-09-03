@@ -265,9 +265,15 @@ fn spawn_console_worker(
 /// `Command::Show` computes inside a `Session`, but a preview can fire (an
 /// arrow key, a completed `.sniff`'s follow-up) without a matching command
 /// ever going through the worker, so it is computed directly here instead.
-fn spawn_wb_preview(tx: mpsc::UnboundedSender<WbMsg>, cfg: Config, path: PathBuf, gen: u64) {
+fn spawn_wb_preview(
+    tx: mpsc::UnboundedSender<WbMsg>,
+    cfg: Config,
+    path: PathBuf,
+    sheet: Option<String>,
+    gen: u64,
+) {
     tokio::task::spawn_blocking(move || {
-        let raw = match raw_head(&path, cfg.limits, None) {
+        let raw = match raw_head(&path, cfg.limits, sheet.as_deref()) {
             Ok(r) => r,
             // A preview is a convenience; its failure belongs on the status
             // line AND in the pane it was meant to fill — a bare `Note`
@@ -349,8 +355,8 @@ fn act_on_wb(
         // `wb.preview_gen` was already bumped by the `Workbench` method that
         // produced this very action (`preview_action` — see its doc
         // comment), so it already names the generation this request is for.
-        WbAction::PreviewFile(path) => {
-            spawn_wb_preview(preview_tx.clone(), cfg.clone(), path, wb.preview_gen)
+        WbAction::PreviewFile { path, sheet } => {
+            spawn_wb_preview(preview_tx.clone(), cfg.clone(), path, sheet, wb.preview_gen)
         }
         // The remedy overlay's write: the ONE sanctioned non-console write
         // in the workbench (spec §8 rule 2), always behind the shown diff

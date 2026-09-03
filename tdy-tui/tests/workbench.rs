@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::path::PathBuf;
 use tdy::console::{Outcome, Payload, RawHead, Table};
 use tdy::report::{
     MemberReport, MemberStatus, PileReport, Problem, ProposalReport, SourceBinding,
@@ -144,7 +145,7 @@ fn arrow_move_previews_data_files_only() {
     w.key(key(KeyCode::Tab));
     // From sub/ (dir: no preview) down to a.csv (preview).
     let act = w.key(key(KeyCode::Down));
-    assert!(matches!(act, WbAction::PreviewFile(ref p) if p.ends_with("a.csv")), "{act:?}");
+    assert!(matches!(act, WbAction::PreviewFile { ref path, .. } if path.ends_with("a.csv")), "{act:?}");
 }
 
 #[test]
@@ -374,7 +375,7 @@ fn pile_navigation_and_enter_opens_a_member() {
     assert!(matches!(&w.context, Context::Pile { selected: 1, .. }));
 
     let act = w.key(key(KeyCode::Enter));
-    assert!(matches!(&act, WbAction::PreviewFile(p) if p.ends_with("2025-02.csv")), "{act:?}");
+    assert!(matches!(&act, WbAction::PreviewFile { path, .. } if path.ends_with("2025-02.csv")), "{act:?}");
     match &w.context {
         Context::Member { member, .. } => assert_eq!(*member, 1),
         other => panic!("expected Member, got {other:?}"),
@@ -653,7 +654,7 @@ fn member_remedies_come_from_the_problems() {
         vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")],
         1,
     );
-    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    assert!(matches!(act, WbAction::PreviewFile { .. }), "{act:?}");
     let remedies = w.member_remedies();
     assert!(!remedies.is_empty(), "a gap member must offer remedies");
     let first = remedies[0].label();
@@ -676,7 +677,7 @@ fn member_remedies_come_from_the_problems() {
 fn a_review_only_member_floors_to_exclude_file() {
     let d = pile();
     let (w, act) = pile_and_enter(&d, vec![member("2025-05.csv", MemberStatus::NeedsReview)], 0);
-    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    assert!(matches!(act, WbAction::PreviewFile { .. }), "{act:?}");
     let remedies = w.member_remedies();
     assert_eq!(
         remedies,
@@ -771,7 +772,7 @@ fn a_member_preview_fills_raw_and_stale_paths_are_dropped() {
     let d = pile();
     let (mut w, act) =
         pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")], 1);
-    let WbAction::PreviewFile(path) = act else { panic!("expected PreviewFile, got {act:?}") };
+    let WbAction::PreviewFile { path, .. } = act else { panic!("expected PreviewFile, got {act:?}") };
 
     let raw = RawHead { lines: vec!["Datum;Kanton".into()], truncated: false, sheets: vec![], grid: vec![], grid_sheet: None };
     // A different, unrelated path must be dropped.
@@ -792,7 +793,7 @@ fn preview_failed_fills_member_raw_and_drops_a_stale_generation() {
     let d = pile();
     let (mut w, act) =
         pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits), gap_member("2025-02.csv")], 1);
-    let WbAction::PreviewFile(path) = act else { panic!("expected PreviewFile, got {act:?}") };
+    let WbAction::PreviewFile { path, .. } = act else { panic!("expected PreviewFile, got {act:?}") };
     let gen = w.preview_gen;
 
     // A stale generation is dropped before the path is even checked.
@@ -881,7 +882,7 @@ fn a_digit_stages_an_edit_and_y_writes_then_refits() {
     let target_path = d.path().join("t.tdy.sql");
     std::fs::write(&target_path, target_sql()).unwrap();
     let (mut w, act) = t_pile_and_enter(&d, vec![gap_member("2025-02.csv")], 0);
-    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    assert!(matches!(act, WbAction::PreviewFile { .. }), "{act:?}");
     w.set_target_sql(target_sql().to_string());
 
     let act = w.key(key(KeyCode::Char('1')));
@@ -918,7 +919,7 @@ fn enter_stages_the_selected_remedy() {
     let d = pile();
     std::fs::write(d.path().join("t.tdy.sql"), target_sql()).unwrap();
     let (mut w, act) = t_pile_and_enter(&d, vec![gap_member("2025-02.csv")], 0);
-    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    assert!(matches!(act, WbAction::PreviewFile { .. }), "{act:?}");
     w.set_target_sql(target_sql().to_string());
 
     let remedies = w.member_remedies();
@@ -1022,7 +1023,7 @@ fn a_dispatches_accept_only_for_reviewable_members() {
     let d = pile();
     let (mut w, act) =
         pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::NeedsReview)], 0);
-    assert!(matches!(act, WbAction::PreviewFile(_)), "{act:?}");
+    assert!(matches!(act, WbAction::PreviewFile { .. }), "{act:?}");
 
     let act = w.key(key(KeyCode::Char('a')));
     let WbAction::Dispatch(line) = act else { panic!("expected Dispatch, got {act:?}") };
@@ -1387,4 +1388,77 @@ fn record_target_records_nothing_on_an_unterminated_quote() {
     w.busy = None; // begin() is idempotent while busy; reset so the next call runs
     w.begin(".fit \"broken");
     assert_eq!(w.last_target, before, "an unterminated quote must not change last_target");
+}
+
+/// A two-sheet workbook's raw head, as `raw_head` would return it after
+/// framing sheet "One" — `[`/`]` tests need `sheets` populated and
+/// `grid_sheet` naming the sheet currently on screen.
+fn two_sheet_raw() -> RawHead {
+    RawHead {
+        lines: vec![],
+        truncated: false,
+        sheets: vec![("One".into(), 5, 3), ("Two".into(), 4, 2)],
+        grid: vec![vec!["a".into()]],
+        grid_sheet: Some("One".into()),
+    }
+}
+
+/// `]` from the first of two sheets asks for a preview of the next one;
+/// `[` at the first sheet has nowhere to go — clamped, not wrapping, so it
+/// is `WbAction::None` with no I/O kicked off.
+#[test]
+fn bracket_keys_flip_sheets_in_file_context() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.focus = Focus::Main;
+    w.context = Context::File {
+        path: PathBuf::from("/pile/book.xlsx"),
+        raw: two_sheet_raw(),
+        spec: None,
+        preview: None,
+        stale: false,
+    };
+    assert_eq!(
+        w.key(key(KeyCode::Char(']'))),
+        WbAction::PreviewFile { path: PathBuf::from("/pile/book.xlsx"), sheet: Some("Two".into()) }
+    );
+    assert_eq!(w.key(key(KeyCode::Char('['))), WbAction::None);
+}
+
+/// A file with no sheets (or a raw head that never got one, like a plain
+/// CSV) has nothing for `[`/`]` to switch — no action, no I/O.
+#[test]
+fn bracket_keys_do_nothing_without_sheets() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.focus = Focus::Main;
+    w.context = Context::File {
+        path: PathBuf::from("/pile/plain.csv"),
+        raw: RawHead::default(),
+        spec: None,
+        preview: None,
+        stale: false,
+    };
+    assert_eq!(w.key(key(KeyCode::Char(']'))), WbAction::None);
+}
+
+/// The same `[`/`]` switch works from a Member's raw column, previewing
+/// the same path Enter itself asked for — the member's own preview path,
+/// not the target or the file's own on-disk relative path.
+#[test]
+fn bracket_keys_flip_sheets_in_member_context() {
+    let d = pile();
+    let (mut w, act) =
+        pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits)], 0);
+    let WbAction::PreviewFile { path, .. } = act else {
+        panic!("expected PreviewFile, got {act:?}")
+    };
+    match &mut w.context {
+        Context::Member { raw, .. } => *raw = Some(two_sheet_raw()),
+        other => panic!("expected Member, got {other:?}"),
+    }
+    assert_eq!(
+        w.key(key(KeyCode::Char(']'))),
+        WbAction::PreviewFile { path, sheet: Some("Two".into()) }
+    );
 }

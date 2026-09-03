@@ -42,6 +42,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("^Up / ^Down", "resize the console"),
     ("↑ / ↓", "move selection / scroll"),
     ("PgUp / PgDn (main)", "scroll the main pane"),
+    ("[ / ] (file / member)", "previous / next sheet of a workbook"),
     ("Enter", "open file or directory"),
     ("Backspace", "go up a directory"),
     ("s", "sniff the selected file"),
@@ -832,6 +833,9 @@ fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
             Context::Pile { .. } => "↑↓ member · enter open · f refit · t edit target · ^Q quit",
             Context::Member { .. } => "↑↓ remedy · enter/1-9 stage · a accept · e edit · Esc back · ^Q quit",
             Context::Evidence { .. } => "a accept · Esc close · PgUp/Dn scroll · ^Q quit",
+            Context::File { raw, .. } if raw.sheets.len() > 1 => {
+                "↑↓ scroll · [ ] sheet · Tab focus · ^Q quit"
+            }
             Context::File { .. } => "↑↓ scroll · Tab focus · ^Q quit",
             // A result table scrolls now (`key_main`'s fallback arm), so
             // it advertises the keys that move it; `Empty` has nothing to

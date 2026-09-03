@@ -103,8 +103,12 @@ pub enum WbAction {
     Quit,
     /// Send this line to the console worker (typed, or synthesized by a shortcut).
     Dispatch(String),
-    /// Compute a preview of this file for the main pane (arrow-move preview).
-    PreviewFile(PathBuf),
+    /// Compute a preview of this file for the main pane (arrow-move
+    /// preview, or `[`/`]` picking another sheet of a workbook — a view
+    /// change like the arrow-move preview, so it deliberately does NOT
+    /// synthesize a console line; `.show FILE --sheet NAME` is the
+    /// console's own spelling of the same thing).
+    PreviewFile { path: PathBuf, sheet: Option<String> },
     /// Run $EDITOR on this path (comes back via Payload::Edit too).
     Edit(PathBuf),
     /// Write a confirmed remedy edit to the target, guarded by `expected`
@@ -439,7 +443,7 @@ impl Workbench {
                 // by the runtime's own PreviewFile action. A spec just
                 // produced by `.sniff` is fresh by definition.
                 self.show_file(path.clone(), RawHead::default(), Some(spec), Some(preview), false);
-                Some(self.preview_action(path))
+                Some(self.preview_action(path, None))
             }
             Payload::Query(t) => {
                 self.context = Context::Query(t);
@@ -644,9 +648,40 @@ impl Workbench {
     /// every time one is handed back to the runtime, so the result — tagged
     /// with the counter it read here — can be told apart from any later
     /// request's, in `set_preview`.
-    fn preview_action(&mut self, path: PathBuf) -> WbAction {
+    fn preview_action(&mut self, path: PathBuf, sheet: Option<String>) -> WbAction {
         self.preview_gen += 1;
-        WbAction::PreviewFile(path)
+        WbAction::PreviewFile { path, sheet }
+    }
+
+    /// `[`/`]`: preview the adjacent sheet of the workbook on screen.
+    /// Clamped, not wrapping — `[` on the first sheet does nothing, which
+    /// is visible honesty (a wrap reads as "nothing changed" on a 2-sheet
+    /// book). No-op in every context without a multi-sheet raw head.
+    fn switch_sheet(&mut self, dir: isize) -> WbAction {
+        let (path, raw) = match &self.context {
+            Context::File { path, raw, .. } => (path.clone(), raw),
+            Context::Member { target, report, member, raw: Some(raw), .. } => {
+                match report.members.get(*member) {
+                    Some(m) => (member_preview_path(target, &m.path), raw),
+                    None => return WbAction::None,
+                }
+            }
+            _ => return WbAction::None,
+        };
+        if raw.sheets.len() < 2 {
+            return WbAction::None;
+        }
+        let cur = raw
+            .grid_sheet
+            .as_ref()
+            .and_then(|g| raw.sheets.iter().position(|(n, ..)| n == g))
+            .unwrap_or(0);
+        let next = cur.saturating_add_signed(dir).min(raw.sheets.len() - 1);
+        if next == cur {
+            return WbAction::None;
+        }
+        let name = raw.sheets[next].0.clone();
+        self.preview_action(path, Some(name))
     }
 
     /// The member currently under the cursor — in a `Pile` the row at
@@ -928,6 +963,14 @@ impl Workbench {
             }
             _ => {}
         }
+        // `[`/`]` page through a workbook's sheets — checked here, ahead of
+        // the File/Member context dispatch below, so both get it without
+        // duplicating the key in each context's own match.
+        match k.code {
+            KeyCode::Char('[') => return self.switch_sheet(-1),
+            KeyCode::Char(']') => return self.switch_sheet(1),
+            _ => {}
+        }
         if let Context::Pile { report, selected, .. } = &mut self.context {
             let len = report.members.len();
             return match k.code {
@@ -1041,7 +1084,7 @@ impl Workbench {
         // otherwise open a short raw head scrolled past its end — a blank
         // pane, indistinguishable from an empty file.
         self.main_scroll = 0;
-        self.preview_action(preview_path)
+        self.preview_action(preview_path, None)
     }
 
     /// Esc from a Member: back to the Pile it came from, `selected` on the
@@ -1245,7 +1288,7 @@ impl Workbench {
     fn preview_selected(&mut self) -> WbAction {
         match self.browser.selected_entry().map(|e| e.kind) {
             Some(EntryKind::File) => match self.browser.selected_path() {
-                Some(p) => self.preview_action(p),
+                Some(p) => self.preview_action(p, None),
                 None => WbAction::None,
             },
             _ => WbAction::None,
@@ -1274,7 +1317,7 @@ impl Workbench {
         } else {
             let p = self.browser.enter();
             match (kind, p) {
-                (EntryKind::File, Some(path)) => self.preview_action(path),
+                (EntryKind::File, Some(path)) => self.preview_action(path, None),
                 _ => WbAction::None,
             }
         }
