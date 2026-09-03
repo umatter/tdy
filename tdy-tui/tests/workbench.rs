@@ -1283,7 +1283,7 @@ fn main_scroll_is_clamped_to_a_generous_bound() {
         w.key(key(KeyCode::Down));
     }
     // 3 raw lines, no sheets, no preview: 3 + 0 + 0 + 16.
-    assert!(w.main_scroll <= 3 + 0 + 16, "{}", w.main_scroll);
+    assert!(w.main_scroll <= 3 + 16, "{}", w.main_scroll);
 }
 
 /// `set_preview` drops a result tagged with an older generation before it

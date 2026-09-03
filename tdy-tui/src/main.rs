@@ -200,7 +200,9 @@ enum WbMsg {
     /// exists but its fingerprint no longer matches the file) — `spec`
     /// stays `None` for it exactly as before, this only adds the flag the
     /// footer needs to say why.
-    Preview { gen: u64, path: PathBuf, raw: RawHead, spec: Option<SpecSummary>, stale: bool },
+    /// Boxed: clippy 1.98's large_enum_variant — this variant weighed 265
+    /// bytes against `Started`'s 24, and every other message paid for it.
+    Preview { gen: u64, path: PathBuf, raw: Box<RawHead>, spec: Option<Box<SpecSummary>>, stale: bool },
     /// A `PreviewFile` action FAILED, computed off the UI thread. Same
     /// `gen`/`path` staleness rules as `Preview` (see `Workbench::
     /// preview_failed`) — sent instead of a bare `Note`, which left the
@@ -298,7 +300,7 @@ fn spawn_wb_preview(
             }
             _ => None,
         };
-        let _ = tx.send(WbMsg::Preview { gen, path, raw, spec, stale });
+        let _ = tx.send(WbMsg::Preview { gen, path, raw: Box::new(raw), spec: spec.map(Box::new), stale });
     });
 }
 
@@ -484,7 +486,7 @@ async fn run_workbench(
                 WbMsg::Progress(what) => wb.progress(what),
                 WbMsg::Note(what) => wb.note(what),
                 WbMsg::Preview { gen, path, raw, spec, stale } => {
-                    wb.set_preview(gen, path, raw, spec, stale)
+                    wb.set_preview(gen, path, *raw, spec.map(|s| *s), stale)
                 }
                 WbMsg::PreviewFailed { gen, path, msg } => wb.preview_failed(gen, path, msg),
             }
