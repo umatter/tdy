@@ -16,3 +16,4 @@ __pycache__/
 # but are not part of it (separate authorship workflow, large PDFs).
 /literature/
 /paper/
+/gap_reports/
