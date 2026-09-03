@@ -116,9 +116,9 @@ pub struct RawHead {
     pub truncated: bool,
     /// Excel/ODS only: (sheet name, rows, cols) per sheet.
     pub sheets: Vec<(String, usize, usize)>,
-    /// The first sheet's raw grid — the file's own header spelling and raw
-    /// values, up to a small cap. First sheet only; empty for text files
-    /// (tab-per-sheet is future work).
+    /// The raw grid of one sheet — `grid_sheet` names which — holding the
+    /// file's own header spelling and raw values, up to a small cap. The
+    /// first sheet unless `--sheet` picked another; empty for text files.
     ///
     /// A read the cap clipped says so *in here*: `engine::sheet_grid`
     /// appends a `…` cell to every row when it cut columns and a final
