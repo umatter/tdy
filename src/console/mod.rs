@@ -1091,9 +1091,10 @@ fn render_shown(name: &str, raw: &RawHead, spec: Option<&SpecSummary>, stale: bo
         // Unlike the TUI's raw panel (`wb_ui::raw_head_lines`), console text
         // is not width-constrained, so cells print in full — a title cell
         // like "Muster AG — Umsatzübersicht" is exactly what `.show` exists
-        // to surface verbatim. The grid is the FIRST sheet's, and a
-        // workbook may list a dozen: say which one, or the rows below read
-        // as the whole book.
+        // to surface verbatim. The grid is whichever sheet `grid_sheet`
+        // names (the first by default, another when `--sheet` picked it),
+        // and a workbook may list a dozen: say which one, or the rows below
+        // read as the whole book.
         if let Some(n) = &raw.grid_sheet {
             let _ = writeln!(s, "  grid of sheet {n:?}:");
         }

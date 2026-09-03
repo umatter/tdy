@@ -612,6 +612,17 @@ impl Workbench {
         if let Context::Member { target, report, member, raw: r, .. } = &mut self.context {
             let expected = report.members.get(*member).map(|m| member_preview_path(target, &m.path));
             if expected.as_deref() == Some(path.as_path()) {
+                // A `[`/`]` sheet flip lands on this same member path, so
+                // the staleness check above alone would preserve whatever
+                // scroll was set over the *old* sheet's content — a
+                // shorter new sheet then renders a blank pane. A `None`
+                // current counts as no change (the first fill-in keeps the
+                // reset-on-entry `enter_pile_member` already did); only an
+                // actual sheet change resets here.
+                let sheet_changed = matches!(r, Some(old) if old.grid_sheet != raw.grid_sheet);
+                if sheet_changed {
+                    self.main_scroll = 0;
+                }
                 *r = Some(raw);
             }
             return;
@@ -687,8 +698,18 @@ impl Workbench {
         preview: Option<Table>,
         stale: bool,
     ) {
-        let same = matches!(&self.context, Context::File { path: p, .. } if *p == path);
-        if !same {
+        // Same-path rule per `set_preview`'s doc comment above — but a
+        // `[`/`]` sheet flip also lands on the same path, so a same-path
+        // update whose `grid_sheet` differs from what the context already
+        // held must reset too, or a scroll set over the old sheet survives
+        // onto the new one's (possibly shorter) content.
+        let (same, sheet_changed) = match &self.context {
+            Context::File { path: p, raw: old, .. } if *p == path => {
+                (true, old.grid_sheet != raw.grid_sheet)
+            }
+            _ => (false, false),
+        };
+        if !same || sheet_changed {
             self.main_scroll = 0;
         }
         self.context = Context::File { path, raw, spec, preview, stale };
@@ -1096,6 +1117,7 @@ impl Workbench {
             Context::File { raw, preview, .. } => {
                 raw.lines.len()
                     + raw.sheets.len()
+                    + raw.grid.len()
                     + preview.as_ref().map(|t| t.rows.len()).unwrap_or(0)
                     + 16
             }
@@ -1153,6 +1175,10 @@ impl Workbench {
         // the member's raw column's, and means nothing here (see
         // `enter_pile_member`).
         self.main_scroll = 0;
+        // ...then move the window onto the restored selection, exactly as
+        // the `Payload::Fitted` arm does — a member deep in a long pile
+        // would otherwise land back with its `▸` marker off-screen.
+        self.follow_pile_selection();
     }
 
     /// Keys over a Member context (Main focus): Up/Down pick a remedy,

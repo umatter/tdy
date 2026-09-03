@@ -606,12 +606,14 @@ fn member_detail(m: &MemberReport) -> &str {
 
 /// The raw head, verbatim: file lines, or (for a workbook) one
 /// `sheet "Name": R row(s) x C col(s)` line per sheet, then the file's own
-/// lines if any were also sampled, then the first sheet's grid under a line
-/// naming that sheet (its own header spelling and raw values —
-/// tab-per-sheet stays future work). A trailing `…` marks a truncated text
-/// read; a grid clipped by its own cap carries its markers inside the grid,
-/// put there by `engine::sheet_grid`, which is the only place that knows
-/// both the cap and the sheet's true extent.
+/// lines if any were also sampled, then the grid of whichever sheet
+/// `grid_sheet` names (the first by default, another when `--sheet` or the
+/// workbench's `[`/`]` picked it) under a line naming that sheet (its own
+/// header spelling and raw values — tab-per-sheet stays future work). A
+/// trailing `…` marks a truncated text read; a grid clipped by its own cap
+/// carries its markers inside the grid, put there by `engine::sheet_grid`,
+/// which is the only place that knows both the cap and the sheet's true
+/// extent.
 fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
     if raw.lines.is_empty() && raw.sheets.is_empty() && raw.grid.is_empty() {
         return vec![Line::styled("reading…", Style::new().fg(DIM))];
@@ -623,9 +625,10 @@ fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
     for l in &raw.lines {
         lines.push(Line::raw(l.clone()));
     }
-    // The grid is the FIRST sheet's; a workbook may list a dozen above it,
-    // so name the one these rows came from rather than let them read as the
-    // whole book.
+    // The grid is whichever sheet `grid_sheet` names — the first by
+    // default, another when `--sheet`/`[`/`]` picked it. A workbook may
+    // list a dozen sheets above it, so name the one these rows came from
+    // rather than let them read as the whole book.
     if let Some(name) = &raw.grid_sheet {
         lines.push(Line::raw(format!("grid of sheet \"{name}\":")));
     }

@@ -1556,3 +1556,93 @@ fn refit_follows_the_restored_selection_into_view() {
         line
     );
 }
+
+/// A `[`/`]` sheet flip lands on the same path `set_preview` matches
+/// against, so the same-path rule that preserves `main_scroll` for an
+/// ordinary re-fill must not also carry a scroll set over sheet "One"
+/// onto a freshly-delivered sheet "Two" — a shorter sheet then renders a
+/// blank pane. Finding 1.
+#[test]
+fn set_preview_resets_scroll_when_the_grid_sheet_changes_on_the_same_path() {
+    let d = pile();
+    let mut w = wb(&d);
+    let raw_one = || RawHead {
+        lines: vec![],
+        truncated: false,
+        sheets: vec![("One".into(), 5, 3), ("Two".into(), 4, 2)],
+        grid: vec![vec!["a".into()]],
+        grid_sheet: Some("One".into()),
+    };
+    w.begin(".show a.csv");
+    w.apply(
+        outcome(
+            ".show a.csv",
+            "",
+            Payload::Shown { path: d.path().join("a.csv"), raw: raw_one(), spec: None, stale: false },
+        ),
+        d.path(),
+    );
+    w.main_scroll = 7;
+
+    let mut raw_two = raw_one();
+    raw_two.grid_sheet = Some("Two".into());
+    w.set_preview(w.preview_gen, d.path().join("a.csv"), raw_two, None, false);
+    assert_eq!(
+        w.main_scroll, 0,
+        "a different sheet's content must not inherit the old sheet's scroll"
+    );
+}
+
+/// The other half of the same rule: a same-path, same-sheet update (a
+/// `.sniff` fill-in re-delivering the identical `grid_sheet`) must still
+/// preserve the scroll the user set.
+#[test]
+fn set_preview_preserves_scroll_when_the_grid_sheet_is_unchanged() {
+    let d = pile();
+    let mut w = wb(&d);
+    let raw_one = || RawHead {
+        lines: vec![],
+        truncated: false,
+        sheets: vec![("One".into(), 5, 3), ("Two".into(), 4, 2)],
+        grid: vec![vec!["a".into()]],
+        grid_sheet: Some("One".into()),
+    };
+    w.begin(".show a.csv");
+    w.apply(
+        outcome(
+            ".show a.csv",
+            "",
+            Payload::Shown { path: d.path().join("a.csv"), raw: raw_one(), spec: None, stale: false },
+        ),
+        d.path(),
+    );
+    w.main_scroll = 7;
+
+    w.set_preview(w.preview_gen, d.path().join("a.csv"), raw_one(), None, false);
+    assert_eq!(w.main_scroll, 7, "an unchanged sheet must preserve the user's scroll");
+}
+
+/// Esc from a deep member must leave the restored Pile's selection on
+/// screen — `leave_member` resets `main_scroll` to 0 like every other
+/// context change, but on a short pane a member selected far down the
+/// list then renders off the visible window. Finding 2.
+#[test]
+fn esc_from_a_deep_member_keeps_the_pile_selection_on_screen() {
+    let d = pile();
+    let members: Vec<MemberReport> =
+        (0..20).map(|i| member(&format!("2025-{i:02}.csv"), MemberStatus::Fits)).collect();
+    let (mut w, _act) = pile_and_enter(&d, members, 15);
+    w.set_main_view_rows(5);
+
+    w.key(key(KeyCode::Esc));
+
+    let Context::Pile { selected, .. } = &w.context else { panic!("expected Pile") };
+    assert_eq!(*selected, 15);
+    let line = 2 + *selected;
+    assert!(
+        w.main_scroll <= line && line < w.main_scroll + 5,
+        "selected line scrolled off: scroll={} line={}",
+        w.main_scroll,
+        line
+    );
+}
