@@ -117,6 +117,15 @@ Rules:
 - **A multi-line SQL statement is buffered in the session** until a line ends
   in `;`; `run` returns `Outcome { payload: Nothing, text: "" }` with a
   continuation marker for the incomplete lines.
+- **A completed `CREATE TABLE` statement is a target declaration, not a
+  query** (added 2026-09-03): the session intercepts it before DataFusion —
+  which cannot execute DDL — parses it with `Target::parse` (its errors, not
+  "Unsupported SQL statement"), and writes it verbatim as `<table>.tdy.sql`
+  in the session's cwd, confined. Overwriting an existing target walks the
+  console's two-step grammar: refused with "repeat the statement", performed
+  only when the exact statement is repeated, and reset by any dot-command or
+  blank line in between — `.accept`'s rule, applied to the one other write
+  the console can perform.
 - **Long work narrates through `tdy::progress`.** `run` takes a `Sink`, so the
   workbench runs it on a spawned task and the status line says what is
   happening; the plain console prints the same messages on stderr.

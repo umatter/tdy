@@ -212,6 +212,14 @@ pub struct Session {
     /// shown, nothing written), cleared by anything except an identical
     /// repeat of that same line — see `run`'s reset rule.
     pending_accept: Option<(PathBuf, String)>,
+    /// A typed `CREATE TABLE` whose target file already exists: step one
+    /// refused the overwrite and remembered (path, the statement's trimmed
+    /// text); only the *same statement repeated* — recalled with ↑, or
+    /// pasted again — performs it, mirroring `.accept`'s two-step grammar.
+    /// Cleared by any dot-command or blank line in between (`run`'s reset),
+    /// and by any completed statement that is not this one (`run_sql` and
+    /// `create_target` both settle it).
+    pending_ddl: Option<(PathBuf, String)>,
 }
 
 impl Session {
@@ -229,6 +237,7 @@ impl Session {
             sql_buffer: String::new(),
             output: None,
             pending_accept: None,
+            pending_ddl: None,
         })
     }
 
@@ -328,6 +337,15 @@ impl Session {
         if !matches!(&dot_parsed, Some(Ok(Command::Accept { .. }))) {
             self.pending_accept = None;
         }
+        // The DDL overwrite's step two follows the same reset rule, EXCEPT
+        // that a non-dot line may be a fragment of (or the whole of) the
+        // repeated statement itself — so only dot lines and bare Enter
+        // reset it here; a completed statement settles it below
+        // (`create_target` on the exact repeat, the clear before `run_sql`
+        // for anything else).
+        if is_dot || (trimmed.trim().is_empty() && self.sql_buffer.is_empty()) {
+            self.pending_ddl = None;
+        }
         // `.abort` is the explicit spelling of "discard whatever SQL is
         // buffered" — handled here, ahead of the generic "a dot-command
         // interrupts a pending statement" note below, so it reports its own
@@ -362,6 +380,17 @@ impl Session {
                 };
             }
             let sql = std::mem::take(&mut self.sql_buffer);
+            if is_create_table(&sql) {
+                let mut o = match self.create_target(&sql) {
+                    Ok(o) => o,
+                    Err(e) => Outcome::error(&sql, format!("{e:#}")),
+                };
+                o.echo = sql;
+                return o;
+            }
+            // Any other completed statement is "another line in between"
+            // for a pending DDL overwrite, exactly as it is for `.accept`.
+            self.pending_ddl = None;
             let mut o = match self.run_sql(&sql, progress).await {
                 Ok(o) => o,
                 Err(e) => Outcome::error(&sql, format!("{e:#}")),
@@ -422,6 +451,47 @@ impl Session {
     /// otherwise. Each statement builds its own query context (see the
     /// design doc §4): a `.sniff --force` or a rewritten export between two
     /// statements must not serve a `MemTable` built from the old spec.
+    /// A typed `CREATE TABLE` is a target declaration, not a query —
+    /// DataFusion cannot execute one anyway ("Unsupported SQL statement"),
+    /// and the console is a SQL prompt in a tool whose whole design is that
+    /// a dataset is declared as SQL DDL. So the statement goes through the
+    /// target layer's own parser (its errors, not DataFusion's) and is
+    /// written *verbatim* — the human's literal, comments and layout kept —
+    /// as `<table>.tdy.sql` beside the data. Overwriting an existing target
+    /// walks the console's two-step grammar: refused with instructions, and
+    /// performed only when the same statement is repeated (`pending_ddl`),
+    /// exactly as `.accept` asks twice.
+    fn create_target(&mut self, sql: &str) -> Result<Outcome> {
+        let pending = self.pending_ddl.take();
+        let target = crate::target::Target::parse(sql)?;
+        // The table's name becomes a file name; a quoted name can carry
+        // path syntax the file system would act on.
+        if target.name.contains(['/', '\\']) || target.name.contains("..") {
+            bail!("table name {:?} cannot name a file — rename the table", target.name);
+        }
+        let file = format!("{}.tdy.sql", target.name);
+        let path = self.resolve_new(&file)?;
+        let exists = path.exists();
+        if exists {
+            let same = pending.as_ref().is_some_and(|(p, s)| *p == path && s == sql.trim());
+            if !same {
+                self.pending_ddl = Some((path, sql.trim().to_string()));
+                let text = format!(
+                    "{file} already exists — repeat the statement (↑ recalls it) to overwrite it, or `.edit {file}`\n"
+                );
+                return Ok(Outcome { echo: String::new(), text, payload: Payload::Nothing, ok: true });
+            }
+        }
+        let mut contents = sql.trim_end().to_string();
+        contents.push('\n');
+        crate::fileio::atomic_write(&path, &contents)?;
+        let verb = if exists { "rewrote" } else { "wrote" };
+        let n = target.columns.len();
+        let text =
+            format!("{verb} {file} ({n} column(s)) — `.fit {file}` plans the pile onto it\n");
+        Ok(Outcome { echo: String::new(), text, payload: Payload::Nothing, ok: true })
+    }
+
     async fn run_sql(&mut self, sql: &str, progress: Option<&progress::Sink>) -> Result<Outcome> {
         // A relative `messy('2025-01.csv')` inside the SQL text has to mean
         // the file `.ls` and `.sniff` would mean — the one in *this
@@ -1164,10 +1234,29 @@ pub fn render_evidence(rows: &[crate::evidence::Evidence]) -> String {
     s
 }
 
+/// Is this completed statement DDL for the console to intercept? First
+/// meaningful token (skipping blank lines and `--` comments) is CREATE,
+/// case-insensitive. Every CREATE lands in the target layer: DataFusion
+/// cannot execute DDL, so routing a CREATE VIEW there too trades "not
+/// implemented" for the target parser's precise "a target is exactly one
+/// CREATE TABLE statement".
+fn is_create_table(sql: &str) -> bool {
+    for line in sql.lines() {
+        let t = line.trim_start();
+        if t.is_empty() || t.starts_with("--") {
+            continue;
+        }
+        return t.get(..6).is_some_and(|w| w.eq_ignore_ascii_case("CREATE"));
+    }
+    false
+}
+
 fn help_text(command: Option<&str>) -> String {
     const ALL: &str = "\
 SQL runs as typed; end a statement with `;` (it may span lines).
-Everything else is a dot-command:
+A `CREATE TABLE name (…) WITH (…);` statement is a target declaration: it
+is written to `name.tdy.sql` beside the data (repeat the statement to
+overwrite an existing one). Everything else is a dot-command:
 
   .sniff FILE [--quick] [--force] [--no-llm] [--hint \"…\"]   infer the sidecar for one file
   .validate FILE [--stamp]                                  check a sidecar against its file

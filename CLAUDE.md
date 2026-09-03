@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 584 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 589 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -300,7 +300,11 @@ with a one-line stderr note; piped stdin always batches; `tdy console` still for
 console explicitly, and `tdy ui`/`tdy-tui` remain its other doors. Its `text` is the CLI's text
 because `src/commands.rs` produces both — the CLI arms print what `commands::*_text` return,
 and `tests/console.rs` asserts the console's `.fit`/`.sniff`/`.draft`/query text equals the
-binary's. The query context is deliberately **not** kept across statements (a re-sniff between
+binary's. A completed `CREATE TABLE` statement never reaches DataFusion (which cannot execute DDL):
+`Session::create_target` parses it with `Target::parse` and writes it verbatim as
+`<table>.tdy.sql` in the session's cwd — refusing to overwrite an existing target unless
+the exact statement is repeated (`pending_ddl`, `.accept`'s two-step rule; any other
+dot-command or blank line resets it). The query context is deliberately **not** kept across statements (a re-sniff between
 two queries would serve a stale `MemTable`). `.accept` is two steps in the session itself
 (`pending_accept`), and any other command in between resets it — `.abort` included, since it is
 a command like any other, not a special case carved out for the review gate. `evidence` lives in the library

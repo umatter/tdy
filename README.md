@@ -169,13 +169,12 @@ refuses to guess that `Datum` and `Date`, or `Betrag`, `Betrag CHF` and
 `Amount`, mean the same thing — you know that; it cannot. (Its grouping
 note is wrong for the same reason: this *is* one dataset, in four
 vocabularies.) Collapsing it to the three columns you mean, each synonym
-carried as a `matches` spelling, is the human step. The console has no way
-to write a file from a literal, so write that as `sales.tdy.sql` beside the
-data in your shell:
+carried as a `matches` spelling, is the human step. A `CREATE TABLE` typed
+at the prompt *is* that declaration, so paste it straight into the console
+and tdy writes it beside the data, named after the table:
 
-```bash
-cat > sales.tdy.sql <<'EOF'
-CREATE TABLE sales (
+```
+tdy> CREATE TABLE sales (
   month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
   region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
   amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
@@ -184,12 +183,14 @@ WITH (
   files      = '2025-*.csv, 2025-*.xlsx',
   date_order = 'dmy'
 );
-EOF
+```
+
+```
+wrote sales.tdy.sql (3 column(s)) — `.fit sales.tdy.sql` plans the pile onto it
 ```
 
 You write this once, review it in git like code, and never touch the
-files. `tdy fit` plans every file the glob matches onto it — back in the
-console:
+files. `.fit` plans every file the glob matches onto it:
 
 ```
 tdy> .fit sales.tdy.sql
@@ -230,11 +231,12 @@ because a dataset silently missing three months is the outcome tdy exists
 to prevent. July is in Rappen, August has two `Betrag` columns and does not
 say which is meant, November has no region: none of that is tdy's to
 decide. Decide it — here, by leaving the three out — with one `exclude`
-line in the `WITH` block of `sales.tdy.sql`, in your shell again:
+line in the `WITH` block. Paste the revised declaration at the prompt; an
+existing target is never overwritten in one step, so tdy asks for the
+statement again — exactly as `.accept` asks twice:
 
-```bash
-cat > sales.tdy.sql <<'EOF'
-CREATE TABLE sales (
+```
+tdy> CREATE TABLE sales (
   month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
   region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
   amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
@@ -244,10 +246,21 @@ WITH (
   exclude    = '2025-07.csv, 2025-08.csv, 2025-11.csv',
   date_order = 'dmy'
 );
-EOF
 ```
 
-Fit again, and query the dataset as one table — back in the console:
+```
+sales.tdy.sql already exists — repeat the statement (↑ recalls it) to overwrite it, or `.edit sales.tdy.sql`
+```
+
+```
+tdy> CREATE TABLE sales (   -- ↑ recalls the whole statement; Enter re-runs it
+```
+
+```
+rewrote sales.tdy.sql (3 column(s)) — `.fit sales.tdy.sql` plans the pile onto it
+```
+
+Fit again, and query the dataset as one table:
 
 ```
 tdy> .fit sales.tdy.sql            # 9 of 9 fit; writes sales.tdy.lock
@@ -437,6 +450,11 @@ confined to the directory the console was started in. The text a command
 prints is the same text the subcommand prints — one function produces both,
 and a test holds them equal — so nothing you learn in one place is wrong in
 the other.
+
+A completed `CREATE TABLE name (…) WITH (…);` statement is a target
+declaration, not a query: the console writes it verbatim as `name.tdy.sql`
+beside the data, and overwriting an existing target takes the statement
+twice — `.accept`'s two-step rule, applied to the console's other write.
 
 Piped input makes it a batch runner: `tdy < setup.tdy` runs the lines and
 exits non-zero at the first error. On a real terminal, bare `tdy` opens the
@@ -1078,7 +1096,7 @@ console explicitly — see [The console](#the-console) and
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests    # 584 tests; plain `cargo test` also runs doc-tests
+cargo test --workspace --lib --tests    # 589 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py                 # regenerate every fixture (needs openpyxl + xlwt)
 ```
 

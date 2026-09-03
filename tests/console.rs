@@ -755,3 +755,94 @@ async fn low_confidence_notes_reach_the_sink_not_stderr() {
     assert!(notes[0].contains("confidence"), "{notes:?}");
     assert!(notes[0].contains("umsatz.xlsx"), "{notes:?}");
 }
+
+// ---- CREATE TABLE at the prompt writes the target file ----
+
+const MONTHLY_DDL: &str = "CREATE TABLE monthly (\n  month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date'),\n  region     TEXT          NOT NULL,\n  amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount')\n)\nWITH ( files = '2025-*.csv', date_order = 'dmy' );";
+
+async fn run_statement(s: &mut Session, stmt: &str) -> tdy::console::Outcome {
+    let mut last = None;
+    for line in stmt.lines() {
+        last = Some(s.run(line, None).await);
+    }
+    last.unwrap()
+}
+
+#[tokio::test]
+async fn create_table_statement_writes_the_target() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = run_statement(&mut s, MONTHLY_DDL).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains("wrote monthly.tdy.sql"), "{}", o.text);
+    assert!(o.text.contains("3 column"), "{}", o.text);
+    assert!(o.text.contains(".fit monthly.tdy.sql"), "{}", o.text);
+    let on_disk = std::fs::read_to_string(d.path().join("monthly.tdy.sql")).unwrap();
+    assert_eq!(on_disk.trim(), MONTHLY_DDL.trim());
+    // What was written is a target fit can actually load.
+    tdy::target::Target::parse(&on_disk).unwrap();
+}
+
+#[tokio::test]
+async fn create_table_on_existing_target_needs_the_statement_repeated() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    run_statement(&mut s, MONTHLY_DDL).await;
+    let revised =
+        MONTHLY_DDL.replace("date_order = 'dmy'", "exclude = '2025-07.csv', date_order = 'dmy'");
+    let o = run_statement(&mut s, &revised).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains("already exists"), "{}", o.text);
+    assert!(o.text.contains("repeat the statement"), "{}", o.text);
+    // Nothing written yet.
+    let on_disk = std::fs::read_to_string(d.path().join("monthly.tdy.sql")).unwrap();
+    assert_eq!(on_disk.trim(), MONTHLY_DDL.trim());
+    // The exact statement repeated overwrites.
+    let o = run_statement(&mut s, &revised).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains("rewrote monthly.tdy.sql"), "{}", o.text);
+    let on_disk = std::fs::read_to_string(d.path().join("monthly.tdy.sql")).unwrap();
+    assert_eq!(on_disk.trim(), revised.trim());
+}
+
+#[tokio::test]
+async fn any_other_line_between_resets_the_ddl_overwrite() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    run_statement(&mut s, MONTHLY_DDL).await;
+    let revised = MONTHLY_DDL.replace("'2025-*.csv'", "'2025-01.csv'");
+    let o = run_statement(&mut s, &revised).await;
+    assert!(o.text.contains("already exists"), "{}", o.text);
+    // Step one armed; any other command disarms it, exactly like `.accept`.
+    s.run(".ls", None).await;
+    let o = run_statement(&mut s, &revised).await;
+    assert!(o.text.contains("already exists"), "{}", o.text);
+    let on_disk = std::fs::read_to_string(d.path().join("monthly.tdy.sql")).unwrap();
+    assert_eq!(on_disk.trim(), MONTHLY_DDL.trim(), "an interrupted step one must not overwrite");
+}
+
+#[tokio::test]
+async fn bad_ddl_shows_the_target_parsers_error_and_writes_nothing() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    // SMALLINT is a type tdy would not enforce; the target layer refuses it.
+    let o = s.run("CREATE TABLE t (a SMALLINT) WITH ( files = '2025-*.csv' );", None).await;
+    assert!(!o.ok, "{}", o.text);
+    assert!(!d.path().join("t.tdy.sql").exists());
+    // The error is the target parser's, not DataFusion's "not implemented".
+    assert!(!o.text.contains("not implemented"), "{}", o.text);
+}
+
+#[tokio::test]
+async fn a_table_name_that_cannot_name_a_file_is_refused() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = s.run("CREATE TABLE \"sub/dir\" (a TEXT) WITH ( files = '2025-*.csv' );", None).await;
+    assert!(!o.ok, "{}", o.text);
+    assert!(o.text.contains("cannot name a file"), "{}", o.text);
+    let stray = std::fs::read_dir(d.path())
+        .unwrap()
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy().ends_with("dir.tdy.sql"));
+    assert!(!stray);
+}
