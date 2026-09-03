@@ -262,9 +262,7 @@ fn column_line(sql: &str, column: &str) -> Result<usize> {
         if t.starts_with("--") {
             continue;
         }
-        let first: String =
-            t.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '"').collect();
-        if first.trim_matches('"').eq_ignore_ascii_case(column) {
+        if first_identifier_matches(t, column) {
             return Ok(i);
         }
     }
@@ -274,15 +272,13 @@ fn column_line(sql: &str, column: &str) -> Result<usize> {
     // line by design (see the module doc — splicing inside a shared line
     // risks corrupting its neighbors), so the honest error names the
     // reformat, not a phantom missing column.
-    let in_list = lines_with_endings(sql)
-        .iter()
-        .map(|l| strip_end(l))
-        .take(end)
-        .any(|line| {
-            line.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '"'))
-                .any(|w| w.trim_matches('"').eq_ignore_ascii_case(column))
-        });
-    if in_list {
+    //
+    // This has to mirror the primary loop's own rules at sub-line
+    // granularity: skip comment lines, and match only a *declaration's*
+    // first identifier — a column name that only appears inside an
+    // `OPTIONS(matches = '...')` string, or a comma inside that string,
+    // must not read as a second column.
+    if column_shares_a_declaration_line(sql, end, column) {
         bail!(
             "`{column}` shares a line with other declarations — remedies edit one column \
              per line; reformat the target (one column per line, as `tdy draft` writes it) \
@@ -290,6 +286,72 @@ fn column_line(sql: &str, column: &str) -> Result<usize> {
         );
     }
     bail!("no line in this target declares `{column}`")
+}
+
+/// A declaration's first identifier: the first run of
+/// alphanumeric/`_`/`"` characters, quotes trimmed, compared
+/// case-insensitively — the same rule `column_line`'s primary scan uses,
+/// factored out so the shared-line fallback below applies it identically.
+fn first_identifier_matches(text: &str, column: &str) -> bool {
+    let s = text.trim_start();
+    let first: String =
+        s.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '"').collect();
+    first.trim_matches('"').eq_ignore_ascii_case(column)
+}
+
+/// Whether `column` is the first identifier of some declaration inside the
+/// column list — even when several declarations share one physical line.
+///
+/// Walks the column-list text from its opening `(` to the matching `)`,
+/// tracking paren depth and single-quoted strings, and treats a comma as a
+/// declaration boundary only at depth 1 — one level inside that outer
+/// paren, which is where columns are declared. A comma nested deeper (an
+/// `OPTIONS(matches = 'foo, region')` list, or one inside a quoted alias)
+/// stays part of the same segment, so an alias or a value can never be
+/// mistaken for a second declaration; a comment line is skipped exactly as
+/// the primary loop skips it. `end` bounds the same way `column_line`'s own
+/// scan does, but the paren walk is what actually stops at the list's
+/// close — `end` alone cannot, when the whole declaration (open paren,
+/// columns and close) is crammed onto one physical line.
+fn column_shares_a_declaration_line(sql: &str, end: usize, column: &str) -> bool {
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut started = false;
+    let mut seg = String::new();
+    for line in lines_with_endings(sql).iter().map(|l| strip_end(l)).take(end) {
+        if line.trim_start().starts_with("--") {
+            continue;
+        }
+        for c in line.chars() {
+            if !started {
+                if c == '(' {
+                    started = true;
+                    depth = 1;
+                }
+                continue;
+            }
+            match c {
+                '\'' => in_str = !in_str,
+                '(' if !in_str => depth += 1,
+                ')' if !in_str => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return first_identifier_matches(&seg, column);
+                    }
+                }
+                ',' if !in_str && depth == 1 => {
+                    if first_identifier_matches(&seg, column) {
+                        return true;
+                    }
+                    seg.clear();
+                    continue;
+                }
+                _ => {}
+            }
+            seg.push(c);
+        }
+    }
+    first_identifier_matches(&seg, column)
 }
 
 /// Where the column list ends — the `)` that closes CREATE TABLE, which is
@@ -886,5 +948,43 @@ mod tests {
         let err = column_line(sql, "zzz").unwrap_err().to_string();
         assert!(err.contains("no line in this target declares `zzz`"), "{err}");
         assert!(!err.contains("one column per line"), "{err}");
+    }
+
+    /// A column name that only appears inside an `OPTIONS(matches = '...')`
+    /// string is not a declaration — the shared-line fallback must not read
+    /// the alias as a second column merely because it shares a comma-split
+    /// word with the target column name.
+    #[test]
+    fn a_matches_alias_does_not_count_as_a_shared_declaration() {
+        let sql = "CREATE TABLE t (area TEXT OPTIONS(matches = 'region'), amount BIGINT) \
+                    WITH (format = 'csv');\n";
+        let err = column_line(sql, "region").unwrap_err().to_string();
+        assert!(err.contains("no line in this target declares `region`"), "{err}");
+        assert!(!err.contains("shares a line"), "{err}");
+    }
+
+    /// A column name that only appears in a comment is not a declaration.
+    #[test]
+    fn a_name_in_a_column_list_comment_does_not_count_as_a_shared_declaration() {
+        let sql = "CREATE TABLE t (\n\
+                    \x20 a TEXT,\n\
+                    \x20 -- b column removed\n\
+                    \x20 c BIGINT\n\
+                    )\nWITH (format = 'csv');\n";
+        let err = column_line(sql, "b").unwrap_err().to_string();
+        assert!(err.contains("no line in this target declares `b`"), "{err}");
+        assert!(!err.contains("shares a line"), "{err}");
+    }
+
+    /// A comma inside a quoted string must not create a segment boundary —
+    /// otherwise `'foo, region'` reads as a second declaration named
+    /// `region`, when it is only part of one alias string.
+    #[test]
+    fn a_comma_inside_a_quoted_string_is_not_a_declaration_boundary() {
+        let sql = "CREATE TABLE t (a TEXT OPTIONS(matches = 'foo, region'), b BIGINT) \
+                    WITH (format='csv');\n";
+        let err = column_line(sql, "region").unwrap_err().to_string();
+        assert!(err.contains("no line in this target declares `region`"), "{err}");
+        assert!(!err.contains("shares a line"), "{err}");
     }
 }
