@@ -858,9 +858,11 @@ fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
             Context::Empty => "Tab focus · ^Q quit",
         },
     };
-    let [left, right] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(keys.len() as u16 + 2)])
-            .areas(area);
+    let [left, right] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(keys.chars().count() as u16 + 2),
+    ])
+    .areas(area);
     f.render_widget(Paragraph::new(Span::styled(text, style)), left);
     f.render_widget(
         Paragraph::new(Span::styled(keys, Style::new().fg(DIM))).alignment(Alignment::Right),

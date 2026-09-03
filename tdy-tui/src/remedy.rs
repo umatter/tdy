@@ -268,6 +268,27 @@ fn column_line(sql: &str, column: &str) -> Result<usize> {
             return Ok(i);
         }
     }
+    // The loop above matches a line's FIRST identifier. Before declaring
+    // the column absent, check whether it merely shares a line with other
+    // declarations (a hand-minified target): remedies edit one column per
+    // line by design (see the module doc — splicing inside a shared line
+    // risks corrupting its neighbors), so the honest error names the
+    // reformat, not a phantom missing column.
+    let in_list = lines_with_endings(sql)
+        .iter()
+        .map(|l| strip_end(l))
+        .take(end)
+        .any(|line| {
+            line.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '"'))
+                .any(|w| w.trim_matches('"').eq_ignore_ascii_case(column))
+        });
+    if in_list {
+        bail!(
+            "`{column}` shares a line with other declarations — remedies edit one column \
+             per line; reformat the target (one column per line, as `tdy draft` writes it) \
+             or edit it by hand"
+        );
+    }
     bail!("no line in this target declares `{column}`")
 }
 
@@ -850,5 +871,20 @@ mod tests {
             t.columns.iter().find(|c| c.name == "region").unwrap().matches,
             vec!["Gebiet"]
         );
+    }
+
+    /// A hand-minified target packs several columns onto one line. `column_line`
+    /// matches a line's first identifier only, so a column later on the same
+    /// line is not found — but it is declared, and the error must say so
+    /// rather than claiming it is absent.
+    #[test]
+    fn single_line_target_gets_the_reformat_hint_not_a_lie() {
+        let sql = "CREATE TABLE t (a TEXT, b BIGINT) WITH (format = 'csv');\n";
+        let err = column_line(sql, "b").unwrap_err().to_string();
+        assert!(err.contains("one column per line"), "{err}");
+        // A column that is genuinely absent keeps the plain message.
+        let err = column_line(sql, "zzz").unwrap_err().to_string();
+        assert!(err.contains("no line in this target declares `zzz`"), "{err}");
+        assert!(!err.contains("one column per line"), "{err}");
     }
 }

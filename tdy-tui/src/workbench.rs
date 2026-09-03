@@ -314,6 +314,11 @@ impl Workbench {
                     match &self.context {
                         Context::Pile { .. } => {
                             self.context = Context::Empty;
+                            // A context change resets (see the
+                            // `Payload::Query` arm in `apply`): a
+                            // paged-down Pile must not leave a stale offset
+                            // behind for whatever opens in Main next.
+                            self.main_scroll = 0;
                             return WbAction::None;
                         }
                         Context::Member { .. } => {
@@ -330,6 +335,9 @@ impl Workbench {
                             // plus a note pointing at `f`, which still works
                             // (`last_target` survives) to bring the pile back.
                             self.context = Context::Empty;
+                            // Context change resets, matching the Pile arm
+                            // above and the `Payload::Query` arm.
+                            self.main_scroll = 0;
                             self.status =
                                 "evidence closed — press f to re-open the pile".to_string();
                             return WbAction::None;
@@ -410,6 +418,10 @@ impl Workbench {
     /// recover from: it records nothing, leaving `last_target` at whatever
     /// it already was, the same as any other line that isn't `.fit`/
     /// `.accept`/`.check`.
+    ///
+    /// If a fit-family command ever grows a *valued* flag, the flag's value
+    /// would be mistaken for the target here — extend the skip below when
+    /// that happens.
     fn record_target(&mut self, line: &str) {
         let Ok(tokens) = tdy::console::parse::tokenize(line.trim()) else { return };
         let mut it = tokens.iter();

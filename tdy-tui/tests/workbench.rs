@@ -590,6 +590,34 @@ fn main_scroll_resets_on_every_context_change() {
     assert_eq!(w.main_scroll, 0, "a fresh result set starts at its first row");
 }
 
+/// Esc over a Pile closes it to `Context::Empty` — the same context-change
+/// rule as every other transition `main_scroll_resets_on_every_context_change`
+/// pins, but that test never drives this particular exit. A stale offset
+/// left behind here would open whatever comes up next in Main already
+/// scrolled past its own top.
+#[test]
+fn closing_a_pile_to_empty_resets_main_scroll() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let report = pile_report(
+        "sales.tdy.sql",
+        vec![
+            member("2025-01.csv", MemberStatus::Fits),
+            member("2025-02.csv", MemberStatus::NeedsReview),
+        ],
+    );
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(report)), d.path());
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+
+    w.key(key(KeyCode::PageDown));
+    assert!(w.main_scroll > 0, "PageDown must scroll the Pile");
+    w.key(key(KeyCode::Esc));
+    assert!(matches!(w.context, Context::Empty), "{:?}", w.context);
+    assert_eq!(w.main_scroll, 0, "closing the Pile to Empty must reset the scroll");
+}
+
 /// `.accept` is two steps, and the second one's `Done` is a refit: the
 /// selection-preservation match must therefore know `Evidence` as an
 /// outgoing context too. Without that arm the member you just accepted is
