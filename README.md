@@ -1082,9 +1082,13 @@ costs ~122 bytes and a delimited one ~46 — so 50M is a ceiling of roughly
 ## Install
 
 ```bash
-cargo install --path .        # puts `tdy` on your PATH
-cargo install --path tdy-tui  # the terminal UI behind `tdy ui` (optional, separate binary)
+cargo install tdy       # puts `tdy` on your PATH
+cargo install tdy-tui   # the workbench that bare `tdy` and `tdy ui` open (optional, separate binary)
 ```
+
+From a source checkout (e.g. to run the quick start on the repo's example
+data), `cargo install --path .` and `cargo install --path tdy-tui` do the
+same.
 
 `tdy` with no arguments opens the console (batteries included, no second
 install) on a real terminal without `tdy-tui`; with it installed, bare `tdy`
