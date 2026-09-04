@@ -633,17 +633,7 @@ fn sniff_excel_sheet(
     limits: Limits,
     mut doubts: Doubts,
 ) -> Result<SniffResult> {
-    // Read directly from the zip, before calamine's own richer-but-narrower
-    // view of the workbook takes over: it never carries a cell's number
-    // format past `open_workbook_auto`, and that format is the only honest
-    // signal that a column is money (see `xlmoney`). `skip_rows` and
-    // `promote_header` below only ever remove *rows*, never reorder or drop
-    // a column, so a raw 0-based column index still matches the header's
-    // index by the time `finish` builds column specs from it.
-    let money_columns: std::collections::HashSet<usize> = sheet
-        .as_deref()
-        .map(|s| crate::xlmoney::money_columns(path, s))
-        .unwrap_or_default();
+    let sheet_for_money = sheet.clone();
     let extraction = Extraction::Excel {
         sheet_name: sheet,
         sheet_index: None,
@@ -659,6 +649,33 @@ fn sniff_excel_sheet(
     if table.rows.is_empty() {
         bail!("sheet appears to be empty");
     }
+
+    // Read directly from the zip, before calamine's own richer-but-narrower
+    // view of the workbook takes over: it never carries a cell's number
+    // format past `open_workbook_auto`, and that format is the only honest
+    // signal that a column is money (see `xlmoney`). `xlmoney` decodes
+    // sheet-*absolute* column indices from cell references (`<c r="D10">`
+    // is column 3, whatever else is on the sheet) — but `table`'s column 0
+    // is wherever calamine's used range actually starts, which is sheet
+    // column A only when the data does too. A sheet with a title or a blank
+    // margin in column A pushes every real column over, and binding on the
+    // unshifted index would either miss the money column entirely or, worse,
+    // silently land on a different one. `table.col_offset`, read from this
+    // same extraction (never recomputed independently — see its own doc),
+    // is what reconciles the two. `skip_rows`/`promote_header` below only
+    // ever remove *rows*, never reorder or drop a column, so once shifted by
+    // the offset a column index still matches the header's index by the
+    // time `finish` builds column specs from it.
+    let money_columns: std::collections::HashSet<usize> = sheet_for_money
+        .as_deref()
+        .map(|s| {
+            let offset = table.col_offset as usize;
+            crate::xlmoney::money_columns(path, s)
+                .into_iter()
+                .filter_map(|c| c.checked_sub(offset))
+                .collect()
+        })
+        .unwrap_or_default();
     let width = table.width();
     let non_empty = |r: &Vec<String>| r.iter().filter(|c| !c.trim().is_empty()).count();
 

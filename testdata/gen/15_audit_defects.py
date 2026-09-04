@@ -12,7 +12,7 @@ pointing at them goes stale.
 Run from the repo root: python3 testdata/gen/15_audit_defects.py
 
 Deterministic; requires openpyxl (and lxml, transitively -- see
-gen_fixtures.py's module docstring) for the two xlsx fixtures.
+gen_fixtures.py's module docstring) for the xlsx fixtures.
 
 --------------------------------------------------------------------------
 FIXTURES
@@ -80,10 +80,32 @@ FIXTURES
    three currently resolve to Decimal despite every cell here carrying the
    same `"$"#,##0.00"` format.
 
-No test currently reads `xl_money_siblings.xlsx` -- calamine 0.36 does not
-expose per-cell number-format strings through any public API reachable from
-tdy's extraction path, so the fix behind it is blocked. It is generated here
-so the fixture exists once that capability does.
+`xl_money_siblings.xlsx` is read by `tests/regression.rs::
+currency_formatted_columns_all_become_decimal` -- `src/xlmoney.rs` reads
+`xl/styles.xml` and the sheet XML straight out of the zip, since calamine
+0.36 exposes no per-cell number-format through any public API reachable
+from tdy's extraction path.
+
+4. xl_money_offset_a.xlsx, xl_money_offset_c.xlsx (`tests/regression.rs::
+   money_typing_survives_a_used_range_that_does_not_start_at_column_a`)
+
+   Byte-identical in content -- four columns `label`, `alpha`, `beta`
+   (currency-formatted, deliberately named nothing `looks_monetary` would
+   catch, with alternating 100.5/200.25 and 300.5/400.25 values so the
+   scale is inconsistent and only the cell format can make them decimal),
+   `note` -- differing *only* in which sheet column the table starts at:
+   `_a` starts at column A, `_c` at column C (two blank leading columns).
+
+   `xlmoney::money_columns` decodes sheet-*absolute* column indices from
+   cell references (`<c r="D10">` is column 3, whatever else is on the
+   sheet), but a `RawTable`'s column 0 is wherever calamine's used range
+   actually starts -- column A only when the sheet's data does too. Before
+   `RawTable::col_offset` existed, `_c`'s money columns silently bound
+   nothing (or, on an unluckier layout, the wrong column): sheet-absolute
+   index 1 (`alpha`, real table column 0) was tested against table column 1
+   (`beta`), which is not what a currency format on `alpha` should mean.
+   The two files must type identically, which is the point of committing
+   them as a pair rather than one file that could pass by accident.
 """
 
 import os
@@ -247,6 +269,42 @@ def build_money_siblings():
     note(out, "4 currency-formatted sibling columns, lossy float64 values")
 
 
+def _build_money_offset(first_col, filename, what):
+    """One workbook for the money/column-offset pair: four columns starting
+    at `first_col` (1 = A, 3 = C), `alpha`/`beta` currency-formatted with
+    names that `looks_monetary` would not catch and values whose scale is
+    inconsistent (100.5 vs 200.25) so only the cell format can make them
+    decimal. Column layout is otherwise irrelevant to the point of the
+    fixture -- what matters is that `_a` and `_c` disagree only on
+    `first_col`."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "S"
+    fmt = '"$"#,##0.00'
+    for j, h in enumerate(["label", "alpha", "beta", "note"]):
+        ws.cell(row=1, column=first_col + j, value=h)
+    for i in range(30):
+        ws.cell(row=2 + i, column=first_col, value=f"row {i}")
+        a = ws.cell(row=2 + i, column=first_col + 1, value=100.5 if i % 2 else 200.25)
+        b = ws.cell(row=2 + i, column=first_col + 2, value=300.5 if i % 2 else 400.25)
+        a.number_format = fmt
+        b.number_format = fmt
+        ws.cell(row=2 + i, column=first_col + 3, value=f"n{i}")
+
+    out = os.path.join(OUT, filename)
+    _save_deterministic(wb, out)
+    note(out, what)
+
+
+def build_money_offset_pair():
+    _build_money_offset(1, "xl_money_offset_a.xlsx", "money columns starting at sheet column A")
+    _build_money_offset(
+        3, "xl_money_offset_c.xlsx", "byte-for-byte the same table, starting at sheet column C"
+    )
+
+
 def _save_deterministic(wb, out):
     """Pin document properties and repack the zip with fixed entry stamps,
     exactly as gen_fixtures.py's own _repack_deterministic does -- openpyxl
@@ -265,6 +323,7 @@ def main():
     build_torn_tail_utf8()
     build_cell_newline()
     build_money_siblings()
+    build_money_offset_pair()
 
 
 if __name__ == "__main__":
