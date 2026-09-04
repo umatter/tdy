@@ -1355,3 +1355,55 @@ fn a_trailing_block_never_swallows_the_whole_table() {
         );
     }
 }
+
+/// An all-text table is only suspicious when the file did not name its
+/// columns either.
+///
+/// The 2026-09-04 flagged-file adjudication found the doubt "nearly every
+/// column typed as text; the layout may be misread" unearned on file after
+/// file that is simply textual by nature — cocktail recipes measured in
+/// "1 1/2 oz" (`mr-boston-flattened.csv`), animal-complaint categories,
+/// TV-episode notes (`chopped-raw.csv`), villager names. Each had a real
+/// header and typed correctly, and this single 0.15 penalty was the only
+/// thing taking them from 0.95 to just under the 0.8 flag line, which is
+/// how people are taught to ignore warnings.
+///
+/// The ratio cannot separate those from a genuine misreading — both groups
+/// are 100% text. Having had to invent the column names is what makes
+/// "everything is text" evidence of a misreading rather than a description.
+#[test]
+fn an_all_text_table_with_a_real_header_is_not_suspicious() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // A header the file supplies, over columns that are genuinely textual.
+    let named = dir.path().join("recipes.csv");
+    let mut s = String::from("name,category,measurement,ingredient\n");
+    for i in 0..20 {
+        s.push_str(&format!("drink {i},cocktail classic,1 1/2 oz,gin and bitters\n"));
+    }
+    std::fs::write(&named, &s).unwrap();
+    let r = sniffed(&named);
+    assert!(
+        !r.spec.notes.iter().any(|n| n.contains("nearly every column typed as text")),
+        "the all-text doubt fired on a file that named its own columns: {:?}",
+        r.spec.notes
+    );
+    assert!(r.confidence > 0.8, "confidence {:?}", r.confidence);
+
+    // The same values with no promotable header row keep the doubt: now
+    // "everything is text" comes with not knowing what anything is called.
+    // Repeated cells in the first row are what make it implausible as a
+    // header, so the names have to be invented.
+    let unnamed = dir.path().join("no_header.csv");
+    let mut s = String::new();
+    for _ in 0..20 {
+        s.push_str("cocktail classic,cocktail classic,gin and bitters,gin and bitters\n");
+    }
+    std::fs::write(&unnamed, &s).unwrap();
+    let r = sniffed(&unnamed);
+    assert!(
+        r.spec.notes.iter().any(|n| n.contains("nearly every column typed as text")),
+        "the all-text doubt must still fire when the names had to be invented: {:?}",
+        r.spec.notes
+    );
+}

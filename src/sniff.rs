@@ -906,6 +906,10 @@ fn finish(
     base_confidence: f32,
     mut doubts: Doubts,
 ) -> Result<SniffResult> {
+    // Did the file give us its column names? `ensure_header` is about to
+    // invent `col_1, col_2, …` if it did not, and the all-text doubt below
+    // turns on the difference.
+    let named_by_file = table.header.is_some();
     table.ensure_header()?;
     let header = table.header.clone().unwrap_or_default();
     if header.is_empty() {
@@ -914,9 +918,18 @@ fn finish(
     let body: Vec<&Vec<String>> = table.rows.iter().take(TYPE_SAMPLE).collect();
     let (columns, probe_empty) = guess_columns(&header, &body, &mut doubts);
 
-    // A table that types as almost entirely text usually means the layout was
-    // misread, not that the data is textual.
-    if columns.len() >= 3 {
+    // A table that types as almost entirely text can mean the layout was
+    // misread — but only when the file did not also tell us its column
+    // names. The 2026-09-04 flagged-file adjudication found this doubt
+    // unearned on file after file that is simply textual by nature: cocktail
+    // recipes measured in "1 1/2 oz", animal-complaint categories, TV-episode
+    // notes, villager names. Each carried a real header and typed correctly,
+    // and this 0.15 was the only thing pushing them from 0.95 to 0.7999 —
+    // just under the flag line — which is how people learn to ignore
+    // warnings. The ratio alone cannot tell those from a genuine misreading:
+    // both groups are 100% text. Having to invent the names is what makes
+    // "everything is text" suspicious rather than merely true.
+    if columns.len() >= 3 && !named_by_file {
         let utf8 = columns.iter().filter(|c| c.dtype == DType::Utf8).count() as f32;
         if utf8 / columns.len() as f32 > 0.8 && !body.is_empty() {
             doubts.add(0.15, "nearly every column typed as text; the layout may be misread");
