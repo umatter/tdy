@@ -1280,3 +1280,31 @@ fn a_newline_inside_a_cell_is_not_a_row_boundary() {
     let label = t.column(0).as_any().downcast_ref::<StringArray>().unwrap();
     assert_eq!(label.value(1), "Manufacture\nOf Beer (In Barrels)");
 }
+
+/// A short footnote line sitting between two long ones must not stop the
+/// trailing-block scan from crossing it.
+///
+/// The 2026-09-04 audit re-run found `trailing_prose_block` failing on the
+/// real `ttb_brewery_size_2011/2017/2018.xlsx` files for exactly this shape:
+/// a legend block containing a short line ("5) Only for CY 2010...", well
+/// under the 40-character prose bar and not matching the legend/footnote
+/// lead-in pattern) between two long ones. The first version of the
+/// detector required every row it walked to itself look like prose, so it
+/// stopped at the short line and never reached the two qualifying rows it
+/// needs to fire.
+#[test]
+fn a_short_line_inside_the_trailing_block_does_not_break_the_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("short_line_in_block.csv");
+    let mut s = String::from("size,breweries,barrels\n");
+    for i in 0..12 { s.push_str(&format!("band {i},{},{}\n", i * 3, i * 1000)); }
+    s.push_str("\nLegend\n");
+    s.push_str("1) Number of Breweries - Count of brewery premises reporting operations.\n");
+    s.push_str("2) Short note.\n");
+    s.push_str("3) Size - Based on Annual Production as reported on the operations report.\n");
+    std::fs::write(&f, &s).unwrap();
+    let r = sniffed(&f);
+    assert!(r.confidence < 0.8, "confidence {:?}", r.confidence);
+    assert!(r.spec.notes.iter().any(|n| n.contains("trailing")),
+            "no note about the trailing block: {:?}", r.spec.notes);
+}

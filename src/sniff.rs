@@ -1076,38 +1076,52 @@ const PROSE_LEAD: &str = r"(?i)^(legend|note|notes|footnote|source)s?\b";
 /// A trailing block of legend/footnote rows, the multi-row shape a single
 /// summary-row footer check (`footer_rows`, `footer_row_cells`) cannot see.
 ///
-/// Walks backwards from the last row while each row is blank, or is
-/// under-width (fewer populated cells than the table) with a first populated
-/// cell that reads as free text (long, with a space) or as a legend/footnote
-/// lead-in. Requires at least two qualifying rows: a single trailing oddity
-/// is `footer_rows`'s job, not this one's — firing on one row here would
-/// duplicate that check with a cruder pattern. Returns the count and the
-/// (1-based) row number of the first qualifying row, for the note.
+/// Two phases, deliberately separate. First, find the block's *extent* by
+/// walking backwards from the last row while each row is blank or
+/// under-width (fewer populated cells than the table) — nothing about
+/// whether it *reads* like prose. A real legend commonly has a short line
+/// buried between two long ones ("5) Only for CY 2010...", audited from
+/// `ttb_brewery_size_2011/2017/2018.xlsx`): it is under-width like its
+/// neighbours, but well under the 40-character prose bar, and a first
+/// version of this detector that required every row in the walk to look
+/// like prose stopped dead at that line and never reached 2 qualifying
+/// rows. Second, only *within* that block, require at least two rows that
+/// actually read as prose (long free text with a space, or a
+/// legend/footnote lead-in) before raising the doubt — a couple of stray
+/// blank or short under-width rows must not trip it on their own; that is
+/// still `footer_rows`'s territory. Returns the block's total row count
+/// (for the `skip_rows` tail suggestion) and the (1-based) row number the
+/// block starts at.
 fn trailing_prose_block(rows: &[Vec<String>], width: usize) -> Option<(usize, usize)> {
     if width == 0 {
         return None;
     }
     let lead_re = regex::Regex::new(PROSE_LEAD).expect("static regex");
-    let mut count = 0usize;
-    let mut first_row_number = 0usize;
+    let is_prose = |cell: &str| (cell.len() > 40 && cell.contains(' ')) || lead_re.is_match(cell);
+
+    let mut block_start = rows.len();
     for (i, row) in rows.iter().enumerate().rev() {
-        let populated: Vec<&str> = row.iter().map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
-        let qualifies = if populated.is_empty() {
-            true
-        } else if populated.len() < width {
-            let first_cell = populated[0];
-            (first_cell.len() > 40 && first_cell.contains(' ')) || lead_re.is_match(first_cell)
+        let populated = row.iter().filter(|c| !c.trim().is_empty()).count();
+        if populated < width {
+            block_start = i;
         } else {
-            false
-        };
-        if !qualifies {
             break;
         }
-        count += 1;
-        first_row_number = i + 1;
     }
-    if count >= 2 {
-        Some((count, first_row_number))
+    let block = &rows[block_start..];
+    if block.len() < 2 {
+        return None;
+    }
+
+    let prose_rows = block
+        .iter()
+        .filter(|row| {
+            let first_cell = row.iter().map(|c| c.trim()).find(|c| !c.is_empty());
+            first_cell.is_some_and(is_prose)
+        })
+        .count();
+    if prose_rows >= 2 {
+        Some((block.len(), block_start + 1))
     } else {
         None
     }
