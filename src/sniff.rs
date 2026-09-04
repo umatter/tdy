@@ -516,6 +516,8 @@ fn sniff_delimited(
         }
     }
 
+    note_trailing_blocks(&table, &mut doubts);
+
     finish(extraction, transforms, table, 0.95, doubts)
 }
 
@@ -721,6 +723,8 @@ fn sniff_excel_sheet(
             );
         }
     }
+
+    note_trailing_blocks(&table, &mut doubts);
 
     finish(extraction, transforms, table, 0.9, doubts)
 }
@@ -1061,6 +1065,119 @@ fn footer_rows(last_line: Option<&str>, delimiter: Option<char>, sampled: &[Vec<
         .unwrap_or(false);
     let line_re = regex::Regex::new(FOOTER_LINE).expect("static regex");
     u32::from(corroborated || (delimiter.is_none() && line_re.is_match(line)))
+}
+
+/// A cell that leads a legend/footnote line rather than a data row: "Legend",
+/// "Note", "Notes", "Footnote(s)", "Source(s)" — optionally pluralised, and
+/// tested against the whole cell so a real value that merely starts with one
+/// of these words (a company called "Source Data AG") is not caught by it.
+const PROSE_LEAD: &str = r"(?i)^(legend|note|notes|footnote|source)s?\b";
+
+/// A trailing block of legend/footnote rows, the multi-row shape a single
+/// summary-row footer check (`footer_rows`, `footer_row_cells`) cannot see.
+///
+/// Walks backwards from the last row while each row is blank, or is
+/// under-width (fewer populated cells than the table) with a first populated
+/// cell that reads as free text (long, with a space) or as a legend/footnote
+/// lead-in. Requires at least two qualifying rows: a single trailing oddity
+/// is `footer_rows`'s job, not this one's — firing on one row here would
+/// duplicate that check with a cruder pattern. Returns the count and the
+/// (1-based) row number of the first qualifying row, for the note.
+fn trailing_prose_block(rows: &[Vec<String>], width: usize) -> Option<(usize, usize)> {
+    if width == 0 {
+        return None;
+    }
+    let lead_re = regex::Regex::new(PROSE_LEAD).expect("static regex");
+    let mut count = 0usize;
+    let mut first_row_number = 0usize;
+    for (i, row) in rows.iter().enumerate().rev() {
+        let populated: Vec<&str> = row.iter().map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
+        let qualifies = if populated.is_empty() {
+            true
+        } else if populated.len() < width {
+            let first_cell = populated[0];
+            (first_cell.len() > 40 && first_cell.contains(' ')) || lead_re.is_match(first_cell)
+        } else {
+            false
+        };
+        if !qualifies {
+            break;
+        }
+        count += 1;
+        first_row_number = i + 1;
+    }
+    if count >= 2 {
+        Some((count, first_row_number))
+    } else {
+        None
+    }
+}
+
+/// The promoted header, found again as a data row further down the file —
+/// several exports concatenated together without stripping the repeats.
+/// Case- and whitespace-folded, so trivial spacing differences don't hide a
+/// real repeat. Returns the count and the (1-based) row number of the first
+/// occurrence.
+///
+/// This is the sniff-time signal, working only from the sample; the
+/// definitive, whole-file version (which also removes the rows, because by
+/// then it is proven rather than merely likely) is
+/// [`crate::stream::verify`]'s `repeated_header_rows`, applied in
+/// [`verify_types`].
+fn repeated_header_rows(header: &[String], rows: &[Vec<String>]) -> Option<(usize, usize)> {
+    let fold = |cells: &[String]| -> Vec<String> {
+        cells.iter().map(|c| c.trim().to_lowercase()).collect()
+    };
+    let header_key = fold(header);
+    let mut count = 0usize;
+    let mut first_row_number = 0usize;
+    for (i, row) in rows.iter().enumerate() {
+        if fold(row) == header_key {
+            count += 1;
+            if first_row_number == 0 {
+                first_row_number = i + 1;
+            }
+        }
+    }
+    if count >= 1 {
+        Some((count, first_row_number))
+    } else {
+        None
+    }
+}
+
+/// Add doubts for the two multi-row shapes above — a trailing legend/footnote
+/// block and a header repeated mid-file — on the fully-transformed probe
+/// table (after header promotion, if any). Shared by the delimited and Excel
+/// sheet sniffers, since both hand this function the same shape of table.
+///
+/// Neither check removes a row: the sniffer's job is to notice and say so,
+/// never to guess which rows are safe to drop. A human decides with
+/// `skip_rows` or `drop_rows_matching` in the sidecar.
+fn note_trailing_blocks(table: &RawTable, doubts: &mut Doubts) {
+    let width = table.width();
+    if let Some((n, first_row)) = trailing_prose_block(&table.rows, width) {
+        doubts.add(
+            0.3,
+            format!(
+                "{n} trailing row(s) starting at row {first_row} look like a legend or \
+                 footnote block rather than data, and were read as rows; if so, add \
+                 skip_rows (tail = {n}) or drop_rows_matching to the sidecar"
+            ),
+        );
+    }
+    if let Some(header) = table.header.as_ref() {
+        if let Some((n, first_row)) = repeated_header_rows(header, &table.rows) {
+            doubts.add(
+                0.3,
+                format!(
+                    "the header row repeats {n} time(s) further down the file, starting at \
+                     row {first_row}; the file looks like several exports concatenated \
+                     together. Add drop_rows_matching to the sidecar to remove them"
+                ),
+            );
+        }
+    }
 }
 
 enum HeaderVerdict {

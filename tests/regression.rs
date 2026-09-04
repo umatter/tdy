@@ -1223,3 +1223,36 @@ async fn a_late_starting_repeated_decimal_does_not_narrow_to_float() {
     .await;
     assert!(err.is_err(), "sum() over the text-kept column should be refused, not coerced");
 }
+
+/// A legend/footnote block below the data was read as data rows at high
+/// confidence with no warning. Found by the 2026-09-03 corpus audit.
+#[test]
+fn a_trailing_prose_block_is_noticed() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("footnote_block.csv");
+    let mut s = String::from("size,breweries,barrels\n");
+    for i in 0..12 { s.push_str(&format!("band {i},{},{}\n", i * 3, i * 1000)); }
+    s.push_str("\nLegend\n");
+    s.push_str("1) Number of Breweries - Count of brewery premises reporting operations.\n");
+    s.push_str("2) Size - Based on Annual Production as reported on the operations report.\n");
+    std::fs::write(&f, &s).unwrap();
+    let r = sniffed(&f);
+    assert!(r.confidence < 0.8, "confidence {:?}", r.confidence);
+    assert!(r.spec.notes.iter().any(|n| n.contains("trailing")),
+            "no note about the trailing block: {:?}", r.spec.notes);
+}
+
+/// The header repeated mid-file between sections was read as data.
+#[test]
+fn a_repeated_header_row_is_noticed() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("repeated_header.csv");
+    let mut s = String::from("year,lowest,second\n");
+    for i in 0..10 { s.push_str(&format!("{},{},{}\n", 2000 + i, i * 10, i * 20)); }
+    s.push_str("year,lowest,second\n");
+    for i in 0..10 { s.push_str(&format!("{},{},{}\n", 2010 + i, i * 11, i * 21)); }
+    std::fs::write(&f, &s).unwrap();
+    let r = sniffed(&f);
+    assert!(r.spec.notes.iter().any(|n| n.contains("repeat")),
+            "no note about the repeated header: {:?}", r.spec.notes);
+}
