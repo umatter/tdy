@@ -394,7 +394,7 @@ fn sniff_delimited(
         doubts.add(0.15, "rows have differing field counts; short rows are padded with nulls");
     }
 
-    let skip_tail = footer_rows(last_line(sample), Some(delim.delimiter));
+    let skip_tail = footer_rows(last_line(sample), Some(delim.delimiter), &table.rows);
     if skip_tail > 0 {
         doubts.note("dropped a trailing summary row");
     }
@@ -603,7 +603,7 @@ fn sniff_excel_sheet(
     } else {
         // Test the cells, not a joined line: a summary row often carries its
         // label in the second column ("2025" | "Total" | 5051.25).
-        last_row_cells.as_deref().map(footer_row_cells).unwrap_or(0)
+        last_row_cells.as_deref().map(|cells| footer_row_cells(cells, &table.rows)).unwrap_or(0)
     };
     if skip_tail > 0 {
         doubts.note("dropped a trailing summary row");
@@ -888,26 +888,65 @@ const FOOTER_FIELD: &str = r"(?i)^\s*(total|totals|summe|gesamt|gesamtsumme|zwis
 /// For files with no delimiter, the whole line is tested as a prefix instead.
 const FOOTER_LINE: &str = r"(?i)^\s*(total|totals|summe|gesamt|gesamtsumme|zwischensumme|subtotal|sum|endsumme|insgesamt)\b";
 
-/// Does the file's last line look like a summary row? Returns the number of
-/// trailing rows to skip (0 or 1).
-/// Does this row (as separate cells) look like a summary row?
-fn footer_row_cells(cells: &[String]) -> u32 {
-    let re = regex::Regex::new(FOOTER_FIELD).expect("static regex");
-    u32::from(cells.iter().any(|c| re.is_match(c.trim().trim_matches('"'))))
+/// Case-folded, quote- and whitespace-trimmed comparison key for a cell.
+fn footer_key(cell: &str) -> String {
+    cell.trim().trim_matches('"').to_lowercase()
 }
 
-fn footer_rows(last_line: Option<&str>, delimiter: Option<char>) -> u32 {
+/// How many sampled rows carry `needle` in column `idx`? Used to tell a
+/// summary label from a routine category value in the same position.
+fn column_occurrences(sampled: &[Vec<String>], idx: usize, needle: &str) -> usize {
+    sampled
+        .iter()
+        .filter(|row| row.get(idx).map(|c| footer_key(c) == needle).unwrap_or(false))
+        .count()
+}
+
+/// Does this row (as separate cells) look like a summary row?
+///
+/// The label alone is not evidence: a value like "total" can be a routine
+/// category (`subsector = "total"`, 2,288 times in one audited file), and
+/// dropping the last row on the strength of it silently deleted a real
+/// record. `sampled` is this sheet's other rows, over the same column: the
+/// label must appear (almost) nowhere else in it — the same rarity check
+/// `footer_rows` applies to delimited files.
+fn footer_row_cells(cells: &[String], sampled: &[Vec<String>]) -> u32 {
+    let re = regex::Regex::new(FOOTER_FIELD).expect("static regex");
+    let matched = cells.iter().enumerate().find(|(_, c)| re.is_match(c.trim().trim_matches('"')));
+    u32::from(
+        matched
+            .map(|(idx, value)| column_occurrences(sampled, idx, &footer_key(value)) <= 1)
+            .unwrap_or(false),
+    )
+}
+
+/// Does the file's last line look like a summary row? Returns the number of
+/// trailing rows to skip (0 or 1).
+///
+/// The label alone is not evidence: `subsector = "total"` is a routine
+/// category in some exports, and dropping the last row because of it
+/// silently deleted a real record (2026-09-03 corpus audit). A summary row
+/// is a row whose label is EXCEPTIONAL — it appears in the last row and
+/// (almost) nowhere else in that column. `sampled` is that column's values
+/// over the sampled rows.
+fn footer_rows(last_line: Option<&str>, delimiter: Option<char>, sampled: &[Vec<String>]) -> u32 {
     let Some(line) = last_line else { return 0 };
     let field_re = regex::Regex::new(FOOTER_FIELD).expect("static regex");
     // The label is not always in the first column: `2025-12-31,Total,,14337.00`
     // is a perfectly ordinary summary row, so every field is tested — but only
     // for an exact match.
-    let matches_any_field = match delimiter {
-        Some(d) => line.split(d).any(|f| field_re.is_match(f.trim().trim_matches('"'))),
-        None => false,
+    let matched_field = match delimiter {
+        Some(d) => line
+            .split(d)
+            .enumerate()
+            .find(|(_, f)| field_re.is_match(f.trim().trim_matches('"'))),
+        None => None,
     };
+    let corroborated = matched_field
+        .map(|(idx, value)| column_occurrences(sampled, idx, &footer_key(value)) <= 1)
+        .unwrap_or(false);
     let line_re = regex::Regex::new(FOOTER_LINE).expect("static regex");
-    u32::from(matches_any_field || (delimiter.is_none() && line_re.is_match(line)))
+    u32::from(corroborated || (delimiter.is_none() && line_re.is_match(line)))
 }
 
 enum HeaderVerdict {
@@ -1638,19 +1677,32 @@ mod tests {
 
     #[test]
     fn footer_detection_wants_an_exact_label() {
-        assert_eq!(footer_rows(Some("Total;1;2"), Some(';')), 1);
-        assert_eq!(footer_rows(Some("Zwischensumme,1"), Some(',')), 1);
+        // An empty `sampled` slice never corroborates a repeat, so these
+        // exercise only the label-matching half of the rule.
+        let none: Vec<Vec<String>> = Vec::new();
+        assert_eq!(footer_rows(Some("Total;1;2"), Some(';'), &none), 1);
+        assert_eq!(footer_rows(Some("Zwischensumme,1"), Some(','), &none), 1);
         // The label is not always first.
-        assert_eq!(footer_rows(Some("2025-12-31,Total,,14337.00"), Some(',')), 1);
-        assert_eq!(footer_rows(Some("Summe:,1"), Some(',')), 1);
+        assert_eq!(footer_rows(Some("2025-12-31,Total,,14337.00"), Some(','), &none), 1);
+        assert_eq!(footer_rows(Some("Summe:,1"), Some(','), &none), 1);
         // ...but a company whose name merely starts with one is a data row,
         // and dropping it would be silent data loss.
-        assert_eq!(footer_rows(Some("2025-12-31,Total Quality AG,1"), Some(',')), 0);
-        assert_eq!(footer_rows(Some("Totally Fine Ltd,1"), Some(',')), 0);
-        assert_eq!(footer_rows(Some("Summe Ost GmbH,1"), Some(',')), 0);
-        assert_eq!(footer_rows(Some("Ost,1"), Some(',')), 0);
-        assert_eq!(footer_rows(None, Some(',')), 0);
+        assert_eq!(footer_rows(Some("2025-12-31,Total Quality AG,1"), Some(','), &none), 0);
+        assert_eq!(footer_rows(Some("Totally Fine Ltd,1"), Some(','), &none), 0);
+        assert_eq!(footer_rows(Some("Summe Ost GmbH,1"), Some(','), &none), 0);
+        assert_eq!(footer_rows(Some("Ost,1"), Some(','), &none), 0);
+        assert_eq!(footer_rows(None, Some(','), &none), 0);
         // No delimiter: the line is tested as a prefix.
-        assert_eq!(footer_rows(Some("GESAMT   1 574 559.68"), None), 1);
+        assert_eq!(footer_rows(Some("GESAMT   1 574 559.68"), None, &none), 1);
+    }
+
+    #[test]
+    fn a_repeated_label_is_a_category_not_a_footer() {
+        let rows: Vec<Vec<String>> = (0..10)
+            .map(|i| vec![format!("S{i}"), "total".into(), "1".into()])
+            .collect();
+        assert_eq!(footer_rows(Some("S9,total,1"), Some(','), &rows), 0);
+        let once: Vec<Vec<String>> = vec![vec!["S1".into(), "retail".into(), "1".into()]];
+        assert_eq!(footer_rows(Some("Total,,14337.00"), Some(','), &once), 1);
     }
 }

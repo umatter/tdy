@@ -1083,3 +1083,19 @@ fn a_homogeneous_single_column_list_keeps_its_first_row() {
     let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
     assert_eq!(t.num_rows(), 4, "row 1 was consumed as a header");
 }
+
+/// "total" as a routine category value in the last row is not a summary row.
+/// tdy silently deleted a real record. Found by the 2026-09-03 corpus audit.
+#[test]
+fn a_frequent_category_value_is_not_a_footer() {
+    let dir = TempDir::new().unwrap();
+    let mut s = String::from("state,subsector,sales\n");
+    for i in 0..40 {
+        s.push_str(&format!("S{i},retail,{}\n", 100 + i));
+        s.push_str(&format!("S{i},total,{}\n", 200 + i));
+    }
+    let f = write(&dir, "category_total.csv", &s);
+    let spec = sniffed(&f).spec;
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(t.num_rows(), 80, "a routine 'total' category row was dropped as a footer");
+}
