@@ -412,7 +412,27 @@ fn sniff_delimited(
             transforms.push(t);
         }
         HeaderVerdict::Absent => {
-            doubts.add(0.1, "no header row detected; columns are named col_1, col_2, ...");
+            // A single all-text column is the one shape header_verdict cannot
+            // settle structurally: the first row is a cell like any other,
+            // so "the header" and "a record" look identical (2026-09-03
+            // corpus audit: SOLUTION_FILES.txt, requirements.txt,
+            // workflows-version.txt). Name that ambiguity specifically
+            // rather than the generic no-header doubt, since the fix here
+            // is the same either way — promote_header in the sidecar — but
+            // the reason to reach for it is not "no header was found", it
+            // is "tdy could not tell".
+            if table.width() == 1
+                && table.rows.iter().all(|r| r.first().is_none_or(|v| !looks_scalar(v)))
+            {
+                doubts.add(
+                    0.2,
+                    "one all-text column: the first row cannot be told apart from the rest, \
+                     so it was read as data. If it is a header, add promote_header to the \
+                     sidecar.",
+                );
+            } else {
+                doubts.add(0.1, "no header row detected; columns are named col_1, col_2, ...");
+            }
         }
         HeaderVerdict::AbsentButSuspicious => {
             doubts.add(

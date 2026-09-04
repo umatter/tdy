@@ -68,7 +68,12 @@ fn disagreeing_types_widen_with_a_caveat() {
     assert!(sql.contains("widened"), "the widening must be said:\n{sql}");
 
     let c = dir.path().join("c.csv");
-    std::fs::write(&c, "menge\nviel\nwenig\netwas\n").unwrap();
+    // Two columns on purpose: a one-column all-text file is genuinely
+    // ambiguous (its first row could be a header or a value), and since the
+    // 2026-09-03 corpus audit tdy refuses to guess — see header_verdict's
+    // width > 1 guards. The conflict under test is `menge` TEXT vs BIGINT,
+    // which two columns exercise exactly as well.
+    std::fs::write(&c, "id,menge\n1,viel\n2,wenig\n3,etwas\n").unwrap();
     let sql = tdy::draft::draft_target(&[a, c], Limits::default()).unwrap();
     assert!(sql.contains("TEXT"), "{sql}");
     assert!(sql.contains("kept TEXT"), "the conflict must be named:\n{sql}");
