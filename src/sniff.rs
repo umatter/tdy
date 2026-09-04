@@ -405,7 +405,26 @@ fn sniff_delimited(
     }
     engine::apply_transforms(&mut table, &transforms)?;
 
+    // A header is a row that DESCRIBES the rows under it. Two shapes prove
+    // there is nothing to describe, and promoting anyway deletes a record:
+    //   - a table with one row (there is nothing below the "header"), and
+    //   - a single-column table whose every row has the same shape (a list of
+    //     paths, a requirements file): each row is as much a "label" as row 1,
+    //     so "looks like a header" cannot distinguish them.
+    // Found by the 2026-09-03 corpus audit: a one-line version file returned
+    // an EMPTY table, and a 168-path list returned 167 rows.
+    let promotable = table.rows.len() > 1
+        && !(table.width() <= 1 && rows_are_homogeneous(&table.rows));
+
     match header_verdict(&table.rows) {
+        HeaderVerdict::Present if !promotable => {
+            doubts.add(
+                0.2,
+                "every row here has the same shape, so no row describes the others; \
+                 read as data with generated column names. If the first row really is \
+                 a header, add promote_header to the sidecar.",
+            );
+        }
         HeaderVerdict::Present => {
             let t = Transform::PromoteHeader { rows: 1, join: " ".into() };
             engine::apply_transforms(&mut table, std::slice::from_ref(&t))?;
@@ -888,6 +907,13 @@ fn footer_rows(last_line: Option<&str>, delimiter: Option<char>) -> u32 {
     };
     let line_re = regex::Regex::new(FOOTER_LINE).expect("static regex");
     u32::from(matches_any_field || (delimiter.is_none() && line_re.is_match(line)))
+}
+
+/// Do all rows have the same shape — same field count? Used to recognise a
+/// list (paths, versions, requirements) where no row is a header.
+fn rows_are_homogeneous(rows: &[Vec<String>]) -> bool {
+    let Some(first) = rows.first() else { return true };
+    rows.iter().all(|r| r.len() == first.len())
 }
 
 enum HeaderVerdict {

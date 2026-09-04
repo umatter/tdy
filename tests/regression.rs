@@ -1061,3 +1061,25 @@ fn a_clipped_sheet_grid_says_that_it_was_clipped() {
     // addition, never a replacement.
     assert_eq!(clipped[0][..2], full[0][..2]);
 }
+
+/// A single-line file has no header — promoting its only line returned an
+/// EMPTY table with no warning. Found by the 2026-09-03 corpus audit.
+#[test]
+fn a_single_line_file_keeps_its_only_row() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "one_line.txt", "1.0.1\n");
+    let spec = sniffed(&f).spec;
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(t.num_rows(), 1, "the file's only datum was consumed as a header");
+}
+
+/// Every row structurally identical = no header. Promoting row 1 dropped a
+/// record into the column name.
+#[test]
+fn a_homogeneous_single_column_list_keeps_its_first_row() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "paths.txt", "a/b/one.csv\na/b/two.csv\na/b/three.csv\na/b/four.csv\n");
+    let spec = sniffed(&f).spec;
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(t.num_rows(), 4, "row 1 was consumed as a header");
+}
