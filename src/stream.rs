@@ -782,6 +782,19 @@ pub struct Verification {
     /// whole file's values unanimously support, if any. Empty unless the
     /// caller asked for narrowing.
     pub narrowed: Vec<(usize, DType, ValueParsing)>,
+    /// Narrowing candidates that saw only null/numeric-with-a-fractional-part
+    /// values — every value was a number, but not every value was a whole
+    /// one. Deliberately **not** narrowed to `Float64`: `guess_type` sends a
+    /// consistently-scaled fractional column to `Decimal` precisely because
+    /// money must not go through binary floating point (the same reason
+    /// `decimal_shift` moves the point on the digit string rather than
+    /// multiplying by `0.01`), and a bounded per-value tracker has no way to
+    /// tell a `Decimal` shape from an ordinary float without the whole
+    /// sample in hand — the same ambiguity that keeps date/timestamp formats
+    /// out of [`NarrowTracker`] entirely. Reported separately from
+    /// `narrowed` so the caller can still say *why* the column was left as
+    /// text instead of going silent.
+    pub narrow_fractional: Vec<usize>,
 }
 
 /// Incrementally narrows one `Utf8` column whose probe was empty, from the
@@ -789,29 +802,55 @@ pub struct Verification {
 /// growing allocation, since only a handful of yes/no flags survive per
 /// value rather than the values themselves.
 ///
-/// Deliberately conservative: it resolves only to `Int64`, `Float64` or
-/// `Bool` — never a date/timestamp format or a locale-specific decimal,
-/// both of which need the whole sample in hand at once to settle an
-/// ambiguity (`guess_type` does that for the *probe*; checking format
-/// compatibility one value at a time here cannot replicate it safely). A
-/// column that would need one of those simply stays text. Narrowing is a
-/// strict improvement over never correcting a probe-empty column, not an
-/// obligation to match everything `guess_type` itself can find with a full
-/// sample in hand.
+/// Deliberately conservative: it resolves only to `Int64` or `Bool` — never
+/// `Float64`, and never a date/timestamp format or a locale-specific
+/// decimal. Money is exactly a consistently-scaled fractional column, and
+/// `guess_type` types that `Decimal`, never `Float64` — the whole point
+/// being that money must not go through binary floating point. Choosing
+/// between `Decimal` and `Float64` needs the whole sample in hand at once
+/// (the same reason date/timestamp formats stay out of here too); a value
+/// with a fractional part is reported as [`Verification::narrow_fractional`]
+/// instead of being narrowed. Integers and booleans carry no such hazard, so
+/// they narrow. A column that would need one of the excluded shapes simply
+/// stays text — narrowing is a strict improvement over never correcting a
+/// probe-empty column, not an obligation to match everything `guess_type`
+/// itself can find with a full sample in hand, and under-narrowing is always
+/// the safe failure mode.
 #[derive(Debug, Clone)]
 struct NarrowTracker {
     any_value: bool,
     int_ok: bool,
-    float_ok: bool,
+    /// Every value seen so far is at least number-shaped (integral or a
+    /// plain finite float) — as opposed to genuine, unrelated text.
+    numeric_ok: bool,
+    /// Some value seen so far was number-shaped but not integral. Only
+    /// meaningful together with `numeric_ok`.
+    saw_fraction: bool,
     bool_ok: bool,
 }
 
 const NARROW_TRUTHY: [&str; 5] = ["true", "yes", "y", "ja", "wahr"];
 const NARROW_FALSY: [&str; 5] = ["false", "no", "n", "nein", "falsch"];
 
+/// What whole-file evidence supports for one narrowing-candidate column.
+enum NarrowOutcome {
+    /// No safe conclusion — either no evidence at all, or genuine text.
+    None,
+    /// Every value was a number but not every value was whole; see
+    /// [`Verification::narrow_fractional`].
+    Fractional,
+    Type(DType, ValueParsing),
+}
+
 impl NarrowTracker {
     fn new() -> Self {
-        NarrowTracker { any_value: false, int_ok: true, float_ok: true, bool_ok: true }
+        NarrowTracker {
+            any_value: false,
+            int_ok: true,
+            numeric_ok: true,
+            saw_fraction: false,
+            bool_ok: true,
+        }
     }
 
     /// `raw` is the untouched, post-transform cell text — the same string
@@ -829,14 +868,16 @@ impl NarrowTracker {
                 // single such value disqualifies every candidate, not only
                 // `Int64`.
                 self.int_ok = false;
-                self.float_ok = false;
+                self.numeric_ok = false;
                 self.bool_ok = false;
                 return;
             }
         } else {
             self.int_ok = false;
-            if !v.parse::<f64>().map(f64::is_finite).unwrap_or(false) {
-                self.float_ok = false;
+            if v.parse::<f64>().map(f64::is_finite).unwrap_or(false) {
+                self.saw_fraction = true;
+            } else {
+                self.numeric_ok = false;
             }
         }
         if self.bool_ok {
@@ -847,25 +888,25 @@ impl NarrowTracker {
         }
     }
 
-    fn resolve(&self) -> Option<(DType, ValueParsing)> {
+    fn resolve(&self) -> NarrowOutcome {
         let with_na = |mut p: ValueParsing| {
             p.na_values = crate::sniff::NA_TOKENS.iter().map(|t| t.to_string()).collect();
             p.na_values.retain(|t| !t.is_empty());
             p
         };
         if !self.any_value {
-            return None;
+            return NarrowOutcome::None;
         }
         if self.int_ok {
-            return Some((DType::Int64, with_na(ValueParsing::default())));
-        }
-        if self.float_ok {
-            return Some((DType::Float64, with_na(ValueParsing::default())));
+            return NarrowOutcome::Type(DType::Int64, with_na(ValueParsing::default()));
         }
         if self.bool_ok {
-            return Some((DType::Bool, with_na(ValueParsing::default())));
+            return NarrowOutcome::Type(DType::Bool, with_na(ValueParsing::default()));
         }
-        None
+        if self.numeric_ok && self.saw_fraction {
+            return NarrowOutcome::Fractional;
+        }
+        NarrowOutcome::None
     }
 }
 
@@ -973,13 +1014,29 @@ pub fn verify(
         }
     };
     if clean {
-        let narrowed = trackers
-            .into_iter()
-            .filter_map(|(i, t)| t.resolve().map(|(dtype, parse)| (i, dtype, parse)))
-            .collect();
-        return Ok(Verification { rows, narrowed, ..Verification::default() });
+        let (narrowed, narrow_fractional) = resolve_trackers(trackers);
+        return Ok(Verification { rows, narrowed, narrow_fractional, ..Verification::default() });
     }
     analyse(spec, path, limits, narrow)
+}
+
+/// Split a batch of finished trackers into columns that narrowed and columns
+/// that were left as text specifically because of a fractional value — the
+/// two outcomes [`verify_types`](crate::sniff::verify_types) reports
+/// differently.
+fn resolve_trackers(
+    trackers: HashMap<usize, NarrowTracker>,
+) -> (Vec<(usize, DType, ValueParsing)>, Vec<usize>) {
+    let mut narrowed = Vec::new();
+    let mut narrow_fractional = Vec::new();
+    for (i, t) in trackers {
+        match t.resolve() {
+            NarrowOutcome::Type(dtype, parse) => narrowed.push((i, dtype, parse)),
+            NarrowOutcome::Fractional => narrow_fractional.push(i),
+            NarrowOutcome::None => {}
+        }
+    }
+    (narrowed, narrow_fractional)
 }
 
 /// Which values of `values` fail, found by halving rather than by asking once
@@ -1133,16 +1190,14 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits, narrow: &[usize]) -> R
             capped: t.capped,
         })
         .collect();
-    let narrowed = trackers
-        .into_iter()
-        .filter_map(|(i, t)| t.resolve().map(|(dtype, parse)| (i, dtype, parse)))
-        .collect();
+    let (narrowed, narrow_fractional) = resolve_trackers(trackers);
     Ok(Verification {
         failing: failed.into_iter().enumerate().filter_map(|(i, e)| e.map(|e| (i, e))).collect(),
         offenders,
         rows: row_base,
         repeated_header_rows: repeats,
         narrowed,
+        narrow_fractional,
     })
 }
 

@@ -251,6 +251,23 @@ pub fn verify_types(
         col.dtype = dtype.clone();
         col.parse = parse.clone();
     }
+    // Same evidence, an unsafe conclusion: every value was a number but not
+    // every value was whole. `guess_type` would send a consistently-scaled
+    // fractional column to `Decimal`, never `Float64` — money must not go
+    // through binary floating point — and a bounded tracker cannot tell
+    // `Decimal` from an ordinary float without the whole sample in hand. So
+    // the column stays `Utf8` (already is; nothing to mutate), and this says
+    // why rather than leaving the sniffer silent about having looked.
+    for i in &v.narrow_fractional {
+        let Some(col) = spec.columns.get(*i) else { continue };
+        spec.notes.push(format!(
+            "column `{}`: the probe (the sniffer's first ~{TYPE_SAMPLE} rows) saw no values \
+             for this column; later values are fractional, and choosing between decimal and \
+             float needs the full type inference, so it was left as text. Set the dtype in \
+             the sidecar if you know it.",
+            col.name
+        ));
+    }
 
     if v.failing.is_empty() {
         return;

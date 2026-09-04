@@ -1152,3 +1152,74 @@ fn a_column_that_starts_late_is_still_typed() {
         b.dtype
     );
 }
+
+/// A late-starting fractional column must never narrow to `Float64`: money is
+/// exactly a consistently-scaled fractional column, `guess_type` sends that
+/// shape to `Decimal` (never `Float64`) precisely because money must not go
+/// through binary floating point, and a bounded per-value tracker cannot tell
+/// `Decimal` from an ordinary float without the whole sample in hand. Found
+/// by fix-round-1 review of `a_column_that_starts_late_is_still_typed`: the
+/// first cut of the narrowing fix resolved to `Float64` and rendered 135.1
+/// instead of 135.10. The safe outcome is staying `Utf8` — an explicit,
+/// loud refusal to sum it — never a plausible wrong number.
+#[test]
+fn a_late_starting_money_column_does_not_narrow_to_float() {
+    let dir = TempDir::new().unwrap();
+    let mut s = String::from("a,b\n");
+    for i in 0..2500 {
+        s.push_str(&format!("{i},NA\n"));
+    }
+    for i in 0..50 {
+        s.push_str(&format!("{i},{:.2}\n", 100.0 + i as f64 + 0.10));
+    }
+    let f = write(&dir, "late_money.csv", &s);
+    let r = sniffed(&f);
+    let b = r.spec.columns.iter().find(|c| c.name == "b").expect("column b");
+    assert_eq!(
+        b.dtype,
+        DType::Utf8,
+        "a late-starting two-decimal column narrowed to a lossy type: {:?}",
+        b.dtype
+    );
+    assert!(
+        r.spec.notes.iter().any(|n| n.contains("column `b`") && n.contains("fractional")),
+        "no note explains why the fractional column was left as text: {:?}",
+        r.spec.notes
+    );
+}
+
+/// As above, with every value the same repeating decimal (`0.10`) — the
+/// reviewer's second measurement, where `sum(x)` on the `Float64` narrowing
+/// returned `100.00000000000088` instead of `100.00`. Pinned separately
+/// because a single repeated value is the case most likely to look
+/// "consistent enough" to a naive narrower.
+#[tokio::test]
+async fn a_late_starting_repeated_decimal_does_not_narrow_to_float() {
+    let dir = TempDir::new().unwrap();
+    let mut s = String::from("a,b\n");
+    for i in 0..2500 {
+        s.push_str(&format!("{i},NA\n"));
+    }
+    for i in 0..1000 {
+        s.push_str(&format!("{i},0.10\n"));
+    }
+    let f = write(&dir, "late_repeated_decimal.csv", &s);
+    let r = sniffed(&f);
+    let b = r.spec.columns.iter().find(|c| c.name == "b").expect("column b");
+    assert_eq!(
+        b.dtype,
+        DType::Utf8,
+        "a repeated late-starting decimal narrowed to a lossy type: {:?}",
+        b.dtype
+    );
+    // The safe fallback (text) must actually refuse to be summed, rather than
+    // DataFusion silently coercing Utf8 to a float on its own — a loud error
+    // is correct here, a quiet wrong number is not.
+    let err = provider::run_query(
+        &format!("SELECT sum(b) s FROM messy('{}')", f.display()),
+        &cfg(),
+        false,
+    )
+    .await;
+    assert!(err.is_err(), "sum() over the text-kept column should be refused, not coerced");
+}
