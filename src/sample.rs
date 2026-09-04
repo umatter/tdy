@@ -86,7 +86,7 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static encoding_rs::Encoding {
     // at the tail's start and another truncated at the very end. Neither says
     // anything about the file's encoding, and treating a torn sample as
     // "not UTF-8" is how a valid UTF-8 file acquired windows-1252 mojibake.
-    if is_utf8_apart_from_torn_edges(bytes) {
+    if is_confidently_utf8(bytes) {
         return encoding_rs::UTF_8;
     }
     let mut det = chardetng::EncodingDetector::new();
@@ -103,12 +103,32 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static encoding_rs::Encoding {
 /// at the start of a tail sample) and tolerates an incomplete sequence at the
 /// very end (`Utf8Error::error_len() == None`, which means "valid so far, ran
 /// out of bytes"). An *interior* error is a real signal and returns false.
+///
+/// A buffer that is *nothing but* those leading continuation bytes is not
+/// evidence of anything: trimming them away would leave an empty remainder,
+/// which trivially "validates", so a lone stray high byte — exactly what a
+/// 1-3 byte tail window can hold — would be waved through as UTF-8 having had
+/// nothing actually checked. That buffer is refused instead.
 fn is_utf8_apart_from_torn_edges(bytes: &[u8]) -> bool {
     let start = bytes.iter().take(3).take_while(|b| (0x80..=0xBF).contains(*b)).count();
+    if start > 0 && bytes[start..].is_empty() {
+        return false;
+    }
     match std::str::from_utf8(&bytes[start..]) {
         Ok(_) => true,
         Err(e) => e.error_len().is_none() && e.valid_up_to() > 0,
     }
+}
+
+/// Would `detect_encoding` classify this buffer as UTF-8 without falling
+/// back to the statistical guesser? Composes the same two checks
+/// `detect_encoding` makes (UTF-16 first, then edge-tolerant UTF-8) into one
+/// place, so `build`'s head+tail fast path — which must check each piece
+/// against its own edges, never the artificial seam between the two pieces —
+/// reuses this exact reasoning per piece instead of restating a shortened
+/// version of it that could drift from `detect_encoding` over time.
+fn is_confidently_utf8(bytes: &[u8]) -> bool {
+    utf16_flavour(bytes).is_none() && is_utf8_apart_from_torn_edges(bytes)
 }
 
 /// Bounded slices of `bytes` that carry the encoding evidence.
@@ -247,9 +267,11 @@ pub fn build(path: &Path, max_bytes: usize, limits: Limits) -> Result<FileSample
             // *file* is fine, the concatenation isn't — which skips the
             // "valid UTF-8 is UTF-8" check and freezes a wrong chardetng
             // guess. Check each piece against its own edges instead of the
-            // artificial seam between them.
-            if is_utf8_apart_from_torn_edges(&ht.head) && is_utf8_apart_from_torn_edges(tail) {
-                "utf-8".to_string()
+            // artificial seam between them, through the same predicate
+            // `detect_encoding` itself uses (`is_confidently_utf8`), so the
+            // two decisions cannot drift apart.
+            if is_confidently_utf8(&ht.head) && is_confidently_utf8(tail) {
+                encoding_rs::UTF_8.name().to_ascii_lowercase()
             } else {
                 let mut both = ht.head.clone();
                 both.extend_from_slice(tail);
@@ -474,6 +496,42 @@ mod tests {
         let s = build(&p, 64, Limits::default()).unwrap();
         assert!(!s.ascii_only, "test precondition: tail must be non-ASCII");
         assert_eq!(s.encoding.as_deref(), Some("utf-8"), "torn tail was mistaken for another encoding");
+    }
+
+    #[test]
+    fn a_buffer_of_only_continuation_bytes_is_not_utf8() {
+        // A 1-2 byte tail window can hold a single stray windows-1252 byte.
+        // Trimming it away and validating the empty remainder would call that
+        // file UTF-8 and mangle every high byte in it.
+        assert!(!is_utf8_apart_from_torn_edges(&[0x92]));
+        assert!(!is_utf8_apart_from_torn_edges(&[0x92, 0x93]));
+        assert!(!is_utf8_apart_from_torn_edges(&[0x92, 0x93, 0x94]));
+    }
+
+    /// `build()`-level reproduction: `sample_bytes = 513` (one past the
+    /// config-enforced minimum of 512) gives `head_budget =
+    /// (513*3/4).max(512) = 512` and `tail_budget = 1`, so the *entire* tail
+    /// sample can be a single stray high byte. Before the fix to
+    /// `is_utf8_apart_from_torn_edges`, checking that 1-byte tail on its own
+    /// trimmed it away as "torn" and validated the empty remainder, so this
+    /// windows-1252-only file was recorded `encoding = "utf-8"` — the exact
+    /// mirror of the `enc_late_1252_byte.csv` fixture this fix has to keep
+    /// passing.
+    #[test]
+    fn a_tiny_tail_window_holding_only_a_stray_byte_is_not_utf8() {
+        let d = tempfile::TempDir::new().unwrap();
+        let mut body = vec![b'x'; 599];
+        body.push(0x92); // windows-1252 right single quote, alone in the tail
+        assert_eq!(body.len(), 600);
+        let p = write(&d, "tiny_tail.csv", &body);
+
+        let s = build(&p, 513, Limits::default()).unwrap();
+        assert!(!s.ascii_only, "test precondition: tail must be non-ASCII");
+        assert_ne!(
+            s.encoding.as_deref(),
+            Some("utf-8"),
+            "a lone stray byte filling a 1-byte tail window was waved through as UTF-8"
+        );
     }
 
     /// The regression behind `evidence_windows`: a 22 MB CSV whose only
