@@ -9,7 +9,7 @@ already existed as committed bytes before this generator was written, and
 regenerating them must not move a single byte, or every sidecar fingerprint
 pointing at them goes stale.
 
-Run from the repo root: python3 testdata/gen/13_audit_defects.py
+Run from the repo root: python3 testdata/gen/15_audit_defects.py
 
 Deterministic; requires openpyxl (and lxml, transitively -- see
 gen_fixtures.py's module docstring) for the two xlsx fixtures.
