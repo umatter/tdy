@@ -1092,6 +1092,17 @@ const PROSE_LEAD: &str = r"(?i)^(legend|note|notes|footnote|source)s?\b";
 /// still `footer_rows`'s territory. Returns the block's total row count
 /// (for the `skip_rows` tail suggestion) and the (1-based) row number the
 /// block starts at.
+///
+/// Second, decide whether the block *is* a legend, and this is where the
+/// looseness of phase one has to be paid back. The walk stops only at a
+/// full-width row, so on a table whose rows are mostly sparse it runs clear
+/// to the top: `Electricity_generation_statistics_2019.xlsx` was reported as
+/// "475 trailing rows" over a 475-row table, advising a `skip_rows` tail
+/// that would have deleted every row. Two gates close that. A block starting
+/// at the first row has no data above it and is trailing nothing. And prose
+/// must be a real share of the block's non-empty rows — a legend is mostly
+/// legend, whereas a span holding eight legend lines among 475 data rows is
+/// the table, reached by accident.
 fn trailing_prose_block(rows: &[Vec<String>], width: usize) -> Option<(usize, usize)> {
     if width == 0 {
         return None;
@@ -1108,11 +1119,21 @@ fn trailing_prose_block(rows: &[Vec<String>], width: usize) -> Option<(usize, us
             break;
         }
     }
+    // A block with nothing above it is not trailing anything: the walk ran
+    // clear to the top of a table whose rows are simply sparse. Claiming it
+    // is a legend advises deleting the entire dataset.
+    if block_start == 0 {
+        return None;
+    }
     let block = &rows[block_start..];
     if block.len() < 2 {
         return None;
     }
 
+    let non_empty = block
+        .iter()
+        .filter(|row| row.iter().any(|c| !c.trim().is_empty()))
+        .count();
     let prose_rows = block
         .iter()
         .filter(|row| {
@@ -1120,7 +1141,10 @@ fn trailing_prose_block(rows: &[Vec<String>], width: usize) -> Option<(usize, us
             first_cell.is_some_and(is_prose)
         })
         .count();
-    if prose_rows >= 2 {
+    // Prose must be a real share of the block, not two lines lost inside it.
+    // A legend is mostly legend; a span where prose is a small minority is
+    // the table itself, reached because its rows happen to be sparse.
+    if prose_rows >= 2 && prose_rows * 3 >= non_empty {
         Some((block.len(), block_start + 1))
     } else {
         None

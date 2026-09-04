@@ -1308,3 +1308,50 @@ fn a_short_line_inside_the_trailing_block_does_not_break_the_scan() {
     assert!(r.spec.notes.iter().any(|n| n.contains("trailing")),
             "no note about the trailing block: {:?}", r.spec.notes);
 }
+
+/// A "trailing" block must have data above it, and must be mostly prose.
+///
+/// The 2026-09-04 flagged-file adjudication found
+/// `Electricity_generation_statistics_2019.xlsx` carrying the note "475
+/// trailing row(s) starting at row 1 look like a legend or footnote block" —
+/// where `count(*)` IS 475. The backward walk stops only at a *full-width*
+/// row, so on a sheet whose rows are mostly sparse it ran clear to the top
+/// and claimed the entire table; the >=2-prose-rows gate still passed,
+/// because the sheet's real ~8-row legend sits inside that span. The remedy
+/// it then printed ("add skip_rows (tail = 475)") would have deleted every
+/// row of data — the opposite of the warning's purpose.
+///
+/// Two properties fix it, and this pins both: a block with no data above it
+/// is not trailing anything, and a block in which prose is a tiny minority
+/// is a table, not a legend.
+#[test]
+fn a_trailing_block_never_swallows_the_whole_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("sparse_with_legend.csv");
+    // Every data row is under-width (two of four columns populated), the
+    // shape that let the backward walk run to the top of the file.
+    let mut s = String::from("country,gwh,share,rank\n");
+    for i in 0..40 { s.push_str(&format!("country {i},{},,\n", i * 100)); }
+    s.push_str("\nNotes\n");
+    s.push_str("1) Generation is measured at the terminals of all generator units.\n");
+    s.push_str("2) Totals may not sum exactly because each figure is rounded.\n");
+    std::fs::write(&f, &s).unwrap();
+
+    let r = sniffed(&f);
+    let rows = tdy::engine::execute(&r.spec, &f, Limits::default()).unwrap().num_rows();
+    for n in r.spec.notes.iter().filter(|n| n.contains("trailing row")) {
+        let claimed: usize = n
+            .split_whitespace()
+            .next()
+            .and_then(|w| w.parse().ok())
+            .expect("the note opens with the row count");
+        assert!(
+            claimed < rows,
+            "the trailing-block note claims {claimed} of {rows} rows — the whole table: {n}"
+        );
+        assert!(
+            !n.contains("starting at row 1,") && !n.contains("starting at row 1 "),
+            "a trailing block starting at row 1 has no data above it: {n}"
+        );
+    }
+}
