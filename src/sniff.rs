@@ -405,26 +405,7 @@ fn sniff_delimited(
     }
     engine::apply_transforms(&mut table, &transforms)?;
 
-    // A header is a row that DESCRIBES the rows under it. Two shapes prove
-    // there is nothing to describe, and promoting anyway deletes a record:
-    //   - a table with one row (there is nothing below the "header"), and
-    //   - a single-column table whose every row has the same shape (a list of
-    //     paths, a requirements file): each row is as much a "label" as row 1,
-    //     so "looks like a header" cannot distinguish them.
-    // Found by the 2026-09-03 corpus audit: a one-line version file returned
-    // an EMPTY table, and a 168-path list returned 167 rows.
-    let promotable = table.rows.len() > 1
-        && !(table.width() <= 1 && rows_are_homogeneous(&table.rows));
-
     match header_verdict(&table.rows) {
-        HeaderVerdict::Present if !promotable => {
-            doubts.add(
-                0.2,
-                "every row here has the same shape, so no row describes the others; \
-                 read as data with generated column names. If the first row really is \
-                 a header, add promote_header to the sidecar.",
-            );
-        }
         HeaderVerdict::Present => {
             let t = Transform::PromoteHeader { rows: 1, join: " ".into() };
             engine::apply_transforms(&mut table, std::slice::from_ref(&t))?;
@@ -909,13 +890,6 @@ fn footer_rows(last_line: Option<&str>, delimiter: Option<char>) -> u32 {
     u32::from(matches_any_field || (delimiter.is_none() && line_re.is_match(line)))
 }
 
-/// Do all rows have the same shape — same field count? Used to recognise a
-/// list (paths, versions, requirements) where no row is a header.
-fn rows_are_homogeneous(rows: &[Vec<String>]) -> bool {
-    let Some(first) = rows.first() else { return true };
-    rows.iter().all(|r| r.len() == first.len())
-}
-
 enum HeaderVerdict {
     Present,
     /// No header, and the first row does not look like one either.
@@ -947,13 +921,17 @@ fn header_verdict(rows: &[Vec<String>]) -> HeaderVerdict {
     }
 
     if rows.len() == 1 {
-        // A file with a header and no data rows still has a header.
+        // A file with a header and no data rows still has a header — but a
+        // single-column, single-row file has exactly one datum. Promoting it
+        // returns an EMPTY table from a file that plainly has content, which
+        // is worse than any naming (2026-09-03 corpus audit:
+        // workflows-version.txt, one line, "1.0.1").
         let unique = {
             let mut s = std::collections::HashSet::new();
             first.iter().all(|c| s.insert(c.trim().to_ascii_lowercase()))
         };
         let texty = first.iter().all(|c| c.trim().is_empty() || !looks_scalar(c));
-        return if unique && texty && named == width {
+        return if unique && texty && named == width && width > 1 {
             HeaderVerdict::Present
         } else {
             HeaderVerdict::Absent
@@ -1002,8 +980,11 @@ fn header_verdict(rows: &[Vec<String>]) -> HeaderVerdict {
     };
     if evidence == 0 && against == 0 {
         // An all-text table: a header is the row whose cells are all distinct
-        // labels.
-        if unique && named == width {
+        // labels. With ONE column that test is vacuous — a single cell is
+        // trivially "all distinct" — and promoting on it consumed a record
+        // from a list of file paths (2026-09-03 corpus audit). A one-column
+        // all-text list offers no way to tell a header from its data.
+        if unique && named == width && width > 1 {
             return HeaderVerdict::Present;
         }
     }
