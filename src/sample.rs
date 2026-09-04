@@ -489,7 +489,7 @@ mod tests {
         // byte 0xA9, tearing the character in two.
         let mut body = vec![b'x'; 100];
         body.extend_from_slice("é".as_bytes());
-        body.extend_from_slice(&vec![b'y'; 15]);
+        body.extend_from_slice(&[b'y'; 15]);
         assert_eq!(body.len(), 117);
         let p = write(&d, "torn.csv", &body);
 
