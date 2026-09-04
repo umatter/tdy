@@ -546,6 +546,40 @@ fn regex_replace_encoding(text: &str) -> String {
         .join("\n")
 }
 
+/// A valid-UTF-8 file whose tail sample begins mid-character was recorded as
+/// windows-1252 and every accented value came back as mojibake, at confidence
+/// 0.80 with no warning. Found by the 2026-09-03 corpus audit.
+///
+/// Fixture: testdata/torn_tail_utf8.csv (generated ad hoc for this task;
+/// Task 7 moves its generation into testdata/gen/13_audit_defects.py).
+#[test]
+fn utf8_file_with_a_torn_tail_sample_is_not_mojibake() {
+    let p = fixture("torn_tail_utf8.csv");
+    // The production sniff path samples `cfg.sample_bytes` (default 16 KiB,
+    // giving a 4 KiB tail) — not the 64 KiB the `sniffed()` helper above
+    // uses, which would swallow this 43 KiB fixture whole and never read a
+    // separate tail at all.
+    let sample_bytes = Config::default().sample_bytes;
+    let sample = sample::build(&p, sample_bytes, Limits::default()).unwrap();
+    let spec = sniff::sniff(&p, &sample, Limits::default()).unwrap().spec;
+    assert_eq!(
+        spec.extraction.encoding(),
+        Some("utf-8"),
+        "torn tail sample was mistaken for another encoding: {:?}",
+        spec.extraction
+    );
+    let batch = provider::spec_to_batch(&spec, &p).unwrap();
+    let text = col_str(&batch, 1); // "name" column
+    assert!(
+        text.iter().flatten().any(|v| v.contains('à') || v.contains('ò')),
+        "expected accented text to survive decoding, got {text:?}"
+    );
+    assert!(
+        !text.iter().flatten().any(|v| v.contains('\u{c3}')),
+        "mojibake (stray 0xC3 lead byte rendered as text) in output: {text:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 5. The pre-pass must read the query, not grep it
 // ---------------------------------------------------------------------------

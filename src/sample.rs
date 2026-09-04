@@ -80,7 +80,13 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static encoding_rs::Encoding {
     // Valid UTF-8 is UTF-8. chardetng is a statistical guesser and will
     // cheerfully call a short ASCII file windows-1252; freezing that guess
     // then mangles every multi-byte character later in the file.
-    if std::str::from_utf8(bytes).is_ok() {
+    //
+    // The bytes handed to us are a SAMPLE: `build` concatenates a head with a
+    // tail read from an arbitrary offset, so a multi-byte character can be torn
+    // at the tail's start and another truncated at the very end. Neither says
+    // anything about the file's encoding, and treating a torn sample as
+    // "not UTF-8" is how a valid UTF-8 file acquired windows-1252 mojibake.
+    if is_utf8_apart_from_torn_edges(bytes) {
         return encoding_rs::UTF_8;
     }
     let mut det = chardetng::EncodingDetector::new();
@@ -89,6 +95,20 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static encoding_rs::Encoding {
     }
     det.feed(b"", true);
     det.guess(None, true)
+}
+
+/// Is this sample valid UTF-8 once truncation at its edges is discounted?
+///
+/// Skips leading continuation bytes (0x80..=0xBF, at most 3 — a torn character
+/// at the start of a tail sample) and tolerates an incomplete sequence at the
+/// very end (`Utf8Error::error_len() == None`, which means "valid so far, ran
+/// out of bytes"). An *interior* error is a real signal and returns false.
+fn is_utf8_apart_from_torn_edges(bytes: &[u8]) -> bool {
+    let start = bytes.iter().take(3).take_while(|b| (0x80..=0xBF).contains(*b)).count();
+    match std::str::from_utf8(&bytes[start..]) {
+        Ok(_) => true,
+        Err(e) => e.error_len().is_none() && e.valid_up_to() > 0,
+    }
 }
 
 /// Bounded slices of `bytes` that carry the encoding evidence.
@@ -220,9 +240,21 @@ pub fn build(path: &Path, max_bytes: usize, limits: Limits) -> Result<FileSample
     // would freeze a guess made from evidence that contained none.
     let enc_name = match (&ht.tail, ascii_only) {
         (Some(tail), false) => {
-            let mut both = ht.head.clone();
-            both.extend_from_slice(tail);
-            decode_text(&both, None).1
+            // `read_head_tail` seeks the tail to an arbitrary byte offset, so
+            // it can begin mid multi-byte sequence even when the file is
+            // valid UTF-8 throughout. Fusing the raw bytes and validating the
+            // fused buffer manufactures a false tear right at the seam — the
+            // *file* is fine, the concatenation isn't — which skips the
+            // "valid UTF-8 is UTF-8" check and freezes a wrong chardetng
+            // guess. Check each piece against its own edges instead of the
+            // artificial seam between them.
+            if is_utf8_apart_from_torn_edges(&ht.head) && is_utf8_apart_from_torn_edges(tail) {
+                "utf-8".to_string()
+            } else {
+                let mut both = ht.head.clone();
+                both.extend_from_slice(tail);
+                decode_text(&both, None).1
+            }
         }
         _ => decode_text(&ht.head, None).1,
     };
@@ -391,6 +423,57 @@ mod tests {
         assert_eq!(detect_encoding("Zürich".as_bytes()).name(), "UTF-8");
         // Not valid UTF-8: fall back to the statistical guesser.
         assert_ne!(detect_encoding(b"M\xfcller").name(), "UTF-8");
+    }
+
+    #[test]
+    fn a_torn_multibyte_char_at_a_sample_boundary_is_still_utf8() {
+        // A tail sample that begins in the middle of "à" (0xC3 0xA0): the leading
+        // 0xA0 is a continuation byte, so the buffer is not valid UTF-8 on its
+        // own — but the FILE is, and freezing windows-1252 here mangles every
+        // accented value. `detect_encoding` is checked on the tail alone
+        // (what `is_utf8_apart_from_torn_edges` actually tolerates); fusing
+        // an unrelated head onto it before validating would manufacture a
+        // *different*, un-anchored tear at the seam that no pure function of
+        // bytes can safely tell apart from a genuine interior encoding error
+        // (see `a_late_non_ascii_byte_is_still_decoded_correctly` in
+        // tests/fixtures.rs, which pins exactly that distinction: a single
+        // stray byte in the *middle* of an otherwise-ASCII sample must NOT be
+        // waved through as "torn"). `build()`'s fix is to check the head and
+        // tail pieces independently rather than validate their concatenation.
+        let torn_tail = &[0xA0u8, b' ', b'd', b'e', b' ', b'L', 0xC3, 0xB2, b'r', b'i', b'a', b'\n'];
+        assert!((0x80..=0xBF).contains(&torn_tail[0]), "precondition: buffer starts torn");
+        assert_eq!(detect_encoding(torn_tail).name(), "UTF-8");
+    }
+
+    #[test]
+    fn a_truncated_trailing_sequence_is_still_utf8() {
+        // The head can end mid-character too.
+        let mut b = "Zürich, Genève, Basel".as_bytes().to_vec();
+        b.truncate(b.len() - 1); // cut the last byte of "è"
+        assert_eq!(detect_encoding(&b).name(), "UTF-8");
+    }
+
+    /// End-to-end: `build()` samples a file whose tail read (at the seek
+    /// offset `read_head_tail` computes) genuinely begins mid multi-byte
+    /// character. The file is valid UTF-8 throughout; before the fix,
+    /// `build` fused head+tail into one buffer, `detect_encoding` saw an
+    /// interior tear at the seam, and the sample was frozen as windows-1252.
+    #[test]
+    fn a_file_whose_tail_sample_begins_mid_character_still_samples_as_utf8() {
+        let d = tempfile::TempDir::new().unwrap();
+        // max_bytes = 64 -> head_budget = 48, tail_budget = 16.
+        // "é" (0xC3 0xA9) sits at byte offset 100-101; total length 117 makes
+        // the tail start (117 - 16 = 101) land exactly on the continuation
+        // byte 0xA9, tearing the character in two.
+        let mut body = vec![b'x'; 100];
+        body.extend_from_slice("é".as_bytes());
+        body.extend_from_slice(&vec![b'y'; 15]);
+        assert_eq!(body.len(), 117);
+        let p = write(&d, "torn.csv", &body);
+
+        let s = build(&p, 64, Limits::default()).unwrap();
+        assert!(!s.ascii_only, "test precondition: tail must be non-ASCII");
+        assert_eq!(s.encoding.as_deref(), Some("utf-8"), "torn tail was mistaken for another encoding");
     }
 
     /// The regression behind `evidence_windows`: a 22 MB CSV whose only
