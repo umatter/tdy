@@ -1126,3 +1126,29 @@ fn a_late_clustered_category_beyond_the_probe_window_is_not_a_footer() {
         "the last row of a late-clustered 'total' category was dropped as a footer"
     );
 }
+
+/// A column whose values all appear after the probe window was typed text
+/// while identical sibling columns were numeric, and whole-file verification
+/// never corrected it (it only widens). Found by the 2026-09-03 corpus audit:
+/// `individual_results_df.csv` types `p7` as text while `p1`-`p6` (identical
+/// shape) are whole numbers, because `p7`'s only non-null values sit at rows
+/// 21,513-21,655, past `PROBE_ROWS`.
+#[test]
+fn a_column_that_starts_late_is_still_typed() {
+    let dir = TempDir::new().unwrap();
+    let mut s = String::from("a,b\n");
+    for i in 0..2500 {
+        s.push_str(&format!("{i},NA\n"));
+    }
+    for i in 0..50 {
+        s.push_str(&format!("{i},{}\n", i % 9));
+    }
+    let f = write(&dir, "late_column.csv", &s);
+    let spec = sniffed(&f).spec;
+    let b = spec.columns.iter().find(|c| c.name == "b").expect("column b");
+    assert!(
+        !matches!(b.dtype, DType::Utf8),
+        "late-starting numeric column stayed text: {:?}",
+        b.dtype
+    );
+}

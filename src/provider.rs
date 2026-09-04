@@ -423,7 +423,11 @@ pub async fn ensure_sidecar_opts(
         // backwards: a model narrows a type from a sample it was shown, and
         // `testdata/late_surprise_*` is four files where the sample lies.
         if opts.verify {
-            sniff::verify_types(&mut spec, path, cfg.limits);
+            // No `probe_empty` evidence for a model-proposed spec — its
+            // columns are not `draft`'s, so narrowing is skipped rather than
+            // guessed at; widening (the part that matters for correctness)
+            // still runs.
+            sniff::verify_types(&mut spec, path, cfg.limits, &[]);
         }
         (spec, InferenceMethod::Llm, Some(inferred.model))
     } else {

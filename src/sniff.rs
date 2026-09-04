@@ -39,6 +39,12 @@ pub(crate) const TYPE_SAMPLE: usize = 500;
 pub struct SniffResult {
     pub spec: ParseSpec,
     pub confidence: f32,
+    /// Which columns (by index into `spec.columns`) were typed `Utf8` because
+    /// every value the probe saw was null/NA — as opposed to `Utf8` because
+    /// real text was seen. [`verify_types`] uses this to decide which columns
+    /// it may narrow from whole-file evidence: a column with real text in the
+    /// probe must never be narrowed, only one with no evidence at all.
+    pub(crate) probe_empty: Vec<usize>,
 }
 
 /// Accumulates the reasons a spec might be wrong, so that the confidence
@@ -96,7 +102,7 @@ pub fn sniff_opts(
         FormatGuess::Delimited | FormatGuess::Unknown => sniff_text(path, sample, limits),
     }?;
     if opts.verify {
-        verify_types(&mut res.spec, path, limits);
+        verify_types(&mut res.spec, path, limits, &res.probe_empty);
     } else {
         // Said in the sidecar rather than only on the terminal, because the
         // sidecar is what a colleague reads six months later and the claim
@@ -135,15 +141,42 @@ pub fn sniff_opts(
 /// which column and why, so a user who wants the narrow type knows exactly
 /// what to fix.
 ///
+/// The one direction this does not go is text staying text forever for lack
+/// of evidence: a column whose probe was entirely null/NA is typed `Utf8` by
+/// default (there was nothing to guess from), and a text guess never
+/// *fails*, so the widen loop above never revisits it — `p7` in
+/// `individual_results_df.csv` types as text while `p1`-`p6` are whole
+/// numbers, because its only non-null values sit at rows 21,513-21,655, past
+/// the probe. `probe_empty` (indices into `spec.columns`, from the sniffer
+/// that built this spec) names exactly those columns, and this pass narrows
+/// one **only** when it is in that list — never a column that had real text
+/// in the probe, which is what keeps widening's guarantee intact — **and**
+/// the whole file's values unanimously support a narrower type (see
+/// [`crate::stream::verify`]'s `narrow` parameter). A narrowing is recorded
+/// in a note exactly like a widening is, so it is visible rather than silent.
+///
 /// This costs a full read of the file. That is affordable only because
 /// extraction streams — before that it would have cost eight times the file in
 /// memory — and it is paid once, when the sidecar is written, not per query.
-pub fn verify_types(spec: &mut crate::spec::ParseSpec, path: &Path, limits: Limits) {
-    // Nothing to check if every column is already text.
-    if spec.columns.iter().all(|c| c.dtype == DType::Utf8) {
+/// Narrowing rides the same read: no second pass over the file.
+pub fn verify_types(
+    spec: &mut crate::spec::ParseSpec,
+    path: &Path,
+    limits: Limits,
+    probe_empty: &[usize],
+) {
+    let narrow: Vec<usize> = probe_empty
+        .iter()
+        .copied()
+        .filter(|&i| spec.columns.get(i).is_some_and(|c| c.dtype == DType::Utf8))
+        .collect();
+    // Nothing to check if every column is already text and none of them is a
+    // narrowing candidate — that is the only case with nothing to learn from
+    // a read of the file.
+    if narrow.is_empty() && spec.columns.iter().all(|c| c.dtype == DType::Utf8) {
         return;
     }
-    let mut v = match crate::stream::verify(spec, path, limits) {
+    let mut v = match crate::stream::verify(spec, path, limits, &narrow) {
         Ok(v) => v,
         // A file that cannot be read at all is not this function's problem —
         // the caller's own execution reports it properly. But silence here
@@ -196,10 +229,27 @@ pub fn verify_types(spec: &mut crate::spec::ParseSpec, path: &Path, limits: Limi
                  exports concatenated together",
                 v.repeated_header_rows
             ));
-            if let Ok(again) = crate::stream::verify(spec, path, limits) {
+            if let Ok(again) = crate::stream::verify(spec, path, limits, &narrow) {
                 v = again;
             }
         }
+    }
+
+    // Narrowing happens before the `failing.is_empty()` exit below, because a
+    // narrowed column was `Utf8` and text never fails — the exit that
+    // (correctly) skips the widen loop when there is nothing to widen would
+    // otherwise also skip the one case this function exists to add.
+    for (i, dtype, parse) in &v.narrowed {
+        let Some(col) = spec.columns.get_mut(*i) else { continue };
+        spec.notes.push(format!(
+            "column `{}`: the probe (the sniffer's first ~{TYPE_SAMPLE} rows) saw no values \
+             for this column, so it was kept as text; the whole file's values are all present \
+             and uniformly {}, so it has been narrowed to that.",
+            col.name,
+            type_word(dtype)
+        ));
+        col.dtype = dtype.clone();
+        col.parse = parse.clone();
     }
 
     if v.failing.is_empty() {
@@ -841,7 +891,7 @@ fn finish(
         bail!("no columns detected");
     }
     let body: Vec<&Vec<String>> = table.rows.iter().take(TYPE_SAMPLE).collect();
-    let columns = guess_columns(&header, &body, &mut doubts);
+    let (columns, probe_empty) = guess_columns(&header, &body, &mut doubts);
 
     // A table that types as almost entirely text usually means the layout was
     // misread, not that the data is textual.
@@ -860,7 +910,7 @@ fn finish(
         confidence: Some(confidence),
         notes,
     };
-    Ok(SniffResult { spec, confidence })
+    Ok(SniffResult { spec, confidence, probe_empty })
 }
 
 fn csv_field_counts(text: &str, delimiter: char) -> Vec<usize> {
@@ -1201,10 +1251,11 @@ fn guess_columns(
     header: &[String],
     body: &[&Vec<String>],
     doubts: &mut Doubts,
-) -> Vec<ColumnSpec> {
+) -> (Vec<ColumnSpec>, Vec<usize>) {
     let mut names: Vec<String> = header.iter().map(|h| sanitize(h)).collect();
     dedupe(&mut names);
-    header
+    let mut probe_empty = Vec::new();
+    let columns = header
         .iter()
         .enumerate()
         .map(|(i, original)| {
@@ -1213,6 +1264,14 @@ fn guess_columns(
                 .filter_map(|r| r.get(i))
                 .map(|s| s.as_str())
                 .collect();
+            // Every value the probe saw for this column was null/NA (or there
+            // were none): the probe has no opinion on this column's type, as
+            // opposed to having looked and found text. That distinction is
+            // lost the moment `guess_type` returns `Utf8` either way, so it
+            // is captured here, before it disappears.
+            if values.iter().all(|v| is_na(v.trim())) {
+                probe_empty.push(i);
+            }
             let name = names[i].clone();
             let g = guess_type(&values, &name);
             if let Some(n) = g.note {
@@ -1230,7 +1289,8 @@ fn guess_columns(
                 parse: g.parse,
             }
         })
-        .collect()
+        .collect();
+    (columns, probe_empty)
 }
 
 /// Words that mean "this column is money" in the languages these files come

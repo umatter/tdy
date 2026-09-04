@@ -70,7 +70,7 @@ use crate::engine::{
 /// exactly the batches it had.
 const BATCH_CELLS: usize = 1 << 20;
 use crate::spec::{
-    ColumnSpec, Extraction, FixedField, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform,
+    ColumnSpec, DType, Extraction, FixedField, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform,
     ValueParsing,
 };
 
@@ -777,6 +777,114 @@ pub struct Verification {
     /// February's header sitting in the middle of the data — and the result is
     /// one text row that poisons every numeric column in the file.
     pub repeated_header_rows: usize,
+    /// For each column index passed in as a narrowing candidate (see
+    /// [`verify`]'s `narrow` parameter): the type and parse settings the
+    /// whole file's values unanimously support, if any. Empty unless the
+    /// caller asked for narrowing.
+    pub narrowed: Vec<(usize, DType, ValueParsing)>,
+}
+
+/// Incrementally narrows one `Utf8` column whose probe was empty, from the
+/// raw values the verification pass reads anyway — no second read, and no
+/// growing allocation, since only a handful of yes/no flags survive per
+/// value rather than the values themselves.
+///
+/// Deliberately conservative: it resolves only to `Int64`, `Float64` or
+/// `Bool` — never a date/timestamp format or a locale-specific decimal,
+/// both of which need the whole sample in hand at once to settle an
+/// ambiguity (`guess_type` does that for the *probe*; checking format
+/// compatibility one value at a time here cannot replicate it safely). A
+/// column that would need one of those simply stays text. Narrowing is a
+/// strict improvement over never correcting a probe-empty column, not an
+/// obligation to match everything `guess_type` itself can find with a full
+/// sample in hand.
+#[derive(Debug, Clone)]
+struct NarrowTracker {
+    any_value: bool,
+    int_ok: bool,
+    float_ok: bool,
+    bool_ok: bool,
+}
+
+const NARROW_TRUTHY: [&str; 5] = ["true", "yes", "y", "ja", "wahr"];
+const NARROW_FALSY: [&str; 5] = ["false", "no", "n", "nein", "falsch"];
+
+impl NarrowTracker {
+    fn new() -> Self {
+        NarrowTracker { any_value: false, int_ok: true, float_ok: true, bool_ok: true }
+    }
+
+    /// `raw` is the untouched, post-transform cell text — the same string
+    /// [`build_column_at`] would be asked to parse.
+    fn observe(&mut self, raw: &str) {
+        let v = raw.trim();
+        if crate::sniff::is_na(v) {
+            return;
+        }
+        self.any_value = true;
+        if crate::numfmt::all_integral(&[v]) {
+            if crate::numfmt::has_significant_leading_zero(v) || !crate::numfmt::fits_i64(v) {
+                // `guess_type` keeps a whole column like this as text rather
+                // than quietly falling back to a float or a boolean, so a
+                // single such value disqualifies every candidate, not only
+                // `Int64`.
+                self.int_ok = false;
+                self.float_ok = false;
+                self.bool_ok = false;
+                return;
+            }
+        } else {
+            self.int_ok = false;
+            if !v.parse::<f64>().map(f64::is_finite).unwrap_or(false) {
+                self.float_ok = false;
+            }
+        }
+        if self.bool_ok {
+            let l = v.to_ascii_lowercase();
+            if !NARROW_TRUTHY.contains(&l.as_str()) && !NARROW_FALSY.contains(&l.as_str()) {
+                self.bool_ok = false;
+            }
+        }
+    }
+
+    fn resolve(&self) -> Option<(DType, ValueParsing)> {
+        let with_na = |mut p: ValueParsing| {
+            p.na_values = crate::sniff::NA_TOKENS.iter().map(|t| t.to_string()).collect();
+            p.na_values.retain(|t| !t.is_empty());
+            p
+        };
+        if !self.any_value {
+            return None;
+        }
+        if self.int_ok {
+            return Some((DType::Int64, with_na(ValueParsing::default())));
+        }
+        if self.float_ok {
+            return Some((DType::Float64, with_na(ValueParsing::default())));
+        }
+        if self.bool_ok {
+            return Some((DType::Bool, with_na(ValueParsing::default())));
+        }
+        None
+    }
+}
+
+/// Feed one batch's raw string values for the narrow candidates into their
+/// trackers. `positions` maps a position in the *read* batch to the column's
+/// index in the original spec.
+fn observe_narrow_batch(
+    batch: &RecordBatch,
+    positions: &[(usize, usize)],
+    trackers: &mut HashMap<usize, NarrowTracker>,
+) {
+    use datafusion::arrow::array::StringArray;
+    for &(pos, orig) in positions {
+        let Some(arr) = batch.column(pos).as_any().downcast_ref::<StringArray>() else { continue };
+        let Some(tracker) = trackers.get_mut(&orig) else { continue };
+        for v in arr.iter().flatten() {
+            tracker.observe(v);
+        }
+    }
 }
 
 pub fn failing_columns(
@@ -784,7 +892,7 @@ pub fn failing_columns(
     path: &Path,
     limits: Limits,
 ) -> Result<Vec<(usize, String)>> {
-    Ok(verify(spec, path, limits)?.failing)
+    Ok(verify(spec, path, limits, &[])?.failing)
 }
 
 /// Read the whole file and report what the guess got wrong.
@@ -799,20 +907,56 @@ pub fn failing_columns(
 /// Without the split this cost 16 s on a 141 MB file against 2.9 s for the
 /// same file's `count(*)`, because it did the typing work twice for every
 /// file whether or not anything was wrong.
-pub fn verify(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification> {
+///
+/// `narrow` names columns (by index into `spec.columns`) that are `Utf8`
+/// with no probe evidence at all — every value the sniffer's probe saw was
+/// null/NA — so they are kept in the read (as `Utf8`, which can never fail
+/// the cast below) purely so their whole-file values can be classified; see
+/// [`NarrowTracker`]. Pass `&[]` for a spec with no such columns, or when the
+/// caller has no probe to compare against (a model-proposed spec, say).
+pub fn verify(
+    spec: &ParseSpec,
+    path: &Path,
+    limits: Limits,
+    narrow: &[usize],
+) -> Result<Verification> {
     // A text column cannot fail to be text, so verifying one is pure work.
     // Projecting them away is free on a file of numbers and a large saving on
-    // the wide mostly-textual exports that are most of real data.
+    // the wide mostly-textual exports that are most of real data — except a
+    // `narrow` candidate, kept so its values can be read in this same pass.
     let mut probe = spec.clone();
-    probe.columns.retain(|c| c.dtype != crate::spec::DType::Utf8);
+    let mut kept_original: Vec<usize> = Vec::new();
+    probe.columns = spec
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| c.dtype != DType::Utf8 || narrow.contains(i))
+        .map(|(i, c)| {
+            kept_original.push(i);
+            c.clone()
+        })
+        .collect();
     if probe.columns.is_empty() {
         return Ok(Verification::default());
     }
+
+    // Which positions in the *read* batch are narrow candidates, and which
+    // original column each is. `Vec`, not the map itself, because insertion
+    // order does not matter and this is checked once per batch.
+    let narrow_positions: Vec<(usize, usize)> = kept_original
+        .iter()
+        .enumerate()
+        .filter(|(_, &orig)| narrow.contains(&orig))
+        .map(|(pos, &orig)| (pos, orig))
+        .collect();
+    let mut trackers: HashMap<usize, NarrowTracker> =
+        narrow_positions.iter().map(|&(_, orig)| (orig, NarrowTracker::new())).collect();
 
     let mut rows = 0usize;
     let clean = if can_stream(&probe) {
         execute_with(&probe, path, limits, |b| {
             rows += b.num_rows();
+            observe_narrow_batch(&b, &narrow_positions, &mut trackers);
             Ok(())
         })
         .is_ok()
@@ -820,15 +964,22 @@ pub fn verify(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verificat
         match crate::engine::execute_batches(&probe, path, limits) {
             Ok(bs) => {
                 rows = bs.iter().map(|b| b.num_rows()).sum();
+                for b in &bs {
+                    observe_narrow_batch(b, &narrow_positions, &mut trackers);
+                }
                 true
             }
             Err(_) => false,
         }
     };
     if clean {
-        return Ok(Verification { rows, ..Verification::default() });
+        let narrowed = trackers
+            .into_iter()
+            .filter_map(|(i, t)| t.resolve().map(|(dtype, parse)| (i, dtype, parse)))
+            .collect();
+        return Ok(Verification { rows, narrowed, ..Verification::default() });
     }
-    analyse(spec, path, limits)
+    analyse(spec, path, limits, narrow)
 }
 
 /// Which values of `values` fail, found by halving rather than by asking once
@@ -875,7 +1026,7 @@ struct Tally {
 }
 
 /// The slow path: which columns are wrong, and which values made them so.
-fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification> {
+fn analyse(spec: &ParseSpec, path: &Path, limits: Limits, narrow: &[usize]) -> Result<Verification> {
     use datafusion::arrow::array::{Array, StringArray};
 
     // Read every column as an untouched string: no na_values, no strip, no
@@ -889,6 +1040,8 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
 
     let mut failed: Vec<Option<String>> = vec![None; spec.columns.len()];
     let mut bad: Vec<Tally> = vec![Tally::default(); spec.columns.len()];
+    let mut trackers: HashMap<usize, NarrowTracker> =
+        narrow.iter().map(|&i| (i, NarrowTracker::new())).collect();
     let mut repeats = 0usize;
     let mut row_base = 0usize;
     // The header cell each column reads from, which is what a repeated header
@@ -927,6 +1080,14 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
             let Some(arr) = cols.get(i).copied().flatten() else { continue };
             let values: Vec<&str> =
                 (0..arr.len()).map(|r| if arr.is_null(r) { "" } else { arr.value(r) }).collect();
+            // Before the early exit below: a narrow candidate is `Utf8` in
+            // `spec`, so `build_column_at` against its own declared type
+            // always succeeds and would otherwise skip this column entirely.
+            if let Some(tracker) = trackers.get_mut(&i) {
+                for v in &values {
+                    tracker.observe(v);
+                }
+            }
             if build_column_at(col, &values, row_base).is_ok() {
                 continue;
             }
@@ -972,11 +1133,16 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<Verification
             capped: t.capped,
         })
         .collect();
+    let narrowed = trackers
+        .into_iter()
+        .filter_map(|(i, t)| t.resolve().map(|(dtype, parse)| (i, dtype, parse)))
+        .collect();
     Ok(Verification {
         failing: failed.into_iter().enumerate().filter_map(|(i, e)| e.map(|e| (i, e))).collect(),
         offenders,
         rows: row_base,
         repeated_header_rows: repeats,
+        narrowed,
     })
 }
 

@@ -942,7 +942,7 @@ fn fit_framed(
     // right". `verify = 'head'` opts out, for datasets where that read is too
     // expensive to pay on every fit.
     if rigour == Rigour::Full && target.verify == Verify::Full {
-        if let Ok(v) = crate::stream::verify(&spec, path, limits) {
+        if let Ok(v) = crate::stream::verify(&spec, path, limits, &[]) {
             let mut late = Vec::new();
             for (i, why) in &v.failing {
                 let Some(c) = spec.columns.get(*i) else { continue };
