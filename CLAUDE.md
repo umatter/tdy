@@ -333,7 +333,9 @@ relative I/O against the *process's* directory, and the two routes have to agree
 into `corpus/` (gitignored, ~7 GB, 9,881 files). `TDY_CORPUS=corpus cargo test --test corpus
 -- --nocapture` sweeps them: never panic, never hang, anything read confidently is
 reproducible, plus a survey. Nothing in CI sees it, so anything it *finds* has to become a
-fixture in `testdata/` — that is what `12_late_surprises.py` is.
+fixture in `testdata/` — that is what `12_late_surprises.py` is. The 2026-09-03 sweep's own
+findings live in `gap_reports/AUDIT_FINDINGS.md` (gitignored, like every `gap_reports/`
+report); its fixtures are `13_audit_defects.py` (below).
 
 Current state (re-swept after the calamine 0.26→0.36 upgrade — no regressions, and the
 only "declined" xlsx are Office `~$` owner-lock stubs, which is correct):
@@ -578,6 +580,11 @@ all become. It is the corpus `tdy fit` will be judged on, and three of its twelv
 (Rappen, two-`Betrag`, no-region) exist to be **refused**. Its ground truth is the sum
 57'340.00 over the nine that may join. `testdata/large/` is gitignored (perf fixtures, generated on demand).
 `tests/e2e.rs::umsatz_spec()` is the hand-written reference spec for `umsatz.xlsx`.
+`13_audit_defects.py` is the 2026-09-03 corpus audit's own regression corpus — the three
+fixtures its defect fixes reference (`torn_tail_utf8.csv`, `xl_cell_newline.xlsx`,
+`xl_money_siblings.xlsx`), committed ad hoc while fixing them and consolidated here so they
+regenerate byte-identically like every other fixture, rather than living only as committed
+bytes nothing can reproduce.
 
 Generators need `openpyxl` (xlsx/xlsm), `xlwt` (the only pure-Python BIFF8 writer, for
 `.xls`) and **`lxml`** — nothing imports lxml, but openpyxl serialises through it when it is
