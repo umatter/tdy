@@ -394,7 +394,12 @@ fn sniff_delimited(
         doubts.add(0.15, "rows have differing field counts; short rows are padded with nulls");
     }
 
-    let skip_tail = footer_rows(last_line(sample), Some(delim.delimiter), &table.rows);
+    // Corroborate against the *sample*'s head and tail, not the head-only
+    // probe table: for a file longer than `PROBE_ROWS`, `table.rows` never
+    // reaches the tail, so a label that only recurs there would read as 0
+    // occurrences and be wrongly treated as rare.
+    let footer_evidence = footer_sample_rows(sample, delim.delimiter);
+    let skip_tail = footer_rows(last_line(sample), Some(delim.delimiter), &footer_evidence);
     if skip_tail > 0 {
         doubts.note("dropped a trailing summary row");
     }
@@ -902,6 +907,40 @@ fn column_occurrences(sampled: &[Vec<String>], idx: usize, needle: &str) -> usiz
         .count()
 }
 
+/// Parse delimited text into rows of fields, quote-aware. Used only to
+/// corroborate a candidate footer label against text already sampled — never
+/// to build data, so a malformed record is simply skipped (`filter_map`)
+/// rather than reported.
+fn parse_sample_rows(text: &str, delimiter: char) -> Vec<Vec<String>> {
+    if !delimiter.is_ascii() {
+        return Vec::new();
+    }
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .delimiter(delimiter as u8)
+        .from_reader(text.as_bytes());
+    rdr.records().filter_map(|r| r.ok()).map(|r| r.iter().map(str::to_string).collect()).collect()
+}
+
+/// Every row the *sample* shows for a delimited file, head and tail alike —
+/// the same evidence `last_line` draws its candidate row from.
+///
+/// Corroborating against a head-only probe (`table.rows`, capped at
+/// `PROBE_ROWS`) missed a label that only recurs after the probe window: a
+/// 2,600-row file with 100 trailing rows sharing a label read as 0
+/// occurrences from the head alone, and the genuinely-repeated last row was
+/// dropped anyway — the identical bug this rarity check exists to close,
+/// just moved to a bigger file. The sample's tail is already in hand (no new
+/// I/O) and is exactly where a real trailing cluster would show up.
+fn footer_sample_rows(sample: &FileSample, delimiter: char) -> Vec<Vec<String>> {
+    let mut rows = parse_sample_rows(sample_head(sample), delimiter);
+    if let Some(tail) = sample_tail(sample) {
+        rows.extend(parse_sample_rows(tail, delimiter));
+    }
+    rows
+}
+
 /// Does this row (as separate cells) look like a summary row?
 ///
 /// The label alone is not evidence: a value like "total" can be a routine
@@ -909,7 +948,10 @@ fn column_occurrences(sampled: &[Vec<String>], idx: usize, needle: &str) -> usiz
 /// dropping the last row on the strength of it silently deleted a real
 /// record. `sampled` is this sheet's other rows, over the same column: the
 /// label must appear (almost) nowhere else in it — the same rarity check
-/// `footer_rows` applies to delimited files.
+/// `footer_rows` applies to delimited files. Unlike `footer_rows`, this path
+/// corroborates against the *whole* sheet (Excel probing reads it whole
+/// regardless), not a bounded sample — the two functions see different
+/// amounts of evidence, and that asymmetry is fine, not incidental.
 fn footer_row_cells(cells: &[String], sampled: &[Vec<String>]) -> u32 {
     let re = regex::Regex::new(FOOTER_FIELD).expect("static regex");
     let matched = cells.iter().enumerate().find(|(_, c)| re.is_match(c.trim().trim_matches('"')));
@@ -928,7 +970,12 @@ fn footer_row_cells(cells: &[String], sampled: &[Vec<String>]) -> u32 {
 /// silently deleted a real record (2026-09-03 corpus audit). A summary row
 /// is a row whose label is EXCEPTIONAL — it appears in the last row and
 /// (almost) nowhere else in that column. `sampled` is that column's values
-/// over the sampled rows.
+/// over the sampled rows — callers should pass [`footer_sample_rows`] (head
+/// *and* tail), not a head-only probe table: a probe never reaching the tail
+/// would report 0 occurrences for a label that in fact recurs there, and
+/// wrongly corroborate it. Bounded by the sample, so a label repeating only
+/// past the sample's window on both ends goes uncorroborated — the same
+/// bound every other sniffer heuristic accepts.
 fn footer_rows(last_line: Option<&str>, delimiter: Option<char>, sampled: &[Vec<String>]) -> u32 {
     let Some(line) = last_line else { return 0 };
     let field_re = regex::Regex::new(FOOTER_FIELD).expect("static regex");

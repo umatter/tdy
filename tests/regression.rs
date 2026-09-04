@@ -1099,3 +1099,30 @@ fn a_frequent_category_value_is_not_a_footer() {
     let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
     assert_eq!(t.num_rows(), 80, "a routine 'total' category row was dropped as a footer");
 }
+
+/// A frequent label that only clusters *after* the sniffer's row-count probe
+/// window (`PROBE_ROWS` = 2000) must still be corroborated from the file's
+/// real tail, not from a head-only probe table that never reaches it. A
+/// 2,600-row file where the last 100 rows share a "total" category read as 0
+/// occurrences from the head alone, and the last row was silently dropped as
+/// a footer — the same class of bug as `a_frequent_category_value_is_not_a_footer`,
+/// just moved past the probe window. Found by the 2026-09-04 fix-round review.
+#[test]
+fn a_late_clustered_category_beyond_the_probe_window_is_not_a_footer() {
+    let dir = TempDir::new().unwrap();
+    let mut s = String::from("state,subsector,sales\n");
+    for i in 0..2500 {
+        s.push_str(&format!("S{i},retail,{}\n", 100 + i));
+    }
+    for i in 0..100 {
+        s.push_str(&format!("S{i},total,{}\n", 200 + i));
+    }
+    let f = write(&dir, "late_category.csv", &s);
+    let spec = sniffed(&f).spec;
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(
+        t.num_rows(),
+        2600,
+        "the last row of a late-clustered 'total' category was dropped as a footer"
+    );
+}
