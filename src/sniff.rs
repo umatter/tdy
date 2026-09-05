@@ -35,6 +35,16 @@ use crate::spec::{
 pub(crate) const PROBE_ROWS: usize = 2000;
 /// How many body rows inform a column's type guess.
 pub(crate) const TYPE_SAMPLE: usize = 500;
+/// A currency-formatted column is only ever typed `Decimal` at a scale equal
+/// to the widest fractional part any *sampled* value actually has — never
+/// wider, so nothing is ever rounded to reach it — but this is the backstop
+/// against trusting that scale when it has clearly stopped meaning "money".
+/// A double holds roughly 17 significant decimal digits, so a value in the
+/// millions can carry on the order of ten fractional digits of genuine
+/// IEEE-754 noise from an upstream spreadsheet formula and still be an
+/// honest, exact fit at that scale; past this bound it is evidence of
+/// something else, not a currency's usual 1-4 decimal places.
+const MAX_MONEY_SCALE: usize = 15;
 
 pub struct SniffResult {
     pub spec: ParseSpec,
@@ -518,7 +528,7 @@ fn sniff_delimited(
 
     note_trailing_blocks(&table, &mut doubts);
 
-    finish(extraction, transforms, table, 0.95, doubts)
+    finish(extraction, transforms, table, 0.95, doubts, &std::collections::HashSet::new())
 }
 
 fn sniff_lines(
@@ -556,7 +566,7 @@ fn sniff_lines(
     if table.rows.is_empty() {
         bail!("the log pattern matched no lines");
     }
-    finish(extraction, vec![], table, 0.9, doubts)
+    finish(extraction, vec![], table, 0.9, doubts, &std::collections::HashSet::new())
 }
 
 fn sniff_fixed_width(
@@ -591,7 +601,7 @@ fn sniff_fixed_width(
         engine::apply_transforms(&mut table, std::slice::from_ref(&t))?;
         transforms.push(t);
     }
-    finish(extraction, transforms, table, 0.8, doubts)
+    finish(extraction, transforms, table, 0.8, doubts, &std::collections::HashSet::new())
 }
 
 // ---------------------------------------------------------------------------
@@ -623,6 +633,7 @@ fn sniff_excel_sheet(
     limits: Limits,
     mut doubts: Doubts,
 ) -> Result<SniffResult> {
+    let sheet_for_money = sheet.clone();
     let extraction = Extraction::Excel {
         sheet_name: sheet,
         sheet_index: None,
@@ -638,6 +649,33 @@ fn sniff_excel_sheet(
     if table.rows.is_empty() {
         bail!("sheet appears to be empty");
     }
+
+    // Read directly from the zip, before calamine's own richer-but-narrower
+    // view of the workbook takes over: it never carries a cell's number
+    // format past `open_workbook_auto`, and that format is the only honest
+    // signal that a column is money (see `xlmoney`). `xlmoney` decodes
+    // sheet-*absolute* column indices from cell references (`<c r="D10">`
+    // is column 3, whatever else is on the sheet) — but `table`'s column 0
+    // is wherever calamine's used range actually starts, which is sheet
+    // column A only when the data does too. A sheet with a title or a blank
+    // margin in column A pushes every real column over, and binding on the
+    // unshifted index would either miss the money column entirely or, worse,
+    // silently land on a different one. `table.col_offset`, read from this
+    // same extraction (never recomputed independently — see its own doc),
+    // is what reconciles the two. `skip_rows`/`promote_header` below only
+    // ever remove *rows*, never reorder or drop a column, so once shifted by
+    // the offset a column index still matches the header's index by the
+    // time `finish` builds column specs from it.
+    let money_columns: std::collections::HashSet<usize> = sheet_for_money
+        .as_deref()
+        .map(|s| {
+            let offset = table.col_offset as usize;
+            crate::xlmoney::money_columns(path, s)
+                .into_iter()
+                .filter_map(|c| c.checked_sub(offset))
+                .collect()
+        })
+        .unwrap_or_default();
     let width = table.width();
     let non_empty = |r: &Vec<String>| r.iter().filter(|c| !c.trim().is_empty()).count();
 
@@ -726,7 +764,7 @@ fn sniff_excel_sheet(
 
     note_trailing_blocks(&table, &mut doubts);
 
-    finish(extraction, transforms, table, 0.9, doubts)
+    finish(extraction, transforms, table, 0.9, doubts, &money_columns)
 }
 
 /// Frame one named sheet, for `fit`'s sheet elimination. The doubts a
@@ -816,7 +854,7 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
     let extraction = Extraction::Json { lines, pointer };
     let table = engine::extract(&extraction, path, &ExtractOpts::capped(limits, PROBE_ROWS))
         .with_context(|| format!("probing {}", path.display()))?;
-    finish(extraction, vec![], table, 0.95, doubts)
+    finish(extraction, vec![], table, 0.95, doubts, &std::collections::HashSet::new())
 }
 
 /// RFC 6901: `~` is `~0` and `/` is `~1`.
@@ -905,6 +943,7 @@ fn finish(
     mut table: RawTable,
     base_confidence: f32,
     mut doubts: Doubts,
+    money_columns: &std::collections::HashSet<usize>,
 ) -> Result<SniffResult> {
     table.ensure_header()?;
     let header = table.header.clone().unwrap_or_default();
@@ -912,7 +951,7 @@ fn finish(
         bail!("no columns detected");
     }
     let body: Vec<&Vec<String>> = table.rows.iter().take(TYPE_SAMPLE).collect();
-    let (columns, probe_empty) = guess_columns(&header, &body, &mut doubts);
+    let (columns, probe_empty) = guess_columns(&header, &body, &mut doubts, money_columns);
 
     // A table that types as almost entirely text usually means the layout was
     // misread, not that the data is textual.
@@ -1399,6 +1438,7 @@ fn guess_columns(
     header: &[String],
     body: &[&Vec<String>],
     doubts: &mut Doubts,
+    money_columns: &std::collections::HashSet<usize>,
 ) -> (Vec<ColumnSpec>, Vec<usize>) {
     let mut names: Vec<String> = header.iter().map(|h| sanitize(h)).collect();
     dedupe(&mut names);
@@ -1421,7 +1461,7 @@ fn guess_columns(
                 probe_empty.push(i);
             }
             let name = names[i].clone();
-            let g = guess_type(&values, &name);
+            let g = guess_type(&values, &name, money_columns.contains(&i));
             if let Some(n) = g.note {
                 doubts.add(g.penalty, format!("column `{name}`: {n}"));
             } else if g.penalty > 0.0 {
@@ -1458,7 +1498,7 @@ fn looks_monetary(name: &str) -> bool {
     WORDS.iter().any(|w| n.contains(w))
 }
 
-fn guess_type(values: &[&str], name: &str) -> TypeGuess {
+fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGuess {
     let sample: Vec<&str> = values
         .iter()
         .map(|v| v.trim())
@@ -1560,6 +1600,23 @@ fn guess_type(values: &[&str], name: &str) -> TypeGuess {
         let money_like = fmt.thousands.is_some()
             || (consistent && (1..=4).contains(&max_scale))
             || (looks_monetary(name) && (1..=4).contains(&max_scale));
+        // The workbook's own cell format (read straight out of the xlsx zip
+        // in `xlmoney`, since calamine 0.36 does not carry it) is stronger
+        // evidence than any of the three heuristics above and does not need
+        // `consistent` to agree with it: `render_cell`'s shortest-round-trip
+        // Display drops a trailing zero (100000.10 -> "100000.1") or the
+        // point on a whole number, which breaks `consistent` on money that
+        // is otherwise perfectly clean — exactly PCA_Report_FY16Q3.xlsx's
+        // defect. `max_scale` is still what makes this provably safe rather
+        // than merely plausible: it is defined as the *widest* fractional
+        // part any sampled value actually has, so parsing every one of them
+        // at that scale never rounds a single digit away (`parse_decimal` in
+        // `engine.rs` only rounds a value with *more* fractional digits than
+        // the declared scale — never one with fewer or exactly that many).
+        // `MAX_MONEY_SCALE` is a sanity backstop on that scale, not a
+        // money-shaped one: see its own comment for why real currency cells
+        // can legitimately need it to be generous.
+        let currency_scale_ok = currency_formatted && !fmt.ambiguous && max_scale <= MAX_MONEY_SCALE;
         let note = if fmt.ambiguous {
             Some(format!(
                 "{:?} could be a thousands separator or a decimal point here; read as a \
@@ -1572,7 +1629,7 @@ fn guess_type(values: &[&str], name: &str) -> TypeGuess {
         };
         let penalty = if fmt.ambiguous { 0.25 } else { 0.0 };
 
-        if money_like && max_scale <= 6 {
+        if (money_like && max_scale <= 6) || currency_scale_ok {
             // Exact decimals: money must not go through binary floating point.
             // Precision 38 is the Decimal128 maximum, so there is no realistic
             // way for a later row to overflow it.
@@ -1581,10 +1638,11 @@ fn guess_type(values: &[&str], name: &str) -> TypeGuess {
             // it is always stated — not only when the sample disagreed with
             // itself.
             let n = Some(format!(
-                "{}read as decimal({}) — scale inferred from the first {} rows; any \
+                "{}read as decimal({}){} — scale inferred from the first {} rows; any \
                  later value with more fractional digits is rounded half away from zero",
                 note.map(|s| format!("{s} ")).unwrap_or_default(),
                 max_scale,
+                if currency_formatted { " (the cell format is currency)" } else { "" },
                 TYPE_SAMPLE
             ));
             return TypeGuess {
@@ -1598,6 +1656,35 @@ fn guess_type(values: &[&str], name: &str) -> TypeGuess {
             parse.thousands_separator = None;
             parse.decimal_separator = None;
         }
+        // A currency-formatted column that still did not qualify above is
+        // not silently left unexplained: either the separator itself is
+        // ambiguous, or the noisiest sampled value would need more than
+        // `MAX_MONEY_SCALE` fractional digits to be held exactly. Forcing a
+        // decimal here would mean guessing the wrong separator or rounding
+        // a genuine value away — the one thing this whole feature must
+        // never do — so the column is left exactly as it would have been
+        // typed without the format hint, and the reason is said out loud.
+        let note = if currency_formatted {
+            let why = if fmt.ambiguous {
+                "the decimal separator here is ambiguous, so a safe scale cannot be determined"
+                    .to_string()
+            } else {
+                format!(
+                    "its widest sampled value needs {max_scale} fractional digits to be held \
+                     exactly — more consistent with float-64 noise already baked into the file \
+                     (a spreadsheet formula's accumulated rounding error) than with money's \
+                     usual 1-4 decimal places — above the {MAX_MONEY_SCALE}-digit limit for \
+                     trusting that scale"
+                )
+            };
+            Some(format!(
+                "{}the cell format is currency, but {why}; kept as float64 rather than round a \
+                 real value into a decimal",
+                note.map(|s| format!("{s} ")).unwrap_or_default(),
+            ))
+        } else {
+            note
+        };
         return TypeGuess { dtype: DType::Float64, parse, penalty, note };
     }
 
@@ -1812,33 +1899,33 @@ mod tests {
 
     #[test]
     fn decimal_comma_column_is_typed_as_a_decimal_comma_column() {
-        let g = guess_type(&["1,5", "2,75", "10,25"], "v");
+        let g = guess_type(&["1,5", "2,75", "10,25"], "v", false);
         assert_eq!(g.parse.decimal_separator, Some(','));
         assert_eq!(g.parse.thousands_separator, None);
     }
 
     #[test]
     fn money_becomes_an_exact_decimal_not_a_float() {
-        let g = guess_type(&["1'234.50", "12'000.00"], "v");
+        let g = guess_type(&["1'234.50", "12'000.00"], "v", false);
         assert!(matches!(g.dtype, DType::Decimal { scale: 2, .. }));
         assert_eq!(g.parse.thousands_separator, Some('\''));
     }
 
     #[test]
     fn plain_measurements_stay_floats() {
-        let g = guess_type(&["1.23456", "2.5", "0.000001"], "v");
+        let g = guess_type(&["1.23456", "2.5", "0.000001"], "v", false);
         assert_eq!(g.dtype, DType::Float64);
         // Uneven decimals with a non-monetary name: a score, not a price.
-        let g = guess_type(&["3.5", "1.25", "2.0"], "score");
+        let g = guess_type(&["3.5", "1.25", "2.0"], "score", false);
         assert_eq!(g.dtype, DType::Float64);
     }
 
     #[test]
     fn a_money_column_that_dropped_its_trailing_zeros_is_still_money() {
         // Same values, but the header says what they are.
-        let g = guess_type(&["10.5", "10.50", "12"], "betrag_chf");
+        let g = guess_type(&["10.5", "10.50", "12"], "betrag_chf", false);
         assert!(matches!(g.dtype, DType::Decimal { scale: 2, .. }), "{:?}", g.dtype);
-        let g = guess_type(&["10.5", "10.50", "12"], "score");
+        let g = guess_type(&["10.5", "10.50", "12"], "score", false);
         assert_eq!(g.dtype, DType::Float64);
     }
 
@@ -1865,28 +1952,28 @@ mod tests {
 
     #[test]
     fn identifiers_keep_their_leading_zeros() {
-        let g = guess_type(&["007", "0123", "0999"], "v");
+        let g = guess_type(&["007", "0123", "0999"], "v", false);
         assert_eq!(g.dtype, DType::Utf8);
-        let g = guess_type(&["8001", "3000"], "v");
+        let g = guess_type(&["8001", "3000"], "v", false);
         assert_eq!(g.dtype, DType::Int64);
     }
 
     #[test]
     fn oversized_integers_stay_text() {
-        let g = guess_type(&["99999999999999999999", "99999999999999999998"], "v");
+        let g = guess_type(&["99999999999999999999", "99999999999999999998"], "v", false);
         assert_eq!(g.dtype, DType::Utf8);
     }
 
     #[test]
     fn unambiguous_dates_are_read_the_right_way_round() {
-        let g = guess_type(&["13/02/2025", "01/02/2025"], "v");
+        let g = guess_type(&["13/02/2025", "01/02/2025"], "v", false);
         assert_eq!(g.dtype, DType::Date { format: "%d/%m/%Y".into() });
         assert_eq!(g.penalty, 0.0);
     }
 
     #[test]
     fn ambiguous_dates_are_flagged() {
-        let g = guess_type(&["01/02/2025", "03/04/2025"], "v");
+        let g = guess_type(&["01/02/2025", "03/04/2025"], "v", false);
         assert!(matches!(g.dtype, DType::Date { .. }));
         assert!(g.penalty > 0.2);
         assert!(g.note.unwrap().contains("ambiguous"));
@@ -1894,21 +1981,21 @@ mod tests {
 
     #[test]
     fn two_digit_years_are_not_dates() {
-        let g = guess_type(&["01/02/25", "03/04/25"], "v");
+        let g = guess_type(&["01/02/25", "03/04/25"], "v", false);
         assert_eq!(g.dtype, DType::Utf8);
     }
 
     #[test]
     fn text_columns_do_not_get_automatic_na_tokens() {
         // "NA" is Namibia here, not a missing value.
-        let g = guess_type(&["CH", "DE", "NA", "AT"], "v");
+        let g = guess_type(&["CH", "DE", "NA", "AT"], "v", false);
         assert_eq!(g.dtype, DType::Utf8);
         assert!(g.parse.na_values.is_empty());
     }
 
     #[test]
     fn typed_columns_do_get_na_tokens() {
-        let g = guess_type(&["1", "n/a", "3"], "v");
+        let g = guess_type(&["1", "n/a", "3"], "v", false);
         assert_eq!(g.dtype, DType::Int64);
         assert!(g.parse.na_values.contains(&"n/a".to_string()));
     }

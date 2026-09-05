@@ -43,3 +43,4 @@ pub mod stream;
 pub mod target;
 pub mod sqlscan;
 pub mod xlguard;
+pub mod xlmoney;

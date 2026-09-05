@@ -98,11 +98,23 @@ pub struct RawTable {
     /// Anything that reasons about the *end* of the data (a trailing total
     /// row) must not trust a truncated table.
     pub truncated: bool,
+    /// The 0-based sheet column that this table's column 0 actually came
+    /// from — 0 for every format except Excel, where it is the used range's
+    /// (or a declared `range`'s) own start column, straight from the same
+    /// `calamine::Range` extraction builds `rows` from. A sheet whose data
+    /// does not start at column A (a title in column A, say) makes table
+    /// column 0 mean sheet column C or D, not A — and anything that maps a
+    /// sheet-absolute column index (like `xlmoney`'s, decoded from `<c
+    /// r="D10">`) onto this table's columns must subtract this first, or it
+    /// binds two columns over. Reading it from the extraction's own `Range`
+    /// rather than recomputing it elsewhere is what keeps the two from being
+    /// able to disagree.
+    pub col_offset: u32,
 }
 
 impl RawTable {
     fn new(rows: Vec<Vec<String>>, ragged: RaggedPolicy, truncated: bool) -> Self {
-        RawTable { header: None, header_origin: None, rows, ragged, truncated }
+        RawTable { header: None, header_origin: None, rows, ragged, truncated, col_offset: 0 }
     }
 
     fn with_header(header: Vec<String>, rows: Vec<Vec<String>>, truncated: bool) -> Self {
@@ -112,6 +124,7 @@ impl RawTable {
             rows,
             ragged: RaggedPolicy::PadNulls,
             truncated,
+            col_offset: 0,
         }
     }
 
@@ -505,6 +518,14 @@ fn extract_excel(
         }
         None => full,
     };
+    // Table column 0 is sheet column `col_offset`, not sheet column A,
+    // whenever the used range (or a declared `range`) does not start at the
+    // sheet's origin — a title in column A, say, pushes the real data to C.
+    // Read from `range` itself (the one `.rows()` below actually iterates),
+    // so anything downstream that maps a sheet-absolute column index onto
+    // this table (`xlmoney`'s column tally) cannot drift from what was
+    // really extracted.
+    let col_offset = range.start().map(|(_, c)| c).unwrap_or(0);
 
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut truncated = false;
@@ -519,7 +540,7 @@ fn extract_excel(
     while rows.last().map(|r| r.iter().all(|c| c.trim().is_empty())).unwrap_or(false) {
         rows.pop();
     }
-    Ok(RawTable::new(rows, RaggedPolicy::PadNulls, truncated))
+    Ok(RawTable { col_offset, ..RawTable::new(rows, RaggedPolicy::PadNulls, truncated) })
 }
 
 fn extract_fixed_width(
