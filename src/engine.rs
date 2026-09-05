@@ -1116,10 +1116,9 @@ pub(crate) fn build_column_at(
                 if re.is_match(&v) {
                     let marker = if sign_guard { sign_marker(&v) } else { None };
                     let stripped = re.replace_all(&v, "").trim().to_string();
-                    if let (Some(kind), None) = (marker, sign_marker(&stripped)) {
-                        if ate_sign.is_none() {
-                            ate_sign = Some((i, kind));
-                        }
+                    if ate_sign.is_none() && marker.is_some() && sign_marker(&stripped).is_none()
+                    {
+                        ate_sign = marker.map(|kind| (i, kind));
                     }
                     if stripped.is_empty() {
                         return None;
@@ -1185,13 +1184,11 @@ pub(crate) fn build_column_at(
         // Undeclared, the marker would otherwise surface as "invalid digit
         // found in string", which is true and useless. The value is right
         // here and so is the fix.
-        if !neg {
-            if let Some(kind) = sign_marker(v) {
-                bail!(
-                    "looks like an accounting negative; declare `negative = \"{kind}\"` on \
-                     this column to read the marker as a sign"
-                );
-            }
+        if let (false, Some(kind)) = (neg, sign_marker(v)) {
+            bail!(
+                "looks like an accounting negative; declare `negative = \"{kind}\"` on \
+                 this column to read the marker as a sign"
+            );
         }
         numfmt::check_grouping(v, p.thousands_separator, p.decimal_separator)
             .map_err(|e| anyhow!("{e}"))?;
