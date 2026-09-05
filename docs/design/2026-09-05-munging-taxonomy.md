@@ -1800,17 +1800,57 @@ Naumann, PVLDB 16). The design is unusually well suited to this project:
   comparing against the known polluted content. Cell-level scores catch values
   lost or invented regardless of where they ended up.
 
-**This is the right instrument for tdy, with one caveat that is itself
-interesting.** tdy's whole stance is *refuse rather than be wrong*, so on a
-pollution it cannot read confidently it scores a **0 for success** while a
-guessing parser scores 1 and then loses cells. A tool designed as tdy is should
-therefore show a distinctive profile: lower success, and precision/recall at or
-near 1 wherever success is 1. Nobody has published that profile for a
-refuse-first loader, and producing it would be a genuine result rather than a
-box-ticking exercise — as well as the cheapest external audit of Parts A–C
-available, since the benchmark is open source
-(`github.com/HPI-Information-Systems/Pollock`) and the pollutions are exactly the
-dialect axes tdy claims to sniff.
+**Run, on 2026-09-06** — `scripts/download_pollock.sh` and
+`scripts/run_pollock.py`. Two modes, because the cell metric is exact string
+equality and a system that parses a date loses cell score for writing it back in
+ISO form, which is why Pollock itself ships both a typed and an all-text DuckDB.
+
+| system | success | header F1 | record F1 | cell F1 |
+|---|---|---|---|---|
+| **tdy (text)** | 0.999 | 0.957 | **0.991** | 0.967 |
+| **tdy (typed)** | 0.999 | 0.957 | **0.991** | 0.873 |
+| duckdbparse (all text) | 1.000 | 1.000 | 0.991 | 0.996 |
+| pandas | 0.999 | 0.995 | 0.978 | 0.991 |
+| clevercsv | 1.000 | 0.975 | 0.840 | 0.904 |
+| duckdbauto (typed) | 1.000 | 0.978 | 0.919 | 0.792 |
+| rhypoparsr | 1.000 | 0.198 | 0.124 | 0.604 |
+| postgres | 0.017 | 0.015 | 0.013 | 0.012 |
+
+The predicted profile — low success, high precision — did not appear, and what
+appeared instead is better. tdy loads **2,287 of 2,290**, so it almost never has
+to refuse; its record F1 of 0.991 ties duckdbparse, the strongest text reader in
+the field; and against its own peer, the typed reader, it is clearly ahead: cell
+F1 0.873 against duckdbauto's 0.792.
+
+**The result is in the asymmetry inside the cell score: precision 0.996, recall
+0.942.** Precision asks how many of the cells tdy produced are real; recall asks
+how many of them the file actually contained. tdy therefore emits *more* cells
+than the source and almost never a wrong one — which is `RaggedPolicy::PadNulls`
+doing exactly what it says. When one row carries an extra separator the table
+widens and every other row gains an empty cell, rather than the overflow being
+dropped. 1,428 of the 2,290 pollutions are that shape, and that is where the
+whole 0.05 of recall goes.
+
+Over-reporting empty padding while under-reporting almost nothing is the correct
+asymmetry for this project, and it is worth something that a benchmark designed
+by other people for other systems measures it directly.
+
+**Two real defects, both found here first:**
+
+1. **The sniffer can emit a spec that does not execute.**
+   `file_quotation_char_0x27` and `file_field_delimiter_0x2C_0x20` both die with
+   `resolving output column col_13: no column named col_13`. The *outcome* is
+   right — a loud error, no sidecar written, no wrong answer — but the
+   documented guarantee that "the sniffer can never emit an unexecutable spec"
+   is weaker than stated, and the message is internal jargon where it should say
+   something about the file. Both are dialects tdy cannot express (an apostrophe
+   quote character, a two-character delimiter), which leaves rows with wildly
+   varying arity.
+2. **One malformed row can cost the whole header.** 32 files score header
+   F1 = 0, nearly all `row_*` pollutions where a single row has an extra or
+   missing separator: `header_verdict` rejects the header row, the columns
+   become `col_1…col_N`, and sometimes the real header is dropped as a title
+   row. The data survives — record F1 stays near 1 — but the names do not.
 
 Note also what Pollock found about everyone else: **only 2 of 16 systems** loaded
 a file with a non-standard escape character correctly, the rest dropping the rest
@@ -2009,17 +2049,16 @@ would mean producing a value the file does not contain.
   reachable version is the same shape as everything else here: the *target*
   declares, tdy checks.
 
-**And one thing to measure rather than decide:**
+**Measured rather than decided, on 2026-09-06:**
 
-- **Run tdy against Pollock** (§M3). 2,290 polluted files, open source, scored on
-  success plus header/record/cell precision and recall. It is the cheapest
-  external audit of Parts A–C that exists, it directly tests the claim this
-  project rests on, and the expected result — low success, near-perfect precision
-  — has never been published for a refuse-first loader. The corpus sweep in
-  `tests/corpus.rs` answers "does it crash or lie on real files"; Pollock answers
-  "how does it compare, on a controlled axis, to the sixteen systems everyone
-  else uses." Strudel's 226-file annotated corpus is the second such test, for
-  framing specifically.
+- **tdy was run against Pollock** (§M3): 2,287 of 2,290 files loaded, record F1
+  0.991 — tying the strongest text reader in the field — and cell precision
+  0.996 against recall 0.942, which is the padding asymmetry this design implies.
+  It also found two defects nothing else had: a sniffed spec that does not
+  execute, and a header lost to a single malformed row. Both are new entries on
+  this list rather than entries removed from it. `scripts/run_pollock.py` makes
+  it repeatable, and Strudel's 226-file annotated corpus is the second such test,
+  for framing specifically.
 
 ### N3 · What tdy does that the survey found nowhere else
 
