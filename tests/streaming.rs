@@ -247,7 +247,7 @@ fn fill_down_carries_across_a_batch_boundary() {
     let s = spec(
         vec![
             Transform::PromoteHeader { rows: 1, join: " ".into() },
-            Transform::FillDown { columns: vec!["grp".into()] },
+            Transform::FillDown { columns: vec!["grp".into()], direction: Default::default() },
         ],
         vec![col("grp", DType::Utf8), col("val", DType::Int64)],
     );
@@ -339,7 +339,7 @@ fn a_dropped_row_does_not_break_the_fill_down_carry() {
                 pattern: "^Zwischensumme$".into(),
                 column: Some("grp".into()),
             },
-            Transform::FillDown { columns: vec!["grp".into()] },
+            Transform::FillDown { columns: vec!["grp".into()], direction: Default::default() },
         ],
         vec![col("grp", DType::Utf8), col("val", DType::Int64)],
     );
@@ -364,7 +364,7 @@ fn fill_then_drop_and_drop_then_fill_are_different_and_both_paths_know_it() {
     let body = "grp,val\nOst,1\nZwischensumme,99\n,2\n,3\n";
     let p = write(&dir, "order.csv", body);
 
-    let fill = Transform::FillDown { columns: vec!["grp".into()] };
+    let fill = Transform::FillDown { columns: vec!["grp".into()], direction: Default::default() };
     let drop = Transform::DropRowsMatching {
         pattern: "^Zwischensumme$".into(),
         column: Some("grp".into()),
@@ -520,7 +520,7 @@ fn unstreamable_shapes_are_declined_rather_than_guessed() {
                 variable_name: "k".into(),
                 value_name: "v".into(),
             },
-            Transform::FillDown { columns: vec!["a".into()] },
+            Transform::FillDown { columns: vec!["a".into()], direction: Default::default() },
         ],
         vec![],
     );

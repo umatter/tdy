@@ -38,7 +38,7 @@ fn umsatz_spec() -> ParseSpec {
         transforms: vec![
             Transform::SkipRows { head: 3, tail: 1 },
             Transform::PromoteHeader { rows: 2, join: " ".into() },
-            Transform::FillDown { columns: vec!["Region".into()] },
+            Transform::FillDown { columns: vec!["Region".into()], direction: Default::default() },
             Transform::DropRowsMatching {
                 pattern: "(?i)^zwischensumme".into(),
                 column: Some("Region".into()),

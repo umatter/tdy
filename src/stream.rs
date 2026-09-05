@@ -70,8 +70,8 @@ use crate::engine::{
 /// exactly the batches it had.
 const BATCH_CELLS: usize = 1 << 20;
 use crate::spec::{
-    ColumnSpec, DType, Extraction, FixedField, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform,
-    ValueParsing,
+    ColumnSpec, DType, Extraction, FillDirection, FixedField, NoMatchPolicy, ParseSpec,
+    RaggedPolicy, Transform, ValueParsing,
 };
 
 /// Whether [`execute_batches`] can run this spec. See the module docs.
@@ -119,6 +119,13 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
             // the fallback executor is the simpler home for it.
             Transform::Constant { .. } => return false,
         };
+        // An upward fill carries a value from a row the reader has not seen
+        // yet, which is the one thing a forward-only pass cannot do. Refused
+        // here as a *shape*, so the materialising executor runs it and no
+        // spec is ever rejected for being unusual.
+        if matches!(t, Transform::FillDown { direction: FillDirection::Up, .. }) {
+            return false;
+        }
         let allowed = match t {
             Transform::SkipRows { .. } => stage == Stage::Skip,
             Transform::PromoteHeader { .. } => stage <= Stage::Header,
@@ -1485,7 +1492,7 @@ impl Plan {
                     column: column.clone(),
                     idx: None,
                 }),
-                Transform::FillDown { columns } => p.ops.extend(columns.iter().map(|c| {
+                Transform::FillDown { columns, .. } => p.ops.extend(columns.iter().map(|c| {
                     RowOp::Fill { column: c.clone(), idx: 0, carry: String::new() }
                 })),
                 Transform::Constant { .. } => {

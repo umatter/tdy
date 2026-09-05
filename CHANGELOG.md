@@ -2,6 +2,26 @@
 
 Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
+## Unreleased
+
+### Added
+
+- **`fill_down` takes a `direction`.** `down` (the default, and what it always
+  did) carries the last non-empty value forward — the merged-cell and
+  written-once-at-the-top layout. `up` carries it backward, which is the same
+  layout with the label written at the *bottom* of its group, as
+  French-language and some accounting exports write it. The two are different
+  readings of the same file, so it is declared rather than guessed.
+
+  A spec with `direction = "up"` runs on the materialising executor:
+  `stream::can_stream` refuses the shape, because carrying a value from a row
+  the reader has not reached yet is the one thing a forward-only pass cannot
+  do. No spec is refused for it — only executed the older way.
+
+  *Library note:* `Transform::FillDown` gained a field, so code constructing
+  the variant directly needs `direction: Default::default()`. Sidecars are
+  unaffected; the field defaults and is omitted when it is `down`.
+
 ## 0.2.1 — 2026-09-06
 
 One correctness fix, in the same class as 0.2.0's: a spec that passed every

@@ -980,6 +980,11 @@ Details worth knowing:
   digits than `scale`. When the sniffer sees an inconsistent number of
   fractional digits it says so in `notes`, because rows it never read may be
   rounded.
+- **`fill_down` has a `direction`.** `down` (the default) is the merged-cell
+  and written-once-at-the-top layout; `up` is the same layout with the label
+  written at the *bottom* of its group. Both readings are valid for a file
+  with blanks in a category column, which is why the direction is declared and
+  never inferred.
 - **`columns` is a projection.** There is no drop or rename op; `source` →
   `name` is the only renaming, and unlisted columns do not appear.
 

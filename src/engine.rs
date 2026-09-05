@@ -36,8 +36,8 @@ use crate::fileio;
 use crate::numfmt;
 use crate::sample::render_cell;
 use crate::spec::{
-    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, NegativeStyle,
-    NoMatchPolicy, ParseSpec, RaggedPolicy, Transform, ValueParsing,
+    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, FillDirection,
+    NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform, ValueParsing,
 };
 
 /// Which negative-number marker a value carries, if any — the shape only, not
@@ -877,7 +877,7 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     }
                 }
             }
-            Transform::FillDown { columns } => {
+            Transform::FillDown { columns, direction } => {
                 table.ensure_header()?;
                 let index = table.header_index()?;
                 let resolved: Vec<usize> = columns
@@ -886,7 +886,14 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     .collect::<Result<_>>()?;
                 for idx in resolved {
                     let mut last = String::new();
-                    for row in &mut table.rows {
+                    // One loop, two directions: filling up is filling down
+                    // over the reversed table, and writing it that way keeps
+                    // the carry rule in exactly one place.
+                    let rows: Box<dyn Iterator<Item = &mut Vec<String>>> = match direction {
+                        FillDirection::Down => Box::new(table.rows.iter_mut()),
+                        FillDirection::Up => Box::new(table.rows.iter_mut().rev()),
+                    };
+                    for row in rows {
                         let Some(cell) = row.get_mut(idx) else { continue };
                         if cell.trim().is_empty() {
                             cell.clone_from(&last);

@@ -212,6 +212,24 @@ pub enum RaggedPolicy {
     TruncateExtra,
 }
 
+/// Which way `fill_down` carries the last non-empty value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FillDirection {
+    /// Downward: the value is written once at the top of its group, or the
+    /// cell above was vertically merged.
+    #[default]
+    Down,
+    /// Upward: the value is written at the *bottom* of its group.
+    Up,
+}
+
+impl FillDirection {
+    pub fn is_default(&self) -> bool {
+        matches!(self, FillDirection::Down)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NoMatchPolicy {
@@ -258,7 +276,15 @@ pub enum Transform {
     },
     /// Propagate the last non-empty value downward: the cure for vertically
     /// merged cells and "category written once" layouts.
-    FillDown { columns: Vec<String> },
+    FillDown {
+        columns: Vec<String>,
+        /// Which way the last non-empty value travels. `down` is the
+        /// merged-cell and written-once-at-the-top layout; `up` is the same
+        /// layout with the label written at the *bottom* of its group, which
+        /// French-language and some accounting exports do.
+        #[serde(default, skip_serializing_if = "FillDirection::is_default")]
+        direction: FillDirection,
+    },
     /// Add a column the file does not have, holding `value` in every row.
     ///
     /// The empty string is the null fill: `""` reads as missing in every
@@ -773,7 +799,7 @@ impl ParseSpec {
                         errs.push(format!("drop_rows_matching: invalid regex: {e}"));
                     }
                 }
-                Transform::FillDown { columns } => {
+                Transform::FillDown { columns, .. } => {
                     if columns.is_empty() {
                         errs.push("fill_down: `columns` must not be empty".into());
                     }
