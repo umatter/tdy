@@ -77,12 +77,12 @@ it.
 3. **Recursive CTEs work**, but the CTE's column alias list is not honoured —
    `WITH RECURSIVE t(n) AS (SELECT 1 …)` fails with `No field named n`; you must
    write `SELECT 1 AS n`.
-4. **A hand-written `strip` can silently flip a sign.** Sniffing
-   `"(1,234.50)"` correctly declines to type it (it stays `utf8`, confidence
-   0.95, no wrong number). But the only tool the spec language offers for fixing
-   it — `strip = "[()]"` — produces `+1234.50`, and `tdy validate` accepts the
-   spec. This is the one finding in this report that touches the project's
-   central rule directly; see **E5**.
+4. **A hand-written `strip` could silently flip a sign — since fixed, in
+   0.2.1.** Sniffing `"(1,234.50)"` correctly declined to type it (it stayed
+   `utf8`, no wrong number), but the only repair the spec language offered —
+   `strip = "[()]"` — produced `+1234.50`, and `tdy validate` accepted it. This
+   was the one finding in this report that touched the project's central rule
+   directly. See **E5**, which now records the fix rather than the defect.
 
 ### 0.5 A second pass, against the literature and the tool docs
 
@@ -933,20 +933,38 @@ $ tdy query "SELECT * FROM messy('paren.csv')"
 | C |  300.00 |     ← was (300.00),   i.e.  −300.00
 ```
 
-A validated, fingerprinted, dry-run spec that produces a number wrong in its
-**sign**, on money, silently. It is user-authored, so it is not a defect in
-inference — but the spec language currently offers no way to say the true thing,
-which means the only available fix is the wrong one. Two candidate remedies, both
-small:
+A validated, fingerprinted, dry-run spec producing a number wrong in its
+**sign**, on money, silently. It was user-authored, so not a defect in inference
+— but the spec language offered no way to say the true thing, which made the only
+available fix the wrong one.
 
-- add `ValueParsing::negative_parens: bool` (and possibly `trailing_minus`), so
-  the intent is declarable; and/or
-- have `validate()` refuse a `strip` regex that can remove a parenthesis or a
-  sign character from a numeric column — the pattern of "anything the executor
-  would otherwise discover by panicking belongs in `validate` as a message,"
-  extended to "anything the executor would otherwise discover by being wrong."
+**Fixed in 0.2.1, in the three places the shape of the problem asked for:**
 
-Trailing minus and CR/DR have the same shape and the same non-answer today.
+- **`parse.negative = "parentheses" | "trailing_minus"`** says what the marker
+  means. It applies after `strip` and before the separators, so a symbol inside
+  the marker composes (`(CHF 1'234.50)`: strip takes the symbol, `negative`
+  takes the bracket, and the digits reach `check_grouping` unsigned). Numeric
+  columns only. `(-5)` — a sign *and* a marker — is refused rather than resolved.
+- **A `strip` that would eat a sign marker now fails at execution**, naming the
+  row, the value and the remedy. Checked against the data rather than refused in
+  `validate`, because a strip that never meets a bracket is fine and only the
+  file knows which it is. That extends `validate`'s charter from "anything the
+  executor would otherwise discover by panicking" to "…or by being wrong."
+- **The sniffer reports the shape and does not act on it.** The column stays
+  text, gains a note naming the declaration that would type it, and loses 0.10
+  of confidence. Never inferred: `(5)` is a footnote marker at least as often as
+  it is minus five.
+
+The same command that produced `+1234.50` above now produces:
+
+```
+| A | -1234.50 |   total 465.50
+| B |  2000.00 |
+| C |  -300.00 |
+```
+
+CR/DR suffixes remain undeclarable, and are the obvious third `NegativeStyle`
+if a file ever asks for one.
 
 ### E6 · Percent handling
 **Also called:** `str.rstrip('%').astype(float)/100`, `Percentage` type (Power
@@ -1296,11 +1314,17 @@ drop-then-fill does not. Both are legitimate; the spec says which.
 `na.locf(fromLast=TRUE)` (zoo), `Table.FillUp` (Power Query),
 `fill_null(strategy="backward")` (polars).
 
-**`gap`** — `FillDown` has no `direction` and there is no `FillUp`. The layout it
-cures (a label written at the *bottom* of its group, common in French-language
-and some accounting exports) is rarer but real. A `direction` field on the
-existing transform is a two-line change; it is listed here mostly because its
-absence is invisible until you meet the file.
+**`spec`** — `fill_down` takes `direction = "down" | "up"`; `down` is the
+default and what it always did. The layout `up` cures — a label written at the
+*bottom* of its group, common in French-language and some accounting exports —
+is rarer but real, and its absence was invisible until you met the file.
+
+Two notes on the implementation, both consequences of rules already in the
+codebase. Filling up is filling down over the reversed table, so the carry rule
+lives in exactly one place. And `stream::can_stream` refuses the *shape*:
+carrying a value from a row the reader has not reached yet is the one thing a
+forward-only pass cannot do, so the materialising executor runs it — the same
+treatment `constant` already gets, and no spec is refused for being unusual.
 
 ### G3 · Fill right / fill left
 **Also called:** header fill for merged title cells, `Table.FillDown` after a
@@ -1904,15 +1928,18 @@ rather than leaving implicit in the code.
 | B · Dialect & framing | 8 | – | 2 | 1 | – | 11 |
 | C · Table framing | 6 | – | 3 | 3 | 3 | 16 |
 | D · Shape | 3 | 4 | 1 | 1 | – | 9 |
-| E · Parsing & typing | 13 | – | 5 | 3 | – | 21 |
+| E · Parsing & typing | 14 | – | 5 | 2 | – | 21 |
 | F · Standardisation | 1 | 3 | – | 1 | 5 | 10 |
-| G · Missing data | 3 | 2 | 1 | 1 | 2 | 9 |
+| G · Missing data | 4 | 2 | 1 | – | 2 | 9 |
 | H · Rows | 1 | 3 | – | 1 | – | 5 |
 | I · Aggregation | – | 4 | – | 1 | – | 5 |
 | J · Combining | 1 | 1 | 1 | – | 2 | 5 |
 | K · Validation | 2 | – | 1 | – | 4 | 7 |
 | L · Process | 4 | – | – | 1 | – | 5 |
-| **Total** | **45** | **17** | **16** | **14** | **17** | **110** |
+| **Total** | **47** | **17** | **16** | **12** | **17** | **110** |
+
+Two `gap`s became `spec` on 2026-09-06 — **E5** signed-number conventions and
+**G2** fill-up — and this table counts the state after them.
 
 (Counted from the verdict line of each numbered entry; C15's split verdict is
 counted in the entry total but in neither column.)
@@ -1936,10 +1963,12 @@ would mean producing a value the file does not contain.
    declarative form. Its absence blocks `fit` on any file that packs two target
    columns into one source column, and it is a prerequisite for D7.
 
+~~4. **E5 · Signed-number conventions.**~~ **Done, 0.2.1.** It was the only
+   finding here that could produce a silently wrong number through a validated
+   spec, which is why it went first.
+
 **Tier 2 — files tdy reads but cannot fully clean.**
 
-4. **E5 · Signed-number conventions.** The only finding here that can produce a
-   silently wrong number through a validated spec. Small fix, high stakes.
 5. **D6 · Nested JSON fields.** One level of flattening is the boundary, and
    DataFusion has no JSON functions to finish the job downstream.
 6. **D2 · Pivot (long → wide).** Absent from the spec layer (so a long-format
@@ -1954,7 +1983,7 @@ would mean producing a value the file does not contain.
 
 **Tier 3 — small, cheap, occasionally decisive.**
 
-9. **G2 · Fill up** — a `direction` field on an existing transform.
+9. ~~**G2 · Fill up**~~ — **done**: `fill_down` takes a `direction`.
 10. **E15 · Quarters and ISO weeks** — or at least a documented `replace` idiom.
 11. **E13 + E21 · Time that does not look like time** — spreadsheet serials and
     Unix epochs both type as integers. A sniffer note; a declarable parse; never

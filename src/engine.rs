@@ -1182,6 +1182,17 @@ pub(crate) fn build_column_at(
         if neg && (v.starts_with('-') || v.starts_with('+')) {
             bail!("carries both a sign and a negative marker; one of the two is a mistake");
         }
+        // Undeclared, the marker would otherwise surface as "invalid digit
+        // found in string", which is true and useless. The value is right
+        // here and so is the fix.
+        if !neg {
+            if let Some(kind) = sign_marker(v) {
+                bail!(
+                    "looks like an accounting negative; declare `negative = \"{kind}\"` on \
+                     this column to read the marker as a sign"
+                );
+            }
+        }
         numfmt::check_grouping(v, p.thousands_separator, p.decimal_separator)
             .map_err(|e| anyhow!("{e}"))?;
         let mut s = Cow::Borrowed(v);

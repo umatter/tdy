@@ -1773,3 +1773,20 @@ fn a_column_of_accounting_negatives_is_flagged_and_not_typed() {
         r.spec.confidence
     );
 }
+
+/// Without the declaration the value cannot be parsed at all — which is
+/// correct, and used to be reported as "invalid digit found in string". The
+/// marker is right there in the value and so is the remedy, so the message
+/// names both.
+#[test]
+fn an_undeclared_sign_marker_names_the_declaration_that_fixes_it() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "ledger.csv", LEDGER);
+    let spec = ledger_spec(None, None);
+
+    let e = tdy::engine::execute(&spec, &f, Limits::default())
+        .expect_err("(1,234.50) is not a number without a convention");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("accounting negative"), "{msg}");
+    assert!(msg.contains("parentheses"), "{msg}");
+}
