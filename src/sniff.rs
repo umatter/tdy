@@ -480,6 +480,10 @@ fn sniff_delimited(
     if skip_tail > 0 {
         doubts.note("dropped a trailing summary row");
     }
+    // A summary row that is not the last row is invisible to the check above.
+    // Ask the same question of the sample's tail, where such a row still sits
+    // in its original position relative to the trailing notes that hide it.
+    note_interior_summary(&footer_evidence, modal_arity, &mut doubts);
 
     let mut transforms = Vec::new();
     if skip_head > 0 || skip_tail > 0 {
@@ -786,6 +790,7 @@ fn sniff_excel_sheet(
     }
 
     note_trailing_blocks(&table, &mut doubts);
+    note_interior_summary(&table.rows, table.width(), &mut doubts);
 
     finish(extraction, transforms, table, 0.9, doubts, &money_columns)
 }
@@ -1106,6 +1111,75 @@ fn footer_row_cells(cells: &[String], sampled: &[Vec<String>]) -> u32 {
             .map(|(idx, value)| column_occurrences(sampled, idx, &footer_key(value)) <= 1)
             .unwrap_or(false),
     )
+}
+
+/// The last row that could be data, ignoring what cannot be: trailing blank
+/// rows and legend/footnote prose.
+///
+/// A summary row is only ever tested as the file's *last* row, so anything
+/// below a `Total` hides it. This is what "below" has to mean, and it takes
+/// two answers because neither alone covers the real files. The backward walk
+/// over blank and prose-lead rows catches `PCA_Report_FY18Q3.xls`, whose
+/// trailing block is a blank and one disclaimer — two rows short of what
+/// [`trailing_prose_block`] needs to fire. That block detector, when it does
+/// fire, reaches further than the walk can: its extent is "blank or
+/// under-width", so it crosses the short line buried in a legend
+/// (`ttb_brewery_size_2016.xlsx`, `PCA_Report_FY17Q3.xls`) that stops a walk
+/// requiring every row to look like prose. Whichever reaches further up wins.
+fn last_data_row(rows: &[Vec<String>], width: usize) -> Option<usize> {
+    let lead_re = regex::Regex::new(PROSE_LEAD).expect("static regex");
+    let non_data = |row: &Vec<String>| {
+        let first = row.iter().map(|c| c.trim()).find(|c| !c.is_empty());
+        match first {
+            None => true, // a blank row
+            Some(c) => (c.len() > 40 && c.contains(' ')) || lead_re.is_match(c),
+        }
+    };
+    let mut end = rows.len();
+    while end > 0 && non_data(&rows[end - 1]) {
+        end -= 1;
+    }
+    if let Some((n, _)) = trailing_prose_block(rows, width) {
+        end = end.min(rows.len() - n);
+    }
+    (end > 0).then(|| end - 1)
+}
+
+/// A corroborated summary row that is NOT the last row, because blank or
+/// footnote rows sit below it. Returns its label and how many trailing
+/// non-data rows hid it.
+///
+/// Returns `None` when the summary row *is* the last row: that case is
+/// already handled by dropping it (`skip_rows { tail }`), and an interior row
+/// cannot be expressed that way. Consistent with the rule the other
+/// multi-row shapes follow, this only ever produces a doubt — the sniffer
+/// notices and says so, and a human decides with `drop_rows_matching`.
+fn interior_summary_row(rows: &[Vec<String>], width: usize) -> Option<(String, usize)> {
+    let idx = last_data_row(rows, width)?;
+    let below = rows.len() - idx - 1;
+    if below == 0 || footer_row_cells(&rows[idx], rows) == 0 {
+        return None;
+    }
+    let re = regex::Regex::new(FOOTER_FIELD).expect("static regex");
+    let label = rows[idx]
+        .iter()
+        .find(|c| re.is_match(c.trim().trim_matches('"')))
+        .map(|c| c.trim().trim_matches('"').to_string())?;
+    Some((label, below))
+}
+
+/// The doubt both sniffers raise for [`interior_summary_row`].
+fn note_interior_summary(rows: &[Vec<String>], width: usize, doubts: &mut Doubts) {
+    if let Some((label, below)) = interior_summary_row(rows, width) {
+        doubts.add(
+            0.3,
+            format!(
+                "a summary row (`{label}`) sits above {below} trailing non-data row(s) and \
+                 was read as data, so any sum() over this file double-counts it; add \
+                 drop_rows_matching to the sidecar to remove it"
+            ),
+        );
+    }
 }
 
 /// Does the file's last line look like a summary row? Returns the number of

@@ -1557,3 +1557,59 @@ fn a_ragged_sheet_does_not_lose_rows_hunting_for_a_header() {
     let names = t.column(1).as_any().downcast_ref::<StringArray>().unwrap();
     assert_eq!(names.value(0), "University 1", "the first data row is missing");
 }
+
+/// A summary row must be noticed even when it is not the last row.
+///
+/// `footer_row_cells` and `footer_rows` are only ever handed the file's LAST
+/// row, so anything sitting below a `Total` — a blank line, a disclaimer, a
+/// legend block — hides it completely and it is read as ordinary data. A
+/// `sum()` over the column then double-counts.
+///
+/// Found by the 2026-09-04 flagged-file adjudication in three real files:
+/// `PCA_Report_FY17Q3.xls` (Total = 89,459,550,456, the exact sum of the 16
+/// rows above it, under a four-row note block), `ttb_brewery_size_2016.xlsx`
+/// (Total = 5096 above a fourteen-row legend), and worst
+/// `PCA_Report_FY18Q3.xls`, which lands at confidence 0.80 — above the flag
+/// line — with a Total row in the data and no note whatsoever, because its
+/// trailing block is a blank and one disclaimer, two rows short of what
+/// `trailing_prose_block` needs to fire.
+///
+/// The sniffer does not remove the row: this is the multi-row shape whose
+/// stated rule is to notice and say so, never to guess which rows are safe
+/// to drop. It must say so loudly enough to drop below the escalation
+/// threshold.
+#[test]
+fn a_summary_row_above_a_footnote_is_still_noticed() {
+    // Excel: testdata/xl_interior_total.xlsx is PCA_Report_FY18Q3's shape —
+    // Total, blank, one long disclaimer.
+    let f = Path::new("testdata/xl_interior_total.xlsx");
+    let r = sniffed(f);
+    assert!(
+        r.spec.notes.iter().any(|n| n.contains("summary row")),
+        "the Total row was read as data with no note: {:?}",
+        r.spec.notes
+    );
+    assert!(
+        r.confidence < 0.8,
+        "a Total row silently in the data must not stay above the flag line: {:?}",
+        r.confidence
+    );
+
+    // Delimited files reach the same summary-row check by a different route
+    // (`footer_rows` over the sample's tail), and had the identical blind spot.
+    let dir = tempfile::tempdir().unwrap();
+    let c = dir.path().join("interior_total.csv");
+    let mut s = String::from("region,amount\n");
+    for i in 0..12 {
+        s.push_str(&format!("region {i},{}\n", 100 + i));
+    }
+    s.push_str("Total,1266\n\nNotes: figures are provisional and subject to revision.\n");
+    std::fs::write(&c, &s).unwrap();
+    let r = sniffed(&c);
+    assert!(
+        r.spec.notes.iter().any(|n| n.contains("summary row")),
+        "delimited: the Total row was read as data with no note: {:?}",
+        r.spec.notes
+    );
+    assert!(r.confidence < 0.8, "delimited confidence {:?}", r.confidence);
+}
