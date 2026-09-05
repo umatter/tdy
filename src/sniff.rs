@@ -694,6 +694,29 @@ fn sniff_excel_sheet(
             break;
         }
     }
+    // Never skip past a row that is itself a header.
+    //
+    // The bars above are fractions of the *grid* width, and `next_ok` asks
+    // the row *after* the candidate to clear one too. On a wide ragged sheet
+    // — institutions reporting different numbers of sports, rows running
+    // from a handful of cells to the full grid — a row-1 header that fills
+    // every column is rejected because the first data row under it is
+    // sparse, and the scan then walks into the data until two consecutive
+    // rows happen to be dense enough. On the EADA `Schools.xlsx` family it
+    // stopped 217 rows in and silently discarded seven universities,
+    // reporting only "skipped 217 leading row(s) before the header".
+    //
+    // So when the first row is substantially populated AND reads as a header
+    // over the rows below it, it *is* the header, whatever the pair-scan
+    // found deeper down. This deliberately does not touch a genuine title
+    // block: those rows are sparse prose, fail the populated bar, and do not
+    // read as a header, so the skip that removes them stands.
+    if header_idx > 0
+        && non_empty(&table.rows[0]) as f32 >= 0.6 * width as f32
+        && matches!(header_verdict(&table.rows), HeaderVerdict::Present)
+    {
+        header_idx = 0;
+    }
     if header_idx > 0 {
         doubts.add(0.1, format!("skipped {header_idx} leading row(s) before the header"));
     }
@@ -945,6 +968,10 @@ fn finish(
     mut doubts: Doubts,
     money_columns: &std::collections::HashSet<usize>,
 ) -> Result<SniffResult> {
+    // Did the file give us its column names? `ensure_header` is about to
+    // invent `col_1, col_2, …` if it did not, and the all-text doubt below
+    // turns on the difference.
+    let named_by_file = table.header.is_some();
     table.ensure_header()?;
     let header = table.header.clone().unwrap_or_default();
     if header.is_empty() {
@@ -953,9 +980,18 @@ fn finish(
     let body: Vec<&Vec<String>> = table.rows.iter().take(TYPE_SAMPLE).collect();
     let (columns, probe_empty) = guess_columns(&header, &body, &mut doubts, money_columns);
 
-    // A table that types as almost entirely text usually means the layout was
-    // misread, not that the data is textual.
-    if columns.len() >= 3 {
+    // A table that types as almost entirely text can mean the layout was
+    // misread — but only when the file did not also tell us its column
+    // names. The 2026-09-04 flagged-file adjudication found this doubt
+    // unearned on file after file that is simply textual by nature: cocktail
+    // recipes measured in "1 1/2 oz", animal-complaint categories, TV-episode
+    // notes, villager names. Each carried a real header and typed correctly,
+    // and this 0.15 was the only thing pushing them from 0.95 to 0.7999 —
+    // just under the flag line — which is how people learn to ignore
+    // warnings. The ratio alone cannot tell those from a genuine misreading:
+    // both groups are 100% text. Having to invent the names is what makes
+    // "everything is text" suspicious rather than merely true.
+    if columns.len() >= 3 && !named_by_file {
         let utf8 = columns.iter().filter(|c| c.dtype == DType::Utf8).count() as f32;
         if utf8 / columns.len() as f32 > 0.8 && !body.is_empty() {
             doubts.add(0.15, "nearly every column typed as text; the layout may be misread");
@@ -1131,6 +1167,17 @@ const PROSE_LEAD: &str = r"(?i)^(legend|note|notes|footnote|source)s?\b";
 /// still `footer_rows`'s territory. Returns the block's total row count
 /// (for the `skip_rows` tail suggestion) and the (1-based) row number the
 /// block starts at.
+///
+/// Second, decide whether the block *is* a legend, and this is where the
+/// looseness of phase one has to be paid back. The walk stops only at a
+/// full-width row, so on a table whose rows are mostly sparse it runs clear
+/// to the top: `Electricity_generation_statistics_2019.xlsx` was reported as
+/// "475 trailing rows" over a 475-row table, advising a `skip_rows` tail
+/// that would have deleted every row. Two gates close that. A block starting
+/// at the first row has no data above it and is trailing nothing. And prose
+/// must be a real share of the block's non-empty rows — a legend is mostly
+/// legend, whereas a span holding eight legend lines among 475 data rows is
+/// the table, reached by accident.
 fn trailing_prose_block(rows: &[Vec<String>], width: usize) -> Option<(usize, usize)> {
     if width == 0 {
         return None;
@@ -1147,11 +1194,21 @@ fn trailing_prose_block(rows: &[Vec<String>], width: usize) -> Option<(usize, us
             break;
         }
     }
+    // A block with nothing above it is not trailing anything: the walk ran
+    // clear to the top of a table whose rows are simply sparse. Claiming it
+    // is a legend advises deleting the entire dataset.
+    if block_start == 0 {
+        return None;
+    }
     let block = &rows[block_start..];
     if block.len() < 2 {
         return None;
     }
 
+    let non_empty = block
+        .iter()
+        .filter(|row| row.iter().any(|c| !c.trim().is_empty()))
+        .count();
     let prose_rows = block
         .iter()
         .filter(|row| {
@@ -1159,7 +1216,10 @@ fn trailing_prose_block(rows: &[Vec<String>], width: usize) -> Option<(usize, us
             first_cell.is_some_and(is_prose)
         })
         .count();
-    if prose_rows >= 2 {
+    // Prose must be a real share of the block, not two lines lost inside it.
+    // A legend is mostly legend; a span where prose is a small minority is
+    // the table itself, reached because its rows happen to be sparse.
+    if prose_rows >= 2 && prose_rows * 3 >= non_empty {
         Some((block.len(), block_start + 1))
     } else {
         None

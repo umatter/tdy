@@ -83,13 +83,14 @@ FIXTURES  (all in testdata/, all named legacy_formats_*)
    [a..e]; row 0 = (1, NULL, NULL, NULL, 5); rows 1 and 2 are both
    (1, 2, 3, 4, 5). The point is column e: it must hold 5, not NULL, and
    must not have slid to column b.
-   Measured tier-1 behaviour: the mostly-empty second row reads as more
-   title block, so the sniffer skips two leading rows, finds no header and
-   emits col_1..col_5 over the two dense rows — confidence 0.65, with
-   "skipped 2 leading row(s)" and "no header row detected" in notes. That
-   is the honest outcome, not a defect: it loses a row rather than
-   inventing one, and says so loudly enough to escalate. The correct parse
-   above needs the hand-written spec that tests/formats.rs pins.
+   Measured tier-1 behaviour: correct, since the 2026-09-05 header-skip
+   fix. It used to read the mostly-empty second row as more title block,
+   skip two leading rows, find no header and emit col_1..col_5 over the two
+   dense rows at confidence 0.65 — honest but lossy, since it dropped the
+   sparse row rather than inventing one. Now that the sniffer will not skip
+   past a row that is itself a header, row 0 is promoted and the file parses
+   exactly as the correct parse above, at confidence 0.90. The hand-written
+   spec in tests/formats.rs still pins the same answer independently.
 
 3. legacy_formats_xls_cover_sheet.xls
    Sheet selection on the BIFF reader. Sheets are ["Deckblatt", "Daten"]:

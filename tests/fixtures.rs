@@ -494,18 +494,33 @@ fn sheet_selection_works_on_the_legacy_xls_reader() {
 /// A sparse ODS row is written as a `number-columns-repeated` run, not as
 /// empty cells. If that run were ignored, every value after the gap would
 /// slide left into a neighbouring column — the exact silent-wrong-value
-/// failure the whole design exists to prevent. Tier 1 declines this file
-/// (see the generator's docstring); this asserts the answer is right once a
-/// spec says what to do, and `tests/formats.rs` pins the hand-written spec.
+/// failure the whole design exists to prevent.
+///
+/// Tier 1 now reads this file correctly unaided. It used to skip two leading
+/// rows — reading the sparse row as more title block — find no header, and
+/// emit `col_1..col_5` over the two dense rows only, which is why this test
+/// once asserted the sums of those two rows alone (2,4,6,8,10) and the
+/// generator documented the loss as the honest-but-lossy tier-1 outcome. The
+/// 2026-09-05 header-skip fix ("never skip past a row that is itself a
+/// header") makes the sniffer keep row 0 as the header, so the file now
+/// parses exactly as that generator's *correct parse* says it should:
+/// `promote_header rows = 1`, three rows, `a..e`, with the sparse row read
+/// rather than discarded. `tests/formats.rs` still pins the hand-written
+/// spec that always produced this.
 #[test]
 fn an_ods_repeated_cell_run_keeps_its_column_alignment() {
     let (_, b) = read("legacy_formats_ods_sparse.ods");
     assert_eq!(b.num_columns(), 5, "the repeated run changed the column count");
-    // Whatever tier 1 decides to call the columns, each must hold its own
-    // value: two dense rows of 1,2,3,4,5 sum to 2,4,6,8,10 across the five
-    // columns. A dropped run would shift them left and skew every total.
+    assert_eq!(b.num_rows(), 3, "the sparse row was dropped instead of read");
+
     let schema = b.schema();
     let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, vec!["a", "b", "c", "d", "e"], "the header row was not promoted");
+
+    // The alignment property this file exists for: the sparse row is
+    // (1, NULL, NULL, NULL, 5), so column `e` sums 5+5+5 = 15 and column `b`
+    // sums 0+2+2 = 4. Had the repeated run been dropped, the 5 would have
+    // slid left into `b` and both totals would be wrong.
     let sums: Vec<f64> = names.iter().map(|n| total(&b, n)).collect();
-    assert_eq!(sums, vec![2.0, 4.0, 6.0, 8.0, 10.0], "columns slid: {sums:?}");
+    assert_eq!(sums, vec![3.0, 4.0, 6.0, 8.0, 15.0], "columns slid: {sums:?}");
 }

@@ -305,6 +305,70 @@ def build_money_offset_pair():
     )
 
 
+def build_ragged_header():
+    """A wide, ragged sheet whose real header is row 1 and whose FIRST DATA
+    ROW is sparse enough to disqualify it.
+
+    `sniff_excel_sheet` picks the header as "the first row with >= 60% of the
+    grid width populated that is followed by a row with >= 50%". On a sheet
+    where institutions report different numbers of sports -- rows ranging
+    from a handful of cells to the full grid -- row 1 is a perfect header but
+    row 2 falls under the 50% bar, so the scan walks *into the data* and
+    stops at the first pair of rows that happen to be dense enough. It then
+    finds the row it landed on is not a header, declines to promote it, and
+    keeps the skip anyway: N rows deleted for a reason that was withdrawn.
+
+    Found on the EADA `Schools.xlsx` family (2022-03-29 tidytuesday), where
+    four of five workbooks lost rows and the worst lost 216 -- seven real
+    universities. Reproduced here at 20 columns so the arithmetic is legible:
+
+        row  1 : 20 populated  (>= 12 = 60%)  but row 2 has 9 (< 10 = 50%)
+        rows 2-9: 8-9 populated                       -> never qualify
+        row 10 : 13 populated  (>= 12)  and row 11 has 11 (>= 10)  -> PICKED
+
+    so `header_idx` = 9, `skip_rows{head=9}` deletes the header and the eight
+    data rows above it, and the columns come back `col_1, col_2, ...`.
+
+    The fixture's contract: 29 data rows, all of them readable, under the
+    header's own names.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "EADA_schools"
+
+    W = 20
+    header = ["unitid", "institution_name"] + [f"sport_{i}_participants" for i in range(1, W - 1)]
+    assert len(header) == W, len(header)
+    ws.append(header)
+
+    def row(n, metrics):
+        """One institution reporting `metrics` sports; the rest of the grid
+        is genuinely empty, which is what makes the sheet ragged."""
+        cells = [100000 + n, f"University {n}"] + [10 * n + k for k in range(metrics)]
+        return cells + [None] * (W - len(cells))
+
+    # Row 2: 9 populated -- two short of the 50% bar, which is the whole
+    # defect. Rows 3-9: 8 populated. Row 10: 13, row 11: 11 -> the pair the
+    # scan stops at.
+    plan = [7] + [6] * 7 + [11, 9] + [6] * 19
+    assert len(plan) == 29, len(plan)
+    for n, metrics in enumerate(plan, start=1):
+        ws.append(row(n, metrics))
+
+    populated = [sum(1 for c in r if c is not None and c != "") for r in ws.iter_rows(values_only=True)]
+    assert populated[0] == W, populated[0]
+    assert populated[1] == 9, populated[1]          # first data row, under 50%
+    assert populated[9] == 13, populated[9]         # >= 60%
+    assert populated[10] == 11, populated[10]       # >= 50%
+    assert len(populated) == 30, len(populated)
+
+    out = os.path.join(OUT, "xl_ragged_header.xlsx")
+    _save_deterministic(wb, out)
+    note(out, "wide ragged sheet; real header row 1, sparse first data row")
+
+
 def _save_deterministic(wb, out):
     """Pin document properties and repack the zip with fixed entry stamps,
     exactly as gen_fixtures.py's own _repack_deterministic does -- openpyxl
@@ -324,6 +388,7 @@ def main():
     build_cell_newline()
     build_money_siblings()
     build_money_offset_pair()
+    build_ragged_header()
 
 
 if __name__ == "__main__":

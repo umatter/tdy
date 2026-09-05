@@ -1409,3 +1409,151 @@ fn a_short_line_inside_the_trailing_block_does_not_break_the_scan() {
     assert!(r.spec.notes.iter().any(|n| n.contains("trailing")),
             "no note about the trailing block: {:?}", r.spec.notes);
 }
+
+/// A "trailing" block must have data above it, and must be mostly prose.
+///
+/// The 2026-09-04 flagged-file adjudication found
+/// `Electricity_generation_statistics_2019.xlsx` carrying the note "475
+/// trailing row(s) starting at row 1 look like a legend or footnote block" —
+/// where `count(*)` IS 475. The backward walk stops only at a *full-width*
+/// row, so on a sheet whose rows are mostly sparse it ran clear to the top
+/// and claimed the entire table; the >=2-prose-rows gate still passed,
+/// because the sheet's real ~8-row legend sits inside that span. The remedy
+/// it then printed ("add skip_rows (tail = 475)") would have deleted every
+/// row of data — the opposite of the warning's purpose.
+///
+/// Two properties fix it, and this pins both: a block with no data above it
+/// is not trailing anything, and a block in which prose is a tiny minority
+/// is a table, not a legend.
+#[test]
+fn a_trailing_block_never_swallows_the_whole_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("sparse_with_legend.csv");
+    // Every data row is under-width (two of four columns populated), the
+    // shape that let the backward walk run to the top of the file.
+    let mut s = String::from("country,gwh,share,rank\n");
+    for i in 0..40 { s.push_str(&format!("country {i},{},,\n", i * 100)); }
+    s.push_str("\nNotes\n");
+    s.push_str("1) Generation is measured at the terminals of all generator units.\n");
+    s.push_str("2) Totals may not sum exactly because each figure is rounded.\n");
+    std::fs::write(&f, &s).unwrap();
+
+    let r = sniffed(&f);
+    let rows = tdy::engine::execute(&r.spec, &f, Limits::default()).unwrap().num_rows();
+    for n in r.spec.notes.iter().filter(|n| n.contains("trailing row")) {
+        let claimed: usize = n
+            .split_whitespace()
+            .next()
+            .and_then(|w| w.parse().ok())
+            .expect("the note opens with the row count");
+        assert!(
+            claimed < rows,
+            "the trailing-block note claims {claimed} of {rows} rows — the whole table: {n}"
+        );
+        assert!(
+            !n.contains("starting at row 1,") && !n.contains("starting at row 1 "),
+            "a trailing block starting at row 1 has no data above it: {n}"
+        );
+    }
+}
+
+/// An all-text table is only suspicious when the file did not name its
+/// columns either.
+///
+/// The 2026-09-04 flagged-file adjudication found the doubt "nearly every
+/// column typed as text; the layout may be misread" unearned on file after
+/// file that is simply textual by nature — cocktail recipes measured in
+/// "1 1/2 oz" (`mr-boston-flattened.csv`), animal-complaint categories,
+/// TV-episode notes (`chopped-raw.csv`), villager names. Each had a real
+/// header and typed correctly, and this single 0.15 penalty was the only
+/// thing taking them from 0.95 to just under the 0.8 flag line, which is
+/// how people are taught to ignore warnings.
+///
+/// The ratio cannot separate those from a genuine misreading — both groups
+/// are 100% text. Having had to invent the column names is what makes
+/// "everything is text" evidence of a misreading rather than a description.
+#[test]
+fn an_all_text_table_with_a_real_header_is_not_suspicious() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // A header the file supplies, over columns that are genuinely textual.
+    let named = dir.path().join("recipes.csv");
+    let mut s = String::from("name,category,measurement,ingredient\n");
+    for i in 0..20 {
+        s.push_str(&format!("drink {i},cocktail classic,1 1/2 oz,gin and bitters\n"));
+    }
+    std::fs::write(&named, &s).unwrap();
+    let r = sniffed(&named);
+    assert!(
+        !r.spec.notes.iter().any(|n| n.contains("nearly every column typed as text")),
+        "the all-text doubt fired on a file that named its own columns: {:?}",
+        r.spec.notes
+    );
+    assert!(r.confidence > 0.8, "confidence {:?}", r.confidence);
+
+    // The same values with no promotable header row keep the doubt: now
+    // "everything is text" comes with not knowing what anything is called.
+    // Repeated cells in the first row are what make it implausible as a
+    // header, so the names have to be invented.
+    let unnamed = dir.path().join("no_header.csv");
+    let mut s = String::new();
+    for _ in 0..20 {
+        s.push_str("cocktail classic,cocktail classic,gin and bitters,gin and bitters\n");
+    }
+    std::fs::write(&unnamed, &s).unwrap();
+    let r = sniffed(&unnamed);
+    assert!(
+        r.spec.notes.iter().any(|n| n.contains("nearly every column typed as text")),
+        "the all-text doubt must still fire when the names had to be invented: {:?}",
+        r.spec.notes
+    );
+}
+
+/// A leading skip must not outlive the header it went looking for.
+///
+/// `sniff_excel_sheet` picks the header as "the first row with >= 60% of the
+/// grid width populated, followed by a row with >= 50%", then skips
+/// everything above it. On a wide ragged sheet — institutions reporting
+/// different numbers of sports, rows running from a handful of cells to the
+/// full grid — row 1 is a perfect header but the first *data* row falls
+/// under the 50% bar, so the scan walks into the data and stops at the first
+/// pair of rows dense enough to pass. It then finds that the row it landed
+/// on is not a header, declines to promote it, and keeps the skip regardless:
+/// N rows deleted for a reason that was immediately withdrawn.
+///
+/// Found by the 2026-09-04 flagged-file adjudication on the EADA
+/// `Schools.xlsx` family (tidytuesday 2022-03-29). Four of its five workbooks
+/// lost rows — 69, 31, 32 and 216 — and the worst discarded seven real
+/// universities, from Alabama A&M to Auburn at Montgomery, while reporting
+/// only "skipped 217 leading row(s) before the header". The one workbook that
+/// was correct was correct by accident: the scan found no qualifying pair at
+/// all, so the index stayed at its initialised zero.
+///
+/// `testdata/xl_ragged_header.xlsx` is that shape at 20 columns, where the
+/// arithmetic is legible: row 1 is 20/20, row 2 is 9 (under 10 = 50%), and
+/// rows 10/11 are 13 and 11 — the pair the scan stops at, giving head = 9.
+#[test]
+fn a_ragged_sheet_does_not_lose_rows_hunting_for_a_header() {
+    let f = Path::new("testdata/xl_ragged_header.xlsx");
+    let r = sniffed(f);
+
+    let t = tdy::engine::execute(&r.spec, f, Limits::default()).unwrap();
+    assert_eq!(
+        t.num_rows(),
+        29,
+        "rows were deleted to reach a header that was then rejected; transforms: {:?}",
+        r.spec.transforms
+    );
+
+    // The skip is only ever justified by reaching a real header — so when it
+    // is kept, the header's own names must be what comes out.
+    assert!(
+        r.spec.columns.iter().any(|c| c.name == "institution_name"),
+        "the sheet's own header was discarded; columns: {:?}",
+        r.spec.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+    );
+
+    // The first institution is the one a skip destroys first.
+    let names = t.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+    assert_eq!(names.value(0), "University 1", "the first data row is missing");
+}
