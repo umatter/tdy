@@ -1407,3 +1407,52 @@ fn an_all_text_table_with_a_real_header_is_not_suspicious() {
         r.spec.notes
     );
 }
+
+/// A leading skip must not outlive the header it went looking for.
+///
+/// `sniff_excel_sheet` picks the header as "the first row with >= 60% of the
+/// grid width populated, followed by a row with >= 50%", then skips
+/// everything above it. On a wide ragged sheet — institutions reporting
+/// different numbers of sports, rows running from a handful of cells to the
+/// full grid — row 1 is a perfect header but the first *data* row falls
+/// under the 50% bar, so the scan walks into the data and stops at the first
+/// pair of rows dense enough to pass. It then finds that the row it landed
+/// on is not a header, declines to promote it, and keeps the skip regardless:
+/// N rows deleted for a reason that was immediately withdrawn.
+///
+/// Found by the 2026-09-04 flagged-file adjudication on the EADA
+/// `Schools.xlsx` family (tidytuesday 2022-03-29). Four of its five workbooks
+/// lost rows — 69, 31, 32 and 216 — and the worst discarded seven real
+/// universities, from Alabama A&M to Auburn at Montgomery, while reporting
+/// only "skipped 217 leading row(s) before the header". The one workbook that
+/// was correct was correct by accident: the scan found no qualifying pair at
+/// all, so the index stayed at its initialised zero.
+///
+/// `testdata/xl_ragged_header.xlsx` is that shape at 20 columns, where the
+/// arithmetic is legible: row 1 is 20/20, row 2 is 9 (under 10 = 50%), and
+/// rows 10/11 are 13 and 11 — the pair the scan stops at, giving head = 9.
+#[test]
+fn a_ragged_sheet_does_not_lose_rows_hunting_for_a_header() {
+    let f = Path::new("testdata/xl_ragged_header.xlsx");
+    let r = sniffed(f);
+
+    let t = tdy::engine::execute(&r.spec, f, Limits::default()).unwrap();
+    assert_eq!(
+        t.num_rows(),
+        29,
+        "rows were deleted to reach a header that was then rejected; transforms: {:?}",
+        r.spec.transforms
+    );
+
+    // The skip is only ever justified by reaching a real header — so when it
+    // is kept, the header's own names must be what comes out.
+    assert!(
+        r.spec.columns.iter().any(|c| c.name == "institution_name"),
+        "the sheet's own header was discarded; columns: {:?}",
+        r.spec.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+    );
+
+    // The first institution is the one a skip destroys first.
+    let names = t.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+    assert_eq!(names.value(0), "University 1", "the first data row is missing");
+}

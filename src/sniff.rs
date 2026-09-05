@@ -656,6 +656,29 @@ fn sniff_excel_sheet(
             break;
         }
     }
+    // Never skip past a row that is itself a header.
+    //
+    // The bars above are fractions of the *grid* width, and `next_ok` asks
+    // the row *after* the candidate to clear one too. On a wide ragged sheet
+    // — institutions reporting different numbers of sports, rows running
+    // from a handful of cells to the full grid — a row-1 header that fills
+    // every column is rejected because the first data row under it is
+    // sparse, and the scan then walks into the data until two consecutive
+    // rows happen to be dense enough. On the EADA `Schools.xlsx` family it
+    // stopped 217 rows in and silently discarded seven universities,
+    // reporting only "skipped 217 leading row(s) before the header".
+    //
+    // So when the first row is substantially populated AND reads as a header
+    // over the rows below it, it *is* the header, whatever the pair-scan
+    // found deeper down. This deliberately does not touch a genuine title
+    // block: those rows are sparse prose, fail the populated bar, and do not
+    // read as a header, so the skip that removes them stands.
+    if header_idx > 0
+        && non_empty(&table.rows[0]) as f32 >= 0.6 * width as f32
+        && matches!(header_verdict(&table.rows), HeaderVerdict::Present)
+    {
+        header_idx = 0;
+    }
     if header_idx > 0 {
         doubts.add(0.1, format!("skipped {header_idx} leading row(s) before the header"));
     }
