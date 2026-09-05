@@ -369,6 +369,53 @@ def build_ragged_header():
     note(out, "wide ragged sheet; real header row 1, sparse first data row")
 
 
+def build_interior_total():
+    """A summary row that is NOT the last row, because a blank and a footnote
+    sit below it.
+
+    `footer_row_cells` is only ever handed `table.rows.last()`, so anything
+    below a `Total` -- a blank line, a disclaimer, a legend block -- hides it
+    completely and it is read as an ordinary data row. A naive `sum()` then
+    double-counts the whole column.
+
+    Reduced from `PCA_Report_FY18Q3.xls` (tidytuesday 2019-11-26), the worst
+    of the three the 2026-09-04 adjudication found: it lands at confidence
+    0.80 -- above the flag line -- with a Total row in the data and NO note
+    at all. Its shape is exactly Total, blank, one long disclaimer, which is
+    two rows short of what `trailing_prose_block` needs to fire, so nothing
+    else catches it either.
+
+    The fixture's contract: 12 data rows summing to 1266, plus a Total row
+    carrying that same 1266 which must be reported rather than silently
+    counted.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+
+    ws.append(["region", "amount"])
+    total = 0
+    for i in range(12):
+        ws.append([f"region {i}", 100 + i])
+        total += 100 + i
+    assert total == 1266, total
+    ws.append(["Total", total])
+    ws.append([None, None])
+    ws.append(
+        [
+            "*These figures are provisional snapshots at a point in time and are not "
+            "suitable for comparing performance between reporting periods.",
+            None,
+        ]
+    )
+
+    out = os.path.join(OUT, "xl_interior_total.xlsx")
+    _save_deterministic(wb, out)
+    note(out, "summary row above a blank and a footnote, not the last row")
+
+
 def _save_deterministic(wb, out):
     """Pin document properties and repack the zip with fixed entry stamps,
     exactly as gen_fixtures.py's own _repack_deterministic does -- openpyxl
@@ -389,6 +436,7 @@ def main():
     build_money_siblings()
     build_money_offset_pair()
     build_ragged_header()
+    build_interior_total()
 
 
 if __name__ == "__main__":
