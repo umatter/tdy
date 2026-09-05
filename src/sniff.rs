@@ -1632,6 +1632,45 @@ fn looks_monetary(name: &str) -> bool {
     WORDS.iter().any(|w| n.contains(w))
 }
 
+/// Does this sample look like numbers whose sign is written as a marker —
+/// `(1,234.50)` or `1234.50-`? Returns the convention's name, or `None` if
+/// nothing is marked, two conventions are mixed (so neither is *the*
+/// convention), or the marked values are not numbers underneath.
+///
+/// Deliberately only ever a *note*. A bracket means minus in a ledger and a
+/// footnote reference in a statistical yearbook, and the file does not say
+/// which — so this reports the shape and leaves the reading to a human.
+fn accounting_shape(sample: &[&str]) -> Option<&'static str> {
+    let mut kind: Option<&'static str> = None;
+    let mut marked = 0usize;
+    let mut bodies: Vec<&str> = Vec::with_capacity(sample.len());
+    for v in sample {
+        let t = v.trim();
+        // Both slices cut on ASCII bytes we just matched, so they are on
+        // character boundaries whatever else the value contains.
+        let (k, body) = if t.len() > 2 && t.starts_with('(') && t.ends_with(')') {
+            (Some("parentheses"), t[1..t.len() - 1].trim())
+        } else if t.len() > 1 && t.ends_with('-') {
+            (Some("trailing_minus"), t[..t.len() - 1].trim_end())
+        } else {
+            (None, t)
+        };
+        if let Some(k) = k {
+            match kind {
+                None => kind = Some(k),
+                Some(prev) if prev != k => return None,
+                _ => {}
+            }
+            marked += 1;
+        }
+        bodies.push(body);
+    }
+    if marked == 0 {
+        return None;
+    }
+    numfmt::infer(&bodies).and(kind)
+}
+
 fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGuess {
     let sample: Vec<&str> = values
         .iter()
@@ -1664,6 +1703,18 @@ fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGues
 
     if sample.is_empty() {
         return text(None, 0.0);
+    }
+    // Before anything tries to parse these as numbers, because they will not
+    // parse and the reason is worth saying: the sign is written as a marker.
+    if let Some(kind) = accounting_shape(&sample) {
+        return text(
+            Some(format!(
+                "kept as text: the values are written like accounting negatives; if that \
+                 is what they are, declare `negative = \"{kind}\"` on this column — \
+                 stripping the marker instead would read them as positive"
+            )),
+            0.1,
+        );
     }
     let with_na = |mut p: ValueParsing| {
         // The *whole* vocabulary, not only the tokens this sample happened to

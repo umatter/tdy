@@ -36,9 +36,22 @@ use crate::fileio;
 use crate::numfmt;
 use crate::sample::render_cell;
 use crate::spec::{
-    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, NoMatchPolicy, ParseSpec,
-    RaggedPolicy, Transform, ValueParsing,
+    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, NegativeStyle,
+    NoMatchPolicy, ParseSpec, RaggedPolicy, Transform, ValueParsing,
 };
+
+/// Which negative-number marker a value carries, if any — the shape only, not
+/// a claim that it means minus. Used to notice that a `strip` regex ate one.
+fn sign_marker(v: &str) -> Option<&'static str> {
+    let t = v.trim();
+    if t.len() > 2 && t.starts_with('(') && t.ends_with(')') {
+        Some("parentheses")
+    } else if t.len() > 1 && t.ends_with('-') {
+        Some("trailing_minus")
+    } else {
+        None
+    }
+}
 
 /// Compiled-regex size ceiling. A pattern from a sidecar or a model is
 /// untrusted input; the `regex` crate cannot backtrack, but it can be asked
@@ -1058,11 +1071,22 @@ pub(crate) fn build_column_at(
         .map(|s| compile(s, "strip"))
         .transpose()?;
 
+    // A `strip` that deletes a sign marker turns -1234.50 into +1234.50, and
+    // nothing downstream can tell: the column types, the dry run passes, the
+    // sidecar fingerprints, and the number is wrong by twice itself. Watched
+    // for here rather than refused in `validate`, because a strip that never
+    // meets a parenthesis is perfectly fine and only the data knows.
+    let sign_guard = p.negative.is_none()
+        && strip_re.is_some()
+        && matches!(col.dtype, DType::Int64 | DType::Float64 | DType::Decimal { .. });
+    let mut ate_sign: Option<(usize, &'static str)> = None;
+
     // trim -> replace -> na -> strip. Borrowed until something actually
     // changes, so a clean column costs no allocations at all.
     let cleaned: Vec<Option<Cow<str>>> = values
         .iter()
-        .map(|raw| {
+        .enumerate()
+        .map(|(i, raw)| {
             let mut v: Cow<str> = Cow::Borrowed(raw.trim());
             for r in &p.replace {
                 if v.contains(&r.from) {
@@ -1083,7 +1107,13 @@ pub(crate) fn build_column_at(
             }
             if let Some(re) = &strip_re {
                 if re.is_match(&v) {
+                    let marker = if sign_guard { sign_marker(&v) } else { None };
                     let stripped = re.replace_all(&v, "").trim().to_string();
+                    if let (Some(kind), None) = (marker, sign_marker(&stripped)) {
+                        if ate_sign.is_none() {
+                            ate_sign = Some((i, kind));
+                        }
+                    }
                     if stripped.is_empty() {
                         return None;
                     }
@@ -1093,6 +1123,17 @@ pub(crate) fn build_column_at(
             Some(v)
         })
         .collect();
+
+    if let Some((i, kind)) = ate_sign {
+        bail!(
+            "row {}: `strip` removes the marker that makes {:?} negative, which would \
+             silently read it as positive; write `negative = \"{}\"` to say what the \
+             marker means and leave `strip` for the currency symbol",
+            row_offset + i + 1,
+            values[i].trim(),
+            kind
+        );
+    }
 
     if !col.nullable {
         if let Some(row) = cleaned.iter().position(|v| v.is_none()) {
@@ -1109,6 +1150,31 @@ pub(crate) fn build_column_at(
     // separator that does not group in threes is a wrong spec, not a
     // character to delete. This is what keeps "1,5" from becoming 15.
     let numeric = |v: &str| -> Result<String> {
+        // The sign comes off first, so everything below sees an ordinary
+        // unsigned number: grouping is checked on the digits, the separators
+        // are swapped on the digits, and the decimal point is moved on the
+        // digits. Re-attached at the end, which is sound because none of those
+        // steps depends on the sign.
+        let (neg, v) = match p.negative {
+            Some(NegativeStyle::Parentheses) => match v
+                .strip_prefix('(')
+                .and_then(|inner| inner.strip_suffix(')'))
+            {
+                Some(inner) => (true, inner.trim()),
+                None => (false, v),
+            },
+            Some(NegativeStyle::TrailingMinus) => match v.strip_suffix('-') {
+                Some(inner) => (true, inner.trim_end()),
+                None => (false, v),
+            },
+            None => (false, v),
+        };
+        // Two ways of saying the sign at once is not a value with a known
+        // reading: `(-5)` is minus five to one author and plus five to
+        // another, and picking is guessing.
+        if neg && (v.starts_with('-') || v.starts_with('+')) {
+            bail!("carries both a sign and a negative marker; one of the two is a mistake");
+        }
         numfmt::check_grouping(v, p.thousands_separator, p.decimal_separator)
             .map_err(|e| anyhow!("{e}"))?;
         let mut s = Cow::Borrowed(v);
@@ -1129,7 +1195,7 @@ pub(crate) fn build_column_at(
                 s = Cow::Owned(shift_decimal_point(&s, shift));
             }
         }
-        Ok(s.into_owned())
+        Ok(if neg { format!("-{s}") } else { s.into_owned() })
     };
 
     macro_rules! parse_all {

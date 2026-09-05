@@ -1613,3 +1613,163 @@ fn a_summary_row_above_a_footnote_is_still_noticed() {
     );
     assert!(r.confidence < 0.8, "delimited confidence {:?}", r.confidence);
 }
+
+// ---------------------------------------------------------------------------
+// 2026-09-06: accounting negatives. `(1,234.50)` is minus one thousand two
+// hundred thirty-four francs fifty, and before this the only repair the spec
+// language offered was `strip`, which deletes the brackets and yields
+// *plus* 1234.50 — through `validate`, through the dry run, into a
+// fingerprinted sidecar, wrong in its sign and invisible in any single row.
+// ---------------------------------------------------------------------------
+
+/// A ledger CSV whose negatives are written the way ledgers write them.
+const LEDGER: &str = "konto,betrag\nA,\"(1,234.50)\"\nB,\"2,000.00\"\nC,(300.00)\n";
+
+fn ledger_spec(negative: Option<NegativeStyle>, strip: Option<&str>) -> ParseSpec {
+    ParseSpec {
+        extraction: Extraction::Delimited {
+            delimiter: ',',
+            quote: None,
+            escape: None,
+            encoding: None,
+            comment: None,
+            ragged: RaggedPolicy::Error,
+        },
+        transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        columns: vec![
+            ColumnSpec {
+                name: "konto".into(),
+                source: None,
+                dtype: DType::Utf8,
+                nullable: true,
+                parse: ValueParsing::default(),
+            },
+            ColumnSpec {
+                name: "betrag".into(),
+                source: None,
+                dtype: DType::Decimal { precision: 12, scale: 2 },
+                nullable: true,
+                parse: ValueParsing {
+                    thousands_separator: Some(','),
+                    negative,
+                    strip: strip.map(|s| s.to_string()),
+                    ..Default::default()
+                },
+            },
+        ],
+        confidence: None,
+        notes: vec![],
+    }
+}
+
+/// Declared, the marker is read as the sign — exactly, on a decimal, with no
+/// float anywhere near it.
+#[test]
+fn accounting_negatives_read_as_negative_when_declared() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "ledger.csv", LEDGER);
+    let spec = ledger_spec(Some(NegativeStyle::Parentheses), None);
+    spec.validate().expect("a declared sign convention is a valid spec");
+
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(
+        col_dec(&t, 1),
+        vec![Some(-123_450), Some(200_000), Some(-30_000)],
+        "the parenthesised values are negative, and the plain one is not"
+    );
+    // The sum a person would check: -1234.50 + 2000.00 - 300.00 = 465.50.
+    let total: i128 = col_dec(&t, 1).into_iter().flatten().sum();
+    assert_eq!(total, 46_550);
+}
+
+/// Trailing minus is the same claim in mainframe dialect.
+#[test]
+fn a_trailing_minus_reads_as_negative_when_declared() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "sap.csv", "konto,betrag\nA,1234.50-\nB,2000.00\n");
+    let mut spec = ledger_spec(Some(NegativeStyle::TrailingMinus), None);
+    spec.columns[1].parse.thousands_separator = None;
+
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(col_dec(&t, 1), vec![Some(-123_450), Some(200_000)]);
+}
+
+/// The defect itself: a `strip` that eats the marker must not quietly hand
+/// back a positive number. It is caught at execution rather than refused in
+/// `validate`, because a strip that never meets a bracket is perfectly fine
+/// and only the data knows which it is.
+#[test]
+fn a_strip_that_eats_a_sign_marker_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "ledger.csv", LEDGER);
+    let spec = ledger_spec(None, Some("[()]"));
+    spec.validate().expect("the spec is well-formed; the file is what makes it wrong");
+
+    let e = tdy::engine::execute(&spec, &f, Limits::default())
+        .expect_err("stripping the brackets would flip the sign");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("row 1"), "the offending row must be named: {msg}");
+    assert!(msg.contains("negative"), "the remedy must be named: {msg}");
+    assert!(msg.contains("(1,234.50)"), "the value must be shown: {msg}");
+}
+
+/// ...and the same guard must not fire on an ordinary currency strip, which
+/// is the whole reason `strip` exists.
+#[test]
+fn stripping_a_currency_symbol_is_still_fine() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "chf.csv", "konto,betrag\nA,CHF 1234.50\nB,CHF -300.00\n");
+    let mut spec = ledger_spec(None, Some("CHF\\s*"));
+    spec.columns[1].parse.thousands_separator = None;
+
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(col_dec(&t, 1), vec![Some(123_450), Some(-30_000)]);
+}
+
+/// A currency symbol *inside* the marker is the ordinary shape of a real
+/// ledger cell, and the two features have to compose: strip takes the symbol,
+/// `negative` takes the bracket.
+#[test]
+fn a_currency_symbol_inside_the_marker_composes_with_the_sign() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "chf.csv", "konto,betrag\nA,\"(CHF 1,234.50)\"\nB,\"CHF 2,000.00\"\n");
+    let spec = ledger_spec(Some(NegativeStyle::Parentheses), Some("CHF\\s*"));
+
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(col_dec(&t, 1), vec![Some(-123_450), Some(200_000)]);
+}
+
+/// Two ways of writing the sign at once has no known reading, so it is an
+/// error rather than a guess.
+#[test]
+fn a_sign_inside_the_marker_is_an_error_not_a_guess() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "odd.csv", "konto,betrag\nA,(-5.00)\n");
+    let mut spec = ledger_spec(Some(NegativeStyle::Parentheses), None);
+    spec.columns[1].parse.thousands_separator = None;
+
+    let e = tdy::engine::execute(&spec, &f, Limits::default()).expect_err("(-5) has two readings");
+    assert!(format!("{e:#}").contains("both a sign and a negative marker"), "{e:#}");
+}
+
+/// Inference must not make this decision: a bracket means minus in a ledger
+/// and a footnote reference in a yearbook. The column stays text, and the
+/// note says which declaration would turn it into a number.
+#[test]
+fn a_column_of_accounting_negatives_is_flagged_and_not_typed() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "ledger.csv", LEDGER);
+    let r = sniffed(&f);
+    let betrag = r.spec.columns.iter().find(|c| c.name == "betrag").expect("a betrag column");
+    assert_eq!(betrag.dtype, DType::Utf8, "tdy must not decide a bracket means minus");
+    assert!(betrag.parse.negative.is_none(), "and must not declare the convention either");
+
+    let notes = r.spec.notes.join(" | ");
+    assert!(notes.contains("accounting negatives"), "the shape must be reported: {notes}");
+    assert!(notes.contains("negative ="), "with the remedy: {notes}");
+    assert!(
+        r.spec.confidence.unwrap_or(1.0) < 0.95,
+        "a column nobody can type without a human is not a confident read: {:?}",
+        r.spec.confidence
+    );
+}

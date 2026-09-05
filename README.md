@@ -931,6 +931,11 @@ name = "umsatz_chf"
 source = "umsatz_raw"
 dtype = { type = "decimal", precision = 12, scale = 2 }
 parse = { thousands_separator = "'", strip = "^CHF\\s*", na_values = ["n/a"] }
+
+[[spec.columns]]            # a ledger column: "(CHF 1'234.50)" is -1234.50
+name = "saldo_chf"
+dtype = { type = "decimal", precision = 12, scale = 2 }
+parse = { thousands_separator = "'", strip = "CHF\\s*", negative = "parentheses" }
 ```
 
 Spreadsheets: `.xlsx`, `.xlsm`, `.xls` (BIFF8) and `.ods` all go through
@@ -962,6 +967,15 @@ Details worth knowing:
   named zone like `Europe/Zurich` is rejected rather than guessed, because
   daylight saving cannot be resolved from the value alone. If the format
   itself parses an offset (`%z`), that offset wins.
+- **`negative` says how a negative number is written** when it is not written
+  with a leading `-`: `parentheses` for the accounting `(1,234.50)`, or
+  `trailing_minus` for the mainframe `1234.50-`. It is never inferred — the
+  sniffer notices the shape, keeps the column as text and says which
+  declaration would type it — because `(5)` is a footnote marker at least as
+  often as it is minus five. Declaring it is the *only* correct repair:
+  `strip`-ing the bracket away deletes the sign and reads the value as
+  positive, so a `strip` that would do that on a numeric column is refused at
+  execution, naming the row and the remedy.
 - **`decimal` rounds half away from zero** when a value has more fractional
   digits than `scale`. When the sniffer sees an inconsistent number of
   fractional digits it says so in `notes`, because rows it never read may be

@@ -2,6 +2,44 @@
 
 Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
+## 0.2.1 — 2026-09-06
+
+One correctness fix, in the same class as 0.2.0's: a spec that passed every
+gate and produced a number wrong in its **sign**.
+
+### Fixed
+
+- **Accounting negatives no longer read as positive.** `(1,234.50)` is minus
+  1234.50 in every ledger ever printed, and `1234.50-` is the same claim in
+  mainframe dialect. Neither parses as a number, so the only repair the spec
+  language offered was `strip` — which deletes the marker and yields
+  **+1234.50**, through `validate`, through the dry run, into a fingerprinted
+  sidecar, invisible in any single row and wrong by twice itself.
+
+  Three changes close it:
+
+  - **`parse.negative = "parentheses" | "trailing_minus"`** says what the
+    marker *means*, so the value can be read correctly. It applies after
+    `strip` and before the separators, so `(CHF 1'234.50)` works: strip takes
+    the symbol, `negative` takes the bracket. Only valid on a numeric column.
+  - **A `strip` that would eat a sign marker is now refused at execution**,
+    naming the row, the value and the remedy. It is checked against the data
+    rather than refused in `validate`, because a `strip` that never meets a
+    bracket is perfectly fine and only the file knows which it is.
+  - **The sniffer reports the shape instead of guessing at it.** A column
+    written that way stays text, gains a note saying which declaration would
+    type it, and loses confidence. It is never inferred: `(5)` is a footnote
+    marker at least as often as it is minus five, and that is a judgement
+    about what the file's author meant.
+
+  `(-5)` — a sign *and* a marker — is an error rather than a guess, since it
+  reads as minus five to one author and plus five to another.
+
+**No existing results change**, unless a hand-written sidecar was stripping
+sign markers: such a spec now fails loudly where it used to return positive
+numbers. That is the fix. Sniffed sidecars are unaffected — the sniffer never
+typed these columns in the first place.
+
 ## 0.2.0 — 2026-09-05
 
 A correctness release. Two systematic audits of a 9,881-file corpus of real
