@@ -367,6 +367,22 @@ pub enum Transform {
     },
 }
 
+/// The unit of an integer timestamp.
+///
+/// `format = "%s"` already reads epoch **seconds** — chrono parses it and tdy
+/// passes the format straight through — so this exists for the two scales it
+/// does not: the millisecond epochs JavaScript and Java hand out, and the
+/// microsecond ones some databases do. `1748736000` and `1748736000000` are
+/// the same instant a thousand apart, and both are plausible integers, so the
+/// scale is declared and never guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EpochUnit {
+    Seconds,
+    Milliseconds,
+    Microseconds,
+}
+
 /// Which part of a file's location `source_name` reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -437,6 +453,20 @@ pub struct ColumnSpec {
     pub nullable: bool,
     #[serde(default, skip_serializing_if = "ValueParsing::is_default")]
     pub parse: ValueParsing,
+    /// An RFC 6901 JSON Pointer into this column's value, applied before
+    /// anything else reads it.
+    ///
+    /// `Extraction::Json` gives the union of every record's keys and
+    /// serialises a nested value back to a JSON string — honest, since nothing
+    /// is lost, and unreachable, since DataFusion has no JSON functions to
+    /// open it downstream. This opens one level at a time, declaratively:
+    /// `source = "addr"` with `pointer = "/city"` is a text column.
+    ///
+    /// A pointer that does not resolve is a null. One that resolves to an
+    /// object or an array is an **error**: the column would silently become
+    /// JSON text again, which is the state this exists to get out of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<String>,
 }
 
 impl ColumnSpec {
@@ -561,6 +591,14 @@ pub struct ValueParsing {
     /// separators then see an ordinary number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub negative: Option<NegativeStyle>,
+    /// Read this column as an integer count since 1970 in the given unit.
+    ///
+    /// Only on a `date` or `timestamp` column, and only alongside
+    /// `format = "%s"` — the format and this option are two statements about
+    /// how to read the same value, and a sidecar where they disagree
+    /// (`%Y-%m-%d` beside `epoch = "milliseconds"`) says nothing true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<EpochUnit>,
     /// For Bool columns: e.g. ["ja", "yes", "1"] / ["nein", "no", "0"].
     /// Matched case-insensitively.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -702,6 +740,43 @@ impl ParseSpec {
                         c.name,
                         crate::engine::shift_decimal_point("1234", shift)
                     ));
+                }
+            }
+            if let Some(ptr) = &c.pointer {
+                if !ptr.is_empty() && !ptr.starts_with('/') {
+                    errs.push(format!(
+                        "column `{}`: `pointer` is an RFC 6901 JSON Pointer and must start \
+                         with `/` (or be empty for the whole value); {ptr:?} does not",
+                        c.name
+                    ));
+                }
+                if !matches!(self.extraction, Extraction::Json { .. }) {
+                    errs.push(format!(
+                        "column `{}`: `pointer` reads inside a JSON value, and this file is \
+                         read as {}",
+                        c.name,
+                        self.extraction.format_name()
+                    ));
+                }
+            }
+            if let Some(unit) = c.parse.epoch {
+                let fmt = match &c.dtype {
+                    DType::Timestamp { format, .. } | DType::Date { format } => Some(format),
+                    _ => None,
+                };
+                match fmt {
+                    None => errs.push(format!(
+                        "column `{}`: `epoch` counts time, which means nothing for a {} column",
+                        c.name,
+                        dtype_name(&c.dtype)
+                    )),
+                    Some(f) if f != "%s" => errs.push(format!(
+                        "column `{}`: `epoch = {unit:?}` and `format = {f:?}` are two \
+                         different claims about how to read this value. Write \
+                         `format = \"%s\"` beside an epoch",
+                        c.name
+                    )),
+                    Some(_) => {}
                 }
             }
             // A sign convention means nothing outside a number: on a text
@@ -1241,6 +1316,7 @@ mod tests {
                 dtype: DType::Int64,
                 nullable: true,
                 parse: ValueParsing::default(),
+                pointer: None,
             }],
             confidence: None,
             notes: vec![],
@@ -1272,6 +1348,7 @@ mod tests {
                 dtype: DType::Utf8,
                 nullable: true,
                 parse: ValueParsing::default(),
+                pointer: None,
             }],
             confidence: None,
             notes: vec![],

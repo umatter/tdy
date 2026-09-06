@@ -38,6 +38,46 @@ from RFC 4180 each turned up two things nothing in the tree had:
 
 ### Added
 
+- **A per-column JSON `pointer`.** `Extraction::Json` gives the union of every
+  record's keys and serialises a nested value back to a JSON string — honest,
+  since nothing is lost, and unreachable, since DataFusion has no JSON
+  functions to open it downstream. A column may now declare an RFC 6901
+  pointer into its source value:
+
+  ```toml
+  [[spec.columns]]
+  name = "city"
+  source = "addr"
+  pointer = "/city"
+  ```
+
+  Arbitrary depth works (`/a/b/c`), and the same source column can be opened
+  more than once at different paths. A pointer that does not resolve is a
+  **null** — a key some records lack is the ordinary shape of a JSON export,
+  and the union-of-keys rule already says so. One that lands on an object or
+  an array is an **error**, because the column would quietly go back to
+  holding JSON text, which is the state a pointer is declared to get out of.
+  `validate` refuses a pointer on a non-JSON extraction.
+
+- **`epoch` reads integer timestamps in milliseconds and microseconds.**
+  Seconds already worked and nobody had noticed: `format = "%s"` is chrono's
+  own epoch specifier and tdy passes the format straight through. What was
+  missing is the two scales chrono has no spelling for — the milliseconds
+  JavaScript and Java hand out, and the microseconds some databases do.
+
+  ```toml
+  parse = { epoch = "milliseconds" }
+  dtype = { type = "timestamp", format = "%s" }
+  ```
+
+  `validate` requires `format = "%s"` beside it: the format and the option are
+  two statements about how to read the same value, and a sidecar where they
+  disagree (`%Y-%m-%d` beside `epoch = "milliseconds"`) says nothing true. On
+  a `date` column the instant truncates toward the epoch, so 23:59 still
+  belongs to the day it falls in. A fractional value is an error rather than a
+  rounding — an epoch is a count, and `1748736000.5` in a timestamp column is
+  something to look at.
+
 - **`source_name`: where a file *is* becomes a column.** The period a monthly
   export covers is very often only in its filename, and forty CSVs whose
   canton appears nowhere but their path are an ordinary pile.

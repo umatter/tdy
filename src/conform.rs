@@ -267,6 +267,7 @@ mod tests {
             dtype,
             nullable,
             parse: ValueParsing::default(),
+            pointer: None,
         }
     }
 

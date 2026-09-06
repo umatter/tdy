@@ -62,6 +62,7 @@ fn umsatz_spec() -> ParseSpec {
                 dtype: DType::Utf8,
                 nullable: false,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
             ColumnSpec {
                 name: "produkt".into(),
@@ -69,6 +70,7 @@ fn umsatz_spec() -> ParseSpec {
                 dtype: DType::Utf8,
                 nullable: false,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
             ColumnSpec {
                 name: "monat".into(),
@@ -83,6 +85,7 @@ fn umsatz_spec() -> ParseSpec {
                     ],
                     ..Default::default()
                 },
+                pointer: None,
             },
             ColumnSpec {
                 name: "umsatz_chf".into(),
@@ -93,6 +96,7 @@ fn umsatz_spec() -> ParseSpec {
                     thousands_separator: Some('\''),
                     ..Default::default()
                 },
+                pointer: None,
             },
         ],
         confidence: Some(0.9),
@@ -285,6 +289,7 @@ async fn log_file_with_lines_spec() {
                 dtype: DType::Timestamp { format: "%Y-%m-%d %H:%M:%S".into(), timezone: None },
                 nullable: false,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
             ColumnSpec {
                 name: "level".into(),
@@ -292,6 +297,7 @@ async fn log_file_with_lines_spec() {
                 dtype: DType::Utf8,
                 nullable: false,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
             ColumnSpec {
                 name: "message".into(),
@@ -299,6 +305,7 @@ async fn log_file_with_lines_spec() {
                 dtype: DType::Utf8,
                 nullable: true,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
         ],
         confidence: Some(1.0),

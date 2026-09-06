@@ -980,6 +980,16 @@ Details worth knowing:
   digits than `scale`. When the sniffer sees an inconsistent number of
   fractional digits it says so in `notes`, because rows it never read may be
   rounded.
+- **A column may declare a JSON `pointer`** (RFC 6901) into its source value,
+  so a nested `{"addr": {"city": …}}` becomes a text column instead of a
+  string of JSON. Any depth, and the same source may be opened more than once.
+  An unresolvable pointer is a null; one landing on an object or array is an
+  error, since the column would go back to holding JSON.
+- **`epoch = "seconds" | "milliseconds" | "microseconds"`** reads an integer
+  timestamp. Seconds also work with `format = "%s"` alone, which is what
+  chrono's specifier already means; the option exists for the scales it does
+  not spell. It requires `format = "%s"` beside it, so the two cannot
+  disagree about how to read one value.
 - **`source_name` turns where a file *is* into a column.** The period a
   monthly export covers is very often only in its filename. `from` picks
   `file_stem`, `file_name`, `sheet` or `path`, and an optional `pattern`'s

@@ -1639,6 +1639,7 @@ fn guess_columns(
                 dtype: g.dtype,
                 nullable: true,
                 parse: g.parse,
+                pointer: None,
             }
         })
         .collect();
