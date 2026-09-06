@@ -264,10 +264,14 @@ fn open_input(
     let f = std::fs::File::open(path)
         .with_context(|| format!("cannot read {}", path.display()))?;
     let mut r = std::io::BufReader::with_capacity(256 * 1024, f);
+    // This opener never goes through `fileio`'s readers, so it carries the
+    // same refusal they do: a sidecar declaring `utf-8` on gzip bytes must
+    // not stream one column of mojibake while the engine refuses the file.
     // A BOM is not data. The whole-file decoder strips it; so must this, or
     // the first column comes back named "\u{feff}region".
     {
         let head = r.fill_buf().context("reading the start of the file")?;
+        crate::fileio::refuse_if_compressed(path, head)?;
         if head.starts_with(&[0xEF, 0xBB, 0xBF]) {
             r.consume(3);
         }

@@ -30,6 +30,51 @@ pub struct HeadTail {
     pub sampled: u64,
 }
 
+/// Refuse a compressed file being read as text, naming the fix.
+///
+/// Without this the bytes decode to mojibake and tdy reads them *confidently*
+/// as a one-column table — not a wrong value exactly, since it faithfully
+/// shows what the bytes are, but a confident answer to a question nobody
+/// asked. A loud refusal naming `gunzip` is the honest reading of a file tdy
+/// cannot open.
+///
+/// Deliberately magic-byte based rather than extension based: a `.csv` that is
+/// really gzip is the case that produces the garbage, and it does not announce
+/// itself in its name. Zip *is* listed even though every xlsx, xlsb and ods is
+/// one: workbooks are routed to calamine by extension before any byte is read
+/// as text, so a zip head reaching a text reader is a compressed export (or a
+/// sidecar forcing a workbook through `delimited`), never a workbook.
+///
+/// Every magic here begins with a byte that cannot start UTF-8 text, except
+/// bzip2's `BZh` — which is why that arm also demands the block-size digit
+/// and the block magic that follow it, or `BZh_code,betrag` would be refused
+/// as an archive.
+///
+/// This is enforced inside `read_all` and `read_head_tail`, so every text
+/// reader in the tree is behind it; the streaming executor's raw opener
+/// calls it on its own first buffer. Support, when it comes, is not a
+/// decoder swap — see `docs/design/2026-09-06-compressed-inputs.md`.
+pub fn refuse_if_compressed(path: &Path, head: &[u8]) -> Result<()> {
+    let kind = match head {
+        [0x1f, 0x8b, ..] => "gzip",
+        [0x28, 0xb5, 0x2f, 0xfd, ..] => "zstd",
+        // `BZh`, block size 1-9, then a block magic (pi) or, for an empty
+        // stream, the end-of-stream magic (sqrt(pi)).
+        [b'B', b'Z', b'h', b'1'..=b'9', 0x31, 0x41, 0x59, 0x26, 0x53, 0x59, ..]
+        | [b'B', b'Z', b'h', b'1'..=b'9', 0x17, 0x72, 0x45, 0x38, 0x50, 0x90, ..] => "bzip2",
+        [0xfd, b'7', b'z', b'X', b'Z', ..] => "xz",
+        [0x04, 0x22, 0x4d, 0x18, ..] => "lz4",
+        [0x50, 0x4b, 0x03, 0x04, ..] => "zip",
+        _ => return Ok(()),
+    };
+    anyhow::bail!(
+        "{} is {kind}-compressed, and tdy reads it as text — which would give one column of \
+         mojibake read confidently. Decompress it first (`gunzip`, `unzstd`, …); tdy does not \
+         read compressed files yet",
+        path.display()
+    )
+}
+
 pub fn read_head_tail(path: &Path, head_bytes: usize, tail_bytes: usize) -> Result<HeadTail> {
     let mut f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let total = f
@@ -40,6 +85,7 @@ pub fn read_head_tail(path: &Path, head_bytes: usize, tail_bytes: usize) -> Resu
     let head_len = head_bytes.min(usize::try_from(total).unwrap_or(usize::MAX));
     let mut head = vec![0u8; head_len];
     read_exact_or_eof(&mut f, &mut head)?;
+    refuse_if_compressed(path, &head)?;
     let mut sampled = head.len() as u64;
 
     // Any file bigger than the head has an unseen end. Reading the tail only
@@ -83,6 +129,15 @@ pub fn read_all(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
         .with_context(|| format!("cannot stat {}", path.display()))?;
     if meta.is_dir() {
         bail!("{} is a directory, not a data file", path.display());
+    }
+    // Before the size check and before the read: a compressed file over the
+    // limit should be told to decompress, not to raise the limit, and one
+    // under it should be refused in constant memory, not after being read.
+    {
+        let mut f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+        let mut head = vec![0u8; 16];
+        read_exact_or_eof(&mut f, &mut head)?;
+        refuse_if_compressed(path, &head)?;
     }
     if meta.len() > max_bytes {
         bail!(
@@ -204,6 +259,68 @@ mod tests {
         let mut f = File::create(&p).unwrap();
         f.write_all(body).unwrap();
         (d, p)
+    }
+
+    /// A gzip member of `region,betrag\nZH,10\n` (mtime 0), so the trailer
+    /// is a real CRC32 and ISIZE — gunzip would accept it.
+    const GZ: &[u8] = &[
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 43, 74, 77, 207, 204, 207, 211, 73, 74, 45, 41, 74, 76,
+        231, 138, 242, 208, 49, 52, 224, 2, 0, 129, 245, 9, 214, 20, 0, 0, 0,
+    ];
+
+    #[test]
+    fn read_all_refuses_a_compressed_file_by_its_bytes() {
+        let (_d, p) = tmpfile(GZ);
+        let e = format!("{:#}", read_all(&p, u64::MAX).unwrap_err());
+        assert!(e.contains("gzip-compressed"), "{e}");
+    }
+
+    #[test]
+    fn read_head_tail_refuses_a_compressed_file_by_its_bytes() {
+        let (_d, p) = tmpfile(GZ);
+        let e = match read_head_tail(&p, 1024, 256) {
+            Ok(_) => panic!("read gzip bytes as text"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(e.contains("gzip-compressed"), "{e}");
+    }
+
+    /// A file over the size limit is told to decompress, not to raise the
+    /// limit — and is refused without being read into memory first.
+    #[test]
+    fn an_oversized_compressed_file_is_told_to_decompress_not_to_raise_the_limit() {
+        let (_d, p) = tmpfile(GZ);
+        let e = format!("{:#}", read_all(&p, 8).unwrap_err());
+        assert!(e.contains("gzip-compressed"), "{e}");
+        assert!(!e.contains("max_file_bytes"), "{e}");
+    }
+
+    /// Real bzip2 is `BZh`, a block-size digit, then the block magic. Text
+    /// that merely starts with the letters `BZh` is text.
+    #[test]
+    fn text_beginning_with_the_letters_bzh_is_not_bzip2() {
+        assert!(refuse_if_compressed(Path::new("x.csv"), b"BZh_code,betrag\nBZh1,10\n").is_ok());
+        assert!(refuse_if_compressed(Path::new("x.csv"), b"BZh9 is a nice bus\n").is_ok());
+    }
+
+    #[test]
+    fn a_real_bzip2_head_is_refused() {
+        // `bz2.compress(b"region,betrag\nZH,10\n")[:12]`
+        let head = [66u8, 90, 104, 57, 49, 65, 89, 38, 83, 89, 219, 58];
+        let e = format!("{:#}", refuse_if_compressed(Path::new("x.csv"), &head).unwrap_err());
+        assert!(e.contains("bzip2-compressed"), "{e}");
+    }
+
+    /// Nothing that reaches a text reader can be a workbook — those are
+    /// routed to calamine by extension before any byte is read — so a zip
+    /// head here is a compressed export, never an xlsx.
+    #[test]
+    fn a_zip_is_refused_like_every_other_archive() {
+        let e = format!(
+            "{:#}",
+            refuse_if_compressed(Path::new("sales.csv.zip"), b"PK\x03\x04\x14\x00").unwrap_err()
+        );
+        assert!(e.contains("zip-compressed"), "{e}");
     }
 
     #[test]

@@ -230,6 +230,75 @@ fn col(name: &str, dtype: DType) -> ColumnSpec {
     }
 }
 
+/// A gzip member of `region,betrag\nZH,10\n` (mtime 0) — the trailer is a
+/// real CRC32 and ISIZE, so gunzip would accept it.
+const GZ: &[u8] = &[
+    31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 43, 74, 77, 207, 204, 207, 211, 73, 74, 45, 41, 74, 76, 231,
+    138, 242, 208, 49, 52, 224, 2, 0, 129, 245, 9, 214, 20, 0, 0, 0,
+];
+
+/// A spec a hand-written sidecar could carry for a compressed file that was
+/// never sniffed: `encoding = "utf-8"` is what sends the streaming executor
+/// down its raw-bytes opener, which never touches the engine's decoder.
+fn utf8_spec() -> ParseSpec {
+    let mut s = spec(vec![], vec![col("region", DType::Utf8), col("betrag", DType::Int64)]);
+    s.extraction = Extraction::Delimited {
+        delimiter: ',',
+        quote: Some('"'),
+        escape: None,
+        encoding: Some("utf-8".into()),
+        comment: None,
+        ragged: RaggedPolicy::PadNulls,
+    };
+    s
+}
+
+/// The sniffer refuses a compressed file; so must both executors, because a
+/// hand-written sidecar never passes through the sniffer. The streaming
+/// path has its own opener, and a guard that lives only in the engine's
+/// decoder leaves that opener reading gzip as one column of mojibake.
+#[test]
+fn both_executors_refuse_a_compressed_file_even_when_the_sidecar_says_utf8() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path().join("x.csv");
+    std::fs::write(&p, GZ).unwrap();
+    let spec = utf8_spec();
+
+    let a = format!("{:#}", engine::execute_batches(&spec, &p, Limits::default()).unwrap_err());
+    assert!(a.contains("gzip-compressed"), "engine: {a}");
+    let b = format!("{:#}", stream::execute_batches(&spec, &p, Limits::default()).unwrap_err());
+    assert!(b.contains("gzip-compressed"), "stream: {b}");
+    assert_paths_agree(&spec, &p, "gzip bytes named .csv");
+}
+
+/// The same, end to end: a frozen query over a stamped sidecar, on the
+/// executor a real query uses and on the fallback.
+#[test]
+fn a_frozen_query_over_a_compressed_file_is_refused_on_both_executors() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path().join("x.csv");
+    std::fs::write(&p, GZ).unwrap();
+    tdy::sidecar::save(
+        &p,
+        &utf8_spec(),
+        tdy::sidecar::ProvenanceInfo {
+            method: tdy::spec::InferenceMethod::Manual,
+            model: None,
+            prompt_version: None,
+            sampled_bytes: None,
+        },
+    )
+    .unwrap();
+    let sql = format!("select count(*) from messy('{}')", p.display());
+
+    for env in [&[][..], &[("TDY_NO_STREAM", "1")][..]] {
+        let out = tdy_env(&["query", "--frozen", &sql], env);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "env {env:?}: exited 0:\n{}", String::from_utf8_lossy(&out.stdout));
+        assert!(err.contains("gzip-compressed"), "env {env:?}: {err}");
+    }
+}
+
 /// `fill_down` carries a value from one row to the next. Across a batch
 /// boundary the carry has to survive, and a chunked implementation that
 /// starts each batch with an empty carry loses exactly one value per

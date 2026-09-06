@@ -932,3 +932,186 @@ fn two_fitting_sheets_are_refused_not_ranked() {
     assert!(msg.contains("Q1") && msg.contains("Q2"), "{msg}");
     assert!(msg.contains("sheet_name"), "the remedy must be named:\n{msg}");
 }
+
+/// A long-format member meeting a wide target is not a missing column, and
+/// saying "add `matches`" sends someone looking for something that is not
+/// there. `q1` is not absent from the file — it is one of the *values* in its
+/// `quarter` column, and the file needs reshaping that tdy has no operator for.
+///
+/// Catalogue D2. Rather than build a pivot for a shape that occurs in 2 of
+/// 1,332 corpus files, the refusal names the situation and both real options.
+#[test]
+fn a_long_format_member_is_told_it_is_long_format() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let f = dir.path().join("2025-long.csv");
+    std::fs::write(&f, "region,quarter,umsatz\nOst,Q1,100\nOst,Q2,120\nWest,Q1,90\n").unwrap();
+    let t = dir.path().join("sales.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE sales (\n  region TEXT NOT NULL,\n  q1 BIGINT,\n  q2 BIGINT\n)\n\
+         WITH (\n  files = '2025-*.csv'\n);\n",
+    )
+    .unwrap();
+
+    let target = Target::load(&t).expect("the target parses");
+    let err = fit(&f, &target, Limits::default()).expect_err("a wide target cannot take long data");
+    let FitError::Gaps(gaps) = err else { panic!("expected gaps, got {err:?}") };
+
+    let text = gaps.iter().map(|g| g.message()).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("in long form"), "the situation must be named: {text}");
+    assert!(text.contains("\"quarter\""), "and which column holds the names: {text}");
+    assert!(text.contains("no pivot"), "and why tdy cannot fix it: {text}");
+    assert!(
+        !text.contains("OPTIONS(matches"),
+        "advising `matches` here sends the reader after a column that does not exist:\n{text}"
+    );
+}
+
+/// A file and a target, for the long-form cases below.
+fn fit_pair(csv: &str, ddl: &str) -> (tempfile::TempDir, PathBuf, Target) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let f = dir.path().join("2025-x.csv");
+    std::fs::write(&f, csv).unwrap();
+    let t = dir.path().join("t.tdy.sql");
+    std::fs::write(&t, ddl).unwrap();
+    let target = Target::load(&t).expect("the target parses");
+    (dir, f, target)
+}
+
+fn gap_text(f: &Path, target: &Target) -> String {
+    let err = fit(f, target, Limits::default()).expect_err("must not fit");
+    let FitError::Gaps(gaps) = err else { panic!("expected gaps, got {err:?}") };
+    gaps.iter().map(|g| g.message()).collect::<Vec<_>>().join("\n")
+}
+
+/// One declared name turning up once among some column's values is not a
+/// long-format file: a `Kind` column holding `detail` and `total` is a
+/// category, and a `total` target column is a merely-misspelled `Summe`.
+/// Diagnosing long form here would withhold the one remedy that works.
+#[test]
+fn a_category_value_equal_to_a_column_name_is_not_long_form() {
+    let (_d, f, t) = fit_pair(
+        "Region,Kind,Summe\nOst,detail,10\nOst,total,10\nWest,detail,5\n",
+        "CREATE TABLE s (region TEXT NOT NULL, total DECIMAL(14,2)) WITH (files = '2025-*.csv');",
+    );
+    let text = gap_text(&f, &t);
+    assert!(text.contains("OPTIONS(matches"), "the matches remedy must stay: {text}");
+    assert!(!text.contains("in long form"), "{text}");
+}
+
+/// Likewise a subtotal label interleaved in a key column.
+#[test]
+fn an_interleaved_subtotal_label_is_not_long_form() {
+    let (_d, f, t) = fit_pair(
+        "Region,Betrag\nOst,10\nTotal,10\nWest,5\nTotal,5\n",
+        "CREATE TABLE s (region TEXT NOT NULL, total DECIMAL(14,2)) WITH (files = '2025-*.csv');",
+    );
+    let text = gap_text(&f, &t);
+    assert!(text.contains("OPTIONS(matches"), "the matches remedy must stay: {text}");
+    assert!(!text.contains("in long form"), "{text}");
+}
+
+/// The signature is several declared columns appearing as values of the
+/// *same* column — and it has to hold over the whole probe, or a long file
+/// sorted by its key (all the Q1 rows, then all the Q2 rows) is diagnosed
+/// long-form for `q1` and sent hunting for a `matches` spelling for `q2`.
+#[test]
+fn a_long_file_sorted_by_key_is_long_form_for_every_declared_column() {
+    let mut csv = String::from("region,quarter,umsatz\n");
+    for i in 0..600 {
+        csv.push_str(&format!("R{i},Q1,{i}\n"));
+    }
+    for i in 0..600 {
+        csv.push_str(&format!("R{i},Q2,{i}\n"));
+    }
+    let (_d, f, t) = fit_pair(
+        &csv,
+        "CREATE TABLE s (region TEXT NOT NULL, q1 BIGINT, q2 BIGINT) WITH (files = '2025-*.csv');",
+    );
+    let err = fit(&f, &t, Limits::default()).expect_err("a wide target cannot take long data");
+    let FitError::Gaps(gaps) = err else { panic!("expected gaps, got {err:?}") };
+    for g in &gaps {
+        let m = g.message();
+        assert!(m.contains("in long form"), "{}: {m}", g.column());
+        assert!(!m.contains("OPTIONS(matches"), "{}: {m}", g.column());
+    }
+    assert_eq!(gaps.len(), 2);
+}
+
+/// "Is this value the column's name?" is the planner's own question, so it
+/// uses the planner's own notion of sameness: `norm` under the default mode
+/// (Unicode case, `_` and space folded), and byte equality under `exact`.
+#[test]
+fn long_form_is_judged_by_the_targets_own_name_matching() {
+    let csv = "kanton,monat,betrag\nZH,MÄRZ,1\nZH,APRIL,2\nBE,MÄRZ,3\nBE,APRIL,4\n";
+    let (_d, f, t) = fit_pair(
+        csv,
+        "CREATE TABLE s (kanton TEXT NOT NULL, märz BIGINT, april BIGINT) WITH (files = '2025-*.csv');",
+    );
+    let text = gap_text(&f, &t);
+    assert!(text.contains("in long form"), "normalized mode folds case: {text}");
+
+    let (_d2, f2, t2) = fit_pair(
+        csv,
+        "CREATE TABLE s (kanton TEXT NOT NULL, märz BIGINT, april BIGINT) \
+         WITH (files = '2025-*.csv', match = 'exact');",
+    );
+    let text = gap_text(&f2, &t2);
+    assert!(!text.contains("in long form"), "exact mode does not: {text}");
+    assert!(text.contains("OPTIONS(matches"), "{text}");
+}
+
+/// A declared alias counts as the column's name here too.
+#[test]
+fn long_form_sees_declared_matches_spellings() {
+    let (_d, f, t) = fit_pair(
+        "region,quarter,umsatz\nOst,Q1,100\nOst,Q2,120\n",
+        "CREATE TABLE s (region TEXT NOT NULL, first BIGINT OPTIONS(matches = 'Q1'), \
+         second BIGINT OPTIONS(matches = 'Q2')) WITH (files = '2025-*.csv');",
+    );
+    let text = gap_text(&f, &t);
+    assert!(text.contains("in long form"), "{text}");
+}
+
+/// The diagnosis has to travel with the problem, not only in its prose: a
+/// `--json`/MCP consumer reads `kind`, and the remedy menu is built from it.
+#[test]
+fn a_long_form_gap_is_reported_structurally() {
+    let (_d, f, t) = fit_pair(
+        "region,quarter,umsatz\nOst,Q1,100\nOst,Q2,120\n",
+        "CREATE TABLE s (region TEXT NOT NULL, q1 BIGINT, q2 BIGINT) WITH (files = '2025-*.csv');",
+    );
+    let err = fit(&f, &t, Limits::default()).expect_err("must not fit");
+    let problems = tdy::report::problems_json(&err);
+    let problems = problems.as_array().expect("an array of problems");
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    for p in problems {
+        assert_eq!(p["kind"], "long_form", "{p}");
+        assert_eq!(p["long_form"], "quarter", "{p}");
+        assert!(p["header"].as_array().map(|h| !h.is_empty()).unwrap_or(false), "{p}");
+    }
+}
+
+/// `propose` ranks the file's columns by whether their values can produce
+/// the declared type — which `umsatz` can, for `q1`, and binding it would put
+/// every quarter's amount into one column. A long-form column has no
+/// candidate to offer.
+#[test]
+fn propose_offers_nothing_for_a_long_form_column() {
+    let (_d, f, t) = fit_pair(
+        "region,quarter,umsatz\nOst,Q1,100\nOst,Q2,120\n",
+        "CREATE TABLE s (region TEXT NOT NULL, q1 BIGINT, q2 BIGINT) WITH (files = '2025-*.csv');",
+    );
+    let proposals = tdy::fit::propose(&f, &t, Limits::default()).unwrap();
+    assert!(proposals.is_empty(), "{proposals:?}");
+}
+
+/// ...and an ordinary missing column still gets the ordinary advice, which is
+/// the one that works when the column really could be supplied.
+#[test]
+fn an_ordinary_missing_column_still_suggests_matches() {
+    let gaps = gap_of("2025-11.csv");
+    let text = gaps.iter().map(|g| g.message()).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("OPTIONS(matches"), "{text}");
+    assert!(!text.contains("in long form"), "nothing here holds a column name as a value:\n{text}");
+}

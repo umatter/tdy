@@ -650,6 +650,29 @@ mod tests {
                      \x20 date_order = 'dmy'\n\
                      );\n";
 
+    /// A long-form gap has no `matches` fix — the declared column is a
+    /// *value* in the file, and every header cell the planner could offer
+    /// would bind the wrong data — and no null-fill either, which would
+    /// silently drop those rows' amounts. Excluding the file is what is left.
+    #[test]
+    fn a_long_form_problem_offers_no_matches_and_no_null_fill() {
+        let p = serde_json::json!({
+            "kind": "long_form",
+            "column": "q1",
+            "want": "BIGINT",
+            "header": ["region", "quarter", "umsatz"],
+            "long_form": "quarter",
+            "message": "…"
+        });
+        let r = remedies_for(&p, "2025-long.csv");
+        assert!(
+            r.iter().all(|r| matches!(r, Remedy::ExcludeFile { .. })),
+            "{:?}",
+            r.iter().map(|r| r.label()).collect::<Vec<_>>()
+        );
+        assert_eq!(r.len(), 1);
+    }
+
     /// The comments and the formatting of every untouched line survive: a
     /// tool that reformatted the declaration would be one nobody lets near it.
     #[test]

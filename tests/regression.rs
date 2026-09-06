@@ -1959,3 +1959,46 @@ fn a_headerless_file_with_nothing_discarded_stays_confident() {
         "nothing was discarded here, so nothing compounds: {notes}"
     );
 }
+
+/// A compressed file read as text used to *succeed*: one column of mojibake,
+/// produced confidently, with a real confidence score attached. Not a wrong
+/// value in the strict sense — the bytes really are those bytes — but a
+/// confident answer to a question nobody asked, which is the same failure
+/// wearing different clothes.
+///
+/// Checked by magic bytes rather than by extension, because a `.csv` that is
+/// really gzip is the case that produced the garbage and it does not announce
+/// itself in its name.
+#[test]
+fn a_compressed_file_is_refused_rather_than_read_as_mojibake() {
+    let dir = TempDir::new().unwrap();
+    // A real gzip member of `region,betrag\nZH,10\n` (mtime 0): the trailer
+    // is a genuine CRC32 and ISIZE, so gunzip would accept it too.
+    let gz: Vec<u8> = vec![
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 43, 74, 77, 207, 204, 207, 211, 73, 74, 45, 41, 74, 76,
+        231, 138, 242, 208, 49, 52, 224, 2, 0, 129, 245, 9, 214, 20, 0, 0, 0,
+    ];
+    // Deliberately named `.csv`: the extension lies, the bytes do not.
+    let f = write_bytes(&dir, "looks_like.csv", &gz);
+
+    let e = format!("{:#}", sniff_via_cli(&f).expect_err("a gzip stream is not a csv"));
+    assert!(e.contains("gzip-compressed"), "the format must be named: {e}");
+    assert!(e.contains("gunzip"), "and the fix: {e}");
+    assert!(!f.with_extension("csv.tdy.toml").exists(), "and no sidecar may be left behind");
+}
+
+/// The most common Windows export is a zip, and a zip head can never be a
+/// workbook by the time a text reader sees it (workbooks are routed to
+/// calamine by extension first). Refusing every other archive while sniffing
+/// a `.csv.zip` as a one-column table named after its own bytes was a hole.
+#[test]
+fn a_zip_named_csv_is_refused_not_read_as_a_one_column_table() {
+    let dir = TempDir::new().unwrap();
+    let mut zip = b"PK\x03\x04\x14\x00\x00\x00\x08\x00".to_vec();
+    zip.extend_from_slice(b"sales.csv\x00\x00\x00\x00PK\x05\x06");
+    let f = write_bytes(&dir, "sales.csv.zip", &zip);
+
+    let e = format!("{:#}", sniff_via_cli(&f).expect_err("a zip is not a csv"));
+    assert!(e.contains("zip-compressed"), "the format must be named: {e}");
+    assert!(!f.with_extension("zip.tdy.toml").exists(), "and no sidecar may be left behind");
+}

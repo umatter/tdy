@@ -69,6 +69,14 @@ pub enum Gap {
         /// Every name that was looked for, so the user can see what to add.
         tried: Vec<String>,
         header: Vec<String>,
+        /// A column of the file whose *values* include this column's name.
+        ///
+        /// When a target asks for `q1` and the file has a `quarter` column
+        /// holding `Q1`, the file is not missing the data — it is in long
+        /// form, and the name is one row's worth of it. tdy has no pivot, so
+        /// this cannot be planned; saying which column holds the names is the
+        /// difference between "no column binds" and an answer.
+        long_form: Option<String>,
     },
     /// More than one header cell binds, and tdy will not choose.
     Ambiguous {
@@ -121,17 +129,32 @@ impl Gap {
     /// What a user reads, ending in the edit that fixes it.
     pub fn message(&self) -> String {
         match self {
-            Gap::NoCandidate { column, want, tried, header } => {
+            Gap::NoCandidate { column, want, tried, header, long_form } => {
                 let shown: Vec<String> =
                     header.iter().take(12).map(|h| format!("{h:?}")).collect();
                 let more = header.len().saturating_sub(shown.len());
+                // A name that appears among a column's *values* is not a
+                // missing column, it is a reshaping problem, and telling
+                // someone to add `matches` for it sends them looking for
+                // something that is not there.
+                let remedy = match long_form {
+                    Some(holder) => format!(
+                        "but {holder:?} holds {column:?} as a value, so this file is in long \
+                         form and the declared columns are its rows.\n    \
+                         tdy has no pivot: reshape it before tdy sees it, or declare the \
+                         long shape instead (one row per {holder}, with a value column)."
+                    ),
+                    None => format!(
+                        "If one of those supplies it, say so:\n      \
+                         {column} {want} OPTIONS(matches = '…')\n    \
+                         If none does, this file cannot join the dataset."
+                    ),
+                };
                 format!(
                     "`{column}` ({want}): no column of this file binds\n    \
                      looked for {}\n    \
                      the file has [{}{}]\n    \
-                     If one of those supplies it, say so:\n      \
-                     {column} {want} OPTIONS(matches = '…')\n    \
-                     If none does, this file cannot join the dataset.",
+                     {remedy}",
                     tried.iter().map(|t| format!("{t:?}")).collect::<Vec<_>>().join(", "),
                     shown.join(", "),
                     if more > 0 { format!(", … {more} more") } else { String::new() }
@@ -363,9 +386,19 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
         })
         .collect();
 
+    // A long-form column has nothing to propose: its data is spread over the
+    // rows, and the one column whose values happen to type-check (`umsatz`
+    // for `q1`) is the binding that would put every quarter into one.
+    let unbound: Vec<&crate::target::TargetColumn> = target
+        .columns
+        .iter()
+        .filter(|tc| bind(tc, &origin, target.match_mode).is_empty())
+        .collect();
+    let long_form = long_form_holders(&unbound, &origin, &rows, target.match_mode);
+
     let mut out = Vec::new();
     for tc in &target.columns {
-        if !bind(tc, &origin, target.match_mode).is_empty() {
+        if !bind(tc, &origin, target.match_mode).is_empty() || long_form.contains_key(&tc.name) {
             continue;
         }
         let mut candidates = Vec::new();
@@ -819,6 +852,14 @@ fn fit_framed(
         .filter(|n| n.starts_with(sniff::DROPPED_NOTE))
         .cloned()
         .collect();
+    // Declared columns that are this file's *values*, judged once over every
+    // unbound column so the diagnosis is the same for each of them.
+    let unbound: Vec<&crate::target::TargetColumn> = target
+        .columns
+        .iter()
+        .filter(|tc| bind(tc, &origin, target.match_mode).is_empty())
+        .collect();
+    let long_form = long_form_holders(&unbound, &origin, &rows, target.match_mode);
 
     for tc in &target.columns {
         // Matching is done against the *file's* spelling, so two columns the
@@ -857,6 +898,7 @@ fn fit_framed(
                         .chain(tc.matches.iter().cloned())
                         .collect(),
                     header: origin.clone(),
+                    long_form: long_form.get(&tc.name).cloned(),
                 });
                 continue;
             }
@@ -1066,6 +1108,63 @@ fn bind(
         }
     }
     Vec::new()
+}
+
+/// Which declared columns are *values* of one column of this file, and which.
+///
+/// The signature of a long-format file meeting a wide target: `q1` and `q2`
+/// are not missing, they are the values of a `quarter` column. One name alone
+/// is not a signature — a `Kind` column holding `total` is a category, and a
+/// `Total` label interleaved in a key column is a subtotal — so it takes at
+/// least two declared names in the *same* column. Judged over the whole
+/// probe, because a long file sorted by its key has every `Q1` before the
+/// first `Q2`, and a bounded prefix would diagnose one column and send the
+/// reader after a `matches` spelling for the other.
+///
+/// "Is this value the column's name?" is the planner's own question, so it
+/// gets the planner's own answer: `bind`'s ladder — the file's spelling,
+/// then `norm`, then `sanitize` — under the target's `match` mode, over the
+/// column's name and its declared aliases alike.
+///
+/// Returns each long-form column's name mapped to the file column that holds
+/// it. Computed once per file for every unbound declared column, `if_missing`
+/// ones included: a null-filled `q1` still counts toward `q2`'s diagnosis.
+fn long_form_holders(
+    unbound: &[&crate::target::TargetColumn],
+    header: &[String],
+    rows: &[Vec<String>],
+    mode: MatchMode,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    if unbound.len() < 2 {
+        return out;
+    }
+    let same = |value: &str, want: &str| -> bool {
+        let value = value.trim();
+        value == want
+            || (mode != MatchMode::Exact
+                && (crate::target::norm(value) == crate::target::norm(want)
+                    || sniff::sanitize(value) == want))
+    };
+    for (i, holder) in header.iter().enumerate() {
+        let values: std::collections::HashSet<&str> =
+            rows.iter().filter_map(|r| r.get(i)).map(|v| v.trim()).collect();
+        let held: Vec<&str> = unbound
+            .iter()
+            .filter(|tc| {
+                std::iter::once(&tc.name)
+                    .chain(tc.matches.iter())
+                    .any(|want| values.iter().any(|v| same(v, want)))
+            })
+            .map(|tc| tc.name.as_str())
+            .collect();
+        if held.len() >= 2 {
+            for name in held {
+                out.entry(name.to_string()).or_insert_with(|| holder.clone());
+            }
+        }
+    }
+    out
 }
 
 fn render(t: &ArrowType) -> String {

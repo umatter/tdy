@@ -84,7 +84,7 @@ pub struct SourceBinding {
 /// One reason a member does not fit, with every field a caller could act on.
 #[derive(Debug, Serialize)]
 pub struct Problem {
-    /// no_candidate | ambiguous | untypable | ambiguous_separator |
+    /// no_candidate | long_form | ambiguous | untypable | ambiguous_separator |
     /// ambiguous_format | collides | ambiguous_frame | contradicts | error
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,6 +105,11 @@ pub struct Problem {
     /// The sidecar field that settles an ambiguous frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    /// The file column whose *values* are this declared column (long_form).
+    /// Carried structurally, not only in `message`, so a remedy menu built
+    /// from `kind` never offers the `matches` binding the prose warns against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub long_form: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,13 +155,15 @@ fn problem_of_gap(g: &Gap) -> Problem {
         header: Vec::new(),
         choices: Vec::new(),
         field: None,
+        long_form: None,
     };
     match g {
-        Gap::NoCandidate { want, tried, header, .. } => Problem {
-            kind: "no_candidate".into(),
+        Gap::NoCandidate { want, tried, header, long_form, .. } => Problem {
+            kind: if long_form.is_some() { "long_form" } else { "no_candidate" }.into(),
             want: Some(want.clone()),
             tried: tried.clone(),
             header: header.clone(),
+            long_form: long_form.clone(),
             ..base
         },
         Gap::Ambiguous { candidates, .. } => Problem {
@@ -201,6 +208,7 @@ fn problems_of_error(e: &FitError) -> Vec<Problem> {
             header: Vec::new(),
             choices: choices.clone(),
             field: Some(field.clone()),
+            long_form: None,
         }],
         other => vec![Problem {
             kind: "error".into(),
@@ -211,6 +219,7 @@ fn problems_of_error(e: &FitError) -> Vec<Problem> {
             header: Vec::new(),
             choices: Vec::new(),
             field: None,
+            long_form: None,
         }],
     }
 }
@@ -365,6 +374,7 @@ pub async fn fit_pile(
                                 header: Vec::new(),
                                 choices: Vec::new(),
                                 field: None,
+                                long_form: None,
                             })
                             .collect(),
                         proposals: Vec::new(),
@@ -390,6 +400,7 @@ pub async fn fit_pile(
                             header: Vec::new(),
                             choices: Vec::new(),
                             field: None,
+                            long_form: None,
                         }],
                         proposals: Vec::new(),
                     });
