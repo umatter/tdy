@@ -36,9 +36,8 @@ use crate::fileio;
 use crate::numfmt;
 use crate::sample::render_cell;
 use crate::spec::{
-    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, FillDirection,
-    NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, ShortSplit, SourcePart, SplitBy,
-    Transform, ValueParsing,
+    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, EpochUnit, Extraction, FillDirection, NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, ShortSplit, SourcePart,
+    SplitBy, Transform, ValueParsing,
 };
 
 /// Cut `v` into exactly `n` parts, or `None` when it yields fewer.
@@ -83,6 +82,56 @@ fn split_partial(
             Some((1..caps.len()).map(|i| caps.get(i).map_or(String::new(), |m| m.as_str().to_string())).collect())
         }
     }
+}
+
+/// Follow an RFC 6901 pointer into one JSON value.
+///
+/// An unresolvable pointer is missing, not an error: a key absent from some
+/// records is the ordinary shape of a JSON export, and `Extraction::Json`
+/// already takes the union of every record's keys for the same reason. What
+/// *is* an error is a pointer that lands on an object or an array, because the
+/// column would quietly go back to holding JSON text — the state a pointer is
+/// declared to get out of.
+fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(String::new());
+    }
+    let v: serde_json::Value = serde_json::from_str(t)
+        .map_err(|e| anyhow!("row {row}: `pointer` needs a JSON value here, and {t:?} is not one: {e}"))?;
+    let found = if ptr.is_empty() { Some(&v) } else { v.pointer(ptr) };
+    match found {
+        None | Some(serde_json::Value::Null) => Ok(String::new()),
+        Some(serde_json::Value::String(s)) => Ok(s.clone()),
+        Some(serde_json::Value::Bool(b)) => Ok(b.to_string()),
+        Some(serde_json::Value::Number(n)) => Ok(n.to_string()),
+        Some(other) => bail!(
+            "row {row}: `pointer` {ptr:?} lands on {} — a column cannot hold one, and \
+             leaving it as JSON text is the state a pointer exists to leave. Point at a \
+             value inside it",
+            if other.is_array() { "an array" } else { "an object" }
+        ),
+    }
+}
+
+/// An integer count since 1970, in the declared unit, as microseconds.
+///
+/// Refuses anything that is not an integer rather than reaching for a float:
+/// an epoch is a count, and `1.7e9` in a timestamp column is a value somebody
+/// should look at, not one to round.
+fn epoch_micros(v: &str, unit: EpochUnit) -> Result<i64> {
+    let n: i64 = v
+        .trim()
+        .trim_start_matches('+')
+        .parse()
+        .map_err(|_| anyhow!("{v:?} is not a whole number of {unit:?} since 1970"))?;
+    let scale: i64 = match unit {
+        EpochUnit::Seconds => 1_000_000,
+        EpochUnit::Milliseconds => 1_000,
+        EpochUnit::Microseconds => 1,
+    };
+    n.checked_mul(scale)
+        .ok_or_else(|| anyhow!("{v:?} in {unit:?} is further from 1970 than a timestamp reaches"))
 }
 
 /// Which negative-number marker a value carries, if any — the shape only, not
@@ -1315,6 +1364,23 @@ pub(crate) fn build_column_at(
         && matches!(col.dtype, DType::Int64 | DType::Float64 | DType::Decimal { .. });
     let mut ate_sign: Option<(usize, &'static str)> = None;
 
+    let pointed_refs: Vec<&str>;
+    // A declared pointer reads inside the value before anything else looks at
+    // it, so the rest of the chain sees an ordinary scalar.
+    let pointed: Vec<String>;
+    let values: &[&str] = match &col.pointer {
+        None => values,
+        Some(ptr) => {
+            pointed = values
+                .iter()
+                .enumerate()
+                .map(|(i, raw)| json_pointer_value(raw, ptr, row_offset + i + 1))
+                .collect::<Result<Vec<_>>>()?;
+            pointed_refs = pointed.iter().map(|s| s.as_str()).collect();
+            &pointed_refs
+        }
+    };
+
     // trim -> replace -> na -> strip. Borrowed until something actually
     // changes, so a clean column costs no allocations at all.
     let cleaned: Vec<Option<Cow<str>>> = values
@@ -1501,7 +1567,16 @@ pub(crate) fn build_column_at(
             (ArrowType::Decimal128(*precision, *scale), Arc::new(arr))
         }
         DType::Date { format } => {
-            let out = parse_all!(i32, |s: &str| parse_date_days(s, format));
+            let out = match p.epoch {
+                Some(unit) => parse_all!(i32, |s: &str| {
+                    // Truncating toward the epoch, so 1970-01-01T23:59 is
+                    // still 1970-01-01 and a negative instant lands on the day
+                    // that contains it rather than the one after.
+                    let micros = epoch_micros(s, unit)?;
+                    Ok::<i32, anyhow::Error>(micros.div_euclid(86_400_000_000) as i32)
+                }),
+                None => parse_all!(i32, |s: &str| parse_date_days(s, format)),
+            };
             (ArrowType::Date32, Arc::new(Date32Array::from(out)))
         }
         DType::Timestamp { format, timezone } => {
@@ -1514,7 +1589,12 @@ pub(crate) fn build_column_at(
                 Some(Err(e)) => return Err(e),
                 None => None,
             };
-            let out = parse_all!(i64, |s: &str| parse_timestamp_micros(s, format, offset));
+            let out = match p.epoch {
+                // An epoch is a count, not a rendering: it has no format to
+                // parse and no timezone to place it in — it is already UTC.
+                Some(unit) => parse_all!(i64, |s: &str| epoch_micros(s, unit)),
+                None => parse_all!(i64, |s: &str| parse_timestamp_micros(s, format, offset)),
+            };
             // Store the offset in the one spelling every Arrow consumer
             // parses: "Z", "utc" and "GMT" are readable in a sidecar but not
             // all of them survive a round trip through Arrow's tz handling.
@@ -1983,6 +2063,7 @@ mod tests {
             dtype: DType::Float64,
             nullable: true,
             parse: ValueParsing::default(),
+            pointer: None,
         };
         assert!(build_column_at(&col, &["NaN"], 0).is_err());
         assert!(build_column_at(&col, &["Infinity"], 0).is_err());
@@ -1997,6 +2078,7 @@ mod tests {
             dtype: DType::Float64,
             nullable: true,
             parse: ValueParsing { thousands_separator: Some(','), ..Default::default() },
+            pointer: None,
         };
         let err = build_column_at(&col, &["1,5"], 0).unwrap_err();
         assert!(format!("{err:#}").contains("grouped"), "{err:#}");

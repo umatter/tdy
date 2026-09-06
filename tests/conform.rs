@@ -125,6 +125,7 @@ fn the_target_schema_is_invariant_to_per_file_formats() {
                 dtype: DType::Date { format: df.into() },
                 nullable: false,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
             ColumnSpec {
                 name: "ts".into(),
@@ -132,6 +133,7 @@ fn the_target_schema_is_invariant_to_per_file_formats() {
                 dtype: DType::Timestamp { format: tf.into(), timezone: None },
                 nullable: false,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
         ]);
         assert!(
@@ -197,6 +199,7 @@ fn a_conforming_spec_really_produces_the_declared_dataset() {
                 dtype: DType::Date { format: "%d.%m.%Y".into() },
                 nullable: false,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
             ColumnSpec {
                 name: "region".into(),
@@ -204,6 +207,7 @@ fn a_conforming_spec_really_produces_the_declared_dataset() {
                 dtype: DType::Utf8,
                 nullable: false,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
             ColumnSpec {
                 name: "amount_chf".into(),
@@ -214,6 +218,7 @@ fn a_conforming_spec_really_produces_the_declared_dataset() {
                     thousands_separator: Some('\''),
                     ..ValueParsing::default()
                 },
+                pointer: None,
             },
         ],
         confidence: Some(1.0),
@@ -264,6 +269,7 @@ fn a_spec_that_parses_the_file_but_reads_the_wrong_columns_is_refused() {
             dtype: DType::Int64,
             nullable: true,
             parse: ValueParsing::default(),
+            pointer: None,
         }],
         confidence: Some(1.0),
         notes: vec![],
@@ -482,6 +488,7 @@ fn an_underivable_spec_reports_the_real_reason_not_a_fabricated_comparison() {
         dtype: DType::Decimal { precision: 39, scale: 2 },
         nullable: false,
         parse: ValueParsing::default(),
+        pointer: None,
     }]);
 
     let errs = conforms(&spec, &target).unwrap_err();
@@ -519,6 +526,7 @@ fn a_zoned_timestamp_can_be_declared_and_conformed_to() {
         },
         nullable: false,
         parse: ValueParsing::default(),
+        pointer: None,
     }]);
 
     assert!(

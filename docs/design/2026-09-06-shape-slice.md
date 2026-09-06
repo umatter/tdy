@@ -245,7 +245,7 @@ Two lines, one match arm, one `validate` no-op, and the existing spec-order rule
 in `RowOp` covers it. `up` needs the same second pass a `skip_rows` tail needs,
 so `can_stream` treats it the way it already treats that case.
 
-### S5 · per-column JSON `pointer`
+### S5 · per-column JSON `pointer` — **built, 2026-09-06**
 
 ```toml
 [[spec.columns]]
@@ -262,14 +262,34 @@ way a column name does. A pointer that does not resolve is a null; a pointer tha
 resolves to an object or array is an error, because the column would silently
 become JSON text again.
 
-### S6 · `.gz` inputs
+### S6 · `.gz` inputs — **not built; this section was wrong**
 
-`open_input` gains a gzip branch keyed on the extension, checked against the
-magic bytes. It streams (`flate2`'s reader is a `BufRead`), so nothing about the
-memory story changes. The `xlguard` argument applies: a decompressed size is a
-claim, so the existing cell ceiling does the bounding, and a bomb hits it.
+The plan above is true of the *executor* and false of everything else.
+`sample::build` reads a **head and a tail by byte offset**, and a compressed
+stream has no byte offsets: reaching its tail means decompressing all of it,
+which is precisely the bound the sampler exists to keep. The same applies to
+`fileio`'s seek-based sampling and to `xlguard`'s preflight.
 
-### S7 · epoch parse
+So `.gz` is not a decoder swap. It is a decision about what a *sample* of a
+compressed file is, and there are two defensible answers:
+
+- **Head-only sampling**, with `partial = true` set unconditionally. Cheap, and
+  it costs the tail-based inferences — a trailing `Total` row would stop being
+  detectable, which is one of the things sniffing is for.
+- **Decompress to a temp file on open**, then treat it as an ordinary file.
+  Correct everywhere, costs disk rather than memory, and moves the fingerprint
+  question (hash the compressed bytes, presumably, since that is what the user
+  has).
+
+Neither is a detail, so this needs its own page rather than a line in a slice.
+Recorded here because the estimate being wrong is the useful part.
+
+### S7 · epoch parse — **built, 2026-09-06, and smaller than planned**
+
+Epoch **seconds already worked**: `format = "%s"` is chrono's own specifier and
+tdy passes the format straight through. The catalogue's E21 entry was wrong, and
+so was this section's premise. What was actually missing were the two scales
+chrono has no spelling for.
 
 ```toml
 parse = { epoch = "seconds" }   # seconds | milliseconds | microseconds

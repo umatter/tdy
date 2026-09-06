@@ -845,6 +845,7 @@ fn fit_framed(
                     dtype: null_fill_dtype(&tc.dtype),
                     nullable: tc.nullable,
                     parse: ValueParsing::default(),
+                    pointer: None,
                 });
                 continue;
             }
@@ -907,6 +908,7 @@ fn fit_framed(
                     dtype,
                     nullable: tc.nullable,
                     parse,
+                    pointer: None,
                 });
             }
             Err(g) => gaps.push(g),
@@ -1360,6 +1362,7 @@ where
             dtype: make(f),
             nullable,
             parse: base.clone(),
+            pointer: None,
         };
         match engine::build_column_at(&col, values, 0) {
             Ok((_, arr)) => ok.push((f, arr)),
@@ -1436,6 +1439,7 @@ fn check_one(
         dtype: dtype.clone(),
         nullable: ctx.nullable,
         parse: parse.clone(),
+        pointer: None,
     };
     match engine::build_column_at(&col, ctx.values, 0) {
         Ok(_) => Ok((dtype, parse)),

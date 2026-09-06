@@ -1643,6 +1643,7 @@ fn ledger_spec(negative: Option<NegativeStyle>, strip: Option<&str>) -> ParseSpe
                 dtype: DType::Utf8,
                 nullable: true,
                 parse: ValueParsing::default(),
+                pointer: None,
             },
             ColumnSpec {
                 name: "betrag".into(),
@@ -1655,6 +1656,7 @@ fn ledger_spec(negative: Option<NegativeStyle>, strip: Option<&str>) -> ParseSpe
                     strip: strip.map(|s| s.to_string()),
                     ..Default::default()
                 },
+                pointer: None,
             },
         ],
         confidence: None,
@@ -1824,6 +1826,7 @@ fn a_width_mismatch_on_a_nameless_table_explains_itself() {
             dtype: DType::Utf8,
             nullable: true,
             parse: ValueParsing::default(),
+            pointer: None,
         })
         .collect();
 

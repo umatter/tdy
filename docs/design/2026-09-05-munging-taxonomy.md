@@ -183,9 +183,18 @@ duckdb, polars — all transparent), `zcat`, zip member selection, tar extractio
 **Messy → clean:** the export arrives as `daten.csv.gz` or as one CSV inside a
 zip, and every tool in the pipeline has to be taught to unwrap it.
 
-**`gap`** — tdy reads zip internals for xlsx/xlsb/ods (that is what `xlmoney` and
-`xlguard` do) but a `.csv.gz` is not readable, and a zip-of-CSVs cannot be a
-dataset member. Given that `dataset()` exists to point at a pile of monthly
+**`gap`, and bigger than it looks** — tdy reads zip internals for xlsx/xlsb/ods
+(that is what `xlmoney` and `xlguard` do) but a `.csv.gz` is not readable, and a
+zip-of-CSVs cannot be a dataset member.
+
+An attempt on 2026-09-06 established why it is not the morning's work the shape
+slice's design called it: `sample::build` reads a **head and a tail by byte
+offset**, and a compressed stream has no byte offsets — reaching its tail means
+decompressing all of it, which is exactly the bound the sampler exists to keep.
+So `.gz` support is not a decoder swap but a decision about what a *sample* of a
+compressed file even is. The plausible answers — head-only sampling with
+`partial = true`, or decompressing to a temp file and treating it as ordinary —
+are both defensible and neither is a detail. It needs its own page. Given that `dataset()` exists to point at a pile of monthly
 exports, and monthly exports arrive zipped, this is the most ordinary gap in
 Part A. It also interacts with `xlguard`: a compressed member's declared size is
 a claim, and the zip-expansion check already exists for xlsb.
@@ -814,6 +823,15 @@ plus `json-parse` / `json-stringify` (Miller), `qsv flatten`.
 **Messy → clean:** `{"addr": {"city": "Bern", "zip": "3000"}}` → `addr_city`,
 `addr_zip`; an array-valued field → columns or rows.
 
+**`spec`** since 2026-09-06 — a column may declare an RFC 6901 `pointer` into
+its source value, at any depth, and the same source may be opened more than
+once. An unresolvable pointer is a null (a key some records lack is the
+ordinary shape of a JSON export); one landing on an object or array is an
+error, since the column would go back to holding JSON text. What is still out
+of reach is an *array* of records nested inside a record — that is **D5**,
+which changes the row count and is a modelling decision rather than a parsing
+one. The argument as first written:
+
 **`partial`** — `Extraction::Json` produces the union of record keys as columns,
 and a nested value is **serialized back to a JSON string**. That is an honest
 fallback (nothing is lost, nothing is invented) but it means one-level flattening
@@ -1187,6 +1205,15 @@ Windows FILETIME, Julian day numbers, and the spreadsheet serials of **E13**.
 **Messy → clean:** `1748736000` is 2025-06-01, and `1748736000000` is the same
 instant in milliseconds — the two differ by a factor of a thousand and both are
 plausible integers.
+
+**`spec`** since 2026-09-06, and this entry was **wrong when written**: epoch
+*seconds* already worked, because `format = "%s"` is chrono's own epoch
+specifier and tdy passes the format straight through. Nobody had tried it. What
+was genuinely missing were the two scales chrono has no spelling for, and
+`parse.epoch = "seconds" | "milliseconds" | "microseconds"` now covers all
+three — required to sit beside `format = "%s"`, so the two cannot make
+different claims about one value. A fractional value is an error rather than a
+rounding. The original claim, for the record:
 
 **`gap`, of the same shape as E13** — `DType` has no epoch variant, so the column
 types as `int64` and stays a number. Downstream `to_timestamp_seconds()` fixes it
@@ -2001,8 +2028,8 @@ rather than leaving implicit in the code.
 | A · Physical decoding | 3 | – | 2 | 1 | 1 | 7 |
 | B · Dialect & framing | 8 | – | 2 | 1 | – | 11 |
 | C · Table framing | 7 | – | 4 | 1 | 3 | 16 |
-| D · Shape | 4 | 3 | 1 | 1 | – | 9 |
-| E · Parsing & typing | 14 | – | 5 | 2 | – | 21 |
+| D · Shape | 5 | 3 | – | 1 | – | 9 |
+| E · Parsing & typing | 15 | – | 5 | 1 | – | 21 |
 | F · Standardisation | 1 | 3 | – | 1 | 5 | 10 |
 | G · Missing data | 4 | 2 | 1 | – | 2 | 9 |
 | H · Rows | 2 | 3 | – | – | – | 5 |
@@ -2010,7 +2037,7 @@ rather than leaving implicit in the code.
 | J · Combining | 1 | 1 | 1 | – | 2 | 5 |
 | K · Validation | 2 | – | 1 | – | 4 | 7 |
 | L · Process | 4 | – | – | 1 | – | 5 |
-| **Total** | **50** | **16** | **17** | **9** | **17** | **110** |
+| **Total** | **52** | **16** | **16** | **7** | **17** | **110** |
 
 Two `gap`s became `spec` on 2026-09-06 — **E5** signed-number conventions and
 **G2** fill-up — and this table counts the state after them.

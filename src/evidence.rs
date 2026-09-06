@@ -191,6 +191,7 @@ fn shift_evidence(
             dtype: DType::Utf8,
             nullable: true,
             parse: ValueParsing::default(),
+            pointer: None,
         }],
         confidence: None,
         notes: vec![],

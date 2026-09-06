@@ -190,6 +190,7 @@ mod tests {
                 dtype: DType::Utf8,
                 nullable: true,
                 parse: ValueParsing::default(),
+                pointer: None,
             }],
             confidence: Some(0.42),
             notes: vec!["a heuristic doubt".into()],

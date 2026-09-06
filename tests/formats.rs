@@ -35,6 +35,18 @@ fn strings(b: &RecordBatch, i: usize) -> Vec<String> {
         .collect()
 }
 
+fn ts_micros(b: &RecordBatch, i: usize) -> i64 {
+    b.column(i)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::TimestampMicrosecondArray>()
+        .unwrap_or_else(|| panic!("column {i} is {:?}", b.column(i).data_type()))
+        .value(0)
+}
+
+fn date_days(b: &RecordBatch, i: usize) -> i32 {
+    b.column(i).as_any().downcast_ref::<Date32Array>().unwrap().value(0)
+}
+
 fn ints(b: &RecordBatch, i: usize) -> Vec<Option<i64>> {
     let a = b.column(i).as_any().downcast_ref::<Int64Array>().unwrap();
     (0..a.len()).map(|i| if a.is_null(i) { None } else { Some(a.value(i)) }).collect()
@@ -51,7 +63,7 @@ fn decimals(b: &RecordBatch, i: usize) -> Vec<Option<i128>> {
 }
 
 fn col(name: &str, dtype: DType) -> ColumnSpec {
-    ColumnSpec { name: name.into(), source: None, dtype, nullable: true, parse: ValueParsing::default() }
+    ColumnSpec { name: name.into(), source: None, dtype, nullable: true, parse: ValueParsing::default(), pointer: None }
 }
 
 fn col_from(name: &str, source: &str, dtype: DType) -> ColumnSpec {
@@ -61,6 +73,7 @@ fn col_from(name: &str, source: &str, dtype: DType) -> ColumnSpec {
         dtype,
         nullable: true,
         parse: ValueParsing::default(),
+        pointer: None,
     }
 }
 
@@ -488,6 +501,7 @@ fn value_cleanup_order_is_trim_replace_na_strip() {
                 thousands_separator: Some('\''),
                 ..Default::default()
             },
+            pointer: None,
         }],
         confidence: None,
         notes: vec![],
@@ -513,6 +527,7 @@ fn booleans_use_declared_tokens_case_insensitively() {
                 false_values: vec!["nein".into()],
                 ..Default::default()
             },
+            pointer: None,
         }],
         confidence: None,
         notes: vec![],
@@ -538,6 +553,7 @@ fn a_null_in_a_non_nullable_column_is_an_error() {
             dtype: DType::Int64,
             nullable: false,
             parse: ValueParsing::default(),
+            pointer: None,
         }],
         confidence: None,
         notes: vec![],
@@ -723,6 +739,7 @@ fn float_with_declared_separators() {
                 decimal_separator: Some(','),
                 ..Default::default()
             },
+            pointer: None,
         }],
         confidence: None,
         notes: vec![],
@@ -1192,4 +1209,92 @@ fn source_name_refuses_to_shadow_a_real_column() {
     );
     let e = format!("{:#}", spec_to_batch(&s, &p).expect_err("the file already has a jahr"));
     assert!(e.contains("may only add"), "{e}");
+}
+// ---------------------------------------------------------------------------
+// Epoch timestamps (catalogue E21). Seconds already worked — `format = "%s"`
+// is chrono's own epoch specifier and tdy passes the format straight through,
+// which the catalogue got wrong. What was missing is the two scales chrono has
+// no spelling for: the milliseconds JavaScript and Java hand out, and the
+// microseconds some databases do.
+// ---------------------------------------------------------------------------
+
+fn epoch_spec(unit: Option<EpochUnit>, dtype: DType) -> ParseSpec {
+    let mut c = col("ts", dtype);
+    c.parse = ValueParsing { epoch: unit, ..Default::default() };
+    spec(
+        delim(',', RaggedPolicy::Error),
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![c, col("v", DType::Int64)],
+    )
+}
+
+/// The same instant written three ways reads as the same instant.
+#[test]
+fn every_epoch_scale_lands_on_the_same_instant() {
+    let dir = TempDir::new().unwrap();
+    let ts = DType::Timestamp { format: "%s".into(), timezone: None };
+    let cases = [
+        (EpochUnit::Seconds, "1748736000"),
+        (EpochUnit::Milliseconds, "1748736000000"),
+        (EpochUnit::Microseconds, "1748736000000000"),
+    ];
+    for (unit, written) in cases {
+        let p = dir_file(&dir, &format!("{unit:?}.csv"), &format!("ts,v\n{written},1\n"));
+        let s = epoch_spec(Some(unit), ts.clone());
+        s.validate().unwrap_or_else(|e| panic!("{unit:?}: {e:?}"));
+        let b = spec_to_batch(&s, &p).unwrap();
+        assert_eq!(ts_micros(&b, 0), 1_748_736_000_000_000, "{unit:?}");
+    }
+}
+
+/// Seconds need no option at all, which is worth pinning so nobody adds a
+/// second way to say it.
+#[test]
+fn epoch_seconds_read_from_the_format_alone() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "s.csv", "ts,v\n1748736000,1\n");
+    let s = epoch_spec(None, DType::Timestamp { format: "%s".into(), timezone: None });
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(ts_micros(&b, 0), 1_748_736_000_000_000);
+}
+
+/// A `date` column truncates toward the epoch rather than rounding, so an
+/// instant late in a day still belongs to that day.
+#[test]
+fn an_epoch_on_a_date_column_keeps_the_day_it_falls_in() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "d.csv", "ts,v\n1748822399,1\n"); // 2025-06-01T23:59:59Z
+    let s = epoch_spec(Some(EpochUnit::Seconds), DType::Date { format: "%s".into() });
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(date_days(&b, 0), 20_240);
+}
+
+/// A format and an epoch are two claims about how to read one value. A sidecar
+/// where they disagree says nothing true, so it is refused before anything runs.
+#[test]
+fn an_epoch_beside_a_calendar_format_is_refused() {
+    let s = epoch_spec(
+        Some(EpochUnit::Milliseconds),
+        DType::Timestamp { format: "%Y-%m-%d".into(), timezone: None },
+    );
+    let e = format!("{:?}", s.validate().expect_err("two claims, one value"));
+    assert!(e.contains("different claims"), "{e}");
+
+    let text = epoch_spec(Some(EpochUnit::Seconds), DType::Utf8);
+    let e = format!("{:?}", text.validate().expect_err("epoch means nothing for text"));
+    assert!(e.contains("means nothing for a text"), "{e}");
+}
+
+/// An epoch is a count. A float in that column is a value somebody should look
+/// at, not one to round into an instant.
+#[test]
+fn a_fractional_epoch_is_an_error_not_a_rounding() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "f.csv", "ts,v\n1748736000.5,1\n");
+    let s = epoch_spec(
+        Some(EpochUnit::Seconds),
+        DType::Timestamp { format: "%s".into(), timezone: None },
+    );
+    let e = format!("{:#}", spec_to_batch(&s, &p).expect_err("not a whole number"));
+    assert!(e.contains("whole number"), "{e}");
 }

@@ -226,6 +226,7 @@ fn col(name: &str, dtype: DType) -> ColumnSpec {
         dtype,
         nullable: true,
         parse: ValueParsing::default(),
+        pointer: None,
     }
 }
 
