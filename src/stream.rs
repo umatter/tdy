@@ -118,6 +118,14 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
             // Streamable in principle (it is row-local), but rare enough that
             // the fallback executor is the simpler home for it.
             Transform::Constant { .. } => return false,
+            // Row-local in principle, but it rewrites the header's width as
+            // well as each row's, and the streaming planner establishes the
+            // header once up front. Falls back to the materialising executor
+            // until that is worth doing properly.
+            Transform::SplitColumn { .. } => return false,
+            // The first output row cannot be emitted until the last input row
+            // has been read, which is the definition of not streaming.
+            Transform::Transpose => return false,
         };
         // An upward fill carries a value from a row the reader has not seen
         // yet, which is the one thing a forward-only pass cannot do. Refused
@@ -133,7 +141,9 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
                 stage <= Stage::RowLocal
             }
             Transform::Unpivot { .. } => stage <= Stage::RowLocal,
-            Transform::Constant { .. } => false,
+            Transform::Constant { .. }
+            | Transform::SplitColumn { .. }
+            | Transform::Transpose => false,
         };
         if !allowed {
             return false;
@@ -1495,8 +1505,10 @@ impl Plan {
                 Transform::FillDown { columns, .. } => p.ops.extend(columns.iter().map(|c| {
                     RowOp::Fill { column: c.clone(), idx: 0, carry: String::new() }
                 })),
-                Transform::Constant { .. } => {
-                    bail!("internal: stream planned a spec with a constant column")
+                Transform::Constant { .. }
+                | Transform::SplitColumn { .. }
+                | Transform::Transpose => {
+                    bail!("internal: stream planned a spec it said it could not stream")
                 }
                 Transform::Unpivot {
                     id_columns,

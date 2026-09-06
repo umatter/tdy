@@ -107,17 +107,33 @@ null-fill without one.
 
 ## 3. The operators
 
-### S1 · `split_column`
+### S1 · `split_column` — **built, 2026-09-06**
 
 ```toml
 [[spec.transforms]]
 op = "split_column"
 source = "name"                    # a post-transform column, by its file spelling
 into = ["first_name", "last_name"] # exactly the parts produced
-by = { kind = "delimiter", value = ", ", limit = 2 }
+by = { kind = "delimiter", value = ", " }
 #     { kind = "positions", at = [4, 6] }        -- character offsets, like fixed_width
-#     { kind = "regex", pattern = "(?<y>\\d{4})-Q(?<q>[1-4])" }  -- named groups
+#     { kind = "regex", pattern = "^(\\d{4})-Q([1-4])$" }  -- capture groups, in order
+on_short = "error"                 # or "null"
 ```
+
+**Two changes from the design as written**, both simplifications found while
+building it:
+
+- **`limit` is gone.** `into.len()` already determines how many parts to make,
+  so a separate limit could only ever disagree with it. The split stops after
+  `into.len()` parts, which is what makes the operation total.
+- **Capture groups are positional, not named.** `into` supplies the names;
+  requiring the pattern to repeat them is a second place for them to disagree.
+  `validate` checks the group count against `into.len()`.
+
+And one deferral: it runs on the **materialising executor**. It rewrites the
+header's width as well as each row's, and the streaming planner establishes the
+header once up front — the same reason `constant` falls back. No spec is
+refused for it, only executed the older way.
 
 **Semantics.** Runs in transform order, on the string table, before typing —
 where every other structural operator runs. The source column is **replaced** by
@@ -147,13 +163,22 @@ established by then, so `can_stream` keeps it after the header stage and before
 `unpivot` → `split_column` on the variable column (though not in one operation);
 E20's missingness reasons become a declarable second column.
 
-### S2 · `transpose`
+### S2 · `transpose` — **built, 2026-09-06**
 
 ```toml
 [[spec.transforms]]
 op = "transpose"
-header_from = "first_column"   # or "none"
 ```
+
+**`header_from` is gone.** After the flip, the values that were the first
+column *are* the first row, so `promote_header` reads them with no help — the
+option would have been a second way to say the same thing, and §6's second
+question dissolves with it: the header a `matches` clause addresses is the
+file's own spelling of those labels, by construction.
+
+A truncated table is refused rather than flipped: every row a partial read never
+saw would have been a **column**, so the result is the wrong shape rather than
+merely short. That is `skip_rows`'s tail rule, one step stronger.
 
 **Semantics.** Rows become columns. Runs **first** among transforms — before
 `promote_header`, since after transposing it is the *first column* that holds what
@@ -288,16 +313,17 @@ whether the framing they touch regressed.
 
 ## 6. Open questions for review
 
-1. **`split_column`'s `on_short`.** Is `error` the right default, or is
-   `error`-only correct — no `null` escape at all? The catalogue's rule says a
-   short row is an error; the counter-argument is that a genuinely optional
-   suffix (`"Zürich"` vs `"Zürich, ZH"`) is common and forcing two specs for it
-   is worse than one declared `null`.
-2. **Transpose and `matches`.** After a transpose, does a target's `matches`
-   clause address the *original* header cells (now in the first column) by their
-   file spelling? It should, and that means `header_origin` has to survive the
-   transpose — which is an argument for `header_from = "first_column"` being the
-   only supported mode rather than one of two.
+1. ~~**`split_column`'s `on_short`.**~~ **Settled: both, defaulting to
+   `error`.** A missing trailing part becomes null, not a guessed value, so
+   nothing is invented — which is what separates it from `decimal_shift` and
+   why it needs no review gate. The optional suffix (`"Zürich"` beside
+   `"Zürich, ZH"`) is common enough that forcing two specs for it is worse, and
+   the declaration is visible in the sidecar. The head of a short value is kept
+   rather than nulled along with the tail: a part that is there is data.
+2. ~~**Transpose and `matches`.**~~ **Dissolved by dropping `header_from`.**
+   With plain transposition followed by `promote_header`, the post-transform
+   header *is* the file's own spelling of the labels that ran down the first
+   column, so `header_origin` carries them with no special case.
 3. **`WITH (provenance = true)` and `--frozen`.** `_row` is deterministic only
    because `dataset()` reads members in lock order as a single partition. Worth
    asserting explicitly in `tests/conform.rs` rather than relying on the

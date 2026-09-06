@@ -852,3 +852,244 @@ fn fill_down_and_fill_up_are_different_answers_to_the_same_file() {
         "downward: the label reaches the rows below it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// split_column: the operator the munging catalogue found had no home anywhere
+// in tdy — Potter's Wheel's `Split`, tidyr's `separate`, Power Query's "Split
+// Column by Delimiter". Closes catalogue gap D3.
+// ---------------------------------------------------------------------------
+
+fn split_spec(by: SplitBy, into: &[&str], on_short: ShortSplit) -> ParseSpec {
+    let mut cols = vec![col("id", DType::Utf8)];
+    cols.extend(into.iter().map(|n| col(n, DType::Utf8)));
+    spec(
+        delim(',', RaggedPolicy::Error),
+        vec![
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::SplitColumn {
+                source: "name".into(),
+                into: into.iter().map(|s| s.to_string()).collect(),
+                by,
+                on_short,
+            },
+        ],
+        cols,
+    )
+}
+
+#[test]
+fn split_column_on_a_delimiter_replaces_the_column_in_place() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "n.csv", "id,name\n1,\"Müller, Anna\"\n2,\"Meier, Jan\"\n");
+    let s = split_spec(
+        SplitBy::Delimiter { value: ", ".into() },
+        &["last", "first"],
+        ShortSplit::Error,
+    );
+    s.validate().expect("a two-part split is a valid spec");
+
+    let b = spec_to_batch(&s, &p).unwrap();
+    // The parts land where the source column was, in order, and the column
+    // that followed it is still there.
+    assert_eq!(
+        b.schema().fields().iter().map(|f| f.name().as_str()).collect::<Vec<_>>(),
+        vec!["id", "last", "first"]
+    );
+    assert_eq!(strings(&b, 1), vec!["Müller", "Meier"]);
+    assert_eq!(strings(&b, 2), vec!["Anna", "Jan"]);
+}
+
+/// The remainder stays in the last part, which is what makes the operation
+/// total: a value can never produce more parts than there are names for it, so
+/// the only failure left to handle is *too few*.
+#[test]
+fn a_value_with_more_separators_than_parts_keeps_the_remainder() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "n.csv", "id,name\n1,\"Müller, Anna, Dr.\"\n");
+    let s = split_spec(
+        SplitBy::Delimiter { value: ", ".into() },
+        &["last", "first"],
+        ShortSplit::Error,
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(strings(&b, 1), vec!["Müller"]);
+    assert_eq!(strings(&b, 2), vec!["Anna, Dr."]);
+}
+
+/// A value that does not split is an error naming the row by default. Padding
+/// it silently is how a split loses the second half of every value that
+/// happened to contain no separator.
+#[test]
+fn a_value_that_does_not_split_is_an_error_by_default() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "n.csv", "id,name\n1,\"Müller, Anna\"\n2,Meier\n");
+    let s = split_spec(
+        SplitBy::Delimiter { value: ", ".into() },
+        &["last", "first"],
+        ShortSplit::Error,
+    );
+    let e = spec_to_batch(&s, &p).expect_err("row 2 has no separator");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("row 2"), "the offending row: {msg}");
+    assert!(msg.contains("Meier"), "the offending value: {msg}");
+    assert!(msg.contains("on_short"), "and the declaration that allows it: {msg}");
+}
+
+/// Declared optional, the tail is null and the head survives — nothing is
+/// invented and nothing is lost.
+#[test]
+fn a_declared_optional_tail_is_null_and_the_head_survives() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "n.csv", "id,name\n1,\"Zürich, ZH\"\n2,Zürich\n");
+    let s = split_spec(
+        SplitBy::Delimiter { value: ", ".into() },
+        &["city", "canton"],
+        ShortSplit::Null,
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(strings(&b, 1), vec!["Zürich", "Zürich"], "the head is kept, not nulled with the tail");
+    assert_eq!(strings(&b, 2), vec!["ZH", "<null>"]);
+}
+
+/// Character offsets, not bytes — the same rule `fixed_width` follows, and for
+/// the same reason: the umlaut before the cut would slide every later field.
+#[test]
+fn split_column_by_position_counts_characters() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "n.csv", "id,name\n1,ZÜRICH8001\n2,GENÈVE1201\n");
+    let s = split_spec(SplitBy::Positions { at: vec![6] }, &["ort", "plz"], ShortSplit::Error);
+    s.validate().expect("one cut, two parts");
+
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(strings(&b, 1), vec!["ZÜRICH", "GENÈVE"]);
+    assert_eq!(strings(&b, 2), vec!["8001", "1201"]);
+}
+
+#[test]
+fn split_column_by_regex_uses_its_capture_groups_in_order() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "n.csv", "id,name\n1,2024-Q3\n2,2025-Q1\n");
+    let s = split_spec(
+        SplitBy::Regex { pattern: r"^(\d{4})-Q([1-4])$".into() },
+        &["jahr", "quartal"],
+        ShortSplit::Error,
+    );
+    s.validate().expect("two groups, two names");
+
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(strings(&b, 1), vec!["2024", "2025"]);
+    assert_eq!(strings(&b, 2), vec!["3", "1"]);
+}
+
+/// The assertion the whole conformance layer rests on, for this transform:
+/// **`schema_of` is the schema execution really produces.** `schema_of` derives
+/// it from `columns` alone, with no I/O — that is what lets `tdy check` prove a
+/// spec lands on a target before reading a byte — while execution resolves each
+/// column's source against the header the transforms left behind. A split that
+/// rewrote rows but not the header would satisfy the first and fail the second,
+/// so the two are compared here rather than either being checked alone.
+#[test]
+fn the_derived_schema_of_a_split_is_the_one_execution_produces() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "n.csv", "id,name\n1,\"Müller, Anna\"\n");
+    let s = split_spec(
+        SplitBy::Delimiter { value: ", ".into() },
+        &["last", "first"],
+        ShortSplit::Error,
+    );
+
+    let derived = tdy::engine::schema_of(&s).expect("a schema without touching a file");
+    let executed = spec_to_batch(&s, &p).unwrap().schema();
+    assert_eq!(
+        derived.fields(),
+        executed.fields(),
+        "the schema proved against a target must be the schema the file yields"
+    );
+    assert_eq!(
+        derived.fields().iter().map(|f| f.name().as_str()).collect::<Vec<_>>(),
+        vec!["id", "last", "first"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// transpose: catalogue gap C8, the largest one the survey found. A file with
+// variables down the left and observations across the top could not be read at
+// all — `unpivot` turns wide into long but cannot make the first *column* into
+// the header.
+// ---------------------------------------------------------------------------
+
+/// The layout every print-friendly export produces, read the only way it can
+/// be read: flip it, then promote the row that used to be the first column.
+#[test]
+fn transpose_turns_a_report_layout_into_a_table() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(
+        &dir,
+        "report.csv",
+        "Kennzahl,2021,2022,2023\nUmsatz,100,120,140\nKosten,80,85,95\n",
+    );
+    let s = spec(
+        delim(',', RaggedPolicy::Error),
+        vec![Transform::Transpose, Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![
+            col("Kennzahl", DType::Utf8),
+            col("Umsatz", DType::Int64),
+            col("Kosten", DType::Int64),
+        ],
+    );
+    s.validate().expect("transpose before promote_header is the right order");
+
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(b.num_rows(), 3, "three years become three rows");
+    assert_eq!(strings(&b, 0), vec!["2021", "2022", "2023"]);
+    assert_eq!(ints(&b, 1), vec![Some(100), Some(120), Some(140)]);
+    assert_eq!(ints(&b, 2), vec![Some(80), Some(85), Some(95)]);
+    // And the point of the whole exercise: the numbers are typed, which they
+    // could never be while each column held a label above its values.
+    assert!(
+        matches!(
+            b.schema().field(1).data_type(),
+            datafusion::arrow::datatypes::DataType::Int64
+        ),
+        "got {:?}",
+        b.schema().field(1).data_type()
+    );
+}
+
+/// A short row transposes to an empty cell in each column beyond it — which is
+/// what the missing value was. Nothing is dropped and nothing is invented.
+#[test]
+fn transposing_a_ragged_report_fills_the_gaps_with_nothing() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "ragged.csv", "Kennzahl,2021,2022\nUmsatz,100,120\nKosten,80\n");
+    let s = spec(
+        delim(',', RaggedPolicy::PadNulls),
+        vec![Transform::Transpose, Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("Kennzahl", DType::Utf8), col("Kosten", DType::Utf8)],
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(strings(&b, 0), vec!["2021", "2022"]);
+    assert_eq!(strings(&b, 1), vec!["80", "<null>"], "the row that stopped short leaves a null");
+}
+
+/// The order is not a style preference: a header established before the flip
+/// runs the wrong way afterwards, so the spec would address names that no
+/// longer exist. Refused in `validate`, before anything is read.
+#[test]
+fn a_transpose_after_a_header_is_refused() {
+    let s = spec(
+        delim(',', RaggedPolicy::Error),
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }, Transform::Transpose],
+        vec![col("a", DType::Utf8)],
+    );
+    let e = format!("{:?}", s.validate().expect_err("the order is wrong"));
+    assert!(e.contains("before promote_header"), "{e}");
+
+    let twice = spec(
+        delim(',', RaggedPolicy::Error),
+        vec![Transform::Transpose, Transform::Transpose],
+        vec![col("a", DType::Utf8)],
+    );
+    let e = format!("{:?}", twice.validate().expect_err("two flips are no flip"));
+    assert!(e.contains("table you started with"), "{e}");
+}

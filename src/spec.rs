@@ -295,6 +295,48 @@ pub enum Transform {
     /// authorisation; any other use is hand-written and gated by review,
     /// because a constant is data tdy is being told, not data it read.
     Constant { name: String, value: String },
+    /// Flip the table: rows become columns and columns become rows.
+    ///
+    /// The cure for a file laid out for reading rather than for analysis —
+    /// variables down the left, observations across the top, which is what
+    /// every "print-friendly" export and every hand-built management sheet
+    /// produces. Nothing else in the spec language can reach such a file:
+    /// `unpivot` turns wide into long but cannot make the *first column* into
+    /// the header.
+    ///
+    /// Takes no options, deliberately. After the flip, the values that were
+    /// the first column are the first *row*, so `promote_header` does what it
+    /// always does and the header a `matches` clause addresses is the file's
+    /// own spelling of those labels. An option to fold the two steps into one
+    /// would be a second way to say the same thing.
+    ///
+    /// Must come before `promote_header`: the two disagree about which
+    /// direction the names run. Runs on the materialising executor, since the
+    /// first output row cannot be emitted until the last input row is read.
+    Transpose,
+    /// Split one column into several, in place.
+    ///
+    /// The column named by `source` is **replaced** by the columns named in
+    /// `into`, in that position, so the header keeps its shape and `columns`
+    /// addresses the parts by name. Runs on the string table like every other
+    /// transform, before anything is typed.
+    ///
+    /// The split is *total by construction*: a delimiter split stops after
+    /// `into.len()` parts and puts the remainder in the last one, so a value
+    /// can never yield more parts than there are names for it. It can yield
+    /// **fewer** — a value with no separator at all — and `on_short` says what
+    /// that means, defaulting to an error naming the row. Padding a short row
+    /// silently is how a split loses the second half of every value that
+    /// happened to contain no comma.
+    SplitColumn {
+        /// The post-transform column to split, by the name the file gives it.
+        source: String,
+        /// The columns it becomes. At least two; they replace `source`.
+        into: Vec<String>,
+        by: SplitBy,
+        #[serde(default)]
+        on_short: ShortSplit,
+    },
     /// Wide -> long.
     Unpivot {
         id_columns: Vec<String>,
@@ -302,6 +344,40 @@ pub enum Transform {
         variable_name: String,
         value_name: String,
     },
+}
+
+/// How `split_column` cuts a value.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SplitBy {
+    /// On a literal separator, at most `into.len() - 1` times: the remainder
+    /// stays in the last part, which is what every `split(sep, maxsplit)` in
+    /// every language does and what makes the operation total.
+    Delimiter { value: String },
+    /// At **character** offsets, like `fixed_width` and for the same reason:
+    /// byte offsets slide every later field along by one for each non-ASCII
+    /// character before them. `at = [4, 6]` yields three parts. A value that
+    /// ends before an offset simply has empty parts from there on — a fixed
+    /// layout with a short line is not a short *split*.
+    Positions { at: Vec<u32> },
+    /// One regex whose capture groups become the parts, in order. A value the
+    /// pattern does not match is short.
+    Regex { pattern: String },
+}
+
+/// What a value that yields fewer parts than there are names for it means.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortSplit {
+    /// Refuse, naming the row and the value. The default, because a value that
+    /// does not split is usually a spec that is wrong about the file.
+    #[default]
+    Error,
+    /// The missing trailing parts are null. Declares that the tail is
+    /// optional — `"Zürich"` beside `"Zürich, ZH"` — which is a claim about
+    /// the data a person is entitled to make, and one that invents nothing:
+    /// a part that is not there becomes missing, never a guess.
+    Null,
 }
 
 fn default_header_join() -> String {
@@ -804,6 +880,103 @@ impl ParseSpec {
                         errs.push("fill_down: `columns` must not be empty".into());
                     }
                 }
+                Transform::Transpose => {
+                    // Flipping a table whose names are already established
+                    // would turn the header into a column of data and leave
+                    // the spec addressing names that no longer run that way.
+                    if self.transforms.iter().take_while(|o| !matches!(o, Transform::Transpose)).any(
+                        |o| matches!(o, Transform::PromoteHeader { .. }),
+                    ) {
+                        errs.push(
+                            "transpose must come before promote_header: after the flip it is \
+                             the first row that holds the names, and a header established \
+                             beforehand runs the other way"
+                                .into(),
+                        );
+                    }
+                    if self.transforms.iter().filter(|o| matches!(o, Transform::Transpose)).count()
+                        > 1
+                    {
+                        errs.push(
+                            "two transposes are the table you started with; one of them is a \
+                             mistake"
+                                .into(),
+                        );
+                    }
+                }
+                Transform::SplitColumn { source, into, by, .. } => {
+                    // Splitting into one part is a rename, and tdy has no
+                    // rename: `source` -> `name` in `columns` is the only one.
+                    if into.len() < 2 {
+                        errs.push(format!(
+                            "split_column `{source}`: `into` needs at least two names \
+                             (splitting into one is a rename, which `columns` already does)"
+                        ));
+                    }
+                    // Two parts landing on one name means one of them is
+                    // silently discarded by the projection.
+                    let mut seen = std::collections::BTreeSet::new();
+                    for n in into {
+                        if n.is_empty() {
+                            errs.push(format!("split_column `{source}`: an `into` name is empty"));
+                        } else if !seen.insert(n) {
+                            errs.push(format!(
+                                "split_column `{source}`: `{n}` appears twice in `into`"
+                            ));
+                        }
+                    }
+                    match by {
+                        SplitBy::Delimiter { value } => {
+                            if value.is_empty() {
+                                errs.push(format!(
+                                    "split_column `{source}`: the delimiter is empty, which \
+                                     would split between every character"
+                                ));
+                            }
+                        }
+                        SplitBy::Positions { at } => {
+                            // n cuts make n+1 parts; anything else means the
+                            // author counted one of the two wrong.
+                            if !at.is_empty() && at.len() + 1 != into.len() {
+                                errs.push(format!(
+                                    "split_column `{source}`: {} cut position(s) make {} \
+                                     parts, but `into` names {}",
+                                    at.len(),
+                                    at.len() + 1,
+                                    into.len()
+                                ));
+                            }
+                            if at.is_empty() {
+                                errs.push(format!(
+                                    "split_column `{source}`: `at` must name at least one \
+                                     cut position"
+                                ));
+                            }
+                            if at.windows(2).any(|w| w[1] <= w[0]) {
+                                errs.push(format!(
+                                    "split_column `{source}`: cut positions must increase; \
+                                     {at:?} does not"
+                                ));
+                            }
+                        }
+                        SplitBy::Regex { pattern } => match regex::Regex::new(pattern) {
+                            Err(e) => errs.push(format!(
+                                "split_column `{source}`: `pattern` is not a valid regex: {e}"
+                            )),
+                            Ok(re) => {
+                                // captures_len() counts group 0, the whole match.
+                                let groups = re.captures_len() - 1;
+                                if groups != into.len() {
+                                    errs.push(format!(
+                                        "split_column `{source}`: the pattern has {groups} \
+                                         capture group(s) but `into` names {} column(s)",
+                                        into.len()
+                                    ));
+                                }
+                            }
+                        },
+                    }
+                }
                 Transform::Unpivot {
                     id_columns,
                     value_columns,
@@ -915,6 +1088,47 @@ mod tests {
     /// A token cannot be both "missing" and a value: the executor checks
     /// na_values first, so an overlap silently turns a declared FALSE into a
     /// null — a wrong value whose two readings both produce a valid column.
+    /// Every way of miscounting a split, refused with the count named. These
+    /// are all mistakes whose result would otherwise be a column quietly
+    /// holding the wrong half of a value.
+    #[test]
+    fn a_split_that_does_not_add_up_is_refused() {
+        let base = |by, into: Vec<&str>| {
+            let mut spec = minimal_bool_spec();
+            spec.transforms.push(Transform::SplitColumn {
+                source: "x".into(),
+                into: into.into_iter().map(String::from).collect(),
+                by,
+                on_short: ShortSplit::Error,
+            });
+            spec
+        };
+        let err = |s: ParseSpec, want: &str| {
+            let e = format!("{:?}", s.validate().expect_err("must be refused"));
+            assert!(e.contains(want), "expected {want:?} in {e}");
+        };
+
+        // One part is a rename, and `columns` already renames.
+        err(base(SplitBy::Delimiter { value: ",".into() }, vec!["a"]), "at least two");
+        // Two parts on one name: the projection would drop one silently.
+        err(base(SplitBy::Delimiter { value: ",".into() }, vec!["a", "a"]), "twice");
+        // Splitting on nothing splits between every character.
+        err(base(SplitBy::Delimiter { value: String::new() }, vec!["a", "b"]), "delimiter is empty");
+        // One cut makes two parts, not three.
+        err(base(SplitBy::Positions { at: vec![4] }, vec!["a", "b", "c"]), "make 2");
+        err(base(SplitBy::Positions { at: vec![6, 4] }, vec!["a", "b", "c"]), "must increase");
+        // A pattern whose groups do not match the names it is given.
+        err(base(SplitBy::Regex { pattern: "(a)(b)(c)".into() }, vec!["x", "y"]), "3 capture");
+        err(base(SplitBy::Regex { pattern: "(".into() }, vec!["x", "y"]), "not a valid regex");
+
+        base(SplitBy::Delimiter { value: ", ".into() }, vec!["a", "b"])
+            .validate()
+            .expect("two names, a real delimiter: nothing to complain about");
+        base(SplitBy::Positions { at: vec![4, 6] }, vec!["a", "b", "c"])
+            .validate()
+            .expect("two cuts, three parts");
+    }
+
     /// A sign convention on a text column would silently do nothing, and on a
     /// date it would eat a bracket somebody meant to keep.
     #[test]

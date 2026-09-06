@@ -38,6 +38,73 @@ from RFC 4180 each turned up two things nothing in the tree had:
 
 ### Added
 
+- **`transpose`: rows become columns.** The cure for a file laid out for
+  reading rather than analysis — variables down the left, observations across
+  the top, which is what every print-friendly export and hand-built management
+  sheet produces. Nothing in the spec language could reach such a file before:
+  `unpivot` turns wide into long but cannot make the first *column* into the
+  header.
+
+  ```toml
+  [[spec.transforms]]
+  op = "transpose"
+
+  [[spec.transforms]]
+  op = "promote_header"
+  rows = 1
+  ```
+
+  No options, deliberately. After the flip the values that were the first
+  column are the first row, so `promote_header` does what it always does and
+  the header a `matches` clause addresses is the file's own spelling of those
+  labels. It must come before `promote_header` — the two disagree about which
+  direction the names run — and `validate` refuses the other order, and a
+  second transpose, before anything is read.
+
+  A truncated table is refused rather than flipped: every row a partial read
+  never saw would have been a *column*, so the result would be the wrong shape
+  rather than merely short. It runs on the materialising executor, since the
+  first output row cannot be emitted until the last input row is read.
+
+  **Never inferred.** The sniffer notes the shape — "the header is 3 period
+  labels and the first column holds names" — and names *both* cures, because a
+  transposed report and an ordinary wide report have the same signature and
+  what separates them is what the rows mean. Measured on 400 real corpus files:
+  the note fires once, on a file that genuinely wants `unpivot`.
+
+  Closes the largest gap the operator catalogue found (C8).
+
+- **`split_column`: one column becomes several.** By a literal delimiter, by
+  character positions, or by a regex's capture groups; the source column is
+  replaced in place, so the header keeps its shape and `columns` addresses the
+  parts by name.
+
+  ```toml
+  [[spec.transforms]]
+  op = "split_column"
+  source = "name"
+  into = ["last", "first"]
+  by = { kind = "delimiter", value = ", " }
+  ```
+
+  It is **total by construction**: a delimiter split stops after `into.len()`
+  parts and keeps the remainder in the last one, so a value can never yield
+  more parts than there are names for it. It can yield fewer, and that is an
+  error naming the row and the value — padding a short row silently is how a
+  split loses the second half of every value that happened to contain no
+  separator. `on_short = "null"` declares the tail optional (`"Zürich"` beside
+  `"Zürich, ZH"`), fills the missing parts with nulls and keeps the head.
+
+  Never inferred: choosing where to cut a value is a judgement, and the file
+  does not contain it. Runs on the materialising executor for now — it rewrites
+  the header's width as well as each row's, which the streaming planner
+  establishes once up front.
+
+  This closes the one gap the operator catalogue found in every survey it ran:
+  Potter's Wheel's `Split`, tidyr's `separate`, Power Query's "Split Column by
+  Delimiter" — the most common munging operation, and the only one of the three
+  most common with no declarative form in tdy.
+
 - **`fill_down` takes a `direction`.** `down` (the default, and what it always
   did) carries the last non-empty value forward — the merged-cell and
   written-once-at-the-top layout. `up` carries it backward, which is the same

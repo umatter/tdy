@@ -1000,6 +1000,12 @@ fn finish(
     // Did the file give us its column names? `ensure_header` is about to
     // invent `col_1, col_2, …` if it did not, and the all-text doubt below
     // turns on the difference.
+    // A file laid out for reading rather than analysis: its header is made of
+    // period labels and its first column of variable names. Reported, never
+    // acted on — the same signature belongs to an ordinary wide report that
+    // wants `unpivot`, and only a person knows which one they are looking at.
+    note_reading_layout(&table, &mut doubts);
+
     let named_by_file = table.header.is_some();
     table.ensure_header()?;
     let header = table.header.clone().unwrap_or_default();
@@ -1654,6 +1660,45 @@ fn looks_monetary(name: &str) -> bool {
     ];
     let n = name.to_ascii_lowercase();
     WORDS.iter().any(|w| n.contains(w))
+}
+
+/// Notice a table whose *header* holds values and whose first column holds
+/// names — `Kennzahl | 2021 | 2022 | 2023` over `Umsatz | 100 | 120 | 140`.
+///
+/// Deliberately does not try to say which of the two cures applies. The
+/// signature of a transposed report and of an ordinary wide report are the
+/// same — period labels across the top, entity labels down the side — and what
+/// separates them is what the rows *mean*, which the file does not say. So the
+/// note names both operators and lets a person choose.
+fn note_reading_layout(table: &RawTable, doubts: &mut Doubts) {
+    let Some(header) = table.header.as_deref() else { return };
+    if header.len() < 3 || table.rows.is_empty() {
+        return;
+    }
+    let periods = header.iter().skip(1).filter(|h| looks_like_period_label(h)).count();
+    if periods < 2 || periods + 1 < header.len() {
+        return;
+    }
+    // The first column has to be labels, not more values, or this is just a
+    // table that happens to start with a period column.
+    let labelled = table
+        .rows
+        .iter()
+        .filter_map(|r| r.first())
+        .filter(|v| !v.trim().is_empty())
+        .all(|v| !looks_scalar(v));
+    if !labelled {
+        return;
+    }
+    doubts.add(
+        0.05,
+        format!(
+            "the header is {periods} period label(s) and the first column holds names: this \
+             file is laid out for reading rather than analysis. `unpivot` reads it into long \
+             form as it stands; `transpose` (before promote_header) reads it the other way \
+             round, if its variables are the ones running down the first column"
+        ),
+    );
 }
 
 /// Does this sample look like numbers whose sign is written as a marker —
