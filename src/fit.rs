@@ -607,9 +607,17 @@ fn frame_could_help(e: &FitError) -> bool {
         // Framing failed outright, or columns were not found / not typable —
         // both are what a wrong frame looks like from the outside.
         FitError::Unreadable(_) => true,
-        FitError::Gaps(gaps) => gaps
-            .iter()
-            .all(|g| matches!(g, Gap::NoCandidate { .. } | Gap::Untypable { .. })),
+        // A long-form diagnosis is the opposite of a wrong frame: the
+        // planner found the column whose values are the declared names,
+        // which it could only do with the right one. Another frame would
+        // cost a request to say the same thing, then gate a correct refusal
+        // behind a review reason.
+        FitError::Gaps(gaps) => gaps.iter().all(|g| {
+            matches!(
+                g,
+                Gap::NoCandidate { long_form: None, .. } | Gap::Untypable { .. }
+            )
+        }),
         // Proven ambiguities are settled by declarations, never by a model.
         FitError::AmbiguousFrame { .. } => false,
         FitError::Rejected(_) | FitError::DryRun(_) => false,

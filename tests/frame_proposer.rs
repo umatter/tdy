@@ -45,6 +45,36 @@ fn mock_backend(content: String) -> String {
     format!("http://{addr}")
 }
 
+/// `mock_backend`, plus a count of how many requests actually arrived — for
+/// the tests whose whole claim is that nobody called.
+fn counting_backend(content: String) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().unwrap();
+    let seen = hits.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            seen.fetch_add(1, Ordering::SeqCst);
+            let body = serde_json::json!({
+                "choices": [{"message": {"content": content}}]
+            })
+            .to_string();
+            let mut buf = [0u8; 65536];
+            let _ = s.read(&mut buf);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+        }
+    });
+    (format!("http://{addr}"), hits)
+}
+
 fn cfg_for(base_url: String) -> Config {
     Config {
         backend: Backend::Local,
@@ -162,6 +192,32 @@ async fn a_model_is_never_asked_to_resolve_a_proven_ambiguity() {
         matches!(err, tdy::fit::FitError::AmbiguousFrame { .. }),
         "{err}"
     );
+}
+
+/// A long-form file is *diagnosed*, not mis-framed: the planner found the
+/// column whose values are the declared names, which it could only do with
+/// the right frame. Asking a model for another frame would spend a paid
+/// request to be told the same thing, then gate a correct refusal behind a
+/// review reason. So the gaps stay, and the model is never contacted.
+#[tokio::test]
+async fn a_model_is_never_asked_about_a_long_form_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("2025-long.csv");
+    std::fs::write(&p, "region,quarter,umsatz\nOst,Q1,100\nOst,Q2,120\nWest,Q1,90\n").unwrap();
+    let (url, hits) = counting_backend("{}".into());
+    let cfg = cfg_for(url);
+    let target = Target::parse(
+        "CREATE TABLE sales (
+           region TEXT   NOT NULL,
+           q1     BIGINT,
+           q2     BIGINT
+         ) WITH (files = '2025-*.csv')",
+    )
+    .unwrap();
+    let err = tdy::fit::plan(&p, &target, &cfg, None).await.expect_err("must stay refused");
+    let tdy::fit::FitError::Gaps(gaps) = &err else { panic!("expected gaps, got {err}") };
+    assert!(gaps.iter().all(|g| g.message().contains("in long form")), "{err}");
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0, "the model was contacted");
 }
 
 /// The full CLI loop, and the property the first live run broke: a fresh
