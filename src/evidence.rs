@@ -379,7 +379,7 @@ op = "promote_header"
 rows = 1
 join = " "
 [[columns]]
-name = "amount_chf"
+name = "amount"
 source = "Betrag Rp."
 nullable = false
 [columns.dtype]
@@ -498,7 +498,7 @@ op = "constant"
 name = "region"
 value = "Ticino"
 [[columns]]
-name = "amount_chf"
+name = "amount"
 source = "Betrag Rp."
 nullable = false
 [columns.dtype]
@@ -529,7 +529,7 @@ type = "utf8"
     #[test]
     fn the_headline_names_the_direction_the_executor_moves() {
         let e = Evidence::Shift {
-            column: "amount_chf".into(),
+            column: "amount".into(),
             source: "Betrag Rp.".into(),
             shift: -2,
             head: vec![],

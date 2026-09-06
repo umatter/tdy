@@ -9,7 +9,7 @@
 //! CREATE TABLE sales (
 //!   month        DATE           NOT NULL,
 //!   region       TEXT           NOT NULL,
-//!   amount_chf   DECIMAL(14,2)  NOT NULL,
+//!   amount   DECIMAL(14,2)  NOT NULL,
 //!   discount_pct DOUBLE             NULL
 //! )
 //! WITH (
@@ -119,7 +119,7 @@ pub struct TargetColumn {
     pub name: String,
     /// Header cells this column may be read from, beyond its own name.
     ///
-    /// Needed because a target names what you *want* — `amount_chf` — while
+    /// Needed because a target names what you *want* — `amount` — while
     /// the files are somebody else's exports and say `Betrag`, `Betrag CHF`,
     /// `Amount`. No amount of normalising bridges that; only a human saying
     /// so does. They are declared, versioned and reviewable, which is the

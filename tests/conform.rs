@@ -177,7 +177,7 @@ fn a_conforming_spec_really_produces_the_declared_dataset() {
         "CREATE TABLE sales (
            month      DATE          NOT NULL,
            region     TEXT          NOT NULL,
-           amount_chf DECIMAL(14,2) NOT NULL
+           amount DECIMAL(14,2) NOT NULL
          ) WITH (files = '2025-*.csv', date_order = 'dmy')",
     )
     .unwrap();
@@ -210,7 +210,7 @@ fn a_conforming_spec_really_produces_the_declared_dataset() {
                 pointer: None,
             },
             ColumnSpec {
-                name: "amount_chf".into(),
+                name: "amount".into(),
                 source: Some("Betrag".into()),
                 dtype: DType::Decimal { precision: 14, scale: 2 },
                 nullable: false,
@@ -247,7 +247,7 @@ fn a_spec_that_parses_the_file_but_reads_the_wrong_columns_is_refused() {
     std::fs::write(&p, "Datum;Region;Betrag;Rabatt\n31.01.2025;Ost;1234.50;10\n").unwrap();
 
     let target = Target::parse(
-        "CREATE TABLE sales (amount_chf DECIMAL(14,2) NOT NULL) WITH (files = 'x')",
+        "CREATE TABLE sales (amount DECIMAL(14,2) NOT NULL) WITH (files = 'x')",
     )
     .unwrap();
 
@@ -281,7 +281,7 @@ fn a_spec_that_parses_the_file_but_reads_the_wrong_columns_is_refused() {
     let errs = conforms(&wrong, &target).unwrap_err();
     assert_eq!(errs.len(), 2, "{errs:?}");
     let text: String = errs.iter().map(|m| m.message()).collect::<Vec<_>>().join("\n");
-    assert!(text.contains("amount_chf"), "{text}");
+    assert!(text.contains("amount"), "{text}");
     assert!(text.contains("rabatt"), "{text}");
 }
 
@@ -302,7 +302,7 @@ fn a_sniffed_sidecar_is_unfitted_rather_than_contradicting() {
         "CREATE TABLE sales (
            month      DATE          NOT NULL,
            region     TEXT          NOT NULL,
-           amount_chf DECIMAL(14,2) NOT NULL
+           amount DECIMAL(14,2) NOT NULL
          ) WITH (files = 's.csv')",
     )
     .unwrap();
@@ -477,13 +477,13 @@ fn a_stale_sidecar_fails_the_gate_rather_than_conforming() {
 #[test]
 fn an_underivable_spec_reports_the_real_reason_not_a_fabricated_comparison() {
     let target = Target::parse(
-        "CREATE TABLE sales (amount_chf DECIMAL(14,2) NOT NULL) WITH (files = 'x')",
+        "CREATE TABLE sales (amount DECIMAL(14,2) NOT NULL) WITH (files = 'x')",
     )
     .unwrap();
 
     // Decimal128 tops out at precision 38; 39 cannot be built.
     let spec = spec_with(vec![ColumnSpec {
-        name: "amount_chf".into(),
+        name: "amount".into(),
         source: None,
         dtype: DType::Decimal { precision: 39, scale: 2 },
         nullable: false,
@@ -494,7 +494,7 @@ fn an_underivable_spec_reports_the_real_reason_not_a_fabricated_comparison() {
     let errs = conforms(&spec, &target).unwrap_err();
     assert_eq!(errs.len(), 1, "{errs:?}");
     let m = errs[0].message();
-    assert!(m.contains("amount_chf"), "{m}");
+    assert!(m.contains("amount"), "{m}");
     assert!(
         !m.contains("the target declares it"),
         "an underivable spec was reported as a missing target column: {m}"

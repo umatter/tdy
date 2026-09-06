@@ -14,7 +14,7 @@
 CREATE TABLE sales_ok (
   month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
   region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
-  amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
+  amount     DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
 )
 WITH (
   files      = '2025-*.csv, 2025-*.xlsx',

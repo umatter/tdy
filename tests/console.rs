@@ -543,7 +543,7 @@ nullable = false
 [spec.columns.dtype]
 type = "utf8"
 [[spec.columns]]
-name = "amount_chf"
+name = "amount"
 source = "Betrag Rp."
 nullable = false
 [spec.columns.dtype]
@@ -758,7 +758,7 @@ async fn low_confidence_notes_reach_the_sink_not_stderr() {
 
 // ---- CREATE TABLE at the prompt writes the target file ----
 
-const MONTHLY_DDL: &str = "CREATE TABLE monthly (\n  month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date'),\n  region     TEXT          NOT NULL,\n  amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount')\n)\nWITH ( files = '2025-*.csv', date_order = 'dmy' );";
+const MONTHLY_DDL: &str = "CREATE TABLE monthly (\n  month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date'),\n  region     TEXT          NOT NULL,\n  amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount')\n)\nWITH ( files = '2025-*.csv', date_order = 'dmy' );";
 
 async fn run_statement(s: &mut Session, stmt: &str) -> tdy::console::Outcome {
     let mut last = None;
