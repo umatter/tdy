@@ -856,3 +856,51 @@ decimal_separator = "."
     assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
     assert!(text.contains("7848.06"), "Betrag_2 must be the gross column:\n{text}");
 }
+
+/// `WITH (provenance = true)` adds `_member` and `_row` to the dataset.
+///
+/// The gap it closes: tdy proves which files a dataset contains, what shape
+/// they land on, and what a human accepted — and then a row in the result
+/// carried no trace of which member and which line produced it. An error
+/// message could always name a row; a query never could.
+#[test]
+fn provenance_columns_name_the_member_and_the_line() {
+    let dir = staged();
+    let t = target_of(&dir);
+    // Declared, never implicit: a dataset's schema is what the declaration
+    // says it is, so the columns appear only when the target asks.
+    let sql = std::fs::read_to_string(&t).unwrap();
+    let with_prov = sql.replace("  date_order = 'dmy'", "  date_order = 'dmy',\n  provenance = 'true'");
+    assert_ne!(with_prov, sql, "the option must actually have been added");
+    std::fs::write(&t, with_prov).unwrap();
+    fit_all(&dir);
+
+    let out = query(
+        &dir,
+        "SELECT _member, _row, month FROM dataset('@') ORDER BY _member, _row LIMIT 3",
+    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("2025-01"), "the first member names itself:\n{text}");
+    // 1-based within the member, which is the number a person could look up
+    // in that file — not a position in the union.
+    assert!(text.contains(" 1 "), "rows are numbered from one:\n{text}");
+
+    // Every member restarts at 1: the count of `_row = 1` is the number of
+    // members, not one.
+    let ones = query(&dir, "SELECT count(*) FROM dataset('@') WHERE _row = 1");
+    let n = String::from_utf8_lossy(&ones.stdout);
+    assert!(!n.contains("| 1 "), "each member must restart its own numbering:\n{n}");
+}
+
+/// ...and without the declaration they are absent, because a dataset's schema
+/// is the declaration's business and nothing else may add to it.
+#[test]
+fn provenance_columns_are_absent_unless_declared() {
+    let dir = staged();
+    fit_all(&dir);
+    let out = query(&dir, "SELECT _member FROM dataset('@')");
+    assert!(!out.status.success(), "an undeclared column must not resolve");
+    let e = String::from_utf8_lossy(&out.stderr);
+    assert!(e.contains("_member"), "{e}");
+}

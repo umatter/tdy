@@ -562,7 +562,13 @@ positive that wants unpivot.
 the year exists only as the sheet's name and must become a column. Or: forty
 CSVs whose canton is only in the filename.
 
-**`gap`** — and a structural one, in two halves.
+**`partial`** since 2026-09-06 — `Transform::SourceName` closes the *derivable*
+half: `from = "file_stem" | "file_name" | "sheet" | "path"` with an optional
+regex whose capture becomes the value, so the year in `umsatz_2025.xlsx` is a
+column. It carries no review gate — the value is read off the path, not told to
+tdy — and a pattern that does not match is an error rather than an empty column.
+
+What remains is the *sheet* half, restated below as it was written:
 1. A sidecar is per *file*, so one file contributes exactly one sheet to a
    dataset. A twelve-sheet workbook cannot be twelve members. (`tdy draft`'s
    corpus sweep already meets this: 16 of 31 real multi-sheet workbooks were
@@ -1460,7 +1466,11 @@ keep='last')` (pandas), `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …) = 1`,
 to find that line in the original file; or a union of forty members needs to know
 which member each row came from.
 
-**`gap`, and it argues against the project's own strengths.** tdy proves which
+**`spec`** since 2026-09-06 — `WITH (provenance = true)` on a target adds
+`_member` (the member's lock-relative path) and `_row` (1-based within that
+member) to what `dataset()` returns. Opt-in, since a dataset's schema is what
+the declaration says it is, and part of `target_hash`, since turning it on
+changes that shape. The argument for it, as first written: tdy proves which
 files a dataset contains (the lockfile), what shape they land on (conformance),
 and what a human accepted (the review gate) — but a row in the result carries no
 trace of *which member and which line* produced it. `stream::analyse` already
@@ -1990,17 +2000,17 @@ rather than leaving implicit in the code.
 |---|---|---|---|---|---|---|
 | A · Physical decoding | 3 | – | 2 | 1 | 1 | 7 |
 | B · Dialect & framing | 8 | – | 2 | 1 | – | 11 |
-| C · Table framing | 7 | – | 3 | 2 | 3 | 16 |
+| C · Table framing | 7 | – | 4 | 1 | 3 | 16 |
 | D · Shape | 4 | 3 | 1 | 1 | – | 9 |
 | E · Parsing & typing | 14 | – | 5 | 2 | – | 21 |
 | F · Standardisation | 1 | 3 | – | 1 | 5 | 10 |
 | G · Missing data | 4 | 2 | 1 | – | 2 | 9 |
-| H · Rows | 1 | 3 | – | 1 | – | 5 |
+| H · Rows | 2 | 3 | – | – | – | 5 |
 | I · Aggregation | – | 4 | – | 1 | – | 5 |
 | J · Combining | 1 | 1 | 1 | – | 2 | 5 |
 | K · Validation | 2 | – | 1 | – | 4 | 7 |
 | L · Process | 4 | – | – | 1 | – | 5 |
-| **Total** | **49** | **16** | **16** | **11** | **17** | **110** |
+| **Total** | **50** | **16** | **17** | **9** | **17** | **110** |
 
 Two `gap`s became `spec` on 2026-09-06 — **E5** signed-number conventions and
 **G2** fill-up — and this table counts the state after them.
@@ -2020,10 +2030,11 @@ would mean producing a value the file does not contain.
 ~~1. **C8 · Transposition.**~~ **Done, 2026-09-06** — `transpose`, no options,
    before `promote_header`. Detected and reported, never applied: the shape it
    cures and an ordinary wide report are indistinguishable from the file alone.
-2. **C9 + H4 · Source identity as data.** A sheet or filename that carries the
-   period cannot become a column, and a result row cannot say which member and
-   line it came from. Two halves of one missing capability, and the one most
-   directly in tension with tdy's provenance claims.
+~~2. **C9 + H4 · Source identity as data.**~~ **Mostly done, 2026-09-06** —
+   `source_name` reads a column out of the path, and `WITH (provenance = true)`
+   gives a row `_member` and `_row`. What is left is the *sheet* half: a
+   sidecar is per file, so a twelve-sheet workbook still contributes one sheet
+   to a dataset. That belongs with **B10** in its own design conversation.
 ~~3. **D3 · Split a column.**~~ **Done, 2026-09-06** — `split_column`, total by
    construction, with a declared `on_short` for an optional tail. It was the
    most common munging operation with no declarative form, it blocked `fit` on

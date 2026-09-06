@@ -120,8 +120,16 @@ pub fn target_hash(t: &Target) -> String {
     }
     h.update(
         format!(
-            "{:?}{:?}{:?}{:?}{:?}",
-            t.match_mode, t.date_order, t.verify, t.timezone, t.decimal_separator
+            "{:?}{:?}{:?}{:?}{:?}{:?}",
+            t.match_mode,
+            t.date_order,
+            t.verify,
+            t.timezone,
+            t.decimal_separator,
+            // Turning provenance on adds two columns to what every query sees,
+            // so the proofs taken against the narrower shape are no longer
+            // about this dataset.
+            t.provenance
         )
         .as_bytes(),
     );

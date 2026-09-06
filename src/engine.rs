@@ -37,8 +37,8 @@ use crate::numfmt;
 use crate::sample::render_cell;
 use crate::spec::{
     parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, FillDirection,
-    NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, ShortSplit, SplitBy, Transform,
-    ValueParsing,
+    NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, ShortSplit, SourcePart, SplitBy,
+    Transform, ValueParsing,
 };
 
 /// Cut `v` into exactly `n` parts, or `None` when it yields fewer.
@@ -168,11 +168,33 @@ pub struct RawTable {
     /// rather than recomputing it elsewhere is what keeps the two from being
     /// able to disagree.
     pub col_offset: u32,
+    /// Where these rows came from. Set by `extract`, which is the only place
+    /// that knows, and read by `source_name` — the transform that turns a fact
+    /// about the file's location into a column of data. It sits on the table
+    /// for the same reason `col_offset` does: it is a property of this
+    /// extraction, and passing it separately would be a second thing that
+    /// could disagree with the rows.
+    pub source: SourceRef,
+}
+
+/// The file (and sheet) a `RawTable` was read from.
+#[derive(Debug, Clone, Default)]
+pub struct SourceRef {
+    pub path: Option<std::path::PathBuf>,
+    pub sheet: Option<String>,
 }
 
 impl RawTable {
     fn new(rows: Vec<Vec<String>>, ragged: RaggedPolicy, truncated: bool) -> Self {
-        RawTable { header: None, header_origin: None, rows, ragged, truncated, col_offset: 0 }
+        RawTable {
+            header: None,
+            header_origin: None,
+            rows,
+            ragged,
+            truncated,
+            col_offset: 0,
+            source: SourceRef::default(),
+        }
     }
 
     fn with_header(header: Vec<String>, rows: Vec<Vec<String>>, truncated: bool) -> Self {
@@ -183,6 +205,7 @@ impl RawTable {
             ragged: RaggedPolicy::PadNulls,
             truncated,
             col_offset: 0,
+            source: SourceRef::default(),
         }
     }
 
@@ -356,7 +379,7 @@ pub(crate) fn modal_width(rows: &[Vec<String>]) -> Option<usize> {
 // ---------------------------------------------------------------------------
 
 pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Result<RawTable> {
-    let table = match extraction {
+    let mut table = match extraction {
         Extraction::Delimited {
             delimiter,
             quote,
@@ -386,6 +409,13 @@ pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Resu
         Extraction::Json { lines, pointer } => extract_json(path, *lines, pointer.as_deref(), opts),
     }?;
     table.check_size(&opts.limits)?;
+    table.source = SourceRef {
+        path: Some(path.to_path_buf()),
+        sheet: match extraction {
+            Extraction::Excel { sheet_name, .. } => sheet_name.clone(),
+            _ => None,
+        },
+    };
     Ok(table)
 }
 
@@ -1042,6 +1072,62 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                         },
                     };
                     row.splice(idx..=idx, parts);
+                }
+            }
+            Transform::SourceName { name, from, pattern } => {
+                table.ensure_header()?;
+                let src = &table.source;
+                let path = src
+                    .path
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("internal: source_name ran on a table with no path"))?;
+                let part: String = match from {
+                    SourcePart::FileStem => {
+                        path.file_stem().unwrap_or_default().to_string_lossy().into_owned()
+                    }
+                    SourcePart::FileName => {
+                        path.file_name().unwrap_or_default().to_string_lossy().into_owned()
+                    }
+                    SourcePart::Path => path.to_string_lossy().into_owned(),
+                    SourcePart::Sheet => src.sheet.clone().ok_or_else(|| {
+                        anyhow!(
+                            "source_name `{name}`: `from = \"sheet\"` needs a workbook whose \
+                             sheet the spec names; this extraction has none"
+                        )
+                    })?,
+                };
+                let value = match pattern {
+                    None => part,
+                    Some(p) => {
+                        let re = compile(p, "source_name")?;
+                        let caps = re.captures(&part).ok_or_else(|| {
+                            anyhow!(
+                                "source_name `{name}`: {p:?} does not match {part:?}. An empty \
+                                 column on one member of a pile is the silent gap this \
+                                 refuses — fix the pattern, or use `constant` if the value is \
+                                 not in the path"
+                            )
+                        })?;
+                        caps.get(1).or_else(|| caps.get(0)).map_or(String::new(), |m| {
+                            m.as_str().to_string()
+                        })
+                    }
+                };
+                let header = table.header.as_mut().expect("ensure_header");
+                if header.iter().any(|h| h == name) {
+                    bail!(
+                        "source_name `{name}`: the file already has a column by that name; \
+                         a derived column may only add, never shadow"
+                    );
+                }
+                header.push(name.clone());
+                if let Some(origin) = table.header_origin.as_mut() {
+                    origin.push(name.clone());
+                }
+                let width = table.header.as_ref().map_or(0, |h| h.len());
+                for row in &mut table.rows {
+                    row.resize(width.saturating_sub(1), String::new());
+                    row.push(value.clone());
                 }
             }
             Transform::Constant { name, value } => {

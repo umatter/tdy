@@ -1093,3 +1093,103 @@ fn a_transpose_after_a_header_is_refused() {
     let e = format!("{:?}", twice.validate().expect_err("two flips are no flip"));
     assert!(e.contains("table you started with"), "{e}");
 }
+
+// ---------------------------------------------------------------------------
+// source_name: catalogue gap C9's derivable half. The period a monthly export
+// covers is very often only in its filename, and `constant` could hand-write
+// it per file only at the cost of the review gate firing on every member —
+// the right gate for an arbitrary constant, the wrong one for a fact tdy can
+// read off the path.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn source_name_reads_the_year_out_of_the_filename() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "umsatz_2025.csv", "region,betrag\nOst,100\nWest,200\n");
+    let s = spec(
+        delim(',', RaggedPolicy::Error),
+        vec![
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::SourceName {
+                name: "jahr".into(),
+                from: SourcePart::FileStem,
+                pattern: Some(r"(\d{4})".into()),
+            },
+        ],
+        vec![col("region", DType::Utf8), col("jahr", DType::Int64)],
+    );
+    s.validate().expect("one capture group, one column");
+
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(strings(&b, 0), vec!["Ost", "West"]);
+    // Derived from the path, typed like any other column, on every row.
+    assert_eq!(ints(&b, 1), vec![Some(2025), Some(2025)]);
+}
+
+/// Without a pattern the whole part is the value, which is the common case for
+/// a per-canton or per-department pile.
+#[test]
+fn source_name_without_a_pattern_takes_the_whole_stem() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "zuerich.csv", "a\n1\n");
+    let s = spec(
+        delim(',', RaggedPolicy::Error),
+        vec![
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::SourceName {
+                name: "kanton".into(),
+                from: SourcePart::FileStem,
+                pattern: None,
+            },
+        ],
+        vec![col("a", DType::Int64), col("kanton", DType::Utf8)],
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(strings(&b, 1), vec!["zuerich"]);
+}
+
+/// A pattern that does not match is an error, not an empty column. A silently
+/// empty `jahr` on one member of twelve is exactly the gap this exists to
+/// prevent, and it is invisible in any single file.
+#[test]
+fn a_source_pattern_that_does_not_match_is_an_error() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "umsatz_final.csv", "a\n1\n");
+    let s = spec(
+        delim(',', RaggedPolicy::Error),
+        vec![
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::SourceName {
+                name: "jahr".into(),
+                from: SourcePart::FileStem,
+                pattern: Some(r"(\d{4})".into()),
+            },
+        ],
+        vec![col("a", DType::Int64), col("jahr", DType::Utf8)],
+    );
+    let e = format!("{:#}", spec_to_batch(&s, &p).expect_err("no year in that name"));
+    assert!(e.contains("umsatz_final"), "the file it could not read: {e}");
+    assert!(e.contains("constant"), "and the alternative, when it is not in the path: {e}");
+}
+
+/// It may only add. Shadowing a column the file already has would leave two
+/// columns with one name and the projection binding whichever came first.
+#[test]
+fn source_name_refuses_to_shadow_a_real_column() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "x_2025.csv", "jahr,a\n1999,1\n");
+    let s = spec(
+        delim(',', RaggedPolicy::Error),
+        vec![
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::SourceName {
+                name: "jahr".into(),
+                from: SourcePart::FileStem,
+                pattern: Some(r"(\d{4})".into()),
+            },
+        ],
+        vec![col("jahr", DType::Utf8)],
+    );
+    let e = format!("{:#}", spec_to_batch(&s, &p).expect_err("the file already has a jahr"));
+    assert!(e.contains("may only add"), "{e}");
+}

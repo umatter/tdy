@@ -205,6 +205,18 @@ pub struct Target {
     /// a target is able to express. SQL has no per-column syntax for a
     /// specific offset, so it is declared once for the dataset.
     pub timezone: Option<String>,
+    /// Add `_member` and `_row` to the dataset's schema.
+    ///
+    /// Opt-in, because a dataset's schema is what the declaration says it is
+    /// and no column may appear that the declaration did not ask for. Part of
+    /// `target_hash` for the same reason `if_missing_null` is: turning it on
+    /// changes the shape, so it voids the proofs that were about the old one.
+    ///
+    /// `_member` is the member's lock-relative path, `_row` its 1-based row
+    /// number **within that member**. Both are facts `dataset()` knows and
+    /// nothing downstream could recover — which is why an error message could
+    /// always name a row and a query never could.
+    pub provenance: bool,
 }
 
 impl Target {
@@ -333,6 +345,7 @@ impl Target {
             verify: Verify::default(),
             timezone: None,
             decimal_separator: None,
+            provenance: false,
         };
         // A target is hand-written and merge-conflict-prone. Two settings of
         // one option is a contradiction, and last-one-wins would resolve it
@@ -451,6 +464,18 @@ impl Target {
                 }
                 self.timezone = Some(text);
             }
+            "provenance" => {
+                self.provenance = match text.to_ascii_lowercase().as_str() {
+                    "true" | "yes" | "on" => true,
+                    "false" | "no" | "off" => false,
+                    other => {
+                        return Err(format!(
+                            "provenance = {other:?} is not a yes or a no; write \
+                             `provenance = 'true'`"
+                        ))
+                    }
+                }
+            }
             "verify" => {
                 self.verify = match text.to_ascii_lowercase().as_str() {
                     "full" => Verify::Full,
@@ -461,7 +486,7 @@ impl Target {
             other => {
                 return Err(format!(
                     "unknown WITH option `{other}`. Known options: files, exclude, match, \
-                     date_order, verify, timezone, decimal_separator."
+                     date_order, verify, timezone, decimal_separator, provenance."
                 ))
             }
         }
@@ -566,7 +591,29 @@ impl Target {
                 .collect::<Vec<_>>(),
         )
     }
+
+    /// What `dataset()` returns: the declared columns, plus the provenance
+    /// pair when the target asked for it.
+    ///
+    /// Deliberately *not* what conformance compares against. A member's spec
+    /// produces the declared columns and nothing else — `_member` and `_row`
+    /// are `dataset()`'s to fill, since only it knows which member a row came
+    /// from — so proving a spec lands on the target must use `arrow_schema`.
+    pub fn dataset_schema(&self) -> Schema {
+        let mut fields: Vec<Field> =
+            self.columns.iter().map(|c| Field::new(&c.name, c.dtype.clone(), c.nullable)).collect();
+        if self.provenance {
+            fields.push(Field::new(PROVENANCE_MEMBER, ArrowType::Utf8, false));
+            fields.push(Field::new(PROVENANCE_ROW, ArrowType::Int64, false));
+        }
+        Schema::new(fields)
+    }
 }
+
+/// The member's lock-relative path.
+pub const PROVENANCE_MEMBER: &str = "_member";
+/// The row's 1-based position within its member.
+pub const PROVENANCE_ROW: &str = "_row";
 
 /// Fold a header cell or column name for `match = 'normalized'`.
 ///

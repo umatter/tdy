@@ -980,6 +980,19 @@ Details worth knowing:
   digits than `scale`. When the sniffer sees an inconsistent number of
   fractional digits it says so in `notes`, because rows it never read may be
   rounded.
+- **`source_name` turns where a file *is* into a column.** The period a
+  monthly export covers is very often only in its filename. `from` picks
+  `file_stem`, `file_name`, `sheet` or `path`, and an optional `pattern`'s
+  first capture group narrows it (`(\\d{4})` on `umsatz_2025.xlsx` gives
+  `2025`). A pattern that does not match is an error, not an empty column —
+  a silently empty `jahr` on one member of twelve is the gap it exists to
+  prevent. It may only add, never shadow, and it carries no review gate,
+  because the value is *derived* from the path rather than told to tdy.
+- **`WITH (provenance = true)`** on a target adds `_member` (the lock-relative
+  path) and `_row` (1-based within that member) to what `dataset()` returns.
+  Opt-in, because a dataset's schema is what the declaration says it is; and
+  part of `target_hash`, so turning it on voids proofs taken against the
+  narrower shape.
 - **`transpose` flips the table**, rows into columns, for a file laid out for
   reading rather than analysis — variables down the left, observations across
   the top. It takes no options and must come before `promote_header`: after

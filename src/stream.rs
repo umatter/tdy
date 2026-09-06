@@ -126,6 +126,9 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
             // The first output row cannot be emitted until the last input row
             // has been read, which is the definition of not streaming.
             Transform::Transpose => return false,
+            // Row-local and cheap, but it appends a column to the header the
+            // streaming planner has already fixed. Falls back for now.
+            Transform::SourceName { .. } => return false,
         };
         // An upward fill carries a value from a row the reader has not seen
         // yet, which is the one thing a forward-only pass cannot do. Refused
@@ -143,7 +146,8 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
             Transform::Unpivot { .. } => stage <= Stage::RowLocal,
             Transform::Constant { .. }
             | Transform::SplitColumn { .. }
-            | Transform::Transpose => false,
+            | Transform::Transpose
+            | Transform::SourceName { .. } => false,
         };
         if !allowed {
             return false;
@@ -1507,7 +1511,8 @@ impl Plan {
                 })),
                 Transform::Constant { .. }
                 | Transform::SplitColumn { .. }
-                | Transform::Transpose => {
+                | Transform::Transpose
+                | Transform::SourceName { .. } => {
                     bail!("internal: stream planned a spec it said it could not stream")
                 }
                 Transform::Unpivot {

@@ -201,7 +201,7 @@ values are unique non-numeric labels and the header row's values type
 homogeneously — the mechanical signature of a transposed table. It never applies
 it (D1). `fit` may, by elimination (D2).
 
-### S3 · `source_name`, and `WITH (provenance = true)`
+### S3 · `source_name`, and `WITH (provenance = true)` — **built, 2026-09-06**
 
 ```toml
 [[spec.transforms]]
@@ -324,7 +324,9 @@ whether the framing they touch regressed.
    With plain transposition followed by `promote_header`, the post-transform
    header *is* the file's own spelling of the labels that ran down the first
    column, so `header_origin` carries them with no special case.
-3. **`WITH (provenance = true)` and `--frozen`.** `_row` is deterministic only
-   because `dataset()` reads members in lock order as a single partition. Worth
-   asserting explicitly in `tests/conform.rs` rather than relying on the
-   invariant staying true.
+3. ~~**`WITH (provenance = true)` and `--frozen`.**~~ **Asserted, in
+   `tests/dataset.rs`** rather than left resting on the invariant. This session
+   found twice that an invariant nothing checks is not one, so `_row`'s
+   determinism is now a test: every member restarts its numbering at 1, and the
+   existing `the_row_order_of_a_dataset_is_deterministic` covers the lock-order
+   half it depends on.

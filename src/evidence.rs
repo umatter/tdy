@@ -286,6 +286,7 @@ fn describe_extraction(spec: &ParseSpec) -> String {
             Transform::DropRowsMatching { .. } => "drop_rows_matching".into(),
             Transform::FillDown { .. } => "fill_down".into(),
             Transform::Transpose => "transpose".into(),
+            Transform::SourceName { name, .. } => format!("source_name {name:?}"),
             Transform::SplitColumn { source, into, .. } => {
                 format!("split_column {source:?} -> {into:?}")
             }

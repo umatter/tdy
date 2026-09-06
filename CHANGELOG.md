@@ -38,6 +38,49 @@ from RFC 4180 each turned up two things nothing in the tree had:
 
 ### Added
 
+- **`source_name`: where a file *is* becomes a column.** The period a monthly
+  export covers is very often only in its filename, and forty CSVs whose
+  canton appears nowhere but their path are an ordinary pile.
+
+  ```toml
+  [[spec.transforms]]
+  op = "source_name"
+  name = "jahr"
+  from = "file_stem"      # file_stem | file_name | sheet | path
+  pattern = "(\\d{4})"     # optional: the capture becomes the value
+  ```
+
+  `constant` could hand-write this per file, at the cost of the review gate
+  firing on every member — the right gate for an arbitrary constant and the
+  wrong one for a fact tdy can read off the path. This is derived, not
+  invented, so it carries no review. It may only add, never shadow, and a
+  pattern that does not match is an **error**: a silently empty `jahr` on one
+  member of twelve is invisible in any single file and is exactly what this
+  prevents.
+
+  Internally, `RawTable` now carries where it was read from, set by `extract`
+  — the only place that knows — rather than a path being threaded through
+  nine `apply_transforms` call sites. Same reasoning as `col_offset`: it is a
+  property of the extraction, and passing it separately would be a second
+  thing that could disagree with the rows.
+
+- **`WITH (provenance = true)`: a row can say where it came from.** Adds
+  `_member` (the member's lock-relative path) and `_row` (1-based **within
+  that member**) to what `dataset()` returns.
+
+  tdy proved which files a dataset contains, what shape they land on and what
+  a human accepted — and then a row in the result carried no trace of which
+  member and which line produced it. An error message could always name a row;
+  a query never could.
+
+  Opt-in, because a dataset's schema is what the declaration says it is and no
+  column may appear that the declaration did not ask for. Part of
+  `target_hash` for the same reason `if_missing_null` is: turning it on
+  changes the shape, so it voids the proofs that were about the old one.
+  Conformance still compares a member's spec against the *declared* columns —
+  `_member` and `_row` are `dataset()`'s to fill, since only it knows which
+  member a row came from.
+
 - **`transpose`: rows become columns.** The cure for a file laid out for
   reading rather than analysis — variables down the left, observations across
   the top, which is what every print-friendly export and hand-built management
