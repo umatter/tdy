@@ -1902,3 +1902,57 @@ fn sniff_via_cli(path: &Path) -> Result<(), String> {
         Err(String::from_utf8_lossy(&out.stderr).to_string())
     }
 }
+
+/// The second Pollock finding: 32 files scored a header F1 of zero because one
+/// stray quote in the header row made it parse to the wrong arity, so
+/// `header_verdict` rejected it, the row was discarded as a title row, and
+/// every column came back named `col_N`.
+///
+/// Discarding it is defensible — a row of three fields is not a header for
+/// nine columns, and inventing names from a mis-parsed row is the mis-mapping
+/// the design refuses. What was not defensible was the confidence: 0.80, which
+/// is exactly the escalation threshold, for a file where tdy threw a row away
+/// *and* could not name a single column. Those two doubts corroborate each
+/// other and must compound.
+#[test]
+fn discarding_the_top_of_a_file_and_finding_no_header_is_not_a_confident_read() {
+    let dir = TempDir::new().unwrap();
+    // The state a stray quote in the header puts tdy in, reached directly:
+    // a first row whose arity differs from the body's, so it is discarded as
+    // non-tabular, over a body that gives `header_verdict` nothing to promote.
+    // (The quote is only one route here; the arity mismatch is the situation.)
+    let f = write(
+        &dir,
+        "odd_top.csv",
+        "h1,h2,h3\n1,2,3,4,5\n6,7,8,9,10\n11,12,13,14,15\n16,17,18,19,20\n",
+    );
+    let r = sniffed(&f);
+
+    let notes = r.spec.notes.join(" | ");
+    assert!(notes.contains("no header row detected"), "{notes}");
+    assert!(
+        notes.contains("was not understood"),
+        "the two doubts must be reported as one situation: {notes}"
+    );
+    let c = r.spec.confidence.expect("a heuristic spec carries a confidence");
+    assert!(
+        c < 0.8,
+        "a file whose top row was discarded and whose columns have no names is exactly \
+         what the escalation threshold is for; got {c}"
+    );
+}
+
+/// ...and the compounding must not fire on a file that merely has no header,
+/// which is an ordinary and perfectly readable shape.
+#[test]
+fn a_headerless_file_with_nothing_discarded_stays_confident() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "plain.csv", "1,2,3\n4,5,6\n7,8,9\n10,11,12\n");
+    let r = sniffed(&f);
+
+    let notes = r.spec.notes.join(" | ");
+    assert!(
+        !notes.contains("was not understood"),
+        "nothing was discarded here, so nothing compounds: {notes}"
+    );
+}

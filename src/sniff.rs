@@ -73,6 +73,28 @@ impl Doubts {
     fn note(&mut self, note: impl Into<String>) {
         self.notes.push(note.into());
     }
+    /// Skipping the top of a file is a guess that a header below it
+    /// corroborates. With no header found anywhere, nothing corroborates it —
+    /// and the rows thrown away may have *been* the header, malformed. That
+    /// pair leaves tdy with no names for any column and one fewer row than
+    /// the file has, which is worse than either half alone, so it costs more
+    /// than either half alone. Found by the Pollock sweep, where a single
+    /// stray quote in a header row put 32 files in exactly this state at a
+    /// confidence just high enough not to ask anybody.
+    fn add_unread_top(&mut self, skipped: u32) {
+        if skipped == 0 {
+            return;
+        }
+        self.add(
+            0.15,
+            format!(
+                "{skipped} leading row(s) were discarded as non-tabular and no header was \
+                 found below them, so the top of this file was not understood; if one of \
+                 them was a malformed header, its column names are gone"
+            ),
+        );
+    }
+
     fn finish(self, base: f32) -> (f32, Vec<String>) {
         ((base - self.penalty).clamp(0.0, 1.0), self.notes)
     }
@@ -518,6 +540,7 @@ fn sniff_delimited(
                 );
             } else {
                 doubts.add(0.1, "no header row detected; columns are named col_1, col_2, ...");
+                doubts.add_unread_top(skip_head);
             }
         }
         HeaderVerdict::AbsentButSuspicious => {
@@ -778,6 +801,7 @@ fn sniff_excel_sheet(
         }
         HeaderVerdict::Absent => {
             doubts.add(0.15, "no header row detected; columns are named col_1, col_2, ...");
+            doubts.add_unread_top(header_idx as u32);
         }
         HeaderVerdict::AbsentButSuspicious => {
             doubts.add(

@@ -4,6 +4,38 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
 ## Unreleased
 
+### Fixed — both found by the Pollock benchmark
+
+Running `scripts/run_pollock.py` over 2,290 files with one isolated deviation
+from RFC 4180 each turned up two things nothing in the tree had:
+
+- **A width mismatch on a nameless table now explains itself.** Two files
+  failed with `resolving output column col_13: no column named col_13;
+  available columns: [col_1, …, col_12]` — true, and useless to the person
+  reading it. The spec's columns come from a 16 KB head+tail sample while the
+  table comes from the file, and when parse state crosses the boundary between
+  them (an unbalanced quote is the usual way) the two split rows differently
+  and disagree about the width. When both the wanted name and every name the
+  table has are the generated `col_N`, the error now gives the file's real
+  width and names the likely cause — verified: re-reading that file with
+  `quote = "'"` takes 61 of its 84 rows to a uniform 9 fields.
+
+  The *outcome* was already safe — a loud error, no sidecar written — and
+  stays so. What changed is that the message is about the file.
+
+- **Discarding the top of a file and finding no header is no longer a
+  confident read.** 32 files reached confidence 0.80 — exactly the escalation
+  threshold — in a state where tdy had thrown a leading row away *and* could
+  not name a single column. Skipping the top of a file is a guess that a
+  header below it corroborates; with no header found anywhere, nothing
+  corroborates it, and the row discarded may have *been* the header, malformed.
+  The two doubts now compound (0.80 → 0.65), which puts such a file in the band
+  where a human looks and a backend escalates.
+
+  Discarding the row is unchanged and deliberate: a three-field row is not a
+  header for nine columns, and inventing names from a mis-parsed row is exactly
+  the mis-mapping the design refuses.
+
 ### Added
 
 - **`fill_down` takes a `direction`.** `down` (the default, and what it always
