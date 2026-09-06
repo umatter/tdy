@@ -73,7 +73,10 @@ pub struct Resolved {
 /// path that was proved is the path that is opened.
 pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Result<Resolved> {
     let target = Target::load(target_file)?;
-    let schema: SchemaRef = Arc::new(target.arrow_schema());
+    // What the query sees. Conformance proved each member against
+    // `arrow_schema` — the declared columns — and `_member`/`_row` are added
+    // here, by the only layer that knows which member a row came from.
+    let schema: SchemaRef = Arc::new(target.dataset_schema());
 
     let lock = Lock::load(target_file)?.ok_or_else(|| {
         anyhow::anyhow!(
@@ -187,6 +190,7 @@ impl DatasetTable {
         let schema = resolved.schema.clone();
         DatasetTable {
             partition: Arc::new(MembersPartition {
+                provenance: resolved.target.provenance,
                 schema: schema.clone(),
                 members: resolved.members,
                 limits,
@@ -238,6 +242,28 @@ struct MembersPartition {
     schema: SchemaRef,
     members: Vec<ResolvedMember>,
     limits: Limits,
+    /// Whether `schema` carries the `_member`/`_row` pair the target asked
+    /// for, which each batch then has to be widened to match.
+    provenance: bool,
+}
+
+/// Widen one member's batch to the dataset's schema by stamping it with where
+/// it came from.
+///
+/// `row` is 1-based **within the member** and carries across batch boundaries,
+/// which is what makes it the number a person could look up in that file. It
+/// is deterministic only because `dataset()` reads members in lock order as a
+/// single partition — the same property `--frozen` rests on, asserted in
+/// `tests/dataset.rs` rather than left to hold by luck.
+fn stamp(b: RecordBatch, schema: &SchemaRef, member: &str, row: &mut i64) -> DfResult<RecordBatch> {
+    use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray};
+    let n = b.num_rows();
+    let mut cols: Vec<ArrayRef> = b.columns().to_vec();
+    cols.push(Arc::new(StringArray::from(vec![member; n])));
+    cols.push(Arc::new(Int64Array::from((0..n as i64).map(|i| *row + i + 1).collect::<Vec<_>>())));
+    *row += n as i64;
+    RecordBatch::try_new(schema.clone(), cols)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 impl PartitionStream for MembersPartition {
@@ -250,9 +276,19 @@ impl PartitionStream for MembersPartition {
         let members = self.members.clone();
         let limits = self.limits;
         let schema = self.schema.clone();
+        let out_schema = self.schema.clone();
+        let provenance = self.provenance;
 
         tokio::task::spawn_blocking(move || {
             for m in &members {
+                let mut row_no: i64 = 0;
+                let stamped = |b: RecordBatch, row: &mut i64| -> DfResult<RecordBatch> {
+                    if provenance {
+                        stamp(b, &schema, &m.rel, row)
+                    } else {
+                        Ok(b)
+                    }
+                };
                 let send = |msg: DfResult<RecordBatch>| tx.blocking_send(msg).is_ok();
                 let mut alive = true;
                 // Same choice the single-file provider makes: stream where the
@@ -260,6 +296,7 @@ impl PartitionStream for MembersPartition {
                 // batches (tests/streaming.rs is that equality).
                 let result = if crate::stream::enabled() && crate::stream::can_stream(&m.spec) {
                     crate::stream::execute_with(&m.spec, &m.path, limits, |b| {
+                        let b = stamped(b, &mut row_no).map_err(|e| anyhow::anyhow!("{e}"))?;
                         if send(Ok(b)) {
                             Ok(())
                         } else {
@@ -268,13 +305,15 @@ impl PartitionStream for MembersPartition {
                         }
                     })
                 } else {
-                    crate::engine::execute_batches(&m.spec, &m.path, limits).map(|batches| {
+                    crate::engine::execute_batches(&m.spec, &m.path, limits).and_then(|batches| {
                         for b in batches {
+                            let b = stamped(b, &mut row_no).map_err(|e| anyhow::anyhow!("{e}"))?;
                             if !send(Ok(b)) {
                                 alive = false;
                                 break;
                             }
                         }
+                        Ok(())
                     })
                 };
 
@@ -299,7 +338,7 @@ impl PartitionStream for MembersPartition {
         let body = futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|item| (item, rx))
         });
-        Box::pin(RecordBatchStreamAdapter::new(schema, body))
+        Box::pin(RecordBatchStreamAdapter::new(out_schema, body))
     }
 }
 

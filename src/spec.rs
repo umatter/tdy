@@ -285,6 +285,27 @@ pub enum Transform {
         #[serde(default, skip_serializing_if = "FillDirection::is_default")]
         direction: FillDirection,
     },
+    /// Add a column holding a fact about *where* the data came from.
+    ///
+    /// The period a monthly export covers is very often only in its filename,
+    /// and forty CSVs whose canton appears nowhere but their path are an
+    /// ordinary pile. `Constant` can hand-write that per file, at the cost of
+    /// the review gate firing on every member — which is the right gate for an
+    /// arbitrary constant and the wrong one for a fact tdy can read off the
+    /// path itself. This is *derived*, not invented, so it carries no review.
+    ///
+    /// A `pattern` that does not match is an error, not an empty column: a
+    /// silently empty `jahr` on one member of twelve is exactly the outcome
+    /// this exists to prevent.
+    SourceName {
+        /// The column to add. May only add, never shadow.
+        name: String,
+        from: SourcePart,
+        /// Optional regex; its first capture group (or the whole match, when
+        /// it has none) becomes the value instead of the whole part.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<String>,
+    },
     /// Add a column the file does not have, holding `value` in every row.
     ///
     /// The empty string is the null fill: `""` reads as missing in every
@@ -344,6 +365,20 @@ pub enum Transform {
         variable_name: String,
         value_name: String,
     },
+}
+
+/// Which part of a file's location `source_name` reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SourcePart {
+    /// The file name without its extension: `umsatz_2025.xlsx` -> `umsatz_2025`.
+    FileStem,
+    /// The file name with its extension.
+    FileName,
+    /// The sheet this table was read from. Only a workbook has one.
+    Sheet,
+    /// The whole path as written.
+    Path,
 }
 
 /// How `split_column` cuts a value.
@@ -878,6 +913,23 @@ impl ParseSpec {
                 Transform::FillDown { columns, .. } => {
                     if columns.is_empty() {
                         errs.push("fill_down: `columns` must not be empty".into());
+                    }
+                }
+                Transform::SourceName { name, pattern, .. } => {
+                    if name.trim().is_empty() {
+                        errs.push("source_name: `name` must not be empty".into());
+                    }
+                    if let Some(p) = pattern {
+                        match regex::Regex::new(p) {
+                            Err(e) => errs
+                                .push(format!("source_name `{name}`: invalid regex: {e}")),
+                            Ok(re) if re.captures_len() > 2 => errs.push(format!(
+                                "source_name `{name}`: the pattern has {} capture groups, but \
+                                 one column takes one value; use a single group",
+                                re.captures_len() - 1
+                            )),
+                            Ok(_) => {}
+                        }
                     }
                 }
                 Transform::Transpose => {
