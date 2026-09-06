@@ -1175,7 +1175,7 @@ fn long_form_holders(
     out
 }
 
-fn render(t: &ArrowType) -> String {
+pub(crate) fn render(t: &ArrowType) -> String {
     match t {
         ArrowType::Utf8 => "TEXT".into(),
         ArrowType::Boolean => "BOOLEAN".into(),

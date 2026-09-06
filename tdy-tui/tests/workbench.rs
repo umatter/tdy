@@ -94,6 +94,8 @@ fn pile_report(target_file: &str, members: Vec<MemberReport>) -> PileReport {
         members,
         lock_written: None,
         dry_run: false,
+        columns: vec![],
+        drift: vec![],
     }
 }
 
