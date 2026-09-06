@@ -327,6 +327,44 @@ confinement is enforced in `MessyFunc`/`DatasetFunc`, where the file is opened;
 `run_sql`'s `RestoreCwd` exists because `prepare_specs` reaches the same file by ordinary
 relative I/O against the *process's* directory, and the two routes have to agree.
 
+**The shape slice is in (2026-09-06).** `docs/design/2026-09-06-shape-slice.md`
+is the design and the record of where it was wrong. Six operators closed the
+operator catalogue's tier-1 gaps: `split_column` (delimiter, character
+positions or a regex's capture groups — total by construction, since it stops
+after `into.len()` parts, and short values are an error unless `on_short =
+"null"` declares the tail optional), `transpose` (no options, before
+`promote_header`, refused on a truncated table because every unread row would
+have been a *column*), `source_name` (a column read off the file's own path —
+derived rather than told, so no review gate), `WITH (provenance = 'true')` on a
+target (`_member` and `_row`, opt-in and part of `target_hash`), a per-column
+JSON `pointer`, `epoch` scales, and `fill_down`'s `direction`. None of them is
+ever inferred; `transpose`'s reason is the sharpest — its signature is shared
+exactly with a wide report that wants `unpivot`, so the sniffer notes the shape
+and names both.
+
+`docs/design/2026-09-05-munging-taxonomy.md` is the survey those gaps came from:
+110 operators, one canonical name each with every other system's synonyms, and a
+verdict per operator. Read it before concluding tdy is missing something — and
+before concluding it is not.
+
+**Two questions are deferred with their own pages**, both because they are
+decisions rather than implementations:
+`docs/design/2026-09-06-compressed-inputs.md` (a `.gz` has no byte offsets, so
+`sample::build`'s head+tail sampling has no meaning — the file is now *refused*
+by magic bytes rather than read as mojibake) and
+`docs/design/2026-09-06-members-and-regions.md` (a sidecar is per file, so a
+twelve-sheet workbook contributes one sheet; this is an identity question, not
+an extraction one).
+
+**tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
+`scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
+2,290 files each with one isolated deviation from RFC 4180) through Pollock's
+own metrics, so the numbers compare with the paper. Last run: 2,287 of 2,290
+load, record F1 0.991 (tying duckdbparse), cell precision 0.996 against recall
+0.942 — tdy emits more cells than the source and almost never a wrong one, which
+is `PadNulls` widening rather than dropping. It found two defects nothing else
+had, so re-run it after touching extraction or framing.
+
 ## Real data
 
 `scripts/download_corpus.sh` clones twenty-six public data-wrangling exercise repositories

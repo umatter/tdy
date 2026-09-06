@@ -187,8 +187,16 @@ zip, and every tool in the pipeline has to be taught to unwrap it.
 (that is what `xlmoney` and `xlguard` do) but a `.csv.gz` is not readable, and a
 zip-of-CSVs cannot be a dataset member.
 
-An attempt on 2026-09-06 established why it is not the morning's work the shape
-slice's design called it: `sample::build` reads a **head and a tail by byte
+**One thing did change on 2026-09-06**: a compressed file used to be read as
+text and *succeed*, returning one column of mojibake with a confidence score
+attached. Not a wrong value in the strict sense — those really are the bytes —
+but a confident answer to a question nobody asked. It is now refused by magic
+bytes (gzip, zstd, bzip2, xz, lz4), naming the format and the fix, in both the
+sniffing and the execution paths. Reading them is still unbuilt, and
+`docs/design/2026-09-06-compressed-inputs.md` is why.
+
+That page establishes why it is not the morning's work the shape slice's design
+called it: `sample::build` reads a **head and a tail by byte
 offset**, and a compressed stream has no byte offsets — reaching its tail means
 decompressing all of it, which is exactly the bound the sampler exists to keep.
 So `.gz` support is not a decoder swap but a decision about what a *sample* of a

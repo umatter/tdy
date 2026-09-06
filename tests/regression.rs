@@ -1959,3 +1959,28 @@ fn a_headerless_file_with_nothing_discarded_stays_confident() {
         "nothing was discarded here, so nothing compounds: {notes}"
     );
 }
+
+/// A compressed file read as text used to *succeed*: one column of mojibake,
+/// produced confidently, with a real confidence score attached. Not a wrong
+/// value in the strict sense — the bytes really are those bytes — but a
+/// confident answer to a question nobody asked, which is the same failure
+/// wearing different clothes.
+///
+/// Checked by magic bytes rather than by extension, because a `.csv` that is
+/// really gzip is the case that produced the garbage and it does not announce
+/// itself in its name.
+#[test]
+fn a_compressed_file_is_refused_rather_than_read_as_mojibake() {
+    let dir = TempDir::new().unwrap();
+    // A real gzip member: magic, deflate method, no flags, mtime 0.
+    let mut gz = vec![0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0x03];
+    gz.extend_from_slice(&[0x4b, 0xd4, 0x49, 0xe2, 0x32, 0xd4, 0x31, 0xe2, 0x02, 0x00]);
+    gz.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+    // Deliberately named `.csv`: the extension lies, the bytes do not.
+    let f = write_bytes(&dir, "looks_like.csv", &gz);
+
+    let e = format!("{:#}", sniff_via_cli(&f).expect_err("a gzip stream is not a csv"));
+    assert!(e.contains("gzip-compressed"), "the format must be named: {e}");
+    assert!(e.contains("gunzip"), "and the fix: {e}");
+    assert!(!f.with_extension("csv.tdy.toml").exists(), "and no sidecar may be left behind");
+}

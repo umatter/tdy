@@ -509,11 +509,15 @@ const PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) fn read_text(path: &Path, encoding: Option<&str>, opts: &ExtractOpts) -> Result<String> {
     if opts.max_rows.is_none() {
         let bytes = fileio::read_all(path, opts.limits.max_file_bytes)?;
+        // Checked here too, not only when sniffing: a hand-written sidecar
+        // reaches the executor without ever passing through `sample::build`.
+        fileio::refuse_if_compressed(path, &bytes)?;
         let (text, used, had_errors) = crate::sample::decode_owned(bytes, encoding);
         warn_mojibake(path, encoding, &used, had_errors);
         return Ok(text);
     }
     let ht = fileio::read_head_tail(path, PREVIEW_BYTES, 0)?;
+    fileio::refuse_if_compressed(path, &ht.head)?;
     let truncated = ht.total > ht.head.len() as u64;
     let (mut text, used, had_errors) = crate::sample::decode_owned(ht.head, encoding);
     warn_mojibake(path, encoding, &used, had_errors);

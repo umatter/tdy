@@ -251,6 +251,9 @@ pub fn build(path: &Path, max_bytes: usize, limits: Limits) -> Result<FileSample
     let head_budget = (max_bytes * 3 / 4).max(512);
     let tail_budget = max_bytes.saturating_sub(head_budget);
     let ht = fileio::read_head_tail(path, head_budget, tail_budget)?;
+    // Before anything tries to decode these bytes as text. A compressed file
+    // read as text is one column of mojibake, produced confidently.
+    fileio::refuse_if_compressed(path, &ht.head)?;
 
     let head_ascii = ht.head.iter().all(|b| b.is_ascii());
     let tail_ascii = ht.tail.as_ref().map(|t| t.iter().all(|b| b.is_ascii())).unwrap_or(true);

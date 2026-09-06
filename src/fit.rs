@@ -69,6 +69,14 @@ pub enum Gap {
         /// Every name that was looked for, so the user can see what to add.
         tried: Vec<String>,
         header: Vec<String>,
+        /// A column of the file whose *values* include this column's name.
+        ///
+        /// When a target asks for `q1` and the file has a `quarter` column
+        /// holding `Q1`, the file is not missing the data — it is in long
+        /// form, and the name is one row's worth of it. tdy has no pivot, so
+        /// this cannot be planned; saying which column holds the names is the
+        /// difference between "no column binds" and an answer.
+        long_form: Option<String>,
     },
     /// More than one header cell binds, and tdy will not choose.
     Ambiguous {
@@ -121,17 +129,32 @@ impl Gap {
     /// What a user reads, ending in the edit that fixes it.
     pub fn message(&self) -> String {
         match self {
-            Gap::NoCandidate { column, want, tried, header } => {
+            Gap::NoCandidate { column, want, tried, header, long_form } => {
                 let shown: Vec<String> =
                     header.iter().take(12).map(|h| format!("{h:?}")).collect();
                 let more = header.len().saturating_sub(shown.len());
+                // A name that appears among a column's *values* is not a
+                // missing column, it is a reshaping problem, and telling
+                // someone to add `matches` for it sends them looking for
+                // something that is not there.
+                let remedy = match long_form {
+                    Some(holder) => format!(
+                        "but {holder:?} holds {column:?} as a value, so this file is in long \
+                         form and the declared columns are its rows.\n    \
+                         tdy has no pivot: reshape it before tdy sees it, or declare the \
+                         long shape instead (one row per {holder}, with a value column)."
+                    ),
+                    None => format!(
+                        "If one of those supplies it, say so:\n      \
+                         {column} {want} OPTIONS(matches = '…')\n    \
+                         If none does, this file cannot join the dataset."
+                    ),
+                };
                 format!(
                     "`{column}` ({want}): no column of this file binds\n    \
                      looked for {}\n    \
                      the file has [{}{}]\n    \
-                     If one of those supplies it, say so:\n      \
-                     {column} {want} OPTIONS(matches = '…')\n    \
-                     If none does, this file cannot join the dataset.",
+                     {remedy}",
                     tried.iter().map(|t| format!("{t:?}")).collect::<Vec<_>>().join(", "),
                     shown.join(", "),
                     if more > 0 { format!(", … {more} more") } else { String::new() }
@@ -857,6 +880,7 @@ fn fit_framed(
                         .chain(tc.matches.iter().cloned())
                         .collect(),
                     header: origin.clone(),
+                    long_form: holds_as_value(&tc.name, &origin, &rows),
                 });
                 continue;
             }
@@ -1066,6 +1090,32 @@ fn bind(
         }
     }
     Vec::new()
+}
+
+/// Does some column of this file hold `name` among its *values*?
+///
+/// The signature of a long-format file meeting a wide target: the declared
+/// column `q1` is not missing, it is one of the values in a `quarter` column.
+/// Compared case-insensitively and trimmed, because a target says `q1` where a
+/// file says `Q1` and that difference is not the point.
+fn holds_as_value(name: &str, header: &[String], rows: &[Vec<String>]) -> Option<String> {
+    let want = name.trim().to_ascii_lowercase();
+    if want.is_empty() {
+        return None;
+    }
+    for (i, col) in header.iter().enumerate() {
+        // A column whose values are the target's column names is a key
+        // column, so it repeats: look at a bounded prefix, not the file.
+        let found = rows
+            .iter()
+            .take(500)
+            .filter_map(|r| r.get(i))
+            .any(|v| v.trim().to_ascii_lowercase() == want);
+        if found {
+            return Some(col.clone());
+        }
+    }
+    None
 }
 
 fn render(t: &ArrowType) -> String {

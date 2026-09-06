@@ -30,6 +30,39 @@ pub struct HeadTail {
     pub sampled: u64,
 }
 
+/// Refuse a compressed file being read as text, naming the fix.
+///
+/// Without this the bytes decode to mojibake and tdy reads them *confidently*
+/// as a one-column table — not a wrong value exactly, since it faithfully
+/// shows what the bytes are, but a confident answer to a question nobody
+/// asked. A loud refusal naming `gunzip` is the honest reading of a file tdy
+/// cannot open.
+///
+/// Deliberately magic-byte based rather than extension based: a `.csv` that is
+/// really gzip is the case that produces the garbage, and it does not announce
+/// itself in its name. Zip is *not* listed, because every xlsx, xlsb and ods
+/// is a zip and those are routed to the workbook reader by extension long
+/// before anything tries to read them as text.
+///
+/// Support, when it comes, is not a decoder swap — see
+/// `docs/design/2026-09-06-compressed-inputs.md`.
+pub fn refuse_if_compressed(path: &Path, head: &[u8]) -> Result<()> {
+    let kind = match head {
+        [0x1f, 0x8b, ..] => "gzip",
+        [0x28, 0xb5, 0x2f, 0xfd, ..] => "zstd",
+        [0x42, 0x5a, 0x68, ..] => "bzip2",
+        [0xfd, b'7', b'z', b'X', b'Z', ..] => "xz",
+        [0x04, 0x22, 0x4d, 0x18, ..] => "lz4",
+        _ => return Ok(()),
+    };
+    anyhow::bail!(
+        "{} is {kind}-compressed, and tdy reads it as text — which would give one column of \
+         mojibake read confidently. Decompress it first (`gunzip`, `unzstd`, …); tdy does not \
+         read compressed files yet",
+        path.display()
+    )
+}
+
 pub fn read_head_tail(path: &Path, head_bytes: usize, tail_bytes: usize) -> Result<HeadTail> {
     let mut f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let total = f

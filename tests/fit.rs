@@ -932,3 +932,47 @@ fn two_fitting_sheets_are_refused_not_ranked() {
     assert!(msg.contains("Q1") && msg.contains("Q2"), "{msg}");
     assert!(msg.contains("sheet_name"), "the remedy must be named:\n{msg}");
 }
+
+/// A long-format member meeting a wide target is not a missing column, and
+/// saying "add `matches`" sends someone looking for something that is not
+/// there. `q1` is not absent from the file — it is one of the *values* in its
+/// `quarter` column, and the file needs reshaping that tdy has no operator for.
+///
+/// Catalogue D2. Rather than build a pivot for a shape that occurs in 2 of
+/// 1,332 corpus files, the refusal names the situation and both real options.
+#[test]
+fn a_long_format_member_is_told_it_is_long_format() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let f = dir.path().join("2025-long.csv");
+    std::fs::write(&f, "region,quarter,umsatz\nOst,Q1,100\nOst,Q2,120\nWest,Q1,90\n").unwrap();
+    let t = dir.path().join("sales.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE sales (\n  region TEXT NOT NULL,\n  q1 BIGINT,\n  q2 BIGINT\n)\n\
+         WITH (\n  files = '2025-*.csv'\n);\n",
+    )
+    .unwrap();
+
+    let target = Target::load(&t).expect("the target parses");
+    let err = fit(&f, &target, Limits::default()).expect_err("a wide target cannot take long data");
+    let FitError::Gaps(gaps) = err else { panic!("expected gaps, got {err:?}") };
+
+    let text = gaps.iter().map(|g| g.message()).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("in long form"), "the situation must be named: {text}");
+    assert!(text.contains("\"quarter\""), "and which column holds the names: {text}");
+    assert!(text.contains("no pivot"), "and why tdy cannot fix it: {text}");
+    assert!(
+        !text.contains("OPTIONS(matches"),
+        "advising `matches` here sends the reader after a column that does not exist:\n{text}"
+    );
+}
+
+/// ...and an ordinary missing column still gets the ordinary advice, which is
+/// the one that works when the column really could be supplied.
+#[test]
+fn an_ordinary_missing_column_still_suggests_matches() {
+    let gaps = gap_of("2025-11.csv");
+    let text = gaps.iter().map(|g| g.message()).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("OPTIONS(matches"), "{text}");
+    assert!(!text.contains("in long form"), "nothing here holds a column name as a value:\n{text}");
+}
