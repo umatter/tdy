@@ -643,7 +643,7 @@ mod tests {
                      CREATE TABLE sales (\n\
                      \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
                      \x20 region     TEXT          NOT NULL,\n\
-                     \x20 amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
+                     \x20 amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
                      )\n\
                      WITH (\n\
                      \x20 files      = '2025-*.csv',\n\
@@ -734,7 +734,7 @@ mod tests {
     /// the existing ones instead of opening a second OPTIONS(...).
     #[test]
     fn if_missing_null_joins_an_existing_options_list() {
-        let e = apply(T, &Remedy::IfMissingNull { column: "amount_chf".into() }).unwrap();
+        let e = apply(T, &Remedy::IfMissingNull { column: "amount".into() }).unwrap();
         // Still two OPTIONS( in the file — the new option joined the one that
         // was already on this line rather than opening a second.
         assert_eq!(e.new_text.matches("OPTIONS(").count(), 2, "{}", e.new_text);
@@ -744,7 +744,7 @@ mod tests {
             e.new_text
         );
         let t = Target::parse(&e.new_text).unwrap();
-        let c = t.columns.iter().find(|c| c.name == "amount_chf").unwrap();
+        let c = t.columns.iter().find(|c| c.name == "amount").unwrap();
         assert!(c.if_missing_null);
         assert_eq!(c.matches, vec!["Betrag"]);
     }

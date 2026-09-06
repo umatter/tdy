@@ -8,18 +8,18 @@
 # tdy
 
 Pure SQL over messy files. The structural cleaning — title blocks, two-row
-headers, merged cells, Swiss number formats, subtotal rows, log-line regexes —
+headers, merged cells, regional number formats, subtotal rows, log-line regexes —
 lives in an auditable, versionable *parsing spec*, never in your query.
 
 ```sql
-SELECT region, monat, sum(umsatz_chf) AS umsatz
-FROM messy('umsatz_2025.xlsx')
-GROUP BY region, monat
-ORDER BY region, monat
+SELECT region, month, sum(amount) AS revenue
+FROM messy('sales_2025.xlsx')
+GROUP BY region, month
+ORDER BY region, month
 ```
 
 ```bash
-tdy query "SELECT ... FROM messy('umsatz_2025.xlsx') ..." -o umsatz.parquet
+tdy query "SELECT ... FROM messy('sales_2025.xlsx') ..." -o sales.parquet
 ```
 
 ## Quick start
@@ -34,11 +34,14 @@ cargo install --path tdy-tui    # optional: the workbench that bare `tdy` and `t
 ```
 
 The example is `testdata/drifting_exports/`: twelve monthly sales exports
-from a system that could not keep its own format straight — Swiss
-`1'100.00` amounts, `31.01.2025` dates, semicolons, then two months as
-`.xlsx`, one month in Rappen instead of francs, one with two columns both
-called `Betrag`, one with no region at all. Copy the data files somewhere
-of your own, since tdy writes its notes next to them:
+from a system that could not keep its own format straight — `1'100.00`
+amounts, `31.01.2025` dates, semicolons, then two months as `.xlsx`, one
+month in cents instead of whole units, one with two columns both called
+`Betrag`, one with no region at all. The exports come from a German-speaking
+system, and that is deliberate: apostrophe grouping, day-first dates and
+headers that drift between `Betrag`, `Betrag CHF` and `Amount` are the cases
+a naive reader gets wrong without noticing. Copy the data files somewhere of
+your own, since tdy writes its notes next to them:
 
 ```bash
 mkdir ~/sales && cp testdata/drifting_exports/2025-* ~/sales && cd ~/sales
@@ -114,15 +117,15 @@ so the query sees the tidy table from the preview, never the raw text —
 still in the console, a statement ends with `;`:
 
 ```
-tdy> SELECT count(*) AS rows, sum(betrag) AS total_chf, max(datum) AS datum FROM messy('2025-01.csv');
+tdy> SELECT count(*) AS rows, sum(betrag) AS total, max(datum) AS datum FROM messy('2025-01.csv');
 ```
 
 ```
-+------+-----------+------------+
-| rows | total_chf | datum      |
-+------+-----------+------------+
-| 4    | 4460.00   | 2025-01-31 |
-+------+-----------+------------+
++------+---------+------------+
+| rows | total   | datum      |
++------+---------+------------+
+| 4    | 4460.00 | 2025-01-31 |
++------+---------+------------+
 ```
 
 1'100 + 1'110 + 1'120 + 1'130 = 4'460, in exact decimal arithmetic rather
@@ -177,7 +180,7 @@ and tdy writes it beside the data, named after the table:
 tdy> CREATE TABLE sales (
   month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
   region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
-  amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
+  amount     DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
 )
 WITH (
   files      = '2025-*.csv, 2025-*.xlsx',
@@ -199,21 +202,21 @@ tdy> .fit sales.tdy.sql
 ```
 sales: 12 file(s) match, 3 declared column(s)
 
-  2025-01.csv              fits      month<-"Datum"  region<-"Region"  amount_chf<-"Betrag"
+  2025-01.csv              fits      month<-"Datum"  region<-"Region"  amount<-"Betrag"
   ...
   2025-07.csv              GAP
-      `amount_chf` (DECIMAL(14,2)): no column of this file binds
-          looked for "amount_chf", "Betrag", "Betrag CHF", "Amount", "Umsatz"
+      `amount` (DECIMAL(14,2)): no column of this file binds
+          looked for "amount", "Betrag", "Betrag CHF", "Amount", "Umsatz"
           the file has ["Datum", "Region", "Betrag Rp."]
           If one of those supplies it, say so:
-            amount_chf DECIMAL(14,2) OPTIONS(matches = '…')
+            amount DECIMAL(14,2) OPTIONS(matches = '…')
           If none does, this file cannot join the dataset.
   2025-08.csv              GAP
-      `amount_chf`: 2 columns of this file match, which is ambiguous
+      `amount`: 2 columns of this file match, which is ambiguous
           column 3 named "Betrag" and column 4 named "Betrag"
           tdy will not choose between them — they may well mean different things.
-  2025-09.xlsx             fits      month<-"Datum"  region<-"Region"  amount_chf<-"Betrag CHF"
-  2025-10.xlsx             fits      month<-"Date"  region<-"Region"  amount_chf<-"Amount"
+  2025-09.xlsx             fits      month<-"Datum"  region<-"Region"  amount<-"Betrag CHF"
+  2025-10.xlsx             fits      month<-"Date"  region<-"Region"  amount<-"Amount"
   2025-11.csv              GAP
       `region` (TEXT): no column of this file binds
           looked for "region", "Region", "Kanton", "Gebiet"
@@ -228,7 +231,7 @@ Error: 3 file(s) cannot reach the declared schema; no lock written. Fix them, ex
 
 Nine fit; three are refused with the reason, and **no lock is written**,
 because a dataset silently missing three months is the outcome tdy exists
-to prevent. July is in Rappen, August has two `Betrag` columns and does not
+to prevent. July is in cents, August has two `Betrag` columns and does not
 say which is meant, November has no region: none of that is tdy's to
 decide. Decide it — here, by leaving the three out — with one `exclude`
 line in the `WITH` block. Paste the revised declaration at the prompt; an
@@ -239,7 +242,7 @@ statement again — exactly as `.accept` asks twice:
 tdy> CREATE TABLE sales (
   month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
   region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
-  amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
+  amount     DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
 )
 WITH (
   files      = '2025-*.csv, 2025-*.xlsx',
@@ -264,18 +267,18 @@ Fit again, and query the dataset as one table:
 
 ```
 tdy> .fit sales.tdy.sql            # 9 of 9 fit; writes sales.tdy.lock
-tdy> SELECT region, sum(amount_chf) AS total_chf FROM dataset('sales.tdy.sql') GROUP BY region ORDER BY region;
+tdy> SELECT region, sum(amount) AS total FROM dataset('sales.tdy.sql') GROUP BY region ORDER BY region;
 ```
 
 ```
-+--------+-----------+
-| region | total_chf |
-+--------+-----------+
-| Nord   | 14380.00  |
-| Ost    | 14200.00  |
-| Sued   | 14470.00  |
-| West   | 14290.00  |
-+--------+-----------+
++--------+----------+
+| region | total    |
++--------+----------+
+| Nord   | 14380.00 |
+| Ost    | 14200.00 |
+| Sued   | 14470.00 |
+| West   | 14290.00 |
++--------+----------+
 ```
 
 36 rows, 57'340.00 in total, from nine files in two formats with three
@@ -286,7 +289,7 @@ bytes) and one `*.tdy.toml` per member.
 
 Those member sidecars are also why step 1 no longer replays verbatim:
 `.fit` rewrote each one to speak the declaration's vocabulary, so
-`messy('2025-01.csv')` now serves `month`, `region` and `amount_chf`, and
+`messy('2025-01.csv')` now serves `month`, `region` and `amount`, and
 `.sniff` keeps a fresh sidecar rather than second-guessing it — showing
 `confidence n/a`, because a planned binding is proved, not scored.
 `.sniff 2025-01.csv --force` re-infers the file's own view (`datum`,
@@ -311,7 +314,7 @@ commentary, for its tests.)
 
 ## The idea
 
-Every messy file gets a **sidecar**: `umsatz_2025.xlsx.tdy.toml`, sitting
+Every messy file gets a **sidecar**: `sales_2025.xlsx.tdy.toml`, sitting
 next to the raw file, checked into your repo. It records:
 
 - a blake3 fingerprint of the file (stale specs are never silently reused),
@@ -332,9 +335,10 @@ never a plausible-looking wrong number. Concretely, that is why:
 
 - a `thousands_separator` that could also be a decimal point (`.` or `,`)
   must group the integer part in threes, so declaring `,` a thousands
-  separator over the German price `1,5` is an error rather than the number
-  `15`. An apostrophe or a space can never be a decimal point, so sloppy
-  Swiss grouping (`1000'000.00`) has exactly one reading and is accepted;
+  separator over the continental price `1,5` is an error rather than the
+  number `15`. An apostrophe or a space can never be a decimal point, so
+  sloppy apostrophe grouping (`1000'000.00`) has exactly one reading and is
+  accepted;
 - `%Y` requires a four-digit year in the data, so `01/02/25` is an error
   rather than a date in the year 25;
 - a column of `01/02/2025`-style dates that fits both day-first and
@@ -415,8 +419,8 @@ tdy prints how many bytes are leaving before they do.
 
 ```bash
 export OPENROUTER_API_KEY=...
-tdy sniff umsatz_2025.xlsx --backend openrouter --model google/gemini-2.5-flash
-# note: sending 1169 bytes sampled from umsatz_2025.xlsx to openrouter (...)
+tdy sniff sales_2025.xlsx --backend openrouter --model google/gemini-2.5-flash
+# note: sending 1169 bytes sampled from sales_2025.xlsx to openrouter (...)
 ```
 
 The schema goes into the prompt as well as into `response_format`: most
@@ -442,7 +446,7 @@ tdy> .draft 2025-*.csv 2025-*.xlsx --to sales.tdy.sql
 tdy> .fit sales.tdy.sql
 tdy> .accept sales.tdy.sql 2025-07.csv      # shows the evidence; again to accept
 tdy> .output totals.parquet
-tdy> SELECT region, sum(amount_chf) FROM dataset('sales.tdy.sql') GROUP BY 1;
+tdy> SELECT region, sum(amount) FROM dataset('sales.tdy.sql') GROUP BY 1;
 ```
 
 `.help` lists them. Globs are expanded by the console itself; every path is
@@ -524,7 +528,7 @@ direction this is going is the opposite — you declare the shape of the data yo
 CREATE TABLE sales (
   month      DATE          NOT NULL,
   region     TEXT          NOT NULL,
-  amount_chf DECIMAL(14,2) NOT NULL
+  amount     DECIMAL(14,2) NOT NULL
 )
 WITH (files = '2025-*.csv, 2025-*.xlsx', date_order = 'dmy');
 ```
@@ -550,7 +554,7 @@ $ tdy fit sales.tdy.sql 2025-09.xlsx
 2025-09.xlsx fits `sales`:
   month            <- "Datum"                  DATE  (%d.%m.%Y)
   region           <- "Region"                 TEXT
-  amount_chf       <- "Betrag CHF"             DECIMAL(14,2)
+  amount           <- "Betrag CHF"             DECIMAL(14,2)
 ```
 
 That workbook has a title row and a merged band above the real header, its
@@ -562,7 +566,7 @@ Because a target names what you *want* and the files are somebody else's
 exports, a column may declare the header cells it can be read from:
 
 ```sql
-amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount')
+amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount')
 ```
 
 Those are declared, in the open, in a diff — because a planner guessing at
@@ -572,12 +576,12 @@ half for you:
 ```
 $ tdy fit sales.tdy.sql 2025-07.csv --propose
   suggestions:
-    `amount_chf` (DECIMAL(14,2)):
+    `amount` (DECIMAL(14,2)):
       could be supplied by:
         "Betrag Rp."  — all 4 sampled value(s) parse as DECIMAL(14,2)
       Type-compatible is not the same as correct — a discount column parses as money too.
       If one of them is right, say so:
-        amount_chf DECIMAL(14,2) OPTIONS(matches = 'Betrag, Betrag CHF, Betrag Rp.')
+        amount DECIMAL(14,2) OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Betrag Rp.')
 ```
 
 It says a column's values *parse* as the declared type. It never says they mean
@@ -588,18 +592,18 @@ the right thing, and it never edits your target.
 way to be quietly wrong:
 
 ```
-2025-07.csv   `amount_chf`: no column of this file binds
-                looked for "amount_chf", "Betrag", "Betrag CHF", "Amount"
+2025-07.csv   `amount`: no column of this file binds
+                looked for "amount", "Betrag", "Betrag CHF", "Amount"
                 the file has ["Datum", "Region", "Betrag Rp."]
 
-2025-08.csv   `amount_chf`: 2 columns of this file match, which is ambiguous
+2025-08.csv   `amount`: 2 columns of this file match, which is ambiguous
                 column 3 named "Betrag" and column 4 named "Betrag"
                 tdy will not choose between them
 
 2025-11.csv   `region`: no column of this file binds
 ```
 
-The first holds integer Rappen — it parses, it type-checks, and binding it
+The first holds integer cents — it parses, it type-checks, and binding it
 would be out by a factor of a hundred with the error invisible in any single
 row. The second has a net and a gross column with the same name; taking the
 first is right half the time and silent about it. The third is short a column,
@@ -659,13 +663,13 @@ to, and then the whole pile is one relation:
 ```bash
 $ tdy fit sales.tdy.sql
 sales: 9 file(s) match, 3 declared column(s)
-  2025-01.csv    fits    month<-"Datum"  region<-"Region"  amount_chf<-"Betrag"
+  2025-01.csv    fits    month<-"Datum"  region<-"Region"  amount<-"Betrag"
   …
-  2025-10.xlsx   fits    month<-"Date"   region<-"Region"  amount_chf<-"Amount"
+  2025-10.xlsx   fits    month<-"Date"   region<-"Region"  amount<-"Amount"
 9 of 9 file(s) fit `sales`.
 wrote sales.tdy.lock
 
-$ tdy query "SELECT region, sum(amount_chf) FROM dataset('sales.tdy.sql') GROUP BY 1"
+$ tdy query "SELECT region, sum(amount) FROM dataset('sales.tdy.sql') GROUP BY 1"
 ```
 
 A member is named by its path relative to the target — `exports/2025-07.csv`,
@@ -691,15 +695,15 @@ of writing it in SQL is that it reads like documentation.
 
 ### When a file needs a human
 
-Some things no proof can settle. `2025-07.csv` holds integer Rappen: it parses,
-it type-checks, and reading it as francs is wrong by a factor of a hundred with
-the error invisible in any single row. Nothing declares that column, so the
+Some things no proof can settle. `2025-07.csv` holds integer cents: it parses,
+it type-checks, and reading it as whole units is wrong by a factor of a hundred
+with the error invisible in any single row. Nothing declares that column, so the
 planner refuses it — and you write its spec by hand, in its sidecar, where all
 the other structural cleaning lives:
 
 ```toml
 [[spec.columns]]
-name   = "amount_chf"
+name   = "amount"
 source = "Betrag Rp."
 [spec.columns.parse]
 decimal_shift = -2          # exact: 123450 -> 1234.50, no float involved
@@ -714,15 +718,15 @@ conformance, then a dry run.
 And then it still does not run:
 
 ```
-2025-07.csv   REVIEW  (hand-written spec)
-    `amount_chf` applies decimal_shift = -2, which changes every value
+2025-07.csv              REVIEW    (hand-written spec)  month<-"Datum"  region<-"Region"  amount<-"Betrag Rp."
+    REVIEW: `amount` applies decimal_shift = -2, which changes every value in the column (a factor of 10^-2)
     tdy does not accept a value-changing step on its own judgement.
-    Accept:  tdy fit sales.tdy.sql --accept 2025-07.csv
+    Accept:  tdy fit exports/sales.tdy.sql --accept 2025-07.csv
 ```
 
 That is the sharpest line in the design. Everything the planner does is
 mechanically checked, and none of it can establish that a column of integers is
-*francs* rather than *Rappen* — so a person says so, once, and the acceptance is
+*units* rather than *cents* — so a person says so, once, and the acceptance is
 recorded against that file's bytes and that declaration. Re-fitting an untouched
 dataset does not ask again; editing the file expires the acceptance, because it
 was about those bytes.
@@ -917,23 +921,23 @@ columns = ["Region"]        # vertically merged cells
 op = "unpivot"
 id_columns = ["Region", "Produkt"]
 value_columns = ["2025 Jan", "2025 Feb", "2025 Mär", "2025 Dez"]
-variable_name = "monat_raw"
-value_name = "umsatz_raw"
+variable_name = "month_raw"
+value_name = "revenue_raw"
 
 [[spec.columns]]            # a projection: unlisted columns are dropped
-name = "monat"
-source = "monat_raw"
+name = "month"              # you name what you want; the file stays what it is
+source = "month_raw"
 dtype = { type = "date", format = "%Y %b" }
 parse = { replace = [{ from = "Mär", to = "Mar" }, { from = "Dez", to = "Dec" }] }
 
 [[spec.columns]]
-name = "umsatz_chf"
-source = "umsatz_raw"
+name = "revenue"
+source = "revenue_raw"
 dtype = { type = "decimal", precision = 12, scale = 2 }
 parse = { thousands_separator = "'", strip = "^CHF\\s*", na_values = ["n/a"] }
 
 [[spec.columns]]            # a ledger column: "(CHF 1'234.50)" is -1234.50
-name = "saldo_chf"
+name = "balance"
 dtype = { type = "decimal", precision = 12, scale = 2 }
 parse = { thousands_separator = "'", strip = "CHF\\s*", negative = "parentheses" }
 ```
@@ -993,9 +997,9 @@ Details worth knowing:
 - **`source_name` turns where a file *is* into a column.** The period a
   monthly export covers is very often only in its filename. `from` picks
   `file_stem`, `file_name`, `sheet` or `path`, and an optional `pattern`'s
-  first capture group narrows it (`(\\d{4})` on `umsatz_2025.xlsx` gives
+  first capture group narrows it (`(\\d{4})` on `sales_2025.xlsx` gives
   `2025`). A pattern that does not match is an error, not an empty column —
-  a silently empty `jahr` on one member of twelve is the gap it exists to
+  a silently empty `year` on one member of twelve is the gap it exists to
   prevent. It may only add, never shadow, and it carries no review gate,
   because the value is *derived* from the path rather than told to tdy.
 - **`WITH (provenance = true)`** on a target adds `_member` (the lock-relative
@@ -1159,7 +1163,7 @@ console explicitly — see [The console](#the-console) and
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests    # 589 tests; plain `cargo test` also runs doc-tests
+cargo test --workspace --lib --tests    # 685 tests; plain `cargo test` also runs doc-tests
 python3 gen_fixtures.py                 # regenerate every fixture (needs openpyxl + xlwt)
 ```
 
@@ -1184,7 +1188,7 @@ TDY_LIVE_MODEL=google/gemini-2.5-flash cargo test --test live_backend -- --nocap
 
 It holds the model to the hand-written reference spec: given `umsatz.xlsx` —
 title block, two-row merged header, merged Region cells, a subtotal row, a
-Total footer, Swiss numbers and German month names — the spec it writes must
+Total footer, apostrophe-grouped numbers and German month names — the spec it writes must
 produce the same sixteen amounts totalling 21'244.25. The *shape* is left to
 the model (long or wide are both faithful readings); the arithmetic is not.
 `google/gemini-2.5-flash` and `anthropic/claude-sonnet-4.5` pass;

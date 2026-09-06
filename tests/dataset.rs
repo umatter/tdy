@@ -71,7 +71,7 @@ fn nine_heterogeneous_files_are_one_relation_with_the_right_total() {
 
     let out = query(
         &dir,
-        "SELECT count(*) rows, sum(amount_chf) total FROM dataset('@')",
+        "SELECT count(*) rows, sum(amount) total FROM dataset('@')",
     );
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -85,7 +85,7 @@ fn nine_heterogeneous_files_are_one_relation_with_the_right_total() {
 fn the_row_order_of_a_dataset_is_deterministic() {
     let dir = staged();
     fit_all(&dir);
-    let sql = "SELECT month, region, amount_chf FROM dataset('@')";
+    let sql = "SELECT month, region, amount FROM dataset('@')";
     let first = query(&dir, sql);
     assert!(first.status.success());
     for i in 0..3 {
@@ -145,7 +145,7 @@ fn an_edited_member_is_drift() {
     body.extend_from_slice(b"31.01.2025;Ost;9999.00\n");
     std::fs::write(&p, body).unwrap();
 
-    let out = query(&dir, "SELECT sum(amount_chf) FROM dataset('@')");
+    let out = query(&dir, "SELECT sum(amount) FROM dataset('@')");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "an edited member changed the total silently");
     assert!(err.contains("2025-01.csv"), "{err}");
@@ -290,7 +290,7 @@ fn a_value_changing_step_needs_a_human_and_then_works() {
         "CREATE TABLE rappen (\n\
          \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
          \x20 region     TEXT          NOT NULL OPTIONS(matches = 'Region'),\n\
-         \x20 amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
+         \x20 amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
          )\nWITH (files = '2025-07.csv', date_order = 'dmy');",
     )
     .unwrap();
@@ -308,7 +308,7 @@ fn a_value_changing_step_needs_a_human_and_then_works() {
     assert!(text.contains("--accept"), "no remedy offered:\n{text}");
 
     // …and the query refuses until somebody does.
-    let q = format!("SELECT sum(amount_chf) FROM dataset('{}')", t.display());
+    let q = format!("SELECT sum(amount) FROM dataset('{}')", t.display());
     let blocked = tdy(&["query", &q]);
     let err = String::from_utf8_lossy(&blocked.stderr);
     assert!(!blocked.status.success(), "an unaccepted value change was queried");
@@ -336,7 +336,7 @@ fn an_acceptance_carries_over_but_expires_when_the_file_changes() {
         "CREATE TABLE rappen (\n\
          \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
          \x20 region     TEXT          NOT NULL OPTIONS(matches = 'Region'),\n\
-         \x20 amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
+         \x20 amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
          )\nWITH (files = '2025-07.csv', date_order = 'dmy');",
     )
     .unwrap();
@@ -428,7 +428,7 @@ nullable = false
 [spec.columns.dtype]
 type = "utf8"
 [[spec.columns]]
-name = "amount_chf"
+name = "amount"
 source = "Betrag Rp."
 nullable = false
 [spec.columns.parse]
@@ -484,7 +484,7 @@ fn a_member_in_a_subdirectory_can_be_accepted() {
         "CREATE TABLE rappen (
            month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
            region     TEXT          NOT NULL OPTIONS(matches = 'Region'),
-           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+           amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
          ) WITH (files = 'exports/*.csv', date_order = 'dmy');",
     )
     .unwrap();
@@ -523,7 +523,7 @@ fn editing_an_accepted_members_spec_retracts_the_acceptance() {
         "CREATE TABLE rappen (
            month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
            region     TEXT          NOT NULL OPTIONS(matches = 'Region'),
-           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+           amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
          ) WITH (files = '2025-07.csv', date_order = 'dmy');",
     )
     .unwrap();
@@ -667,7 +667,7 @@ fn a_constant_value_needs_a_human_and_then_works() {
         "CREATE TABLE nov (\n\
          \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
          \x20 region     TEXT          NULL,\n\
-         \x20 amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
+         \x20 amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n\
          )\nWITH (files = '2025-11.csv', date_order = 'dmy');",
     )
     .unwrap();
@@ -712,7 +712,7 @@ nullable = true
 [spec.columns.dtype]
 type = "utf8"
 [[spec.columns]]
-name = "amount_chf"
+name = "amount"
 source = "Betrag"
 nullable = false
 [spec.columns.dtype]
@@ -769,7 +769,7 @@ fn the_two_betrag_file_joins_via_a_sidecar_naming_the_deduped_column() {
         "CREATE TABLE aug (\n\
          \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
          \x20 region     TEXT          NOT NULL,\n\
-         \x20 amount_chf DECIMAL(14,2) NOT NULL\n\
+         \x20 amount DECIMAL(14,2) NOT NULL\n\
          )\nWITH (files = '2025-08.csv', date_order = 'dmy');",
     )
     .unwrap();
@@ -812,7 +812,7 @@ nullable = false
 [spec.columns.dtype]
 type = "utf8"
 [[spec.columns]]
-name = "amount_chf"
+name = "amount"
 source = "Betrag"
 nullable = false
 [spec.columns.dtype]
@@ -839,7 +839,7 @@ decimal_separator = "."
     // `source = "Betrag"` reads the FIRST Betrag — net. The generator's
     // August net total is 7'260.00; the gross column would be 7'848.06, so a
     // wrong binding is visible in the sum, not just the shape.
-    let q = format!("SELECT sum(amount_chf) FROM dataset('{}')", t.display());
+    let q = format!("SELECT sum(amount) FROM dataset('{}')", t.display());
     let ok = tdy(&["query", &q]);
     let text = String::from_utf8_lossy(&ok.stdout);
     assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));

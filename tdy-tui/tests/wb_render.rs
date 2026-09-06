@@ -40,7 +40,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
         review: (status == MemberStatus::NeedsReview).then(|| {
-            "`amount_chf` applies decimal_shift = -2, which changes every value".into()
+            "`amount` applies decimal_shift = -2, which changes every value".into()
         }),
         accepted: false,
         notes: vec![],
@@ -519,7 +519,7 @@ fn the_evidence_view_shows_raw_beside_parsed_and_the_extremes() {
     w.begin(".accept t.tdy.sql m.csv");
     let rows = vec![
         Evidence::Shift {
-            column: "amount_chf".into(),
+            column: "amount".into(),
             source: "Betrag Rp.".into(),
             shift: -2,
             head: vec![Pair { row: 1, raw: "170000".into(), parsed: "1700.00".into() }],
@@ -549,7 +549,7 @@ fn the_evidence_view_shows_raw_beside_parsed_and_the_extremes() {
     assert!(text.contains("1700.00"), "parsed: {text}");
     assert!(text.contains("0.05"), "smallest: {text}");
     assert!(text.contains("9999.99"), "largest: {text}");
-    assert!(text.contains("amount_chf"), "the Shift judgement's headline: {text}");
+    assert!(text.contains("amount"), "the Shift judgement's headline: {text}");
     assert!(
         text.contains("no computable consequence to show"),
         "the Unillustrated judgement's headline too — every judgement shows: {text}"
@@ -951,7 +951,7 @@ fn every_context_renders_at_hostile_sizes() {
     }
     fn table() -> Table {
         Table {
-            columns: vec!["region".into(), "amount_chf".into()],
+            columns: vec!["region".into(), "amount".into()],
             types: vec!["Utf8".into(), "Decimal128(38, 2)".into()],
             rows: vec![vec!["BE".into(), "14200.00".into()]],
             total: 500,

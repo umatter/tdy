@@ -76,7 +76,7 @@ fn fit_json_reports_the_whole_pile_structured() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|s| s["column"] == "amount_chf" && s["source"] == "Betrag"));
+        .any(|s| s["column"] == "amount" && s["source"] == "Betrag"));
 }
 
 /// A member behind the review gate says so in JSON, with the reason.

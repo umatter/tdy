@@ -25,7 +25,7 @@ THE DECLARED TARGET  (drifting_exports/sales.tdy.sql)
 --------------------------------------------------------------------------
     month      DATE          NOT NULL
     region     TEXT          NOT NULL
-    amount_chf DECIMAL(14,2) NOT NULL
+    amount     DECIMAL(14,2) NOT NULL
 
 --------------------------------------------------------------------------
 FIXTURES
@@ -42,7 +42,7 @@ that the arithmetic is checkable.
 2. 2025-07.csv  — THE UNIT TRAP.
    Identical layout, except the amount column is named `Betrag Rp.` and holds
    **integer Rappen**: 123450, not 1234.50. Nothing about it is malformed. It
-   parses. Bound naively to `amount_chf` it is wrong by a factor of 100, and
+   parses. Bound naively to `amount` it is wrong by a factor of 100, and
    the error is invisible in any single row.
    Correct behaviour today (no `decimal_shift` operator yet): `Betrag Rp.`
    does not normalise to `Betrag`, so nothing binds and the file is a gap. The
@@ -277,7 +277,7 @@ TARGET_SQL = """-- The clean dataset we want out of a year of drifting monthly e
 CREATE TABLE sales (
   month      DATE          NOT NULL OPTIONS(matches = 'Datum, Date, Buchungsdatum'),
   region     TEXT          NOT NULL OPTIONS(matches = 'Region, Kanton, Gebiet'),
-  amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
+  amount     DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag CHF, Amount, Umsatz')
 )
 WITH (
   files      = '2025-*.csv, 2025-*.xlsx',
@@ -324,7 +324,7 @@ def main():
 
     fittable = [1, 2, 3, 4, 5, 6, 9, 10, 12]
     total = sum(amount(m, r) for m in fittable for r in range(4))
-    print(f"\nground truth: {len(fittable)} fittable months, sum(amount_chf) = {total:.2f}")
+    print(f"\nground truth: {len(fittable)} fittable months, sum(amount) = {total:.2f}")
     print("             2025-07 (Rappen), 2025-08 (ambiguous), 2025-11 (no region) must not join")
 
 

@@ -116,7 +116,7 @@ fn an_agent_can_fit_and_query_a_pile_over_mcp() {
     let (res, err) = s.call(
         "query",
         serde_json::json!({
-            "sql": "SELECT count(*) n, sum(amount_chf) total FROM dataset('sales_ok.tdy.sql')",
+            "sql": "SELECT count(*) n, sum(amount) total FROM dataset('sales_ok.tdy.sql')",
         }),
     );
     assert!(!err, "{res:#}");
@@ -139,7 +139,7 @@ fn acceptance_is_refused_unless_the_operator_delegated_it() {
         "CREATE TABLE rappen (\n\
          \x20 month      DATE          NOT NULL OPTIONS(matches = 'Datum'),\n\
          \x20 region     TEXT          NOT NULL OPTIONS(matches = 'Region'),\n\
-         \x20 amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag Rp.')\n\
+         \x20 amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag Rp.')\n\
          )\nWITH (files = '2025-07.csv', date_order = 'dmy');",
     )
     .unwrap();
@@ -180,7 +180,7 @@ nullable = false
 [spec.columns.dtype]
 type = "utf8"
 [[spec.columns]]
-name = "amount_chf"
+name = "amount"
 source = "Betrag Rp."
 nullable = false
 [spec.columns.dtype]
@@ -225,7 +225,7 @@ decimal_shift = -2
     assert_eq!(report["needs_review"], 0, "{report:#}");
     let (res, err) = s.call(
         "query",
-        serde_json::json!({"sql": "SELECT sum(amount_chf) FROM dataset('rappen.tdy.sql')"}),
+        serde_json::json!({"sql": "SELECT sum(amount) FROM dataset('rappen.tdy.sql')"}),
     );
     assert!(!err, "{res:#}");
     assert_eq!(res["rows"][0][0], "6860.00", "the shift must be applied exactly");

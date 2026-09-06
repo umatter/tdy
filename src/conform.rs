@@ -295,14 +295,14 @@ mod tests {
     const SALES: &str = "CREATE TABLE sales (
         month      DATE          NOT NULL,
         region     TEXT          NOT NULL,
-        amount_chf DECIMAL(14,2) NOT NULL
+        amount DECIMAL(14,2) NOT NULL
     ) WITH (files = 'x.csv')";
 
     fn conforming() -> Vec<ColumnSpec> {
         vec![
             col("month", DType::Date { format: "%d.%m.%Y".into() }, false),
             col("region", DType::Utf8, false),
-            col("amount_chf", DType::Decimal { precision: 14, scale: 2 }, false),
+            col("amount", DType::Decimal { precision: 14, scale: 2 }, false),
         ]
     }
 
@@ -368,7 +368,7 @@ mod tests {
         let mut cols = conforming();
         cols[2].dtype = DType::Decimal { precision: 38, scale: 2 };
         let errs = conforms(&spec_of(cols), &target_of(SALES)).unwrap_err();
-        assert!(matches!(&errs[0], Mismatch::Type { column, .. } if column == "amount_chf"));
+        assert!(matches!(&errs[0], Mismatch::Type { column, .. } if column == "amount"));
     }
 
     #[test]
@@ -411,7 +411,7 @@ mod tests {
             col("was_ist_das", DType::Int64, true),
         ];
         let errs = conforms(&spec_of(cols), &target_of(SALES)).unwrap_err();
-        // month: wrong type. region, amount_chf: missing. was_ist_das: extra.
+        // month: wrong type. region, amount: missing. was_ist_das: extra.
         assert_eq!(errs.len(), 4, "{errs:?}");
     }
 
@@ -432,7 +432,7 @@ mod tests {
     fn conformance_agrees_with_what_execution_actually_produces() {
         let dir = tempfile::TempDir::new().unwrap();
         let p = dir.path().join("s.csv");
-        std::fs::write(&p, "month,region,amount_chf\n31.01.2025,Ost,1234.50\n").unwrap();
+        std::fs::write(&p, "month,region,amount\n31.01.2025,Ost,1234.50\n").unwrap();
 
         let spec = spec_of(conforming());
         let t = target_of(SALES);

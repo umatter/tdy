@@ -55,7 +55,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
         review: (status == MemberStatus::NeedsReview).then(|| {
-            "`amount_chf` applies decimal_shift = -2, which changes every value".into()
+            "`amount` applies decimal_shift = -2, which changes every value".into()
         }),
         accepted: false,
         notes: vec![],

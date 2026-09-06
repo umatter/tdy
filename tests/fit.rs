@@ -69,7 +69,7 @@ fn the_ordinary_members_of_the_corpus_fit() {
 fn the_planner_picks_the_right_source_column_and_format_per_file() {
     let t = target();
     let expect: &[(&str, [&str; 3], &str)] = &[
-        // file, [month<-, region<-, amount_chf<-], date format
+        // file, [month<-, region<-, amount<-], date format
         ("2025-01.csv", ["Datum", "Region", "Betrag"], "%d.%m.%Y"),
         // A merged band above the real header, and the amount spelt differently.
         ("2025-09.xlsx", ["Datum", "Region", "Betrag CHF"], "%d.%m.%Y"),
@@ -105,7 +105,7 @@ fn gap_of(name: &str) -> Vec<Gap> {
 }
 
 /// THE UNIT TRAP. `Betrag Rp.` holds integer Rappen — the values parse, the
-/// type checks, and binding it to `amount_chf` would be out by a factor of a
+/// type checks, and binding it to `amount` would be out by a factor of a
 /// hundred with the error invisible in any single row. Nothing declares that
 /// column, so nothing may bind it.
 #[test]
@@ -114,7 +114,7 @@ fn the_rappen_file_is_refused_because_nothing_declares_its_amount_column() {
     assert_eq!(gaps.len(), 1, "{gaps:?}");
     match &gaps[0] {
         Gap::NoCandidate { column, header, .. } => {
-            assert_eq!(column, "amount_chf");
+            assert_eq!(column, "amount");
             assert!(
                 header.iter().any(|h| h == "Betrag Rp."),
                 "the message does not show the column that is there: {header:?}"
@@ -138,7 +138,7 @@ fn two_columns_with_the_same_name_are_ambiguous_not_first_wins() {
     assert_eq!(gaps.len(), 1, "{gaps:?}");
     match &gaps[0] {
         Gap::Ambiguous { column, candidates } => {
-            assert_eq!(column, "amount_chf");
+            assert_eq!(column, "amount");
             assert_eq!(candidates.len(), 2, "{candidates:?}");
             assert!(candidates.iter().all(|(_, n)| n == "Betrag"), "{candidates:?}");
             // Positions, so the user can tell them apart at all.
@@ -162,7 +162,7 @@ fn a_file_missing_a_declared_column_is_refused_not_null_filled() {
 }
 
 /// The arithmetic, over the whole corpus. Shape is not enough: a planner that
-/// bound `Rabatt` to `amount_chf` would conform, execute, and be wrong. The
+/// bound `Rabatt` to `amount` would conform, execute, and be wrong. The
 /// generator states this total and computes it independently.
 #[test]
 fn the_fitted_corpus_sums_to_the_declared_ground_truth() {
@@ -179,7 +179,7 @@ fn the_fitted_corpus_sums_to_the_declared_ground_truth() {
             .column(2)
             .as_any()
             .downcast_ref::<datafusion::arrow::array::Decimal128Array>()
-            .unwrap_or_else(|| panic!("{name}: amount_chf is not an exact decimal"));
+            .unwrap_or_else(|| panic!("{name}: amount is not an exact decimal"));
         for i in 0..col.len() {
             assert!(!col.is_null(i), "{name} row {i}: a NOT NULL amount was null");
             total += col.value(i);
@@ -415,13 +415,13 @@ fn propose_offers_type_compatible_columns_without_choosing() {
 
     assert_eq!(props.len(), 1, "{props:?}");
     let p = &props[0];
-    assert_eq!(p.column, "amount_chf");
+    assert_eq!(p.column, "amount");
     assert_eq!(p.candidates.len(), 1, "{:?}", p.candidates);
     assert_eq!(p.candidates[0].0, "Betrag Rp.");
 
     // The remedy is pasteable, keeps the declared aliases, and does not repeat
     // the column's own name (the binder always tries that first).
-    let existing = vec!["amount_chf".to_string(), "Betrag".to_string()];
+    let existing = vec!["amount".to_string(), "Betrag".to_string()];
     let m = p.message(&existing);
     assert!(m.contains("OPTIONS(matches = 'Betrag, Betrag Rp.')"), "{m}");
     assert!(m.contains("not the same as correct"), "the caveat is missing:\n{m}");
@@ -440,7 +440,7 @@ fn propose_ignores_columns_another_declared_column_already_binds() {
     let t = Target::parse(
         "CREATE TABLE t (
            menge      DECIMAL(14,2) NOT NULL,
-           amount_chf DECIMAL(14,2) NOT NULL,
+           amount DECIMAL(14,2) NOT NULL,
            datum      DATE          NOT NULL
          ) WITH (files = 't.csv', date_order = 'dmy')",
     )
@@ -448,7 +448,7 @@ fn propose_ignores_columns_another_declared_column_already_binds() {
 
     let props = tdy::fit::propose(&p, &t, Limits::default()).unwrap();
     assert_eq!(props.len(), 1, "{props:?}");
-    assert_eq!(props[0].column, "amount_chf");
+    assert_eq!(props[0].column, "amount");
     let names: Vec<&str> = props[0].candidates.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, vec!["betrag"], "a column already bound was offered: {names:?}");
 }
@@ -475,7 +475,7 @@ fn the_proposed_alias_makes_the_file_fit() {
         "CREATE TABLE t (
            month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
            region     TEXT          NOT NULL OPTIONS(matches = 'Region'),
-           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag Rp.')
+           amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag, Betrag Rp.')
          ) WITH (files = '2025-07.csv', date_order = 'dmy')",
     )
     .unwrap();
@@ -708,9 +708,9 @@ fn a_fitted_spec_that_drops_rows_carries_the_note_that_says_so() {
 /// note in the planner that says a value was changed.
 #[test]
 fn the_rounding_note_is_not_mistaken_for_a_binding_note() {
-    assert!(tdy::fit::is_binding_note(&tdy::fit::binding_note("amount_chf", "Betrag")));
+    assert!(tdy::fit::is_binding_note(&tdy::fit::binding_note("amount", "Betrag")));
     assert!(!tdy::fit::is_binding_note(
-        "`amount_chf`: some values carry more than 2 fractional digits and are rounded \
+        "`amount`: some values carry more than 2 fractional digits and are rounded \
          half away from zero"
     ));
 }
@@ -729,7 +729,7 @@ fn a_declared_absent_column_is_null_filled_and_needs_no_review() {
         "CREATE TABLE sales (
            month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
            region     TEXT          NULL     OPTIONS(matches = 'Region', if_missing = 'null'),
-           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+           amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
          ) WITH (files = '*.csv', date_order = 'dmy')",
     )
     .unwrap();
@@ -766,7 +766,7 @@ fn a_constant_value_is_a_review_reason_a_null_fill_is_not() {
         "CREATE TABLE sales (
            month      DATE          NOT NULL OPTIONS(matches = 'Datum'),
            region     TEXT          NULL     OPTIONS(matches = 'Region', if_missing = 'null'),
-           amount_chf DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
+           amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')
          ) WITH (files = '*.csv', date_order = 'dmy')",
     )
     .unwrap();
