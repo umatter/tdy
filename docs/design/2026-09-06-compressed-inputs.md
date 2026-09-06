@@ -1,15 +1,16 @@
 # Compressed inputs
 
 *2026-09-06. Why `.csv.gz` is not the afternoon's work the shape slice called
-it, and what the actual decision is. No code yet — this exists because the
-estimate was wrong and the reason is worth writing down.*
+it, and what the actual decision is. Option C below is what landed (§4 records
+where); this page exists because the estimate was wrong and the reason is
+worth writing down.*
 
 ---
 
 ## 1. The need is ordinary
 
 Monthly exports arrive zipped. `dataset()` exists to read a pile of monthly
-exports. Today a `.csv.gz` is unreadable and a zip of CSVs cannot be a member,
+exports. Today a `.csv.gz` is refused and a zip of CSVs cannot be a member,
 so the first thing anyone does with a real export directory is unpack it — which
 means the pile tdy locks is a *copy* of the pile they were given, and the
 fingerprints are of files nobody else has.
@@ -78,7 +79,11 @@ that is ordinary.
 ### C · Refuse clearly, and say so
 
 Keep it unreadable, but make the error name the fix (`gunzip`) rather than
-failing as an encoding error, which is what happens today.
+what happened before: not an encoding error but a *success* — `decode_reporting`
+substitutes U+FFFD and never fails, so a gzip member read as text was one
+column of mojibake with a confidence score attached. Not a wrong value in the
+strict sense, since those really are the bytes, but a confident answer to a
+question nobody asked, which is the same failure in different clothes.
 
 - **Honest and free.** No new concept, no bomb ceiling, no cache.
 - Leaves the pile-of-zipped-exports case exactly where it is.
@@ -86,6 +91,20 @@ failing as an encoding error, which is what happens today.
 ## 4. Recommendation
 
 **C now, B when someone actually has the pile.**
+
+C landed with this page. `fileio::refuse_if_compressed` matches gzip, zstd,
+bzip2 (magic *and* block header, since `BZh` alone is printable text), xz, lz4
+and zip — by magic bytes, not extension, because the `.csv` that is really
+gzip is the case that produced the garbage. Zip is included on purpose:
+workbooks are routed to calamine by extension before any byte is read as
+text, so a zip head reaching a text reader is a compressed export, never an
+xlsx. The check lives *inside* `fileio::read_all` and `fileio::read_head_tail`
+(before the size limit and before the read, so an oversized archive is told
+to decompress rather than to raise `max_file_bytes`, in constant memory), and
+the streaming executor's raw opener — which reads bytes directly when a
+sidecar declares `utf-8` and never touches those readers — calls it on its
+first buffer. The first cut put it at three call sites and missed that
+opener; `tests/streaming.rs` now pins that both executors refuse the file.
 
 C is a message change and can ride with anything. B is the right long-term
 answer — A trades away detection that this project's own audits keep finding

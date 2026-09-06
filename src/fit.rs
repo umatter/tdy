@@ -386,9 +386,19 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
         })
         .collect();
 
+    // A long-form column has nothing to propose: its data is spread over the
+    // rows, and the one column whose values happen to type-check (`umsatz`
+    // for `q1`) is the binding that would put every quarter into one.
+    let unbound: Vec<&crate::target::TargetColumn> = target
+        .columns
+        .iter()
+        .filter(|tc| bind(tc, &origin, target.match_mode).is_empty())
+        .collect();
+    let long_form = long_form_holders(&unbound, &origin, &rows, target.match_mode);
+
     let mut out = Vec::new();
     for tc in &target.columns {
-        if !bind(tc, &origin, target.match_mode).is_empty() {
+        if !bind(tc, &origin, target.match_mode).is_empty() || long_form.contains_key(&tc.name) {
             continue;
         }
         let mut candidates = Vec::new();
@@ -842,6 +852,14 @@ fn fit_framed(
         .filter(|n| n.starts_with(sniff::DROPPED_NOTE))
         .cloned()
         .collect();
+    // Declared columns that are this file's *values*, judged once over every
+    // unbound column so the diagnosis is the same for each of them.
+    let unbound: Vec<&crate::target::TargetColumn> = target
+        .columns
+        .iter()
+        .filter(|tc| bind(tc, &origin, target.match_mode).is_empty())
+        .collect();
+    let long_form = long_form_holders(&unbound, &origin, &rows, target.match_mode);
 
     for tc in &target.columns {
         // Matching is done against the *file's* spelling, so two columns the
@@ -880,7 +898,7 @@ fn fit_framed(
                         .chain(tc.matches.iter().cloned())
                         .collect(),
                     header: origin.clone(),
-                    long_form: holds_as_value(&tc.name, &origin, &rows),
+                    long_form: long_form.get(&tc.name).cloned(),
                 });
                 continue;
             }
@@ -1092,30 +1110,61 @@ fn bind(
     Vec::new()
 }
 
-/// Does some column of this file hold `name` among its *values*?
+/// Which declared columns are *values* of one column of this file, and which.
 ///
-/// The signature of a long-format file meeting a wide target: the declared
-/// column `q1` is not missing, it is one of the values in a `quarter` column.
-/// Compared case-insensitively and trimmed, because a target says `q1` where a
-/// file says `Q1` and that difference is not the point.
-fn holds_as_value(name: &str, header: &[String], rows: &[Vec<String>]) -> Option<String> {
-    let want = name.trim().to_ascii_lowercase();
-    if want.is_empty() {
-        return None;
+/// The signature of a long-format file meeting a wide target: `q1` and `q2`
+/// are not missing, they are the values of a `quarter` column. One name alone
+/// is not a signature — a `Kind` column holding `total` is a category, and a
+/// `Total` label interleaved in a key column is a subtotal — so it takes at
+/// least two declared names in the *same* column. Judged over the whole
+/// probe, because a long file sorted by its key has every `Q1` before the
+/// first `Q2`, and a bounded prefix would diagnose one column and send the
+/// reader after a `matches` spelling for the other.
+///
+/// "Is this value the column's name?" is the planner's own question, so it
+/// gets the planner's own answer: `bind`'s ladder — the file's spelling,
+/// then `norm`, then `sanitize` — under the target's `match` mode, over the
+/// column's name and its declared aliases alike.
+///
+/// Returns each long-form column's name mapped to the file column that holds
+/// it. Computed once per file for every unbound declared column, `if_missing`
+/// ones included: a null-filled `q1` still counts toward `q2`'s diagnosis.
+fn long_form_holders(
+    unbound: &[&crate::target::TargetColumn],
+    header: &[String],
+    rows: &[Vec<String>],
+    mode: MatchMode,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    if unbound.len() < 2 {
+        return out;
     }
-    for (i, col) in header.iter().enumerate() {
-        // A column whose values are the target's column names is a key
-        // column, so it repeats: look at a bounded prefix, not the file.
-        let found = rows
+    let same = |value: &str, want: &str| -> bool {
+        let value = value.trim();
+        value == want
+            || (mode != MatchMode::Exact
+                && (crate::target::norm(value) == crate::target::norm(want)
+                    || sniff::sanitize(value) == want))
+    };
+    for (i, holder) in header.iter().enumerate() {
+        let values: std::collections::HashSet<&str> =
+            rows.iter().filter_map(|r| r.get(i)).map(|v| v.trim()).collect();
+        let held: Vec<&str> = unbound
             .iter()
-            .take(500)
-            .filter_map(|r| r.get(i))
-            .any(|v| v.trim().to_ascii_lowercase() == want);
-        if found {
-            return Some(col.clone());
+            .filter(|tc| {
+                std::iter::once(&tc.name)
+                    .chain(tc.matches.iter())
+                    .any(|want| values.iter().any(|v| same(v, want)))
+            })
+            .map(|tc| tc.name.as_str())
+            .collect();
+        if held.len() >= 2 {
+            for name in held {
+                out.entry(name.to_string()).or_insert_with(|| holder.clone());
+            }
         }
     }
-    None
+    out
 }
 
 fn render(t: &ArrowType) -> String {

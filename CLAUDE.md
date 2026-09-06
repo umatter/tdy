@@ -328,7 +328,7 @@ confinement is enforced in `MessyFunc`/`DatasetFunc`, where the file is opened;
 relative I/O against the *process's* directory, and the two routes have to agree.
 
 **The shape slice is in (2026-09-06).** `docs/design/2026-09-06-shape-slice.md`
-is the design and the record of where it was wrong. Six operators closed the
+is the design and the record of where it was wrong. Seven operators closed the
 operator catalogue's tier-1 gaps: `split_column` (delimiter, character
 positions or a regex's capture groups — total by construction, since it stops
 after `into.len()` parts, and short values are an error unless `on_short =
@@ -351,7 +351,9 @@ before concluding it is not.
 decisions rather than implementations:
 `docs/design/2026-09-06-compressed-inputs.md` (a `.gz` has no byte offsets, so
 `sample::build`'s head+tail sampling has no meaning — the file is now *refused*
-by magic bytes rather than read as mojibake) and
+by magic bytes rather than read as mojibake; the check is inside `fileio`'s
+two readers and the streaming opener, not at call sites, because the first
+cut at call sites missed the executor that actually runs) and
 `docs/design/2026-09-06-members-and-regions.md` (a sidecar is per file, so a
 twelve-sheet workbook contributes one sheet; this is an identity question, not
 an extraction one).

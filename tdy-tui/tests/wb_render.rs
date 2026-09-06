@@ -61,6 +61,7 @@ fn gap_member(path: &str) -> MemberReport {
         header: vec!["Datum".into(), "Kanton".into()],
         choices: vec![],
         field: None,
+        long_form: None,
     }];
     m
 }

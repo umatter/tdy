@@ -76,6 +76,7 @@ fn gap_member(path: &str) -> MemberReport {
         header: vec!["Datum".into(), "Kanton".into()],
         choices: vec![],
         field: None,
+        long_form: None,
     }];
     m
 }
@@ -694,6 +695,34 @@ fn member_remedies_come_from_the_problems() {
     // A fits-member (Enter on index 0) offers nothing.
     let (w2, _) = pile_and_enter(&d, vec![member("2025-01.csv", MemberStatus::Fits)], 0);
     assert!(w2.member_remedies().is_empty());
+}
+
+/// A long-form member's menu must not offer the `matches` binding its own
+/// problem text warns against, nor a null-fill that would silently drop the
+/// rows' amounts: the diagnosis travels in `kind`, and the menu is built from
+/// `kind`, so the two cannot disagree.
+#[test]
+fn a_long_form_member_offers_no_matches_remedy() {
+    let d = pile();
+    let mut m = member("2025-long.csv", MemberStatus::Gaps);
+    m.problems = vec![Problem {
+        kind: "long_form".into(),
+        column: Some("q1".into()),
+        message: "`q1` (BIGINT): no column of this file binds … in long form".into(),
+        want: Some("BIGINT".into()),
+        tried: vec!["q1".into()],
+        header: vec!["region".into(), "quarter".into(), "umsatz".into()],
+        choices: vec![],
+        field: None,
+        long_form: Some("quarter".into()),
+    }];
+    let (w, _) = pile_and_enter(&d, vec![m], 0);
+    let labels: Vec<String> = w.member_remedies().iter().map(|r| r.label()).collect();
+    assert!(!labels.is_empty(), "excluding the file must still be offered");
+    assert!(
+        labels.iter().all(|l| !l.contains("matches") && !l.contains("umsatz") && !l.contains("null")),
+        "{labels:?}"
+    );
 }
 
 /// A review-only member (`review: Some(_)`, no `problems`, no `proposals` —
