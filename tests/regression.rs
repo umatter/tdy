@@ -1790,3 +1790,115 @@ fn an_undeclared_sign_marker_names_the_declaration_that_fixes_it() {
     assert!(msg.contains("accounting negative"), "{msg}");
     assert!(msg.contains("parentheses"), "{msg}");
 }
+
+// ---------------------------------------------------------------------------
+// 2026-09-06, found by the Pollock benchmark (scripts/run_pollock.py):
+// `file_quotation_char_0x27` and `file_field_delimiter_0x2C_0x20` both failed
+// with "resolving output column `col_13`: no column named `col_13`" — a spec
+// the sniffer produced that the executor cannot run, which the design says
+// cannot happen.
+//
+// It can, and the mechanism is worth stating: the spec's columns come from a
+// 16 KB head+tail *sample*, while the table comes from the file. When parse
+// state crosses the boundary between them — an unbalanced quote is the usual
+// way — the two split rows differently and disagree about the width. The
+// outcome is safe (a loud error, no sidecar written) and stays that way; what
+// these tests pin is that the error explains the file rather than the internals.
+// ---------------------------------------------------------------------------
+
+/// A nameless table that came out narrower than the spec expects must say so.
+/// Listing `col_1 … col_12` back to someone who asked for `col_13` is a true
+/// statement that helps nobody: the fact they need is that two reads of one
+/// file disagreed about its width, and why.
+#[test]
+fn a_width_mismatch_on_a_nameless_table_explains_itself() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "narrow.csv", "a,b,c\nd,e,f\n");
+
+    let mut spec = ledger_spec(None, None);
+    spec.transforms.clear(); // no header: columns are the generated col_N
+    spec.columns = (1..=4)
+        .map(|i| ColumnSpec {
+            name: format!("col_{i}"),
+            source: None,
+            dtype: DType::Utf8,
+            nullable: true,
+            parse: ValueParsing::default(),
+        })
+        .collect();
+
+    let e = tdy::engine::execute(&spec, &f, Limits::default())
+        .expect_err("the file has three columns, the spec names four");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("yield 3 column(s)"), "the file's real width: {msg}");
+    assert!(msg.contains("quote"), "and the usual cause, which is actionable: {msg}");
+    assert!(
+        !msg.contains("available columns"),
+        "listing col_1..col_3 back is the unhelpful form this replaces: {msg}"
+    );
+}
+
+/// The invariant itself, end to end, on a file big enough that the sniffer's
+/// 16 KB sample is a strict subset of it: **a spec that reaches a sidecar
+/// executes on the whole file.** Either sniffing produces such a spec, or it
+/// fails saying something about the file and leaves no sidecar behind.
+///
+/// This does not reproduce the Pollock divergence byte for byte — that needs a
+/// file whose quoting state differs between the sampled head+tail and the
+/// middle it skips, which is a property of that corpus rather than a shape
+/// worth hand-building. `scripts/run_pollock.py` is where that case lives. What
+/// is pinned here is the property the divergence broke, which is the one that
+/// matters: no sidecar may promise something the executor cannot deliver.
+#[test]
+fn a_sample_that_parses_differently_from_the_file_never_reaches_a_sidecar() {
+    let dir = TempDir::new().unwrap();
+    let mut body = String::from("date,product,note\n");
+    for i in 0..200 {
+        // Long enough that 16 KB of head+tail is a strict subset of the file,
+        // apostrophe-quoted like the Pollock fixture, with a stray `"` every
+        // so often to leave the declared quote character unbalanced.
+        let stray = if i % 37 == 0 { "\"" } else { "" };
+        body.push_str(&format!(
+            "0{}/01/2018,P-{i:04},'a note about item {i}{stray}, long enough to matter: {}'\n",
+            i % 9 + 1,
+            "x".repeat(120)
+        ));
+    }
+    let f = write(&dir, "quoted.csv", &body);
+    assert!(fs::metadata(&f).unwrap().len() > 16 * 1024, "the sample must be a subset");
+
+    let sidecar = f.with_extension("csv.tdy.toml");
+    match sniff_via_cli(&f) {
+        Ok(()) => {
+            // If it produced a spec, the spec must run on the whole file.
+            let spec = tdy::sidecar::load(&f)
+                .unwrap()
+                .fresh_spec()
+                .expect("a successful sniff leaves a fresh sidecar");
+            tdy::engine::execute(&spec, &f, Limits::default())
+                .expect("a spec that reached a sidecar must execute");
+        }
+        Err(msg) => {
+            assert!(
+                msg.contains("quote") || msg.contains("column"),
+                "a refusal must name something about the file: {msg}"
+            );
+            assert!(!sidecar.exists(), "a failed sniff must not leave a sidecar behind");
+        }
+    }
+}
+
+/// `tdy sniff` as a user runs it, so the assertion covers the whole path
+/// including whether a sidecar was written.
+fn sniff_via_cli(path: &Path) -> Result<(), String> {
+    let out = Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["--backend", "none", "sniff"])
+        .arg(path)
+        .output()
+        .expect("run tdy");
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).to_string())
+    }
+}

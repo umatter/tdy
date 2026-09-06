@@ -235,6 +235,26 @@ impl RawTable {
 
     fn missing_column(&self, name: &str) -> anyhow::Error {
         let header = self.header.as_deref().unwrap_or(&[]);
+        // When both the wanted name and every name the table has are the
+        // generated `col_N`, listing them says nothing: the reader is looking
+        // at a nameless table that came out narrower than the spec expects,
+        // and the useful fact is *why* two reads of one file disagreed about
+        // its width. They disagree when parse state crosses a boundary — an
+        // unbalanced quote is the usual one — because the spec's columns come
+        // from a sample and this table came from the file.
+        let generated = |n: &str| {
+            n.strip_prefix("col_").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+        };
+        if generated(name) && !header.is_empty() && header.iter().all(|h| generated(h)) {
+            return anyhow!(
+                "the spec names `{name}`, but this file's rows yield {} column(s). Two reads \
+                 of the file disagreed about its width, which happens when the declared \
+                 `quote` is not the character the file actually quotes with: a partial read \
+                 then splits rows differently from a whole one. Check `quote` in the sidecar \
+                 against the file",
+                header.len()
+            );
+        }
         let shown: Vec<String> = header.iter().take(50).map(|h| format!("\"{h}\"")).collect();
         let more = header.len().saturating_sub(shown.len());
         anyhow!(
