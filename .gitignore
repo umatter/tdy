@@ -10,6 +10,12 @@
 # testing, never vendored. `tests/corpus.rs` skips when this is absent, which
 # is what CI sees.
 /corpus/
+
+# The Pollock data-loading benchmark, fetched by scripts/download_pollock.sh:
+# 2,290 polluted CSVs plus its own scoring code and a venv for it. Same rule as
+# `corpus/` — external, large, never vendored, and nothing in CI reads it.
+/pollock/
+/pollock-venv/
 __pycache__/
 
 # The Patterns manuscript and its literature pipeline live beside the code

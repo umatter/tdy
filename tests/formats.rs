@@ -353,7 +353,7 @@ fn fill_down_then_drop_rows_then_unpivot() {
         delim(',', RaggedPolicy::PadNulls),
         vec![
             Transform::PromoteHeader { rows: 1, join: " ".into() },
-            Transform::FillDown { columns: vec!["region".into()] },
+            Transform::FillDown { columns: vec!["region".into()], direction: Default::default() },
             Transform::DropRowsMatching {
                 pattern: "(?i)^zwischensumme$".into(),
                 column: Some("region".into()),
@@ -804,4 +804,51 @@ fn constant_adds_a_column_and_refuses_to_shadow_one() {
     let s = spec(delim(';', RaggedPolicy::PadNulls), shadow, vec![col("Datum", DType::Utf8)]);
     let e = spec_to_batch(&s, &p).unwrap_err();
     assert!(format!("{e:#}").contains("shadow"), "{e:#}");
+}
+
+/// `fill_down` carries the last non-empty value downward; `direction = "up"`
+/// carries it backward, which is the same layout with the label written at the
+/// *bottom* of its group — French-language and some accounting exports.
+///
+/// Asserted as a pair on one file, because the two directions must disagree:
+/// a test that only checked `up` would pass against an implementation that
+/// ignored the field entirely.
+#[test]
+fn fill_down_and_fill_up_are_different_answers_to_the_same_file() {
+    let dir = TempDir::new().unwrap();
+    // `grp` is written once per group, at the bottom of it.
+    let p = dir_file(&dir, "groups.csv", "grp,n\n,1\n,2\nNord,3\n,4\nSued,5\n");
+
+    let build = |direction| {
+        spec(
+            delim(',', RaggedPolicy::Error),
+            vec![
+                Transform::PromoteHeader { rows: 1, join: " ".into() },
+                Transform::FillDown { columns: vec!["grp".into()], direction },
+            ],
+            vec![col("grp", DType::Utf8), col("n", DType::Int64)],
+        )
+    };
+
+    let up = build(FillDirection::Up);
+    up.validate().expect("an upward fill is a valid spec");
+    let b = spec_to_batch(&up, &p).unwrap();
+    assert_eq!(
+        strings(&b, 0),
+        vec!["Nord", "Nord", "Nord", "Sued", "Sued"],
+        "upward: each label reaches the rows above it"
+    );
+
+    // The same file filled the other way leaves the first two rows empty and
+    // attaches row 4 to Nord — a different, equally valid reading, which is
+    // exactly why the direction is declared rather than guessed.
+    let b = spec_to_batch(&build(FillDirection::Down), &p).unwrap();
+    assert_eq!(
+        strings(&b, 0),
+        // The two rows above the first label stay empty, and an empty cell is
+        // a null once it is typed — the reading tdy gives a file whose groups
+        // are labelled the other way round.
+        vec!["<null>", "<null>", "Nord", "Nord", "Sued"],
+        "downward: the label reaches the rows below it"
+    );
 }

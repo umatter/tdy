@@ -1613,3 +1613,346 @@ fn a_summary_row_above_a_footnote_is_still_noticed() {
     );
     assert!(r.confidence < 0.8, "delimited confidence {:?}", r.confidence);
 }
+
+// ---------------------------------------------------------------------------
+// 2026-09-06: accounting negatives. `(1,234.50)` is minus one thousand two
+// hundred thirty-four francs fifty, and before this the only repair the spec
+// language offered was `strip`, which deletes the brackets and yields
+// *plus* 1234.50 — through `validate`, through the dry run, into a
+// fingerprinted sidecar, wrong in its sign and invisible in any single row.
+// ---------------------------------------------------------------------------
+
+/// A ledger CSV whose negatives are written the way ledgers write them.
+const LEDGER: &str = "konto,betrag\nA,\"(1,234.50)\"\nB,\"2,000.00\"\nC,(300.00)\n";
+
+fn ledger_spec(negative: Option<NegativeStyle>, strip: Option<&str>) -> ParseSpec {
+    ParseSpec {
+        extraction: Extraction::Delimited {
+            delimiter: ',',
+            quote: None,
+            escape: None,
+            encoding: None,
+            comment: None,
+            ragged: RaggedPolicy::Error,
+        },
+        transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        columns: vec![
+            ColumnSpec {
+                name: "konto".into(),
+                source: None,
+                dtype: DType::Utf8,
+                nullable: true,
+                parse: ValueParsing::default(),
+            },
+            ColumnSpec {
+                name: "betrag".into(),
+                source: None,
+                dtype: DType::Decimal { precision: 12, scale: 2 },
+                nullable: true,
+                parse: ValueParsing {
+                    thousands_separator: Some(','),
+                    negative,
+                    strip: strip.map(|s| s.to_string()),
+                    ..Default::default()
+                },
+            },
+        ],
+        confidence: None,
+        notes: vec![],
+    }
+}
+
+/// Declared, the marker is read as the sign — exactly, on a decimal, with no
+/// float anywhere near it.
+#[test]
+fn accounting_negatives_read_as_negative_when_declared() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "ledger.csv", LEDGER);
+    let spec = ledger_spec(Some(NegativeStyle::Parentheses), None);
+    spec.validate().expect("a declared sign convention is a valid spec");
+
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(
+        col_dec(&t, 1),
+        vec![Some(-123_450), Some(200_000), Some(-30_000)],
+        "the parenthesised values are negative, and the plain one is not"
+    );
+    // The sum a person would check: -1234.50 + 2000.00 - 300.00 = 465.50.
+    let total: i128 = col_dec(&t, 1).into_iter().flatten().sum();
+    assert_eq!(total, 46_550);
+}
+
+/// Trailing minus is the same claim in mainframe dialect.
+#[test]
+fn a_trailing_minus_reads_as_negative_when_declared() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "sap.csv", "konto,betrag\nA,1234.50-\nB,2000.00\n");
+    let mut spec = ledger_spec(Some(NegativeStyle::TrailingMinus), None);
+    spec.columns[1].parse.thousands_separator = None;
+
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(col_dec(&t, 1), vec![Some(-123_450), Some(200_000)]);
+}
+
+/// The defect itself: a `strip` that eats the marker must not quietly hand
+/// back a positive number. It is caught at execution rather than refused in
+/// `validate`, because a strip that never meets a bracket is perfectly fine
+/// and only the data knows which it is.
+#[test]
+fn a_strip_that_eats_a_sign_marker_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "ledger.csv", LEDGER);
+    let spec = ledger_spec(None, Some("[()]"));
+    spec.validate().expect("the spec is well-formed; the file is what makes it wrong");
+
+    let e = tdy::engine::execute(&spec, &f, Limits::default())
+        .expect_err("stripping the brackets would flip the sign");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("row 1"), "the offending row must be named: {msg}");
+    assert!(msg.contains("negative"), "the remedy must be named: {msg}");
+    assert!(msg.contains("(1,234.50)"), "the value must be shown: {msg}");
+}
+
+/// ...and the same guard must not fire on an ordinary currency strip, which
+/// is the whole reason `strip` exists.
+#[test]
+fn stripping_a_currency_symbol_is_still_fine() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "chf.csv", "konto,betrag\nA,CHF 1234.50\nB,CHF -300.00\n");
+    let mut spec = ledger_spec(None, Some("CHF\\s*"));
+    spec.columns[1].parse.thousands_separator = None;
+
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(col_dec(&t, 1), vec![Some(123_450), Some(-30_000)]);
+}
+
+/// A currency symbol *inside* the marker is the ordinary shape of a real
+/// ledger cell, and the two features have to compose: strip takes the symbol,
+/// `negative` takes the bracket.
+#[test]
+fn a_currency_symbol_inside_the_marker_composes_with_the_sign() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "chf.csv", "konto,betrag\nA,\"(CHF 1,234.50)\"\nB,\"CHF 2,000.00\"\n");
+    let spec = ledger_spec(Some(NegativeStyle::Parentheses), Some("CHF\\s*"));
+
+    let t = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(col_dec(&t, 1), vec![Some(-123_450), Some(200_000)]);
+}
+
+/// Two ways of writing the sign at once has no known reading, so it is an
+/// error rather than a guess.
+#[test]
+fn a_sign_inside_the_marker_is_an_error_not_a_guess() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "odd.csv", "konto,betrag\nA,(-5.00)\n");
+    let mut spec = ledger_spec(Some(NegativeStyle::Parentheses), None);
+    spec.columns[1].parse.thousands_separator = None;
+
+    let e = tdy::engine::execute(&spec, &f, Limits::default()).expect_err("(-5) has two readings");
+    assert!(format!("{e:#}").contains("both a sign and a negative marker"), "{e:#}");
+}
+
+/// Inference must not make this decision: a bracket means minus in a ledger
+/// and a footnote reference in a yearbook. The column stays text, and the
+/// note says which declaration would turn it into a number.
+#[test]
+fn a_column_of_accounting_negatives_is_flagged_and_not_typed() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "ledger.csv", LEDGER);
+    let r = sniffed(&f);
+    let betrag = r.spec.columns.iter().find(|c| c.name == "betrag").expect("a betrag column");
+    assert_eq!(betrag.dtype, DType::Utf8, "tdy must not decide a bracket means minus");
+    assert!(betrag.parse.negative.is_none(), "and must not declare the convention either");
+
+    let notes = r.spec.notes.join(" | ");
+    assert!(notes.contains("accounting negatives"), "the shape must be reported: {notes}");
+    assert!(notes.contains("negative ="), "with the remedy: {notes}");
+    assert!(
+        r.spec.confidence.unwrap_or(1.0) < 0.95,
+        "a column nobody can type without a human is not a confident read: {:?}",
+        r.spec.confidence
+    );
+}
+
+/// Without the declaration the value cannot be parsed at all — which is
+/// correct, and used to be reported as "invalid digit found in string". The
+/// marker is right there in the value and so is the remedy, so the message
+/// names both.
+#[test]
+fn an_undeclared_sign_marker_names_the_declaration_that_fixes_it() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "ledger.csv", LEDGER);
+    let spec = ledger_spec(None, None);
+
+    let e = tdy::engine::execute(&spec, &f, Limits::default())
+        .expect_err("(1,234.50) is not a number without a convention");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("accounting negative"), "{msg}");
+    assert!(msg.contains("parentheses"), "{msg}");
+}
+
+// ---------------------------------------------------------------------------
+// 2026-09-06, found by the Pollock benchmark (scripts/run_pollock.py):
+// `file_quotation_char_0x27` and `file_field_delimiter_0x2C_0x20` both failed
+// with "resolving output column `col_13`: no column named `col_13`" — a spec
+// the sniffer produced that the executor cannot run, which the design says
+// cannot happen.
+//
+// It can, and the mechanism is worth stating: the spec's columns come from a
+// 16 KB head+tail *sample*, while the table comes from the file. When parse
+// state crosses the boundary between them — an unbalanced quote is the usual
+// way — the two split rows differently and disagree about the width. The
+// outcome is safe (a loud error, no sidecar written) and stays that way; what
+// these tests pin is that the error explains the file rather than the internals.
+// ---------------------------------------------------------------------------
+
+/// A nameless table that came out narrower than the spec expects must say so.
+/// Listing `col_1 … col_12` back to someone who asked for `col_13` is a true
+/// statement that helps nobody: the fact they need is that two reads of one
+/// file disagreed about its width, and why.
+#[test]
+fn a_width_mismatch_on_a_nameless_table_explains_itself() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "narrow.csv", "a,b,c\nd,e,f\n");
+
+    let mut spec = ledger_spec(None, None);
+    spec.transforms.clear(); // no header: columns are the generated col_N
+    spec.columns = (1..=4)
+        .map(|i| ColumnSpec {
+            name: format!("col_{i}"),
+            source: None,
+            dtype: DType::Utf8,
+            nullable: true,
+            parse: ValueParsing::default(),
+        })
+        .collect();
+
+    let e = tdy::engine::execute(&spec, &f, Limits::default())
+        .expect_err("the file has three columns, the spec names four");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("yield 3 column(s)"), "the file's real width: {msg}");
+    assert!(msg.contains("quote"), "and the usual cause, which is actionable: {msg}");
+    assert!(
+        !msg.contains("available columns"),
+        "listing col_1..col_3 back is the unhelpful form this replaces: {msg}"
+    );
+}
+
+/// The invariant itself, end to end, on a file big enough that the sniffer's
+/// 16 KB sample is a strict subset of it: **a spec that reaches a sidecar
+/// executes on the whole file.** Either sniffing produces such a spec, or it
+/// fails saying something about the file and leaves no sidecar behind.
+///
+/// This does not reproduce the Pollock divergence byte for byte — that needs a
+/// file whose quoting state differs between the sampled head+tail and the
+/// middle it skips, which is a property of that corpus rather than a shape
+/// worth hand-building. `scripts/run_pollock.py` is where that case lives. What
+/// is pinned here is the property the divergence broke, which is the one that
+/// matters: no sidecar may promise something the executor cannot deliver.
+#[test]
+fn a_sample_that_parses_differently_from_the_file_never_reaches_a_sidecar() {
+    let dir = TempDir::new().unwrap();
+    let mut body = String::from("date,product,note\n");
+    for i in 0..200 {
+        // Long enough that 16 KB of head+tail is a strict subset of the file,
+        // apostrophe-quoted like the Pollock fixture, with a stray `"` every
+        // so often to leave the declared quote character unbalanced.
+        let stray = if i % 37 == 0 { "\"" } else { "" };
+        body.push_str(&format!(
+            "0{}/01/2018,P-{i:04},'a note about item {i}{stray}, long enough to matter: {}'\n",
+            i % 9 + 1,
+            "x".repeat(120)
+        ));
+    }
+    let f = write(&dir, "quoted.csv", &body);
+    assert!(fs::metadata(&f).unwrap().len() > 16 * 1024, "the sample must be a subset");
+
+    let sidecar = f.with_extension("csv.tdy.toml");
+    match sniff_via_cli(&f) {
+        Ok(()) => {
+            // If it produced a spec, the spec must run on the whole file.
+            let spec = tdy::sidecar::load(&f)
+                .unwrap()
+                .fresh_spec()
+                .expect("a successful sniff leaves a fresh sidecar");
+            tdy::engine::execute(&spec, &f, Limits::default())
+                .expect("a spec that reached a sidecar must execute");
+        }
+        Err(msg) => {
+            assert!(
+                msg.contains("quote") || msg.contains("column"),
+                "a refusal must name something about the file: {msg}"
+            );
+            assert!(!sidecar.exists(), "a failed sniff must not leave a sidecar behind");
+        }
+    }
+}
+
+/// `tdy sniff` as a user runs it, so the assertion covers the whole path
+/// including whether a sidecar was written.
+fn sniff_via_cli(path: &Path) -> Result<(), String> {
+    let out = Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["--backend", "none", "sniff"])
+        .arg(path)
+        .output()
+        .expect("run tdy");
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).to_string())
+    }
+}
+
+/// The second Pollock finding: 32 files scored a header F1 of zero because one
+/// stray quote in the header row made it parse to the wrong arity, so
+/// `header_verdict` rejected it, the row was discarded as a title row, and
+/// every column came back named `col_N`.
+///
+/// Discarding it is defensible — a row of three fields is not a header for
+/// nine columns, and inventing names from a mis-parsed row is the mis-mapping
+/// the design refuses. What was not defensible was the confidence: 0.80, which
+/// is exactly the escalation threshold, for a file where tdy threw a row away
+/// *and* could not name a single column. Those two doubts corroborate each
+/// other and must compound.
+#[test]
+fn discarding_the_top_of_a_file_and_finding_no_header_is_not_a_confident_read() {
+    let dir = TempDir::new().unwrap();
+    // The state a stray quote in the header puts tdy in, reached directly:
+    // a first row whose arity differs from the body's, so it is discarded as
+    // non-tabular, over a body that gives `header_verdict` nothing to promote.
+    // (The quote is only one route here; the arity mismatch is the situation.)
+    let f = write(
+        &dir,
+        "odd_top.csv",
+        "h1,h2,h3\n1,2,3,4,5\n6,7,8,9,10\n11,12,13,14,15\n16,17,18,19,20\n",
+    );
+    let r = sniffed(&f);
+
+    let notes = r.spec.notes.join(" | ");
+    assert!(notes.contains("no header row detected"), "{notes}");
+    assert!(
+        notes.contains("was not understood"),
+        "the two doubts must be reported as one situation: {notes}"
+    );
+    let c = r.spec.confidence.expect("a heuristic spec carries a confidence");
+    assert!(
+        c < 0.8,
+        "a file whose top row was discarded and whose columns have no names is exactly \
+         what the escalation threshold is for; got {c}"
+    );
+}
+
+/// ...and the compounding must not fire on a file that merely has no header,
+/// which is an ordinary and perfectly readable shape.
+#[test]
+fn a_headerless_file_with_nothing_discarded_stays_confident() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "plain.csv", "1,2,3\n4,5,6\n7,8,9\n10,11,12\n");
+    let r = sniffed(&f);
+
+    let notes = r.spec.notes.join(" | ");
+    assert!(
+        !notes.contains("was not understood"),
+        "nothing was discarded here, so nothing compounds: {notes}"
+    );
+}

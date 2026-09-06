@@ -1,6 +1,6 @@
 [package]
 name = "tdy-tui"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 # ratatui 0.30 requires exactly this, which is also tdy's floor.
 rust-version = "1.88"
@@ -9,7 +9,7 @@ license = "MIT"
 repository = "https://github.com/umatter/tdy"
 
 [dependencies]
-tdy = { path = "..", version = "0.2.0" }
+tdy = { path = "..", version = "0.2.1" }
 ratatui = "0.30"
 crossterm = "0.29"
 anyhow = "1"

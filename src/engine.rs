@@ -36,9 +36,22 @@ use crate::fileio;
 use crate::numfmt;
 use crate::sample::render_cell;
 use crate::spec::{
-    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, NoMatchPolicy, ParseSpec,
-    RaggedPolicy, Transform, ValueParsing,
+    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, FillDirection,
+    NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform, ValueParsing,
 };
+
+/// Which negative-number marker a value carries, if any — the shape only, not
+/// a claim that it means minus. Used to notice that a `strip` regex ate one.
+fn sign_marker(v: &str) -> Option<&'static str> {
+    let t = v.trim();
+    if t.len() > 2 && t.starts_with('(') && t.ends_with(')') {
+        Some("parentheses")
+    } else if t.len() > 1 && t.ends_with('-') {
+        Some("trailing_minus")
+    } else {
+        None
+    }
+}
 
 /// Compiled-regex size ceiling. A pattern from a sidecar or a model is
 /// untrusted input; the `regex` crate cannot backtrack, but it can be asked
@@ -222,6 +235,26 @@ impl RawTable {
 
     fn missing_column(&self, name: &str) -> anyhow::Error {
         let header = self.header.as_deref().unwrap_or(&[]);
+        // When both the wanted name and every name the table has are the
+        // generated `col_N`, listing them says nothing: the reader is looking
+        // at a nameless table that came out narrower than the spec expects,
+        // and the useful fact is *why* two reads of one file disagreed about
+        // its width. They disagree when parse state crosses a boundary — an
+        // unbalanced quote is the usual one — because the spec's columns come
+        // from a sample and this table came from the file.
+        let generated = |n: &str| {
+            n.strip_prefix("col_").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+        };
+        if generated(name) && !header.is_empty() && header.iter().all(|h| generated(h)) {
+            return anyhow!(
+                "the spec names `{name}`, but this file's rows yield {} column(s). Two reads \
+                 of the file disagreed about its width, which happens when the declared \
+                 `quote` is not the character the file actually quotes with: a partial read \
+                 then splits rows differently from a whole one. Check `quote` in the sidecar \
+                 against the file",
+                header.len()
+            );
+        }
         let shown: Vec<String> = header.iter().take(50).map(|h| format!("\"{h}\"")).collect();
         let more = header.len().saturating_sub(shown.len());
         anyhow!(
@@ -864,7 +897,7 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     }
                 }
             }
-            Transform::FillDown { columns } => {
+            Transform::FillDown { columns, direction } => {
                 table.ensure_header()?;
                 let index = table.header_index()?;
                 let resolved: Vec<usize> = columns
@@ -873,7 +906,14 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     .collect::<Result<_>>()?;
                 for idx in resolved {
                     let mut last = String::new();
-                    for row in &mut table.rows {
+                    // One loop, two directions: filling up is filling down
+                    // over the reversed table, and writing it that way keeps
+                    // the carry rule in exactly one place.
+                    let rows: Box<dyn Iterator<Item = &mut Vec<String>>> = match direction {
+                        FillDirection::Down => Box::new(table.rows.iter_mut()),
+                        FillDirection::Up => Box::new(table.rows.iter_mut().rev()),
+                    };
+                    for row in rows {
                         let Some(cell) = row.get_mut(idx) else { continue };
                         if cell.trim().is_empty() {
                             cell.clone_from(&last);
@@ -1058,11 +1098,22 @@ pub(crate) fn build_column_at(
         .map(|s| compile(s, "strip"))
         .transpose()?;
 
+    // A `strip` that deletes a sign marker turns -1234.50 into +1234.50, and
+    // nothing downstream can tell: the column types, the dry run passes, the
+    // sidecar fingerprints, and the number is wrong by twice itself. Watched
+    // for here rather than refused in `validate`, because a strip that never
+    // meets a parenthesis is perfectly fine and only the data knows.
+    let sign_guard = p.negative.is_none()
+        && strip_re.is_some()
+        && matches!(col.dtype, DType::Int64 | DType::Float64 | DType::Decimal { .. });
+    let mut ate_sign: Option<(usize, &'static str)> = None;
+
     // trim -> replace -> na -> strip. Borrowed until something actually
     // changes, so a clean column costs no allocations at all.
     let cleaned: Vec<Option<Cow<str>>> = values
         .iter()
-        .map(|raw| {
+        .enumerate()
+        .map(|(i, raw)| {
             let mut v: Cow<str> = Cow::Borrowed(raw.trim());
             for r in &p.replace {
                 if v.contains(&r.from) {
@@ -1083,7 +1134,12 @@ pub(crate) fn build_column_at(
             }
             if let Some(re) = &strip_re {
                 if re.is_match(&v) {
+                    let marker = if sign_guard { sign_marker(&v) } else { None };
                     let stripped = re.replace_all(&v, "").trim().to_string();
+                    if ate_sign.is_none() && marker.is_some() && sign_marker(&stripped).is_none()
+                    {
+                        ate_sign = marker.map(|kind| (i, kind));
+                    }
                     if stripped.is_empty() {
                         return None;
                     }
@@ -1093,6 +1149,17 @@ pub(crate) fn build_column_at(
             Some(v)
         })
         .collect();
+
+    if let Some((i, kind)) = ate_sign {
+        bail!(
+            "row {}: `strip` removes the marker that makes {:?} negative, which would \
+             silently read it as positive; write `negative = \"{}\"` to say what the \
+             marker means and leave `strip` for the currency symbol",
+            row_offset + i + 1,
+            values[i].trim(),
+            kind
+        );
+    }
 
     if !col.nullable {
         if let Some(row) = cleaned.iter().position(|v| v.is_none()) {
@@ -1109,6 +1176,40 @@ pub(crate) fn build_column_at(
     // separator that does not group in threes is a wrong spec, not a
     // character to delete. This is what keeps "1,5" from becoming 15.
     let numeric = |v: &str| -> Result<String> {
+        // The sign comes off first, so everything below sees an ordinary
+        // unsigned number: grouping is checked on the digits, the separators
+        // are swapped on the digits, and the decimal point is moved on the
+        // digits. Re-attached at the end, which is sound because none of those
+        // steps depends on the sign.
+        let (neg, v) = match p.negative {
+            Some(NegativeStyle::Parentheses) => match v
+                .strip_prefix('(')
+                .and_then(|inner| inner.strip_suffix(')'))
+            {
+                Some(inner) => (true, inner.trim()),
+                None => (false, v),
+            },
+            Some(NegativeStyle::TrailingMinus) => match v.strip_suffix('-') {
+                Some(inner) => (true, inner.trim_end()),
+                None => (false, v),
+            },
+            None => (false, v),
+        };
+        // Two ways of saying the sign at once is not a value with a known
+        // reading: `(-5)` is minus five to one author and plus five to
+        // another, and picking is guessing.
+        if neg && (v.starts_with('-') || v.starts_with('+')) {
+            bail!("carries both a sign and a negative marker; one of the two is a mistake");
+        }
+        // Undeclared, the marker would otherwise surface as "invalid digit
+        // found in string", which is true and useless. The value is right
+        // here and so is the fix.
+        if let (false, Some(kind)) = (neg, sign_marker(v)) {
+            bail!(
+                "looks like an accounting negative; declare `negative = \"{kind}\"` on \
+                 this column to read the marker as a sign"
+            );
+        }
         numfmt::check_grouping(v, p.thousands_separator, p.decimal_separator)
             .map_err(|e| anyhow!("{e}"))?;
         let mut s = Cow::Borrowed(v);
@@ -1129,7 +1230,7 @@ pub(crate) fn build_column_at(
                 s = Cow::Owned(shift_decimal_point(&s, shift));
             }
         }
-        Ok(s.into_owned())
+        Ok(if neg { format!("-{s}") } else { s.into_owned() })
     };
 
     macro_rules! parse_all {

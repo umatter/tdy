@@ -707,7 +707,10 @@ fn describe_frame(spec: &ParseSpec) -> String {
             Transform::DropRowsMatching { pattern, .. } => {
                 format!("drop_rows_matching {pattern:?}")
             }
-            Transform::FillDown { columns } => format!("fill_down {columns:?}"),
+            Transform::FillDown { columns, direction } => match direction {
+                crate::spec::FillDirection::Down => format!("fill_down {columns:?}"),
+                crate::spec::FillDirection::Up => format!("fill_up {columns:?}"),
+            },
             Transform::Unpivot { .. } => "unpivot".into(),
             Transform::Constant { name, .. } => format!("constant {name:?}"),
         });

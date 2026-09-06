@@ -212,6 +212,24 @@ pub enum RaggedPolicy {
     TruncateExtra,
 }
 
+/// Which way `fill_down` carries the last non-empty value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FillDirection {
+    /// Downward: the value is written once at the top of its group, or the
+    /// cell above was vertically merged.
+    #[default]
+    Down,
+    /// Upward: the value is written at the *bottom* of its group.
+    Up,
+}
+
+impl FillDirection {
+    pub fn is_default(&self) -> bool {
+        matches!(self, FillDirection::Down)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NoMatchPolicy {
@@ -258,7 +276,15 @@ pub enum Transform {
     },
     /// Propagate the last non-empty value downward: the cure for vertically
     /// merged cells and "category written once" layouts.
-    FillDown { columns: Vec<String> },
+    FillDown {
+        columns: Vec<String>,
+        /// Which way the last non-empty value travels. `down` is the
+        /// merged-cell and written-once-at-the-top layout; `up` is the same
+        /// layout with the label written at the *bottom* of its group, which
+        /// French-language and some accounting exports do.
+        #[serde(default, skip_serializing_if = "FillDirection::is_default")]
+        direction: FillDirection,
+    },
     /// Add a column the file does not have, holding `value` in every row.
     ///
     /// The empty string is the null fill: `""` reads as missing in every
@@ -344,8 +370,31 @@ pub enum DType {
     },
 }
 
+/// How a negative number is written, when it is not written with a leading `-`.
+///
+/// This exists because the alternative was a wrong number. Accounting exports
+/// write a negative as `(1,234.50)` and mainframe extracts write it as
+/// `1234.50-`; neither parses, so before this existed the only repair the spec
+/// language offered was `strip`, which deletes the marker and yields a
+/// **positive** value — a validated, fingerprinted spec producing money wrong
+/// in its sign, invisibly. Saying what the marker *means* is the honest fix;
+/// deleting it is not.
+///
+/// Never inferred. The sniffer notices the shape and says so (lowering
+/// confidence), but a convention is a claim about what the file's author meant,
+/// and `(5)` is a footnote marker at least as often as it is minus five.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NegativeStyle {
+    /// `(1,234.50)` is -1234.50. Accounting/finance exports, Excel's
+    /// "Accounting" cell format, and every ledger printed since 1494.
+    Parentheses,
+    /// `1234.50-` is -1234.50. COBOL/SAP/mainframe sign-trailing output.
+    TrailingMinus,
+}
+
 /// String-level cleanup applied before the typed cast, in this order:
-/// trim -> replace -> na check -> strip -> separators -> parse.
+/// trim -> replace -> na check -> strip -> sign -> separators -> parse.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ValueParsing {
@@ -393,6 +442,14 @@ pub struct ValueParsing {
     /// multiplication: no float is involved and nothing is rounded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decimal_shift: Option<i8>,
+    /// How this column writes a negative number, when not with a leading `-`.
+    ///
+    /// Applied after `strip` and before the separators, so a value may carry a
+    /// currency symbol inside the marker (`(CHF 1'234.50)`): strip removes the
+    /// symbol, this removes the marker and remembers the sign, and the
+    /// separators then see an ordinary number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub negative: Option<NegativeStyle>,
     /// For Bool columns: e.g. ["ja", "yes", "1"] / ["nein", "no", "0"].
     /// Matched case-insensitively.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -535,6 +592,18 @@ impl ParseSpec {
                         crate::engine::shift_decimal_point("1234", shift)
                     ));
                 }
+            }
+            // A sign convention means nothing outside a number: on a text
+            // column it would silently do nothing, and on a date it would eat
+            // a bracket somebody meant to keep.
+            if c.parse.negative.is_some()
+                && !matches!(c.dtype, DType::Decimal { .. } | DType::Float64 | DType::Int64)
+            {
+                errs.push(format!(
+                    "column `{}`: `negative` says how a negative number is written, which                      means nothing for a {} column",
+                    c.name,
+                    dtype_name(&c.dtype)
+                ));
             }
             // A token cannot be both "missing" and a value. The executor
             // checks na_values first, so an overlap silently turns a declared
@@ -730,7 +799,7 @@ impl ParseSpec {
                         errs.push(format!("drop_rows_matching: invalid regex: {e}"));
                     }
                 }
-                Transform::FillDown { columns } => {
+                Transform::FillDown { columns, .. } => {
                     if columns.is_empty() {
                         errs.push("fill_down: `columns` must not be empty".into());
                     }
@@ -846,6 +915,21 @@ mod tests {
     /// A token cannot be both "missing" and a value: the executor checks
     /// na_values first, so an overlap silently turns a declared FALSE into a
     /// null — a wrong value whose two readings both produce a valid column.
+    /// A sign convention on a text column would silently do nothing, and on a
+    /// date it would eat a bracket somebody meant to keep.
+    #[test]
+    fn a_negative_style_is_refused_outside_a_number() {
+        let mut spec = minimal_bool_spec();
+        spec.columns[0].parse.negative = Some(NegativeStyle::Parentheses);
+        let e = spec.validate().expect_err("`negative` means nothing for a boolean");
+        assert!(format!("{e:?}").contains("negative"), "{e:?}");
+
+        spec.columns[0].dtype = DType::Decimal { precision: 12, scale: 2 };
+        spec.columns[0].parse.true_values.clear();
+        spec.columns[0].parse.false_values.clear();
+        spec.validate().expect("on a decimal it is exactly what it is for");
+    }
+
     #[test]
     fn a_token_may_not_be_both_missing_and_a_boolean() {
         let mut spec = minimal_bool_spec();

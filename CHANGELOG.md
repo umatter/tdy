@@ -2,6 +2,96 @@
 
 Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
+## Unreleased
+
+### Fixed — both found by the Pollock benchmark
+
+Running `scripts/run_pollock.py` over 2,290 files with one isolated deviation
+from RFC 4180 each turned up two things nothing in the tree had:
+
+- **A width mismatch on a nameless table now explains itself.** Two files
+  failed with `resolving output column col_13: no column named col_13;
+  available columns: [col_1, …, col_12]` — true, and useless to the person
+  reading it. The spec's columns come from a 16 KB head+tail sample while the
+  table comes from the file, and when parse state crosses the boundary between
+  them (an unbalanced quote is the usual way) the two split rows differently
+  and disagree about the width. When both the wanted name and every name the
+  table has are the generated `col_N`, the error now gives the file's real
+  width and names the likely cause — verified: re-reading that file with
+  `quote = "'"` takes 61 of its 84 rows to a uniform 9 fields.
+
+  The *outcome* was already safe — a loud error, no sidecar written — and
+  stays so. What changed is that the message is about the file.
+
+- **Discarding the top of a file and finding no header is no longer a
+  confident read.** 32 files reached confidence 0.80 — exactly the escalation
+  threshold — in a state where tdy had thrown a leading row away *and* could
+  not name a single column. Skipping the top of a file is a guess that a
+  header below it corroborates; with no header found anywhere, nothing
+  corroborates it, and the row discarded may have *been* the header, malformed.
+  The two doubts now compound (0.80 → 0.65), which puts such a file in the band
+  where a human looks and a backend escalates.
+
+  Discarding the row is unchanged and deliberate: a three-field row is not a
+  header for nine columns, and inventing names from a mis-parsed row is exactly
+  the mis-mapping the design refuses.
+
+### Added
+
+- **`fill_down` takes a `direction`.** `down` (the default, and what it always
+  did) carries the last non-empty value forward — the merged-cell and
+  written-once-at-the-top layout. `up` carries it backward, which is the same
+  layout with the label written at the *bottom* of its group, as
+  French-language and some accounting exports write it. The two are different
+  readings of the same file, so it is declared rather than guessed.
+
+  A spec with `direction = "up"` runs on the materialising executor:
+  `stream::can_stream` refuses the shape, because carrying a value from a row
+  the reader has not reached yet is the one thing a forward-only pass cannot
+  do. No spec is refused for it — only executed the older way.
+
+  *Library note:* `Transform::FillDown` gained a field, so code constructing
+  the variant directly needs `direction: Default::default()`. Sidecars are
+  unaffected; the field defaults and is omitted when it is `down`.
+
+## 0.2.1 — 2026-09-06
+
+One correctness fix, in the same class as 0.2.0's: a spec that passed every
+gate and produced a number wrong in its **sign**.
+
+### Fixed
+
+- **Accounting negatives no longer read as positive.** `(1,234.50)` is minus
+  1234.50 in every ledger ever printed, and `1234.50-` is the same claim in
+  mainframe dialect. Neither parses as a number, so the only repair the spec
+  language offered was `strip` — which deletes the marker and yields
+  **+1234.50**, through `validate`, through the dry run, into a fingerprinted
+  sidecar, invisible in any single row and wrong by twice itself.
+
+  Three changes close it:
+
+  - **`parse.negative = "parentheses" | "trailing_minus"`** says what the
+    marker *means*, so the value can be read correctly. It applies after
+    `strip` and before the separators, so `(CHF 1'234.50)` works: strip takes
+    the symbol, `negative` takes the bracket. Only valid on a numeric column.
+  - **A `strip` that would eat a sign marker is now refused at execution**,
+    naming the row, the value and the remedy. It is checked against the data
+    rather than refused in `validate`, because a `strip` that never meets a
+    bracket is perfectly fine and only the file knows which it is.
+  - **The sniffer reports the shape instead of guessing at it.** A column
+    written that way stays text, gains a note saying which declaration would
+    type it, and loses confidence. It is never inferred: `(5)` is a footnote
+    marker at least as often as it is minus five, and that is a judgement
+    about what the file's author meant.
+
+  `(-5)` — a sign *and* a marker — is an error rather than a guess, since it
+  reads as minus five to one author and plus five to another.
+
+**No existing results change**, unless a hand-written sidecar was stripping
+sign markers: such a spec now fails loudly where it used to return positive
+numbers. That is the fix. Sniffed sidecars are unaffected — the sniffer never
+typed these columns in the first place.
+
 ## 0.2.0 — 2026-09-05
 
 A correctness release. Two systematic audits of a 9,881-file corpus of real
