@@ -980,6 +980,23 @@ Details worth knowing:
   digits than `scale`. When the sniffer sees an inconsistent number of
   fractional digits it says so in `notes`, because rows it never read may be
   rounded.
+- **`transpose` flips the table**, rows into columns, for a file laid out for
+  reading rather than analysis — variables down the left, observations across
+  the top. It takes no options and must come before `promote_header`: after
+  the flip the values that were the first column are the first *row*, so
+  `promote_header` does what it always does. It needs the whole table in
+  memory by definition, so it does not stream. The sniffer never applies it —
+  the layout it cures and an ordinary wide report that wants `unpivot` look
+  identical, and only a person knows which one they have — but it says so in a
+  note when it sees the shape.
+- **`split_column` replaces one column with several**, by literal delimiter,
+  by character position, or by a regex's capture groups. It is total by
+  construction: a delimiter split stops after as many parts as `into` names
+  and keeps the remainder in the last one, so a value can never make more
+  parts than there are columns for it. It can make *fewer* — a value with no
+  separator — and that is an error naming the row unless the spec declares
+  `on_short = "null"`, which says the tail is optional and fills it with
+  nulls while keeping the head.
 - **`fill_down` has a `direction`.** `down` (the default) is the merged-cell
   and written-once-at-the-top layout; `up` is the same layout with the label
   written at the *bottom* of its group. Both readings are valid for a file

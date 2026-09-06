@@ -711,6 +711,10 @@ fn describe_frame(spec: &ParseSpec) -> String {
                 crate::spec::FillDirection::Down => format!("fill_down {columns:?}"),
                 crate::spec::FillDirection::Up => format!("fill_up {columns:?}"),
             },
+            Transform::Transpose => "transpose".into(),
+            Transform::SplitColumn { source, into, .. } => {
+                format!("split_column {source:?} -> {into:?}")
+            }
             Transform::Unpivot { .. } => "unpivot".into(),
             Transform::Constant { name, .. } => format!("constant {name:?}"),
         });

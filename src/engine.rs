@@ -37,8 +37,53 @@ use crate::numfmt;
 use crate::sample::render_cell;
 use crate::spec::{
     parse_a1_range, parse_fixed_offset, ColumnSpec, DType, Extraction, FillDirection,
-    NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, Transform, ValueParsing,
+    NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, ShortSplit, SplitBy, Transform,
+    ValueParsing,
 };
+
+/// Cut `v` into exactly `n` parts, or `None` when it yields fewer.
+///
+/// Total by construction for a delimiter: `splitn(n, ..)` can return at most
+/// `n` pieces, so the only failure is *too few*. `Positions` never fails —
+/// a fixed layout with a short line has empty trailing fields, exactly as
+/// `fixed_width` reads it — and a `Regex` fails when it does not match.
+fn split_value(v: &str, by: &SplitBy, n: usize, re: Option<&regex::Regex>) -> Option<Vec<String>> {
+    let parts = split_partial(v, by, n, re)?;
+    (parts.len() == n).then_some(parts)
+}
+
+/// The same cut, returning however many parts it managed. Used by
+/// `on_short = "null"` so the head of a short value survives into the
+/// leading columns instead of the whole row going null.
+fn split_partial(
+    v: &str,
+    by: &SplitBy,
+    n: usize,
+    re: Option<&regex::Regex>,
+) -> Option<Vec<String>> {
+    match by {
+        SplitBy::Delimiter { value } => {
+            Some(v.splitn(n, value.as_str()).map(|s| s.to_string()).collect())
+        }
+        SplitBy::Positions { at } => {
+            // Character offsets, not bytes: see the type's doc comment.
+            let chars: Vec<char> = v.chars().collect();
+            let mut out = Vec::with_capacity(n);
+            let mut start = 0usize;
+            for cut in at {
+                let end = (*cut as usize).min(chars.len()).max(start);
+                out.push(chars[start..end].iter().collect::<String>().trim().to_string());
+                start = end;
+            }
+            out.push(chars[start.min(chars.len())..].iter().collect::<String>().trim().to_string());
+            Some(out)
+        }
+        SplitBy::Regex { pattern: _ } => {
+            let caps = re?.captures(v)?;
+            Some((1..caps.len()).map(|i| caps.get(i).map_or(String::new(), |m| m.as_str().to_string())).collect())
+        }
+    }
+}
 
 /// Which negative-number marker a value carries, if any — the shape only, not
 /// a claim that it means minus. Used to notice that a `strip` regex ate one.
@@ -921,6 +966,82 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                             last.clone_from(cell);
                         }
                     }
+                }
+            }
+            Transform::Transpose => {
+                // A partial read has not seen every row, and every row it has
+                // not seen is a *column* of the result — not a few missing
+                // records but a table of the wrong shape. `skip_rows`'s tail
+                // is skipped on a truncated table for the weaker version of
+                // this reason; here it has to be refused outright.
+                if table.truncated {
+                    bail!(
+                        "transpose needs the whole table: this one stopped early, and the \
+                         rows it never read would each have been a column. Raise \
+                         `[limits] max_cells`, or read a smaller range"
+                    );
+                }
+                if table.header.is_some() {
+                    bail!("internal: transpose ran after a header was established");
+                }
+                // Ragged input transposes to a rectangle: a row that stopped
+                // short contributes an empty cell to each column beyond it,
+                // which is what the missing value was.
+                let width = table.rows.iter().map(|r| r.len()).max().unwrap_or(0);
+                let mut flipped: Vec<Vec<String>> =
+                    vec![Vec::with_capacity(table.rows.len()); width];
+                for row in &table.rows {
+                    for (c, out) in flipped.iter_mut().enumerate() {
+                        out.push(row.get(c).cloned().unwrap_or_default());
+                    }
+                }
+                table.rows = flipped;
+            }
+            Transform::SplitColumn { source, into, by, on_short } => {
+                table.ensure_header()?;
+                let idx = table.col_index(source)?;
+                let n = into.len();
+                let re = match by {
+                    SplitBy::Regex { pattern } => Some(compile(pattern, "split_column")?),
+                    _ => None,
+                };
+
+                // The header first, so a table with no rows still comes out
+                // the right shape — which is what `schema_of` reads when it
+                // builds every column over zero rows.
+                if let Some(header) = table.header.as_mut() {
+                    header.splice(idx..=idx, into.iter().cloned());
+                }
+
+                for (r, row) in table.rows.iter_mut().enumerate() {
+                    let Some(cell) = row.get(idx) else { continue };
+                    let parts = split_value(cell, by, n, re.as_ref());
+                    let parts = match parts {
+                        Some(p) => p,
+                        None => match on_short {
+                            ShortSplit::Null => {
+                                let mut p = vec![String::new(); n];
+                                // Whatever the value *did* yield stays in the
+                                // leading parts: a missing tail is missing,
+                                // and the head is not lost with it.
+                                if let Some(got) = split_partial(cell, by, n, re.as_ref()) {
+                                    for (i, v) in got.into_iter().enumerate() {
+                                        p[i] = v;
+                                    }
+                                }
+                                p
+                            }
+                            ShortSplit::Error => bail!(
+                                "row {}: splitting `{source}` gave fewer than {n} parts \
+                                 for {:?}; the value has no separator where the spec \
+                                 expects one. Fix the split, or declare \
+                                 `on_short = \"null\"` if the tail is optional",
+                                r + 1,
+                                cell
+                            ),
+                        },
+                    };
+                    row.splice(idx..=idx, parts);
                 }
             }
             Transform::Constant { name, value } => {

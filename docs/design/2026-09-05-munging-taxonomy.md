@@ -531,14 +531,25 @@ the top —
 — a layout produced by every "print-friendly" export and every hand-built
 management sheet.
 
-**`gap`, and the largest one in this report.** There is no transpose transform.
-The workaround is not partial, it is absent: `unpivot` turns wide into long but
-cannot make the *first column* into the header. A file in this shape can only be
-read as `kennzahl`, `col_2`, `col_3`, `col_4` with three text columns, which
-neither conforms to a sensible target nor types correctly. Note the shape is
-mechanically detectable — the first column holds the names, the header row holds
-values that all parse as one type — so a sniffer note is cheap even if the
-transform is not.
+**`spec`** since 2026-09-06 — `Transform::Transpose`, which takes no options:
+after the flip the values that were the first column are the first *row*, so
+`promote_header` does what it always does. `validate` refuses it after a header
+has been established, and the executor refuses it on a truncated table, because
+every row a partial read never saw would have been a *column* — the result would
+be the wrong shape, not merely short.
+
+It was the largest gap in this report, and the workaround was not partial but
+absent: a file in this shape could only be read as `kennzahl`, `col_2`, `col_3`
+with three text columns, conforming to no sensible target and typing nothing.
+
+**Never inferred**, and the reason is the interesting part: the shape *is*
+mechanically detectable — period labels across the header, entity labels down
+the first column — but that signature is shared exactly with an ordinary wide
+report that wants **D1 `unpivot`**, and what separates them is what the rows
+mean, which the file does not say. So the sniffer emits a note naming both
+operators and lets a person choose. Measured over 400 real corpus files the note
+fires once, on a UNESCO heritage table headed `country, 2004, 2022` — a true
+positive that wants unpivot.
 
 ### C9 · Sheet or file as an implicit dimension
 **Also called:** "one sheet per year", partition columns, Hive partitioning
@@ -728,8 +739,21 @@ OpenRefine "Split into several columns".
 **Messy → clean:** `name` → `first`, `last`; `"Zürich, ZH"` → `city`, `canton`;
 `"2024-Q1"` → `year`, `quarter`; an ISO timestamp packed with a status code.
 
-**`sql`** (`split_part`, `regexp_match`, `substr` — all present and probed) —
-**but `gap` in the spec layer**, and this is the second-largest finding here.
+**`spec`** since 2026-09-06 — `Transform::SplitColumn`, by literal delimiter,
+character positions, or a regex's capture groups; the source column is replaced
+in place. Also `sql` downstream (`split_part`, `regexp_match`, `substr`, all
+probed), but the declarative form is what mattered, and this was the
+second-largest finding in this report.
+
+The design rule is **totality**: a delimiter split stops after as many parts as
+`into` names and keeps the remainder in the last one, so a value can never yield
+*more* parts than there are columns for it. Yielding **fewer** is an error naming
+the row, unless the spec declares `on_short = "null"` — which says the tail is
+optional (`"Zürich"` beside `"Zürich, ZH"`), fills the missing parts with nulls
+and keeps the head. Nothing is invented either way, which is why the null form
+needs no review gate.
+
+What follows is the argument the entry made before it was built:
 Splitting a column is, with unpivot and fill-down, one of the three most common
 munging operations in every catalogue surveyed, and it is the only one of the
 three with no declarative form in tdy. Consequences:
@@ -1966,8 +1990,8 @@ rather than leaving implicit in the code.
 |---|---|---|---|---|---|---|
 | A · Physical decoding | 3 | – | 2 | 1 | 1 | 7 |
 | B · Dialect & framing | 8 | – | 2 | 1 | – | 11 |
-| C · Table framing | 6 | – | 3 | 3 | 3 | 16 |
-| D · Shape | 3 | 4 | 1 | 1 | – | 9 |
+| C · Table framing | 7 | – | 3 | 2 | 3 | 16 |
+| D · Shape | 4 | 3 | 1 | 1 | – | 9 |
 | E · Parsing & typing | 14 | – | 5 | 2 | – | 21 |
 | F · Standardisation | 1 | 3 | – | 1 | 5 | 10 |
 | G · Missing data | 4 | 2 | 1 | – | 2 | 9 |
@@ -1976,7 +2000,7 @@ rather than leaving implicit in the code.
 | J · Combining | 1 | 1 | 1 | – | 2 | 5 |
 | K · Validation | 2 | – | 1 | – | 4 | 7 |
 | L · Process | 4 | – | – | 1 | – | 5 |
-| **Total** | **47** | **17** | **16** | **12** | **17** | **110** |
+| **Total** | **49** | **16** | **16** | **11** | **17** | **110** |
 
 Two `gap`s became `spec` on 2026-09-06 — **E5** signed-number conventions and
 **G2** fill-up — and this table counts the state after them.
@@ -1993,15 +2017,18 @@ would mean producing a value the file does not contain.
 
 **Tier 1 — files tdy cannot read at all today.**
 
-1. **C8 · Transposition.** No operator. Variables-down-the-left is a whole file
-   shape, not an edge case, and it is mechanically detectable.
+~~1. **C8 · Transposition.**~~ **Done, 2026-09-06** — `transpose`, no options,
+   before `promote_header`. Detected and reported, never applied: the shape it
+   cures and an ordinary wide report are indistinguishable from the file alone.
 2. **C9 + H4 · Source identity as data.** A sheet or filename that carries the
    period cannot become a column, and a result row cannot say which member and
    line it came from. Two halves of one missing capability, and the one most
    directly in tension with tdy's provenance claims.
-3. **D3 · Split a column.** The most common munging operation with no
-   declarative form. Its absence blocks `fit` on any file that packs two target
-   columns into one source column, and it is a prerequisite for D7.
+~~3. **D3 · Split a column.**~~ **Done, 2026-09-06** — `split_column`, total by
+   construction, with a declared `on_short` for an optional tail. It was the
+   most common munging operation with no declarative form, it blocked `fit` on
+   any file packing two target columns into one source column, and it is half
+   of what D7 needs.
 
 ~~4. **E5 · Signed-number conventions.**~~ **Done, 0.2.1.** It was the only
    finding here that could produce a silently wrong number through a validated
