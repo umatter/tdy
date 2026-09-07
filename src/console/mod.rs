@@ -768,24 +768,49 @@ impl Session {
                 // sets it again.
                 let pending = pending_accept;
                 let t = self.resolve(&target)?;
+                let same = pending.as_ref().map(|(pt, pm)| pt == &t && pm == &member).unwrap_or(false);
+                if same {
+                    // Step two: the same line, run again, is the only path
+                    // to `accepted == true`. It names the member exactly as
+                    // step one did, and `fit_pile` resolves it against the
+                    // members it has just expanded — so nothing here needs
+                    // the lock, which step one already proved it can do
+                    // without.
+                    let mut o = self.fit_pile(&t, &[PathBuf::from(&member)], false, false, progress).await?;
+                    o.text = format!("accepted {member}\n\n{}", o.text);
+                    return Ok(o);
+                }
+                // A typed member is resolved against what exists: the lock if
+                // there is one, and the sidecars on disk either way. No lock
+                // is the ordinary state after any gap in the pile — and that
+                // is exactly when a review is waiting to be answered, so
+                // resolving against the lock alone read `book.xlsx#Q1` as a
+                // file of that name and failed with "does not exist".
+                let dir = crate::lockfile::target_dir(&t);
+                let lock = crate::lockfile::Lock::load(&t)?;
+                let exists = |m: &crate::member::MemberRef| {
+                    if lock.as_ref().is_some_and(|l| l.member(&m.path, m.sheet.as_deref()).is_some()) {
+                        return true;
+                    }
+                    // Both halves matter: `2025.xlsx#Q1.tdy.toml` is a sidecar
+                    // whether it is read as sheet Q1 of `2025.xlsx` or as a
+                    // file literally called `2025.xlsx#Q1`, and only the first
+                    // has a data file beside it.
+                    let f = dir.join(&m.path);
+                    f.is_file() && crate::sidecar::sidecar_path_for(&f, m.sheet.as_deref()).exists()
+                };
+                let mref = crate::member::MemberRef::resolve(&member, exists)
+                    .unwrap_or_else(|| crate::member::MemberRef::file(member.clone()));
                 // The member's path is named relative to the target's own
                 // directory (what the pile report and `fit_pile`'s `accept`
                 // both use), not resolved against `self.cwd` the way a plain
                 // file argument would be — confined the same way `resolve`
                 // is, and with the same error preserved (a typo is "does not
                 // exist", not "outside").
-                let member_path = crate::fileio::confine(&crate::lockfile::target_dir(&t).join(&member), &self.root)
+                let member_path = crate::fileio::confine(&dir.join(&mref.path), &self.root)
                     .with_context(|| member.clone())?;
-                let same = pending.as_ref().map(|(pt, pm)| pt == &t && pm == &member).unwrap_or(false);
-                if same {
-                    // Step two: the same line, run again, is the only path
-                    // to `accepted == true`.
-                    let mut o = self.fit_pile(&t, &[PathBuf::from(&member)], false, false, progress).await?;
-                    o.text = format!("accepted {member}\n\n{}", o.text);
-                    return Ok(o);
-                }
                 // Step one: evidence only, nothing written.
-                let sc = match crate::sidecar::load(&member_path)? {
+                let sc = match crate::sidecar::load_member(&member_path, mref.sheet.as_deref())? {
                     crate::sidecar::SidecarStatus::Fresh(sc) => sc,
                     _ => bail!("{member} has no fresh sidecar; run `.fit {target}` first"),
                 };

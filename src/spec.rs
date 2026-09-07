@@ -46,6 +46,10 @@ pub struct SourceFingerprint {
     /// blake3 of the full file; mismatch at query time = stale spec.
     pub blake3: String,
     pub bytes: u64,
+    /// The sheet this spec is about, for a sheet member's sidecar
+    /// (`<file>#<sheet>.tdy.toml`). Absent for a plain sidecar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

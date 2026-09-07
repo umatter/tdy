@@ -384,16 +384,27 @@ and names both.
 verdict per operator. Read it before concluding tdy is missing something — and
 before concluding it is not.
 
-**Two questions are deferred with their own pages**, both because they are
-decisions rather than implementations:
-`docs/design/2026-09-06-compressed-inputs.md` (a `.gz` has no byte offsets, so
-`sample::build`'s head+tail sampling has no meaning — the file is now *refused*
-by magic bytes rather than read as mojibake; the check is inside `fileio`'s
-two readers and the streaming opener, not at call sites, because the first
-cut at call sites missed the executor that actually runs) and
-`docs/design/2026-09-06-members-and-regions.md` (a sidecar is per file, so a
-twelve-sheet workbook contributes one sheet; this is an identity question, not
-an extraction one).
+**Compressed inputs are deferred** (`docs/design/2026-09-06-compressed-inputs.md`):
+a `.gz` has no byte offsets, so `sample::build`'s head+tail sampling has no
+meaning — the file is now *refused* by magic bytes rather than read as mojibake;
+the check is inside `fileio`'s two readers and the streaming opener, not at call
+sites, because the first cut at call sites missed the executor that actually runs.
+
+**Workbook members are in (2026-09-07).** `docs/design/2026-09-07-workbook-members.md`.
+A member is `(path, sheet: Option<String>)` — `src/member.rs`'s `MemberRef`, two fields in
+the lock and the sidecar fingerprint, textual `book.xlsx#Q1` only where a person reads or
+types it (report, `_member`, `--accept`, `.accept`, `exclude`), and a typed reference is
+**resolved against the members that exist** (`MemberRef::resolve`), never split by rule.
+A sheet member's sidecar is `<file>#<sheet>.tdy.toml` (`sidecar::load_member`/`save_member`;
+the old forms are the `None` case). `fit_pile` asks `fit::discover_sheets` which sheets pass
+the gates: none or one keeps a plain member (the `one_fits` fixture and every existing lock
+are unchanged); several become one member per sheet, each fully fitted by `fit::fit_sheet`
+and carrying a note naming the sheets that did not fit. The single-file `fit()` still refuses
+several fitting sheets with `AmbiguousFrame` — "the spec for this file" has no single answer;
+the pile is where "which members?" is asked. **Drift is per file**: the file's hash covers
+every sheet, so a changed workbook is one `Changed` and the refit rediscovers the sheet set;
+`Duplicated` is per (path, sheet). `dataset()` never lists a workbook's sheets itself.
+Regions (several tables in one text file) are still deferred, behind the review gate.
 
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,

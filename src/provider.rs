@@ -844,7 +844,11 @@ pub fn validate_command(path: &Path, cfg: &Config, restamp: bool) -> Result<()> 
 /// file BEFORE being stamped), and the file still parses. Returns the spec's
 /// notes. No printing, so the MCP tier can speak it.
 pub fn validate_quiet(path: &Path, cfg: &Config, restamp: bool) -> Result<Vec<String>> {
-    let sc_path = sidecar::sidecar_path(path);
+    // `path` may be a member reference: `book.xlsx#Q1` is one sheet of a
+    // workbook, whose sidecar is `book.xlsx#Q1.tdy.toml` beside it.
+    let (file, sheet) = sidecar::resolve_ref(path);
+    let (path, sheet) = (file.as_path(), sheet.as_deref());
+    let sc_path = sidecar::sidecar_path_for(path, sheet);
     if !sc_path.exists() {
         bail!(
             "no sidecar at {}; run `tdy sniff {}` first",
@@ -874,9 +878,9 @@ pub fn validate_quiet(path: &Path, cfg: &Config, restamp: bool) -> Result<Vec<St
                 path.display()
             )
         })?;
-        sidecar::stamp(path, InferenceMethod::Manual)?;
+        sidecar::stamp_member(path, sheet, InferenceMethod::Manual)?;
     }
-    match sidecar::load(path)? {
+    match sidecar::load_member(path, sheet)? {
         SidecarStatus::Absent => bail!("no sidecar at {}", sc_path.display()),
         SidecarStatus::Stale(_) => bail!(
             "{} is stale: {} has changed since the spec was written.\n\

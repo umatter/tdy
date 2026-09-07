@@ -674,6 +674,15 @@ wrote sales.tdy.lock
 $ tdy query "SELECT region, sum(amount) FROM dataset('sales.tdy.sql') GROUP BY 1"
 ```
 
+A workbook with one sheet per period is the same pile in one file. `tdy fit`
+frames every sheet and tries the declaration against each; when several
+produce the declared table, each becomes a member of its own, named
+`book.xlsx#Q1`, with its own sidecar beside the workbook (`book.xlsx#Q1.tdy.toml`)
+and its own line in the lock. A sheet that does not fit is named in the notes,
+`exclude = 'book.xlsx#Cover'` removes one by name, and a sheet added next year
+changes the workbook's hash, so it is drift — named — and the next fit picks it
+up. `source_name { from = "sheet" }` turns the sheet into a column.
+
 A member is named by its path relative to the target — `exports/2025-07.csv`,
 not `2025-07.csv` — and that is the name `--accept` takes.
 
@@ -754,10 +763,13 @@ holding a cover page, a legend and a data sheet — needs no model and no human
 once a table is declared: `tdy fit` frames every candidate (each sheet gets
 its own framing — its own title rows, its own footer) and tries the
 declaration against each. If exactly one fits, the frame is **proved by
-elimination** and the note says so; if several fit, the file is refused with
-each candidate named, because two complete, well-typed answers with different
-totals is a guess this tool refuses to make; if none fit, you get the
-ordinary gap report.
+elimination** and the note says so; if none fit, you get the ordinary gap
+report. If several fit, the answer depends on what was asked: `tdy fit` on
+the one file refuses, naming each candidate, because "the spec for this
+file" has no single answer; a workbook in a *dataset* becomes one member per
+fitting sheet, as described above; and a JSON document with several fitting
+record arrays is refused either way, since a record array has no name of its
+own to become a member by.
 
 When the layout cannot be enumerated at all — a log line, a report format no
 delimiter sniff can frame — and a backend is configured, `tdy fit` asks the

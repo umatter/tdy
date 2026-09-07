@@ -443,93 +443,148 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     // 1. The frame. What the sniffer knows about this file's *shape* is about
     //    the file, not about the columns anyone wants, so it is reused whole.
     //    Only its `columns` are discarded.
-    let sample = crate::sample::build(path, 16 * 1024, limits)
-        .with_context(|| format!("sampling {}", path.display()))
-        .map_err(FitError::Unreadable)?;
-    let draft = sniff::sniff_opts(
-        path,
-        &sample,
-        limits,
-        sniff::SniffOpts { verify: target.verify == Verify::Full },
-    )
-        .with_context(|| format!("framing {}", path.display()))
-        .map_err(FitError::Unreadable)?
-        .spec;
+    let draft = sniff_draft(path, target, limits)?;
 
     // A file with several possible frames — a JSON document with several
     // record arrays, a workbook with several sheets — makes the sniffer's
     // ranking of them a guess. The declared table turns the guess into a
     // search: try every candidate, and the answer is the one that fits —
     // provably, if it is alone in doing so.
-    match &draft.extraction {
-        Extraction::Json { lines: false, pointer: Some(_) } => {
-            let pointers = sniff::json_record_pointers(path, limits);
-            if pointers.len() > 1 {
-                let candidates = pointers
-                    .iter()
-                    .map(|ptr| {
-                        let mut d = draft.clone();
-                        d.extraction =
-                            Extraction::Json { lines: false, pointer: Some(ptr.clone()) };
-                        (ptr.clone(), d)
-                    })
-                    .collect();
-                return fit_by_elimination(
-                    path,
-                    target,
-                    limits,
-                    FrameCandidates {
-                        what: "record arrays",
-                        field: "pointer",
-                        total: pointers.len(),
-                        candidates,
-                    },
-                );
-            }
+    if let Extraction::Json { lines: false, pointer: Some(_) } = &draft.extraction {
+        let pointers = sniff::json_record_pointers(path, limits);
+        if pointers.len() > 1 {
+            let candidates = pointers
+                .iter()
+                .map(|ptr| {
+                    let mut d = draft.clone();
+                    d.extraction = Extraction::Json { lines: false, pointer: Some(ptr.clone()) };
+                    (ptr.clone(), d)
+                })
+                .collect();
+            return fit_by_elimination(
+                path,
+                target,
+                limits,
+                FrameCandidates {
+                    what: "record arrays",
+                    field: "pointer",
+                    total: pointers.len(),
+                    candidates,
+                },
+            );
         }
-        Extraction::Excel { sheet_name, .. } => {
-            let shapes =
-                crate::engine::excel_sheet_shapes(path, limits).unwrap_or_default();
-            if shapes.len() > 1 {
-                // The sniffer's pick goes first so that when nothing fits,
-                // the error the user reads is about the sheet they would
-                // have been shown anyway.
-                let mut names: Vec<String> = Vec::with_capacity(shapes.len());
-                if let Some(picked) = sheet_name {
-                    names.push(picked.clone());
-                }
-                for sh in &shapes {
-                    if !names.contains(&sh.name) {
-                        names.push(sh.name.clone());
-                    }
-                }
-                // A sheet that cannot even be framed (empty, say) is already
-                // eliminated; `total` still counts it, because "of 3 sheets,
-                // only one produces the declared table" is the true claim.
-                let candidates: Vec<(String, ParseSpec)> = names
-                    .iter()
-                    .filter_map(|n| {
-                        sniff::frame_excel_sheet(path, n, limits).ok().map(|d| (n.clone(), d))
-                    })
-                    .collect();
-                if !candidates.is_empty() {
-                    return fit_by_elimination(
-                        path,
-                        target,
-                        limits,
-                        FrameCandidates {
-                            what: "sheets",
-                            field: "sheet_name",
-                            total: names.len(),
-                            candidates,
-                        },
-                    );
-                }
-            }
-        }
-        _ => {}
     }
 
+    // A sheet that cannot even be framed (empty, say) is already eliminated;
+    // `total` still counts it, because "of 3 sheets, only one produces the
+    // declared table" is the true claim.
+    if let Some((names, candidates)) = sheet_candidates(path, &draft, limits) {
+        if !candidates.is_empty() {
+            return fit_by_elimination(
+                path,
+                target,
+                limits,
+                FrameCandidates { what: "sheets", field: "sheet_name", total: names.len(), candidates },
+            );
+        }
+    }
+
+    fit_framed(path, target, limits, draft, Rigour::Full)
+}
+
+/// A workbook's sheets, each framed on its own: the sniffer's pick first (so
+/// a failure message is about the sheet the user would have been shown),
+/// then the rest in workbook order. `None` when the file is not a workbook
+/// with several sheets.
+fn sheet_candidates(
+    path: &Path,
+    draft: &ParseSpec,
+    limits: Limits,
+) -> Option<(Vec<String>, Vec<(String, ParseSpec)>)> {
+    let Extraction::Excel { sheet_name, .. } = &draft.extraction else { return None };
+    let shapes = crate::engine::excel_sheet_shapes(path, limits).unwrap_or_default();
+    if shapes.len() <= 1 {
+        return None;
+    }
+    let mut names: Vec<String> = Vec::with_capacity(shapes.len());
+    if let Some(picked) = sheet_name {
+        names.push(picked.clone());
+    }
+    for sh in &shapes {
+        if !names.contains(&sh.name) {
+            names.push(sh.name.clone());
+        }
+    }
+    let candidates = names
+        .iter()
+        .filter_map(|n| sniff::frame_excel_sheet(path, n, limits).ok().map(|d| (n.clone(), d)))
+        .collect();
+    Some((names, candidates))
+}
+
+/// The frame the sniffer gives this file — what `fit()` starts from.
+fn sniff_draft(path: &Path, target: &Target, limits: Limits) -> Result<ParseSpec, FitError> {
+    let sample = crate::sample::build(path, 16 * 1024, limits)
+        .with_context(|| format!("sampling {}", path.display()))
+        .map_err(FitError::Unreadable)?;
+    Ok(sniff::sniff_opts(path, &sample, limits, sniff::SniffOpts { verify: target.verify == Verify::Full })
+        .with_context(|| format!("framing {}", path.display()))
+        .map_err(FitError::Unreadable)?
+        .spec)
+}
+
+/// Which sheets of a workbook produce the declared table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SheetDiscovery {
+    /// Every sheet, counting ones that could not even be framed.
+    pub total: usize,
+    /// In the workbook's order. Each passed the cheap gates (`Rigour::Gates`).
+    pub fitting: Vec<String>,
+    /// The rest, in the same order: could not be framed, or did not fit.
+    pub rejected: Vec<String>,
+}
+
+/// Ask a workbook which of its sheets pass the gates against `target`,
+/// without choosing between them. `None` for a file that is not a workbook
+/// with several sheets — the plain-member case, which `fit`/`plan` handle.
+pub fn discover_sheets(
+    path: &Path,
+    target: &Target,
+    limits: Limits,
+) -> Result<Option<SheetDiscovery>, FitError> {
+    // The workbook question is asked first, and cheaply. Sniffing the file
+    // to find out whether it is a multi-sheet workbook meant every member of
+    // every fit paid a whole-file type verification — seconds per member on
+    // a plain CSV, for an answer `excel_sheet_shapes` gives in milliseconds
+    // and gives as `Err` for anything that is not a workbook at all.
+    let Ok(shapes) = crate::engine::excel_sheet_shapes(path, limits) else { return Ok(None) };
+    if shapes.len() <= 1 {
+        return Ok(None);
+    }
+    let mut fitting = Vec::new();
+    let mut rejected = Vec::new();
+    for sh in &shapes {
+        // A sheet that cannot even be framed (empty, say) is rejected here;
+        // `total` still counts it, because "of 3 sheets, only one produces
+        // the declared table" is the true claim.
+        let passes = sniff::frame_excel_sheet(path, &sh.name, limits)
+            .ok()
+            .map(|d| fit_framed(path, target, limits, d, Rigour::Gates).is_ok())
+            .unwrap_or(false);
+        if passes {
+            fitting.push(sh.name.clone())
+        } else {
+            rejected.push(sh.name.clone())
+        }
+    }
+    Ok(Some(SheetDiscovery { total: shapes.len(), fitting, rejected }))
+}
+
+/// Fit one named sheet of a workbook, fully.
+pub fn fit_sheet(path: &Path, sheet: &str, target: &Target, limits: Limits) -> Result<Fitted, FitError> {
+    let draft = sniff::frame_excel_sheet(path, sheet, limits)
+        .with_context(|| format!("framing sheet {sheet:?} of {}", path.display()))
+        .map_err(FitError::Unreadable)?;
     fit_framed(path, target, limits, draft, Rigour::Full)
 }
 

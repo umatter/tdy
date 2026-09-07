@@ -904,3 +904,295 @@ fn provenance_columns_are_absent_unless_declared() {
     let e = String::from_utf8_lossy(&out.stderr);
     assert!(e.contains("_member"), "{e}");
 }
+
+use tdy::lockfile::{Lock, Member, LOCK_VERSION};
+use tdy::spec::{ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
+
+fn quarter_spec(sheet: &str) -> ParseSpec {
+    let col = |name: &str, source: &str, dtype: DType| ColumnSpec {
+        name: name.into(),
+        source: Some(source.into()),
+        dtype,
+        nullable: false,
+        parse: ValueParsing::default(),
+        pointer: None,
+    };
+    ParseSpec {
+        extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None },
+        transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        columns: vec![
+            col("month", "Datum", DType::Date { format: "%d.%m.%Y".into() }),
+            col("region", "Region", DType::Utf8),
+            col("amount", "Betrag", DType::Decimal { precision: 14, scale: 2 }),
+        ],
+        confidence: Some(1.0),
+        notes: vec![],
+    }
+}
+
+/// Step one of the design: a lock naming two sheets of one workbook, written
+/// by hand with hand-written sheet sidecars, is read by `dataset()` as two
+/// members — the sum of both sheets, each row saying which sheet it came from.
+/// No discovery is involved yet; this proves the identity model alone.
+#[test]
+fn a_hand_written_lock_over_two_sheets_reads_both_and_names_them() {
+    let dir = TempDir::new().unwrap();
+    let book = dir.path().join("2025.xlsx");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+        &book,
+    )
+    .unwrap();
+    let t = dir.path().join("monat.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE monat (\n  month DATE NOT NULL, region TEXT NOT NULL, amount DECIMAL(14,2) NOT NULL\n) \
+         WITH (files = '*.xlsx', date_order = 'dmy', provenance = 'true');\n",
+    )
+    .unwrap();
+    let target = tdy::target::Target::load(&t).unwrap();
+    let prov = || tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
+    for sheet in ["Q1", "Q2"] {
+        tdy::sidecar::save_member(&book, Some(sheet), &quarter_spec(sheet), prov()).unwrap();
+    }
+    let (blake3, bytes) = tdy::sidecar::hash_file(&book).unwrap();
+    let member = |sheet: &str| Member {
+        path: "2025.xlsx".into(),
+        sheet: Some(sheet.into()),
+        blake3: blake3.clone(),
+        bytes,
+        spec_digest: tdy::lockfile::spec_digest_for(&book, Some(sheet)),
+        review: None,
+        accepted: false,
+    };
+    Lock {
+        lock_version: LOCK_VERSION,
+        target: "monat".into(),
+        target_hash: tdy::lockfile::target_hash(&target),
+        tool_version: "test".into(),
+        created_at: "now".into(),
+        members: vec![member("Q1"), member("Q2")],
+    }
+    .save(&t)
+    .unwrap();
+
+    let sql = format!(
+        "SELECT _member, count(*) AS n, sum(amount) AS total FROM dataset('{}') GROUP BY _member ORDER BY _member",
+        t.display()
+    );
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025.xlsx#Q1") && text.contains("600.00"), "{text}");
+    assert!(text.contains("2025.xlsx#Q2") && text.contains("1500.00"), "{text}");
+    assert_eq!(text.matches("| 3 ").count(), 2, "three rows per sheet:\n{text}");
+}
+
+fn quarters_pile() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+        dir.path().join("2025.xlsx"),
+    )
+    .unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_one_fits.xlsx"),
+        dir.path().join("2024.xlsx"),
+    )
+    .unwrap();
+    let t = dir.path().join("monat.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE monat (\n  month DATE NOT NULL OPTIONS(matches = 'Datum'),\n  region TEXT NOT NULL OPTIONS(matches = 'Region'),\n  amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n) \
+         WITH (files = '*.xlsx', date_order = 'dmy', provenance = 'true');\n",
+    )
+    .unwrap();
+    (dir, t)
+}
+
+/// Step two of the design: `tdy fit` expands the workbook whose two sheets
+/// fit into two members, keeps the workbook where one sheet fits as one
+/// plain member, locks all three, and the dataset is their sum.
+#[test]
+fn a_workbook_whose_sheets_fit_becomes_one_member_per_sheet() {
+    let (dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025.xlsx#Q1") && text.contains("2025.xlsx#Q2"), "{text}");
+    assert!(text.contains("3 of 3 file(s) fit"), "{text}");
+
+    let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("[[member]]").count(), 3, "{lock}");
+    assert_eq!(lock.matches("sheet = ").count(), 2, "the plain member writes no sheet:\n{lock}");
+    assert!(dir.path().join("2025.xlsx#Q1.tdy.toml").exists());
+    assert!(dir.path().join("2025.xlsx#Q2.tdy.toml").exists());
+    assert!(dir.path().join("2024.xlsx.tdy.toml").exists(), "one fitting sheet stays a plain member");
+    assert!(!dir.path().join("2025.xlsx.tdy.toml").exists(), "an expanded workbook has no plain sidecar");
+    // The expansion is on the record in each sheet member's own spec notes
+    // (the CLI text does not print member notes; the sidecar and --json do).
+    let q1 = std::fs::read_to_string(dir.path().join("2025.xlsx#Q1.tdy.toml")).unwrap();
+    assert!(q1.contains("of 2 sheets, 2 produce the declared table: Q1, Q2"), "{q1}");
+
+    let sql = format!("SELECT count(*), sum(amount) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("| 10 ") && text.contains("3190.00"), "600 + 1500 + 1090 over 3 + 3 + 4 rows:\n{text}");
+}
+
+/// `exclude` takes an exact member reference: one sheet goes, the other stays.
+#[test]
+fn a_sheet_member_can_be_excluded_by_reference() {
+    let (dir, t) = quarters_pile();
+    let ddl = std::fs::read_to_string(&t).unwrap().replace("files = '*.xlsx',", "files = '*.xlsx', exclude = '2025.xlsx#Q2',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
+    assert!(lock.contains("sheet = \"Q1\"") && !lock.contains("sheet = \"Q2\""), "{lock}");
+}
+
+/// A sheet member's sidecar is about its own sheet. Editing `sheet_name`
+/// to another sheet would otherwise read Q1 twice and total 1200 under two
+/// labels — the silent wrong answer, one hand edit away.
+#[test]
+fn a_sheet_sidecar_pointed_at_another_sheet_fails_the_query() {
+    let (dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let sc = dir.path().join("2025.xlsx#Q2.tdy.toml");
+    let text = std::fs::read_to_string(&sc).unwrap();
+    std::fs::write(&sc, text.replace("sheet_name = \"Q2\"", "sheet_name = \"Q1\"")).unwrap();
+
+    let sql = format!("SELECT sum(amount) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "the query must fail, not answer:\n{text}");
+    assert!(err.contains("2025.xlsx#Q2"), "{err}");
+    assert!(!text.contains("1200.00"), "{text}");
+}
+
+/// A `#`-exclude that removes nothing is a typo, not a no-op: the member it
+/// meant to drop is still in the dataset, and nothing said so.
+#[test]
+fn a_member_exclude_that_removes_nothing_is_an_error() {
+    let (_dir, t) = quarters_pile();
+    let ddl = std::fs::read_to_string(&t)
+        .unwrap()
+        .replace("files = '*.xlsx',", "files = '*.xlsx', exclude = '2025.xlsx#Q9',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        err.contains("2025.xlsx#Q9") && err.contains("2025.xlsx#Q1") && err.contains("2025.xlsx#Q2"),
+        "{err}"
+    );
+}
+
+/// Excluding every member of the only file leaves no dataset. A zero-member
+/// lock would query as an empty table — the answer nobody asked for.
+#[test]
+fn excluding_every_member_of_the_pile_is_refused() {
+    let (dir, t) = quarters_pile();
+    std::fs::remove_file(dir.path().join("2024.xlsx")).unwrap();
+    let ddl = std::fs::read_to_string(&t)
+        .unwrap()
+        .replace("files = '*.xlsx',", "files = '*.xlsx', exclude = '2025.xlsx#Q1, 2025.xlsx#Q2',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(err.contains("excluded"), "{err}");
+    assert!(!dir.path().join("monat.tdy.lock").exists(), "no lock for an empty dataset");
+}
+
+/// A file every one of whose sheets is excluded is accounted for by the
+/// declaration: it must not read as `Added` drift for ever after.
+#[test]
+fn a_fully_excluded_workbook_is_not_drift() {
+    let (dir, t) = quarters_pile();
+    let ddl = std::fs::read_to_string(&t)
+        .unwrap()
+        .replace("files = '*.xlsx',", "files = '*.xlsx', exclude = '2025.xlsx#Q1, 2025.xlsx#Q2',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("[[member]]").count(), 1, "{lock}");
+    assert!(lock.contains("2024.xlsx") && !lock.contains("2025.xlsx"), "{lock}");
+
+    let sql = format!("SELECT sum(amount) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("1090.00"), "{text}");
+}
+
+/// The single-file tools take a member reference too: a sheet member's
+/// sidecar is a sidecar, and `validate`/`check --against` are how a person
+/// inspects one.
+#[test]
+fn validate_and_check_take_a_sheet_member_reference() {
+    let (dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let q1 = dir.path().join("2025.xlsx#Q1");
+
+    let out = tdy(&["validate", q1.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025.xlsx#Q1.tdy.toml: ok"), "{text}");
+
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", q1.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("CONFORMS"), "{text}");
+
+    // The workbook itself has no plain sidecar, and saying "NO SIDECAR"
+    // about a file whose members are all right there is a wrong answer.
+    let book = dir.path().join("2025.xlsx");
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", book.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("sheet members") && text.contains("2025.xlsx#Q1"), "{text}");
+    assert!(!text.contains("NO SIDECAR"), "{text}");
+}
+
+/// The expansion note says what *this* fit discovered. A reused sidecar
+/// carrying an older count would have two members of one workbook
+/// disagreeing about how many sheets it has.
+#[test]
+fn a_reused_sheet_sidecars_expansion_note_is_the_current_one() {
+    let (dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let sc = dir.path().join("2025.xlsx#Q1.tdy.toml");
+    let text = std::fs::read_to_string(&sc).unwrap();
+    std::fs::write(
+        &sc,
+        text.replace(
+            "of 2 sheets, 2 produce the declared table: Q1, Q2",
+            "of 9 sheets, 9 produce the declared table: Q1, Q9",
+        ),
+    )
+    .unwrap();
+
+    let out = tdy(&["--json", "fit", t.to_str().unwrap(), "--dry-run"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("of 2 sheets, 2 produce"), "{text}");
+    assert!(!text.contains("of 9 sheets"), "the stale count must not survive the fit:\n{text}");
+}
+
+/// `--accept` names a member the way the report does; a reference that
+/// names none is refused with the real names listed.
+#[test]
+fn accept_takes_a_member_reference_and_names_the_members_when_it_misses() {
+    let (_dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "2025.xlsx#Q3"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(err.contains("not a member") && err.contains("2025.xlsx#Q1"), "{err}");
+}

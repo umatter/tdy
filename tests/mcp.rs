@@ -128,6 +128,38 @@ fn an_agent_can_fit_and_query_a_pile_over_mcp() {
     assert_eq!(chk["ready"], true, "{chk:#}");
 }
 
+/// A workbook whose sheets both fit is several members over MCP too, and
+/// each one says which sheet it is — an agent that could only see the file
+/// name could not name a member back to `accept` or to a query.
+#[test]
+fn a_fit_report_names_a_workbooks_sheet_members() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+        dir.path().join("2025.xlsx"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("monat.tdy.sql"),
+        "CREATE TABLE monat (\n  month DATE NOT NULL OPTIONS(matches = 'Datum'),\n  \
+         region TEXT NOT NULL OPTIONS(matches = 'Region'),\n  \
+         amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n) \
+         WITH (files = '*.xlsx', date_order = 'dmy');\n",
+    )
+    .unwrap();
+    let mut s = Server::start(dir.path(), false);
+
+    let (report, err) = s.call("fit", serde_json::json!({"target": "monat.tdy.sql", "dry_run": true}));
+    assert!(!err, "{report:#}");
+    assert_eq!(report["failed"], 0, "{report:#}");
+    let members = report["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2, "{report:#}");
+    for (m, sheet) in members.iter().zip(["Q1", "Q2"]) {
+        assert_eq!(m["path"], "2025.xlsx");
+        assert_eq!(m["sheet"], sheet, "{m:#}");
+    }
+}
+
 /// The review gate survives the agent: without --allow-accept the review
 /// reasons are visible and acceptance is refused with the reason why.
 #[test]
@@ -323,6 +355,7 @@ fn a_lock_member_outside_the_root_is_refused_at_query_time() {
         created_at: "2026-01-01T00:00:00Z".into(),
         members: vec![tdy::lockfile::Member {
             path: "../loot/x.csv".into(),
+            sheet: None,
             blake3,
             bytes,
             spec_digest: String::new(),
