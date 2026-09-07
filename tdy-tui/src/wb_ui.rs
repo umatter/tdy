@@ -10,8 +10,11 @@
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{
+    Block, Cell, List, ListItem, ListState, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Table as TableWidget, Wrap,
+};
 use ratatui::Frame;
 
 use tdy::console::{EntryStatus, RawHead, SpecSummary, Table};
@@ -22,6 +25,23 @@ use crate::remedy::{Edit, Remedy};
 use crate::workbench::{Context, Focus, Workbench};
 
 const DIM: Color = Color::DarkGray;
+/// The palette, by meaning rather than by screen: what fits is green, a
+/// gap is red, a judgement waiting on a person is yellow, and a state that
+/// is not yet the real one (no lock, dry run) is yellow too. Used the same
+/// way in the pile, the member view and the browser, so one colour means
+/// one thing everywhere.
+const OK: Color = Color::Green;
+const BAD: Color = Color::Red;
+const WARN: Color = Color::Yellow;
+/// The selected row in any pane: reversed, as the browser's `List` already
+/// draws its selection — one grammar for "this is the one you are on".
+const SELECTED: Modifier = Modifier::REVERSED;
+/// A raw-head cell that a remedy could bind (`--propose` said its values
+/// produce the declared type) is green; one the problem itself implicates
+/// (the two `Betrag`s of an ambiguous binding, the column whose values are
+/// the declared names) is yellow.
+const CANDIDATE: Color = OK;
+const IMPLICATED: Color = WARN;
 /// Below this many columns the file browser has nowhere to go; the console
 /// (where typing still works) keeps the space instead.
 const MIN_WIDTH_FOR_BROWSER: u16 = 60;
@@ -282,10 +302,16 @@ fn draw_browser(f: &mut Frame, area: Rect, w: &Workbench) {
             // Confidence below the configured threshold reads red here too
             // (reviewer's §6 note) — the same rule the File view's own
             // confidence line applies, just against the compact glyph.
+            // The same palette the pile speaks: a sniff below the
+            // threshold and a stale sidecar are red, a target with no lock
+            // or with drift is yellow, a current lock green.
             let status_style = match &e.status {
                 EntryStatus::Sniffed { confidence: Some(c), .. } if *c < w.confidence_threshold => {
-                    Style::new().fg(Color::Red)
+                    Style::new().fg(BAD)
                 }
+                EntryStatus::Stale => Style::new().fg(BAD),
+                EntryStatus::NoLock | EntryStatus::Drift(_) => Style::new().fg(WARN),
+                EntryStatus::Locked => Style::new().fg(OK),
                 _ => Style::new(),
             };
             ListItem::new(browser_row(&name, entry_status_text(&e.status), status_style, inner_width))
@@ -382,10 +408,7 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
         Context::Query(t) => {
             let inner = block.inner(area);
             f.render_widget(block, area);
-            f.render_widget(
-                Paragraph::new(table_lines(t)).scroll((w.main_scroll as u16, 0)),
-                inner,
-            );
+            draw_table(f, inner, t, w.main_scroll);
         }
         Context::Pile { report, selected, .. } => {
             draw_pile(f, area, block, report, *selected, w.main_scroll);
@@ -471,81 +494,12 @@ fn draw_evidence(
     );
 }
 
-/// The Member view: the gap beside the file's own rows. Left column is the
-/// member's raw head, verbatim — the file's own header spelling, which is
-/// exactly what a `matches` clause needs to be written against, and "loading…"
-/// until the runtime's `PreviewFile` result lands, scrolled by `main_scroll`
-/// the same way `draw_file_no_spec` scrolls a `File` context's raw head —
-/// the right column (status/review/remedy menu) is not scrolled, mirroring
-/// `draw_file_with_spec`'s own left-only scroll. Right column is the
-/// member's status, its review reason (if a judgement is what it is waiting
-/// on), each problem's message, then a blank line and the numbered remedy
-/// menu — `▸` marks `remedy_selected`. An accepted member's status word
-/// already covers "accepted" (see `status_word`), and naturally has no
-/// remedies to list.
-///
-/// Takes `w` itself, rather than unpacking `raw`/`remedy_selected`/
-/// `main_scroll` as separate parameters, to stay under the
-/// too-many-arguments threshold — the same reason `draw_file_with_spec`
-/// does.
-fn draw_member(f: &mut Frame, area: Rect, block: Block<'static>, m: &MemberReport, w: &Workbench) {
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-    let Context::Member { raw, remedy_selected, .. } = &w.context else {
-        // The caller already matched `w.context` to get here — this is
-        // unreachable in practice, but drawing must still be total.
-        f.render_widget(Paragraph::new(Line::styled("?", Style::new().fg(DIM))), inner);
-        return;
-    };
-    let remedy_selected = *remedy_selected;
-    let remedies = w.member_remedies();
-    let [left, right] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
-
-    let left_lines = match raw {
-        Some(r) => raw_head_lines(r),
-        None => vec![Line::styled("loading…", Style::new().fg(DIM))],
-    };
-    f.render_widget(
-        Paragraph::new(left_lines).scroll((w.main_scroll as u16, 0)),
-        left,
-    );
-
-    let mut lines = Vec::new();
-    let status_style = if m.accepted {
-        Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)
-    } else {
-        Style::new().add_modifier(Modifier::BOLD)
-    };
-    lines.push(Line::styled(status_word(m), status_style));
-    if let Some(review) = &m.review {
-        lines.push(Line::raw(""));
-        for l in review.lines() {
-            lines.push(Line::raw(l.to_string()));
-        }
-    }
-    for p in &m.problems {
-        lines.push(Line::raw(""));
-        for l in p.message.lines() {
-            lines.push(Line::raw(l.to_string()));
-        }
-    }
-    if !remedies.is_empty() {
-        lines.push(Line::raw(""));
-        for (i, r) in remedies.iter().enumerate() {
-            let marker = if i == remedy_selected { "▸ " } else { "  " };
-            lines.push(Line::raw(format!("{marker}{}. {}", i + 1, r.label())));
-        }
-    }
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), right);
-}
-
-/// Header (target name, counts, lock state) then one row per member —
-/// `▸ path  status  detail`, truncated to the pane's width. `scroll` offsets
-/// the whole block (header included) the way `draw_evidence` offsets
-/// its own lines — a long pile scrolls the header out of view along with
-/// early members, which is the same trade `draw_file_no_spec` already makes
-/// for its raw head.
+/// Counts, the declaration, any drift, then the members as a table whose
+/// columns are the declared columns — each member's binding sits under the
+/// column it supplies, so vocabulary drift across months is a column to read
+/// down. `scroll` offsets the whole block: the header lines go first, then
+/// the table's rows (`Workbench::follow_pile_selection` relies on
+/// `pile_header_rows` being the same arithmetic).
 fn draw_pile(
     f: &mut Frame,
     area: Rect,
@@ -556,24 +510,208 @@ fn draw_pile(
 ) {
     let inner = block.inner(area);
     f.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
 
-    let mut header = format!(
-        "{} fitted · {} failed · {} need review",
-        report.fitted, report.failed, report.needs_review
-    );
-    header.push_str(if report.lock_written.is_some() { " · lock written" } else { " · no lock" });
+    let head = pile_head_lines(report);
+    let header_rows = head.len();
+    let head_visible: Vec<Line<'static>> = head
+        .into_iter()
+        .skip(scroll.min(header_rows))
+        .map(|l| clip_line(l, inner.width as usize))
+        .collect();
+    let row_offset = scroll.saturating_sub(header_rows);
+
+    let [head_area, table_area] = Layout::vertical([
+        Constraint::Length(head_visible.len() as u16),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+    f.render_widget(Paragraph::new(head_visible), head_area);
+    if table_area.height == 0 {
+        return;
+    }
+
+    // Column widths from the content: the path, the status word, one column
+    // per declared column (its name or its widest binding, capped), and the
+    // detail taking what is left.
+    let path_w = report.members.iter().map(|m| m.path.chars().count() + 2).max().unwrap_or(8);
+    let mut widths = vec![Constraint::Length(path_w as u16), Constraint::Length(8)];
+    for c in &report.columns {
+        let w = report
+            .members
+            .iter()
+            .filter_map(|m| m.sources.iter().find(|s| s.column == c.name))
+            .map(|s| s.source.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(c.name.chars().count())
+            .min(18);
+        widths.push(Constraint::Length(w as u16));
+    }
+    widths.push(Constraint::Fill(1));
+
+    let mut header: Vec<Cell> = vec![Cell::from("member"), Cell::from("status")];
+    header.extend(report.columns.iter().map(|c| Cell::from(c.name.clone())));
+    header.push(Cell::from("detail"));
+
+    let rows: Vec<Row> = report
+        .members
+        .iter()
+        .enumerate()
+        .skip(row_offset)
+        .map(|(i, m)| {
+            let marker = if i == selected { "▸ " } else { "  " };
+            let mut cells: Vec<Cell> = vec![
+                Cell::from(format!("{marker}{}", m.path)),
+                Cell::from(Span::styled(status_word(m), status_style(m))),
+            ];
+            for c in &report.columns {
+                let bound = m.sources.iter().find(|s| s.column == c.name).map(|s| s.source.clone());
+                cells.push(match bound {
+                    Some(src) => Cell::from(src),
+                    None => Cell::from(Span::styled("·", Style::new().fg(DIM))),
+                });
+            }
+            cells.push(Cell::from(member_detail(m).to_string()));
+            let row = Row::new(cells);
+            if i == selected {
+                row.style(Style::new().add_modifier(SELECTED))
+            } else {
+                row
+            }
+        })
+        .collect();
+
+    let table = TableWidget::new(rows, widths)
+        .header(Row::new(header).style(Style::new().add_modifier(Modifier::BOLD).fg(DIM)))
+        .column_spacing(2);
+    f.render_widget(table, table_area);
+
+    // A scrollbar only when there is something to scroll: rows beyond the
+    // pane, or rows scrolled off its top.
+    let visible = table_area.height.saturating_sub(1) as usize;
+    let total = report.members.len();
+    if total > visible || row_offset > 0 {
+        let mut state =
+            ScrollbarState::new(total.saturating_sub(visible).max(1)).position(row_offset);
+        f.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            table_area,
+            &mut state,
+        );
+    }
+}
+
+/// A line clipped to `width` cells with an ellipsis, span styles kept: a
+/// declaration wider than the pane must read as clipped, not as complete.
+fn clip_line(line: Line<'static>, width: usize) -> Line<'static> {
+    let total: usize = line.spans.iter().map(|sp| sp.content.chars().count()).sum();
+    if total <= width || width == 0 {
+        return line;
+    }
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for sp in line.spans {
+        let n = sp.content.chars().count();
+        if used + n < width {
+            used += n;
+            out.push(sp);
+            continue;
+        }
+        let room = width.saturating_sub(used + 1);
+        let text: String = sp.content.chars().take(room).collect::<String>() + "…";
+        out.push(Span::styled(text, sp.style));
+        break;
+    }
+    Line::from(out)
+}
+
+/// The lines above the pile table: coloured counts and lock state, what the
+/// target declares, and any drift against the lock as it stood.
+fn pile_head_lines(report: &PileReport) -> Vec<Line<'static>> {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let sep = || Span::styled(" · ", Style::new().fg(DIM));
+    let mut counts: Vec<Span<'static>> = vec![
+        Span::styled(format!("{} fitted", report.fitted), bold.fg(if report.fitted > 0 { OK } else { DIM })),
+        sep(),
+        Span::styled(format!("{} failed", report.failed), bold.fg(if report.failed > 0 { BAD } else { DIM })),
+        sep(),
+        Span::styled(
+            format!("{} need review", report.needs_review),
+            bold.fg(if report.needs_review > 0 { WARN } else { DIM }),
+        ),
+        sep(),
+    ];
+    counts.push(if report.lock_written.is_some() {
+        Span::styled("lock written", bold.fg(OK))
+    } else {
+        Span::styled("no lock", bold.fg(WARN))
+    });
     if report.dry_run {
-        header.push_str(" · dry run");
+        counts.push(sep());
+        counts.push(Span::styled("dry run", bold.fg(WARN)));
     }
+    let mut lines = vec![Line::from(counts)];
 
-    let mut lines = vec![Line::styled(header, Style::new().add_modifier(Modifier::BOLD)), Line::raw("")];
-    for (i, m) in report.members.iter().enumerate() {
-        let marker = if i == selected { "▸ " } else { "  " };
-        let detail = member_detail(m);
-        let row = format!("{marker}{}  {}  {detail}", m.path, status_word(m));
-        lines.push(Line::raw(truncate(&row, inner.width as usize)));
+    if !report.columns.is_empty() {
+        let decl: Vec<String> = report
+            .columns
+            .iter()
+            .map(|c| {
+                let mut s = format!("{} {}", c.name, c.dtype);
+                if !c.nullable {
+                    s.push_str(" NOT NULL");
+                }
+                if !c.matches.is_empty() {
+                    s.push_str(&format!(" ({})", c.matches.join(", ")));
+                }
+                if c.if_missing_null {
+                    s.push_str(" [if missing: null]");
+                }
+                s
+            })
+            .collect();
+        lines.push(Line::from(vec![
+            Span::styled("declares  ", Style::new().fg(DIM)),
+            Span::raw(decl.join("  ·  ")),
+        ]));
     }
-    f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    for d in report.drift.iter().take(3) {
+        lines.push(Line::from(vec![
+            Span::styled("drift     ", Style::new().fg(WARN).add_modifier(Modifier::BOLD)),
+            Span::styled(d.clone(), Style::new().fg(WARN)),
+        ]));
+    }
+    if report.drift.len() > 3 {
+        lines.push(Line::styled(
+            format!("          … {} more", report.drift.len() - 3),
+            Style::new().fg(WARN),
+        ));
+    }
+    lines.push(Line::raw(""));
+    lines
+}
+
+/// How many lines `draw_pile` puts above the first member row: its head
+/// lines plus the table's own header row. `Workbench::follow_pile_selection`
+/// reads this so the selection it keeps on screen is the one drawn.
+pub fn pile_header_rows(report: &PileReport) -> usize {
+    pile_head_lines(report).len() + 1
+}
+
+/// The palette applied to a member's status word.
+fn status_style(m: &MemberReport) -> Style {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    if m.accepted {
+        return bold.fg(OK);
+    }
+    match m.status {
+        MemberStatus::Fits => bold.fg(OK),
+        MemberStatus::NeedsReview => bold.fg(WARN),
+        MemberStatus::Gaps | MemberStatus::Contradicts | MemberStatus::Error => bold.fg(BAD),
+    }
 }
 
 /// `accepted` wins over `REVIEW` — a reviewed-and-accepted member is no
@@ -604,17 +742,267 @@ fn member_detail(m: &MemberReport) -> &str {
         .unwrap_or("")
 }
 
-/// The raw head, verbatim: file lines, or (for a workbook) one
-/// `sheet "Name": R row(s) x C col(s)` line per sheet, then the file's own
-/// lines if any were also sampled, then the grid of whichever sheet
-/// `grid_sheet` names (the first by default, another when `--sheet` or the
-/// workbench's `[`/`]` picked it) under a line naming that sheet (its own
-/// header spelling and raw values — tab-per-sheet stays future work). A
-/// trailing `…` marks a truncated text read; a grid clipped by its own cap
-/// carries its markers inside the grid, put there by `engine::sheet_grid`,
-/// which is the only place that knows both the cap and the sheet's true
-/// extent.
-fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
+/// The Member view: the gap beside the file's own rows, and the two halves
+/// pointing at each other. Left is the member's raw head, verbatim — the
+/// file's own header spelling, which is what a `matches` clause is written
+/// against — sized to its content rather than to half the pane, with the
+/// header cells `--propose` can bind in green and the ones the problem
+/// implicates in yellow. Right is the status word, the review reason, each
+/// problem rendered from its *structure* (the names tried and the file's
+/// header as lists, one per line) and the numbered remedy menu, the
+/// selected remedy reversed like every other selection. The raw head
+/// scrolls with `main_scroll`; the right column does not.
+///
+/// Takes `w` itself, rather than unpacking `raw`/`remedy_selected`/
+/// `main_scroll` as separate parameters, to stay under the
+/// too-many-arguments threshold — the same reason `draw_file_with_spec`
+/// does.
+fn draw_member(f: &mut Frame, area: Rect, block: Block<'static>, m: &MemberReport, w: &Workbench) {
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let Context::Member { raw, remedy_selected, .. } = &w.context else {
+        // The caller already matched `w.context` to get here — this is
+        // unreachable in practice, but drawing must still be total.
+        f.render_widget(Paragraph::new(Line::styled("?", Style::new().fg(DIM))), inner);
+        return;
+    };
+    let remedy_selected = *remedy_selected;
+    let remedies = w.member_remedies();
+    let marks = Highlights::for_member(m);
+
+    // The raw head takes the width its content needs (plus a gutter), never
+    // less than a readable minimum and never more than 60% of the pane: a
+    // four-row CSV must not push the problem text into a strip that breaks
+    // every spelling across two lines.
+    let raw_w = raw
+        .as_ref()
+        .map(|r| r.max_width() + 2)
+        .unwrap_or(0)
+        .clamp(24, (inner.width as usize * 3 / 5).max(24)) as u16;
+    let [left, right] =
+        Layout::horizontal([Constraint::Length(raw_w), Constraint::Fill(1)]).areas(inner);
+
+    match raw {
+        Some(r) => draw_raw_head(f, left, r, w.main_scroll, &marks),
+        None => f.render_widget(Paragraph::new(Line::styled("loading…", Style::new().fg(DIM))), left),
+    }
+
+    let mut lines = vec![Line::styled(status_word(m), status_style(m))];
+    if let Some(review) = &m.review {
+        lines.push(Line::raw(""));
+        for l in review.lines() {
+            lines.push(Line::raw(l.to_string()));
+        }
+    }
+    for p in &m.problems {
+        lines.push(Line::raw(""));
+        lines.extend(problem_lines(p, &marks));
+    }
+    if !remedies.is_empty() {
+        lines.push(Line::raw(""));
+        for (i, r) in remedies.iter().enumerate() {
+            let marker = if i == remedy_selected { "▸ " } else { "  " };
+            let text = format!("{marker}{}. {}", i + 1, r.label());
+            lines.push(if i == remedy_selected {
+                Line::styled(text, Style::new().add_modifier(SELECTED))
+            } else {
+                Line::raw(text)
+            });
+        }
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), right);
+}
+
+/// Which of the file's own header cells the member view colours, and how.
+#[derive(Default)]
+struct Highlights {
+    candidates: Vec<String>,
+    implicated: Vec<String>,
+}
+
+impl Highlights {
+    fn for_member(m: &MemberReport) -> Self {
+        let mut h = Highlights::default();
+        for p in &m.proposals {
+            h.candidates.extend(p.candidates.iter().map(|(name, _)| name.clone()));
+        }
+        for p in &m.problems {
+            match p.kind.as_str() {
+                // `Betrag (column 3)` — the spelling is what the file says.
+                "ambiguous" => h.implicated.extend(
+                    p.choices.iter().map(|c| c.split(" (column ").next().unwrap_or(c).to_string()),
+                ),
+                "untypable" | "ambiguous_separator" | "ambiguous_format" | "collides" => {
+                    h.implicated.extend(p.choices.iter().cloned())
+                }
+                _ => {}
+            }
+            if let Some(holder) = &p.long_form {
+                h.implicated.push(holder.clone());
+            }
+        }
+        h
+    }
+
+    fn style_of(&self, cell: &str) -> Option<Style> {
+        let cell = cell.trim();
+        if self.implicated.iter().any(|c| c == cell) {
+            Some(Style::new().fg(IMPLICATED).add_modifier(Modifier::BOLD))
+        } else if self.candidates.iter().any(|c| c == cell) {
+            Some(Style::new().fg(CANDIDATE).add_modifier(Modifier::BOLD))
+        } else {
+            None
+        }
+    }
+
+    /// A raw text line with every highlighted spelling styled where it
+    /// occurs. Longest spellings first, so `Betrag CHF` is not split by
+    /// `Betrag`; an occurrence inside a longer one is left alone.
+    fn line(&self, text: &str) -> Line<'static> {
+        let mut names: Vec<&String> = self.implicated.iter().chain(self.candidates.iter()).collect();
+        names.sort_by_key(|n| std::cmp::Reverse(n.chars().count()));
+        names.dedup();
+        // (start, end, style) byte ranges, non-overlapping.
+        let mut marks: Vec<(usize, usize, Style)> = Vec::new();
+        for n in names {
+            if n.is_empty() {
+                continue;
+            }
+            let Some(style) = self.style_of(n) else { continue };
+            let mut from = 0;
+            while let Some(i) = text[from..].find(n.as_str()) {
+                let (a, b) = (from + i, from + i + n.len());
+                if !marks.iter().any(|(x, y, _)| a < *y && b > *x) {
+                    marks.push((a, b, style));
+                }
+                from = b;
+            }
+        }
+        marks.sort_by_key(|m| m.0);
+        let mut spans = Vec::new();
+        let mut at = 0;
+        for (a, b, style) in marks {
+            if a > at {
+                spans.push(Span::raw(text[at..a].to_string()));
+            }
+            spans.push(Span::styled(text[a..b].to_string(), style));
+            at = b;
+        }
+        if at < text.len() {
+            spans.push(Span::raw(text[at..].to_string()));
+        }
+        Line::from(spans)
+    }
+}
+
+/// One problem, from its structure rather than its prose: the first line of
+/// the message is the headline; the names tried and the file's own header
+/// are lists, one item per line, the header cells carrying the same colours
+/// the raw head does; a long-form diagnosis names the holding column; an
+/// ambiguous binding lists its choices. The CLI's remedy prose is left out
+/// here — the numbered menu beneath is that remedy, made pressable.
+fn problem_lines(p: &tdy::report::Problem, marks: &Highlights) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::styled(
+        p.message.lines().next().unwrap_or("").to_string(),
+        Style::new().add_modifier(Modifier::BOLD),
+    )];
+    let dim = Style::new().fg(DIM);
+    if !p.tried.is_empty() {
+        lines.push(Line::styled("looked for", dim));
+        for t in &p.tried {
+            lines.push(Line::raw(format!("  {t}")));
+        }
+    }
+    if !p.header.is_empty() {
+        lines.push(Line::styled("the file has", dim));
+        for h in &p.header {
+            let text = format!("  {h}");
+            lines.push(match marks.style_of(h) {
+                Some(style) => Line::styled(text, style),
+                None => Line::raw(text),
+            });
+        }
+    }
+    if let Some(holder) = &p.long_form {
+        lines.push(Line::styled(
+            format!("\"{holder}\" holds those names as values — this file is in long form; tdy has no pivot"),
+            Style::new().fg(IMPLICATED),
+        ));
+    }
+    if p.kind == "ambiguous" && !p.choices.is_empty() {
+        lines.push(Line::styled("matches", dim));
+        for c in &p.choices {
+            lines.push(Line::styled(format!("  {c}"), Style::new().fg(IMPLICATED)));
+        }
+    }
+    if p.tried.is_empty() && p.header.is_empty() && p.choices.is_empty() {
+        for l in p.message.lines().skip(1) {
+            lines.push(Line::raw(l.to_string()));
+        }
+    }
+    lines
+}
+
+/// The raw head drawn into `area`: sheet lines and text lines as a
+/// paragraph (the header line carrying `marks`), then a workbook's grid as
+/// a table whose first row carries them too. `scroll` moves the text
+/// lines first and the grid rows after them, so a text file's scroll is
+/// exactly the old paragraph scroll.
+fn draw_raw_head(f: &mut Frame, area: Rect, raw: &RawHead, scroll: usize, marks: &Highlights) {
+    let text_lines = raw_text_lines(raw, marks);
+    if raw.grid.is_empty() {
+        f.render_widget(Paragraph::new(text_lines).scroll((scroll as u16, 0)), area);
+        return;
+    }
+    let shown = text_lines.len().saturating_sub(scroll) as u16;
+    let grid_offset = scroll.saturating_sub(text_lines.len());
+    let [top, grid_area] =
+        Layout::vertical([Constraint::Length(shown.min(area.height)), Constraint::Fill(1)]).areas(area);
+    f.render_widget(Paragraph::new(text_lines).scroll((scroll as u16, 0)), top);
+    if grid_area.height == 0 {
+        return;
+    }
+    let ncols = raw.grid.iter().map(|r| r.len()).max().unwrap_or(0);
+    let widths: Vec<Constraint> = (0..ncols)
+        .map(|c| {
+            let w = raw.grid.iter().filter_map(|r| r.get(c)).map(|v| v.chars().count()).max().unwrap_or(1);
+            Constraint::Length(w.clamp(1, GRID_CELL_MAX) as u16)
+        })
+        .collect();
+    let rows: Vec<Row> = raw
+        .grid
+        .iter()
+        .enumerate()
+        .skip(grid_offset)
+        .map(|(i, r)| {
+            let cells: Vec<Cell> = r
+                .iter()
+                .map(|v| {
+                    let text = truncate(v, GRID_CELL_MAX);
+                    match (i == 0).then(|| marks.style_of(v)).flatten() {
+                        Some(style) => Cell::from(Span::styled(text, style)),
+                        None => Cell::from(text),
+                    }
+                })
+                .collect();
+            let row = Row::new(cells);
+            if i == 0 { row.style(Style::new().add_modifier(Modifier::BOLD)) } else { row }
+        })
+        .collect();
+    f.render_widget(TableWidget::new(rows, widths).column_spacing(1), grid_area);
+}
+
+/// A workbook grid cell is clipped to this many characters (`…` inside), as
+/// it always was — a 300-character title cell must not push every other
+/// column off the pane.
+const GRID_CELL_MAX: usize = 14;
+
+/// The text part of a raw head: one `sheet "Name": R row(s) x C col(s)`
+/// line per sheet, the file's own lines (the first — the header — carrying
+/// `marks`), the caption naming the sheet the grid came from, and a `…`
+/// when the text read was truncated. The grid itself is a table, drawn by
+/// `draw_raw_head`.
+fn raw_text_lines(raw: &RawHead, marks: &Highlights) -> Vec<Line<'static>> {
     if raw.lines.is_empty() && raw.sheets.is_empty() && raw.grid.is_empty() {
         return vec![Line::styled("reading…", Style::new().fg(DIM))];
     }
@@ -622,8 +1010,8 @@ fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
     for (name, rows, cols) in &raw.sheets {
         lines.push(Line::raw(format!("sheet \"{name}\": {rows} row(s) x {cols} col(s)")));
     }
-    for l in &raw.lines {
-        lines.push(Line::raw(l.clone()));
+    for (i, l) in raw.lines.iter().enumerate() {
+        lines.push(if i == 0 { marks.line(l) } else { Line::raw(l.clone()) });
     }
     // The grid is whichever sheet `grid_sheet` names — the first by
     // default, another when `--sheet`/`[`/`]` picked it. A workbook may
@@ -631,10 +1019,6 @@ fn raw_head_lines(raw: &RawHead) -> Vec<Line<'static>> {
     // rather than let them read as the whole book.
     if let Some(name) = &raw.grid_sheet {
         lines.push(Line::raw(format!("grid of sheet \"{name}\":")));
-    }
-    for row in &raw.grid {
-        let cells: Vec<String> = row.iter().map(|c| truncate(c, 14)).collect();
-        lines.push(Line::raw(cells.join(" | ")));
     }
     if raw.truncated {
         lines.push(Line::styled("…", Style::new().fg(DIM)));
@@ -660,10 +1044,7 @@ fn draw_file_no_spec(
     f.render_widget(block, area);
     let [content, footer] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
-    f.render_widget(
-        Paragraph::new(raw_head_lines(raw)).scroll((scroll as u16, 0)),
-        content,
-    );
+    draw_raw_head(f, content, raw, scroll, &Highlights::default());
     let footer_text = if stale { "sidecar stale — `.sniff --force`" } else { "not sniffed — press s" };
     f.render_widget(
         Paragraph::new(Line::styled(footer_text, Style::new().fg(DIM))),
@@ -697,7 +1078,7 @@ fn draw_file_with_spec(
     const TOP_MIN: u16 = 4;
     let (top, bottom) = match preview {
         Some(t) if inner.height > TOP_MIN => {
-            let want = t.rows.len() as u16 + 2;
+            let want = t.rows.len() as u16 + table_header_rows(t) + 1;
             let h = want.min(inner.height - TOP_MIN);
             if h >= 2 {
                 let [top, bottom] =
@@ -712,14 +1093,11 @@ fn draw_file_with_spec(
 
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
-    f.render_widget(
-        Paragraph::new(raw_head_lines(raw)).scroll((scroll as u16, 0)),
-        left,
-    );
+    draw_raw_head(f, left, raw, scroll, &Highlights::default());
     f.render_widget(Paragraph::new(spec_lines(spec, w.confidence_threshold)), right);
 
     if let (Some(bottom), Some(t)) = (bottom, preview) {
-        f.render_widget(Paragraph::new(table_lines(t)), bottom);
+        draw_table(f, bottom, t, 0);
     }
 }
 
@@ -768,21 +1146,86 @@ fn spec_lines(spec: &SpecSummary, threshold: f32) -> Vec<Line<'static>> {
     lines
 }
 
-/// A `Table`, rendered as a header row, its data rows, then a count line —
-/// shared by the File view's preview and a bare query's result.
-fn table_lines(t: &Table) -> Vec<Line<'static>> {
-    let mut lines =
-        vec![Line::styled(t.columns.join("  "), Style::new().add_modifier(Modifier::BOLD))];
-    for r in &t.rows {
-        lines.push(Line::raw(r.join("  ")));
+/// A `Table`, drawn as one: a bold header (with the column types beneath
+/// the names when the table carries them, as a query result does), the
+/// rows with numeric columns right-aligned so amounts read as a column,
+/// and a count line. `scroll` skips leading rows.
+fn draw_table(f: &mut Frame, area: Rect, t: &Table, scroll: usize) {
+    if area.height == 0 {
+        return;
     }
+    let [table_area, count_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+
+    let ncols = t.columns.len();
+    let numeric: Vec<bool> = (0..ncols)
+        .map(|c| {
+            let mut any = false;
+            t.rows.iter().filter_map(|r| r.get(c)).all(|v| {
+                let v = v.trim();
+                if v.is_empty() {
+                    return true;
+                }
+                any = true;
+                v.parse::<f64>().is_ok()
+            }) && any
+        })
+        .collect();
+    let widths: Vec<Constraint> = (0..ncols)
+        .map(|c| {
+            let head = t.columns[c].chars().count().max(t.types.get(c).map(|s| s.chars().count()).unwrap_or(0));
+            let body = t.rows.iter().filter_map(|r| r.get(c)).map(|v| v.chars().count()).max().unwrap_or(0);
+            Constraint::Length(head.max(body).clamp(1, TABLE_CELL_MAX) as u16)
+        })
+        .collect();
+    let align = |c: usize| if numeric.get(c).copied().unwrap_or(false) { Alignment::Right } else { Alignment::Left };
+
+    let header_cells: Vec<Cell> = (0..ncols)
+        .map(|c| {
+            let name = Line::styled(t.columns[c].clone(), Style::new().add_modifier(Modifier::BOLD)).alignment(align(c));
+            match t.types.get(c) {
+                Some(ty) if !ty.is_empty() => Cell::from(Text::from(vec![
+                    name,
+                    Line::styled(ty.clone(), Style::new().fg(DIM)).alignment(align(c)),
+                ])),
+                _ => Cell::from(name),
+            }
+        })
+        .collect();
+    let rows: Vec<Row> = t
+        .rows
+        .iter()
+        .skip(scroll)
+        .map(|r| {
+            Row::new((0..ncols).map(|c| {
+                let v = r.get(c).cloned().unwrap_or_default();
+                Cell::from(Line::raw(truncate(&v, TABLE_CELL_MAX)).alignment(align(c)))
+            }))
+        })
+        .collect();
+    let table = TableWidget::new(rows, widths)
+        .header(Row::new(header_cells).height(table_header_rows(t)))
+        .column_spacing(2);
+    f.render_widget(table, table_area);
+
     let mut count = format!("{} row(s)", t.total);
     if t.truncated {
         count.push_str(" (truncated)");
     }
-    lines.push(Line::styled(count, Style::new().fg(DIM)));
-    lines
+    if scroll > 0 {
+        count.push_str(&format!(" · from row {}", scroll + 1));
+    }
+    f.render_widget(Paragraph::new(Line::styled(count, Style::new().fg(DIM))), count_area);
 }
+
+/// Two header rows when the table names its types, one otherwise.
+fn table_header_rows(t: &Table) -> u16 {
+    if t.types.iter().any(|ty| !ty.is_empty()) { 2 } else { 1 }
+}
+
+/// A table cell is clipped to this many characters; a free-text column
+/// must not push the numbers off the pane.
+const TABLE_CELL_MAX: usize = 40;
 
 fn draw_console(f: &mut Frame, area: Rect, w: &Workbench) {
     let focused = w.focus == Focus::Console;

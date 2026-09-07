@@ -25,6 +25,72 @@ fn screen(w: &mut Workbench, cols: u16, rows: u16) -> Vec<String> {
         .collect()
 }
 
+/// The drawn buffer itself, for assertions on colour and position that
+/// the text alone cannot make.
+fn buffer(w: &mut Workbench, cols: u16, rows: u16) -> ratatui::buffer::Buffer {
+    let mut t = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+    t.draw(|f| wb_ui::draw(f, w)).unwrap();
+    t.backend().buffer().clone()
+}
+
+fn row_text(buf: &ratatui::buffer::Buffer, y: u16) -> String {
+    (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+}
+
+/// First (x, y) at which `needle` starts, scanning rows top to bottom.
+fn find(buf: &ratatui::buffer::Buffer, needle: &str) -> Option<(u16, u16)> {
+    (0..buf.area.height).find_map(|y| row_text(buf, y).find(needle).map(|i| {
+        // byte index -> column: symbols are one cell each here
+        let col = row_text(buf, y)[..i].chars().count() as u16;
+        (col, y)
+    }))
+}
+
+fn fg_at(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> ratatui::style::Color {
+    buf[(x, y)].fg
+}
+
+fn reversed_at(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> bool {
+    buf[(x, y)].modifier.contains(ratatui::style::Modifier::REVERSED)
+}
+
+fn declared(name: &str, dtype: &str, matches: &[&str]) -> tdy::report::TargetColumnReport {
+    tdy::report::TargetColumnReport {
+        name: name.into(),
+        dtype: dtype.into(),
+        nullable: false,
+        matches: matches.iter().map(|m| m.to_string()).collect(),
+        if_missing_null: false,
+    }
+}
+
+fn fitted(w: &mut Workbench, d: &tempfile::TempDir, report: PileReport) {
+    use tdy::console::{Outcome, Payload};
+    w.begin(".fit sales.tdy.sql");
+    w.apply(
+        Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
+        d.path(),
+    );
+}
+
+fn pile_report(members: Vec<MemberReport>) -> PileReport {
+    let failed = members.iter().filter(|m| m.status == MemberStatus::Gaps).count();
+    let needs_review = members.iter().filter(|m| m.status == MemberStatus::NeedsReview).count();
+    PileReport {
+        target: "sales".into(),
+        target_file: "sales.tdy.sql".into(),
+        declared_columns: 3,
+        fitted: members.len() - failed,
+        failed,
+        needs_review,
+        members,
+        lock_written: None,
+        dry_run: false,
+        columns: vec![],
+        drift: vec![],
+    }
+}
+
 fn pile() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("a.csv"), "A;B\n1;2\n").unwrap();
@@ -329,6 +395,8 @@ fn the_pile_context_lists_members_with_status_words() {
         members,
         lock_written: None,
         dry_run: false,
+        columns: vec![],
+        drift: vec![],
     };
     w.apply(
         Outcome {
@@ -372,6 +440,8 @@ fn a_dry_run_pile_report_marks_the_header() {
         members,
         lock_written: None,
         dry_run: true,
+        columns: vec![],
+        drift: vec![],
     };
     w.apply(
         Outcome {
@@ -432,6 +502,8 @@ fn the_member_context_shows_gap_beside_raw_and_the_menu() {
         members: vec![gap_member("2025-02.csv")],
         lock_written: None,
         dry_run: false,
+        columns: vec![],
+        drift: vec![],
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -483,6 +555,8 @@ fn the_confirm_overlay_shows_the_diff() {
         members: vec![m],
         lock_written: None,
         dry_run: false,
+        columns: vec![],
+        drift: vec![],
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -633,6 +707,8 @@ fn pile_scrolls_past_the_first_member_with_page_down() {
         members,
         lock_written: None,
         dry_run: false,
+        columns: vec![],
+        drift: vec![],
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -678,6 +754,8 @@ fn member_raw_head_scrolls_with_page_down() {
         members: vec![member("2025-02.csv", MemberStatus::Fits)],
         lock_written: None,
         dry_run: false,
+        columns: vec![],
+        drift: vec![],
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -976,6 +1054,8 @@ fn every_context_renders_at_hostile_sizes() {
             members,
             lock_written: None,
             dry_run: true,
+            columns: vec![],
+            drift: vec![],
         };
         w.apply(
             Outcome {
@@ -1146,6 +1226,8 @@ fn pile_status_hint_names_refit() {
         members: vec![member("2025-01.csv", MemberStatus::Fits)],
         lock_written: None,
         dry_run: false,
+        columns: vec![],
+        drift: vec![],
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -1209,6 +1291,8 @@ fn member_status_hint_names_digit_shortcuts() {
         members: vec![gap_member("2025-02.csv")],
         lock_written: None,
         dry_run: false,
+        columns: vec![],
+        drift: vec![],
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -1220,4 +1304,272 @@ fn member_status_hint_names_digit_shortcuts() {
     let text = screen(&mut w, 110, 30).join("\n");
     assert!(text.contains("1-9"), "{text}");
     assert!(text.contains("^Q"), "quit must stay advertised in every context: {text}");
+}
+
+// ---------------------------------------------------------------------------
+// The workbench's first visual slice: real tables, a semantic palette, one
+// selection grammar, and a member view whose two halves point at each other.
+// ---------------------------------------------------------------------------
+
+/// The pile is a table: each member's binding sits under the declared
+/// column it supplies, so vocabulary drift across months is a column to
+/// read down rather than a sentence per row to compare.
+#[test]
+fn pile_rows_put_each_binding_under_its_declared_column() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut jan = member("2025-01.csv", MemberStatus::Fits);
+    jan.sources = vec![
+        SourceBinding { column: "month".into(), source: "Datum".into() },
+        SourceBinding { column: "region".into(), source: "Region".into() },
+        SourceBinding { column: "amount".into(), source: "Betrag".into() },
+    ];
+    let mut oct = member("2025-10.xlsx", MemberStatus::Fits);
+    oct.sources = vec![
+        SourceBinding { column: "month".into(), source: "Date".into() },
+        SourceBinding { column: "region".into(), source: "Region".into() },
+        SourceBinding { column: "amount".into(), source: "Amount".into() },
+    ];
+    let mut r = pile_report(vec![jan, oct]);
+    r.columns = vec![
+        declared("month", "DATE", &["Datum", "Date"]),
+        declared("region", "TEXT", &[]),
+        declared("amount", "DECIMAL(14,2)", &["Betrag", "Amount"]),
+    ];
+    fitted(&mut w, &d, r);
+
+    let buf = buffer(&mut w, 120, 30);
+    let in_row = |row_needle: &str, needle: &str| -> (u16, u16) {
+        (0..buf.area.height)
+            .find_map(|y| {
+                let t = row_text(&buf, y);
+                (t.contains(row_needle) && t.contains(needle))
+                    .then(|| (t.find(needle).map(|i| t[..i].chars().count() as u16).unwrap(), y))
+            })
+            .unwrap_or_else(|| panic!("no row with {row_needle:?} and {needle:?}"))
+    };
+    let (x_month, y_head) = in_row("status", "month");
+    let (x_datum, y_jan) = in_row("2025-01.csv", "Datum");
+    let (x_date, y_oct) = in_row("2025-10.xlsx", "Date");
+    assert_eq!(x_datum, x_month, "the binding sits under its column:\n{}", screen(&mut w, 120, 30).join("\n"));
+    assert_eq!(x_date, x_month, "{}", screen(&mut w, 120, 30).join("\n"));
+    assert!(y_head < y_jan && y_jan < y_oct);
+    let text = screen(&mut w, 120, 30).join("\n");
+    assert!(text.contains("month DATE"), "the declaration is stated: {text}");
+    assert!(text.contains("Datum, Date") || text.contains("Datum | Date"), "with its matches: {text}");
+}
+
+/// Status words carry the palette: green for what fits, red for a gap,
+/// yellow for a judgement waiting on a person.
+#[test]
+fn pile_status_words_are_coloured_by_meaning() {
+    use ratatui::style::Color;
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let r = pile_report(vec![
+        member("2025-01.csv", MemberStatus::Fits),
+        gap_member("2025-02.csv"),
+        member("2025-03.csv", MemberStatus::NeedsReview),
+    ]);
+    fitted(&mut w, &d, r);
+    // Move the selection off row 0 so its own highlight does not confuse
+    // the colour read on the first row.
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Down));
+    w.key(key(KeyCode::Down));
+    let buf = buffer(&mut w, 120, 30);
+    let (x, y) = find(&buf, "fits").unwrap();
+    assert_eq!(fg_at(&buf, x, y), Color::Green);
+    let (x, y) = find(&buf, "GAP").unwrap();
+    assert_eq!(fg_at(&buf, x, y), Color::Red);
+    let (x, y) = find(&buf, "REVIEW").unwrap();
+    assert_eq!(fg_at(&buf, x, y), Color::Yellow);
+    let (x, y) = find(&buf, "1 failed").unwrap();
+    assert_eq!(fg_at(&buf, x, y), Color::Red, "the header's counts follow the same rule");
+}
+
+/// One selection grammar: the selected pile row is reversed, as the
+/// browser's selected entry already is.
+#[test]
+fn the_selected_pile_row_is_reversed_like_the_browser_selection() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let r = pile_report(vec![member("2025-01.csv", MemberStatus::Fits), member("2025-02.csv", MemberStatus::Fits)]);
+    fitted(&mut w, &d, r);
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Down));
+    let buf = buffer(&mut w, 120, 30);
+    let (x, y) = find(&buf, "2025-02.csv").unwrap();
+    assert!(reversed_at(&buf, x, y), "selected row");
+    let (x0, y0) = find(&buf, "2025-01.csv").unwrap();
+    assert!(!reversed_at(&buf, x0, y0), "unselected row");
+}
+
+/// Lock drift is a fact about the pile, and the pile view says it.
+#[test]
+fn the_pile_view_names_drift_against_the_lock() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut r = pile_report(vec![member("2025-01.csv", MemberStatus::Fits)]);
+    r.drift = vec!["2025-13.csv matches this dataset and is not in the lock — run `tdy fit` to plan it".into()];
+    fitted(&mut w, &d, r);
+    let text = screen(&mut w, 120, 30).join("\n");
+    assert!(text.contains("drift") && text.contains("2025-13.csv"), "{text}");
+}
+
+fn member_with_raw(w: &mut Workbench, d: &tempfile::TempDir, m: MemberReport, raw: tdy::console::RawHead) {
+    fitted(w, d, pile_report(vec![m]));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Enter));
+    if let tdy_tui::workbench::Context::Member { target, report, member, .. } = &w.context {
+        let path = target.parent().unwrap().join(&report.members[*member].path);
+        w.set_preview(w.preview_gen, path, raw, None, false);
+    } else {
+        panic!("expected Member context, got {:?}", w.context);
+    }
+}
+
+fn raw_of(lines: &[&str]) -> tdy::console::RawHead {
+    tdy::console::RawHead { lines: lines.iter().map(|l| l.to_string()).collect(), truncated: false, sheets: vec![], grid: vec![], grid_sheet: None }
+}
+
+/// The two halves of the member view point at each other: the column
+/// `--propose` says can supply the declared one is green in the file's own
+/// header line, so the reader does not match spellings by eye.
+#[test]
+fn member_raw_header_marks_the_proposed_candidate_green() {
+    use ratatui::style::Color;
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = gap_member("2025-02.csv");
+    m.problems[0].header = vec!["Datum".into(), "Kanton".into(), "Betrag".into()];
+    m.proposals = vec![tdy::report::ProposalReport {
+        column: "region".into(),
+        want: "TEXT".into(),
+        candidates: vec![("Kanton".into(), "all 4 sampled value(s) parse as TEXT".into())],
+        message: String::new(),
+    }];
+    member_with_raw(&mut w, &d, m, raw_of(&["Datum;Kanton;Betrag", "31.01.2025;BE;1.00"]));
+    let buf = buffer(&mut w, 120, 34);
+    let (x, y) = find(&buf, "Datum;Kanton;Betrag").unwrap();
+    assert_eq!(fg_at(&buf, x + 6, y), Color::Green, "Kanton is the candidate");
+    assert_ne!(fg_at(&buf, x, y), Color::Green, "Datum is not");
+}
+
+/// ...and a column the problem itself implicates — the two `Betrag`s of an
+/// ambiguous binding — is yellow.
+#[test]
+fn member_raw_header_marks_an_implicated_column_yellow() {
+    use ratatui::style::Color;
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = member("2025-08.csv", MemberStatus::Gaps);
+    m.problems = vec![Problem {
+        kind: "ambiguous".into(),
+        column: Some("amount".into()),
+        message: "`amount`: 2 columns of this file match, which is ambiguous".into(),
+        want: None,
+        tried: vec![],
+        header: vec![],
+        choices: vec!["Betrag (column 3)".into(), "Betrag (column 4)".into()],
+        field: None,
+        long_form: None,
+    }];
+    member_with_raw(&mut w, &d, m, raw_of(&["Datum;Region;Betrag;Betrag", "31.08.2025;Ost;1;2"]));
+    let buf = buffer(&mut w, 120, 34);
+    let (x, y) = find(&buf, "Datum;Region;Betrag;Betrag").unwrap();
+    assert_eq!(fg_at(&buf, x + 13, y), Color::Yellow, "the first Betrag");
+    assert_eq!(fg_at(&buf, x + 20, y), Color::Yellow, "and the second");
+    assert_ne!(fg_at(&buf, x, y), Color::Yellow, "Datum is not implicated");
+}
+
+/// The raw-head column takes the width its content needs, not half the
+/// pane: a four-row CSV must not push the problem text into a narrow strip
+/// that breaks every spelling across two lines.
+#[test]
+fn the_member_split_follows_the_raw_head_width() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    member_with_raw(&mut w, &d, gap_member("2025-02.csv"), raw_of(&["Datum;Kanton", "1;2"]));
+    let buf = buffer(&mut w, 120, 34);
+    let (x, _) = find(&buf, "`region` (TEXT)").expect("the problem text");
+    // Main pane starts at column 26 (browser) + 1 (border); half of the
+    // remaining ~92 columns would put the right half at ~73.
+    assert!(x < 60, "the right column should start near the raw head's edge, not at half: x={x}\n{}", screen(&mut w, 120, 34).join("\n"));
+}
+
+/// The names that were looked for and the file's own header are lists, and
+/// they render as lists — one item per line — instead of a comma-joined
+/// sentence that wraps mid-spelling.
+#[test]
+fn the_member_view_lists_tried_names_and_the_header_one_per_line() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = gap_member("2025-02.csv");
+    m.problems[0].tried = vec!["region".into(), "Region".into(), "Kanton".into()];
+    m.problems[0].header = vec!["Datum".into(), "Gebiet".into(), "Betrag".into()];
+    member_with_raw(&mut w, &d, m, raw_of(&["Datum;Gebiet;Betrag"]));
+    let lines = screen(&mut w, 120, 34);
+    let right = |needle: &str| lines.iter().find(|l| l.trim_start_matches(['│', ' ']).starts_with(needle) && !l.contains("Datum;")).cloned();
+    assert!(lines.iter().any(|l| l.contains("looked for")), "{}", lines.join("\n"));
+    assert!(right("Kanton").is_some(), "each tried name on its own line:\n{}", lines.join("\n"));
+    assert!(right("Gebiet").is_some(), "each header cell on its own line:\n{}", lines.join("\n"));
+}
+
+/// A preview is a table: numbers right-aligned under their header, text
+/// left-aligned, so a column of amounts reads as a column.
+#[test]
+fn preview_and_query_tables_align_numbers_right_and_text_left() {
+    use tdy::console::Table;
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let t = Table {
+        columns: vec!["region".into(), "total".into()],
+        types: vec!["TEXT".into(), "DECIMAL(14,2)".into()],
+        rows: vec![vec!["Ost".into(), "14200.00".into()], vec!["West".into(), "5.00".into()]],
+        total: 2,
+        truncated: false,
+    };
+    w.context = tdy_tui::workbench::Context::Query(t);
+    let buf = buffer(&mut w, 120, 30);
+    let (x_big, y_big) = find(&buf, "14200.00").unwrap();
+    let (x_small, y_small) = find(&buf, "5.00").unwrap();
+    assert_eq!(x_big + 8, x_small + 4, "right edges line up:\n{}", screen(&mut w, 120, 30).join("\n"));
+    assert!(y_small > y_big);
+    let (x_ost, _) = find(&buf, "Ost").unwrap();
+    let (x_west, _) = find(&buf, "West").unwrap();
+    assert_eq!(x_ost, x_west, "text is left-aligned");
+    let text = screen(&mut w, 120, 30).join("\n");
+    assert!(text.contains("DECIMAL(14,2)"), "a query result names its types: {text}");
+}
+
+/// A declaration wider than the pane is clipped with an ellipsis, not cut
+/// by the border: a line that ends mid-word reads as complete.
+#[test]
+fn a_wide_declaration_line_is_clipped_with_an_ellipsis() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut r = pile_report(vec![member("2025-01.csv", MemberStatus::Fits)]);
+    r.columns = (0..12)
+        .map(|i| declared(&format!("column_number_{i}"), "DECIMAL(14,2)", &["Betrag", "Betrag CHF", "Amount"]))
+        .collect();
+    fitted(&mut w, &d, r);
+    let lines = screen(&mut w, 100, 30);
+    let decl = lines.iter().find(|l| l.contains("declares")).expect("the declares line");
+    assert!(decl.trim_end_matches('│').trim_end().ends_with('…'), "{decl}");
+}
+
+/// The browser's status column speaks the same palette as the pile: a
+/// target without a lock is yellow, a stale sidecar red.
+#[test]
+fn browser_status_follows_the_palette() {
+    use ratatui::style::Color;
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let buf = buffer(&mut w, 100, 20);
+    let (x, y) = find(&buf, "no lock").expect("the target's status");
+    assert_eq!(fg_at(&buf, x, y), Color::Yellow);
 }

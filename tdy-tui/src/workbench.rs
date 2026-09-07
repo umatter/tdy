@@ -228,15 +228,16 @@ impl Workbench {
     }
 
     /// Keep the selected pile row visible: `draw_pile` renders member `i`
-    /// on line `2 + i` (bold header + blank). Selection 0 goes back to a
-    /// scroll of 0 so the header is visible again at the top.
+    /// on line `pile_header_rows + i` (the head lines and the table's own
+    /// header row). Selection 0 goes back to a scroll of 0 so the header is
+    /// visible again at the top.
     fn follow_pile_selection(&mut self) {
-        let Context::Pile { selected, .. } = &self.context else { return };
+        let Context::Pile { selected, report, .. } = &self.context else { return };
         if *selected == 0 {
             self.main_scroll = 0;
             return;
         }
-        let line = 2 + *selected;
+        let line = crate::wb_ui::pile_header_rows(report) + *selected;
         let rows = self.main_view_rows.max(1);
         if line < self.main_scroll {
             self.main_scroll = line;

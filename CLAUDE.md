@@ -246,7 +246,23 @@ regardless of which sheet the panel shows. That read is
 sheet's true extent, so it appends a `…` cell per row when it clips columns and a final `…`
 row when it clips rows — a window shown as if it were the whole sheet is how someone writes a
 `matches` clause for a column they never saw. Both renderers also name the sheet the grid came
-from (`grid of sheet "N":`), since the panel lists every sheet directly above it. `tdy::progress`
+from (`grid of sheet "N":`), since the panel lists every sheet directly above it. **The workbench draws real widgets, from a palette by meaning** (2026-09-06):
+the pile is a ratatui `Table` whose columns are the target's declared columns, each
+member's binding under the column it supplies, and `PileReport` now carries what
+that needs — `columns` (name, SQL type, nullability, `matches`) and `drift` (the
+lock's disagreement with the directory *before* the fit, cleared when a fresh lock is
+written), both skipped in JSON when empty. Green fits, red GAP, yellow REVIEW and
+"no lock"/"dry run", in the pile, the member view and the browser alike; the selected
+row is reversed everywhere, as the browser's `List` already was. The member view's
+raw head is sized to its content, its header line colours `--propose` candidates green
+and problem-implicated cells (the two `Betrag`s, a long-form holder) yellow, and a
+problem renders from `Problem`'s *structure* (tried names and header one per line),
+not its CLI prose. Preview, query results (types under the names), the workbook grid
+and evidence rows are `Table`s with numerics right-aligned. Two couplings to respect:
+`wb_ui::pile_header_rows` is the arithmetic `Workbench::follow_pile_selection` uses,
+so the pile's head lines and the table's header row are counted in one place; and
+`main_scroll` stays the single scroll offset (the table is fed pre-sliced rows rather
+than a `TableState`, which would keep its own). `tdy::progress`
 (owned `Sink`, so a fit can run on a spawned task) is what lets the status line narrate; a
 transient remark must use `Msg::Note`, never `Msg::Progress`, or the UI stays busy forever and
 takes no keys but `q`. The same discipline now reaches query results too:

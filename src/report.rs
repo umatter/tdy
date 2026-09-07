@@ -37,6 +37,28 @@ pub struct PileReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lock_written: Option<String>,
     pub dry_run: bool,
+    /// What the target declares, column by column — so a report is
+    /// readable without the `.tdy.sql` beside it, and a pile view can put
+    /// each member's binding under the column it supplies.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<TargetColumnReport>,
+    /// How the directory disagrees with the lock that existed *before* this
+    /// fit (`lockfile::drift`'s messages). Empty when there was no lock, or
+    /// when this fit wrote a fresh one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drift: Vec<String>,
+}
+
+/// One declared column of the target, as the report carries it.
+#[derive(Debug, Clone, Serialize)]
+pub struct TargetColumnReport {
+    pub name: String,
+    /// The SQL spelling of the declared type (`DECIMAL(14,2)`).
+    pub dtype: String,
+    pub nullable: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub matches: Vec<String>,
+    pub if_missing_null: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -260,6 +282,15 @@ pub async fn fit_pile(
     let limits = cfg.limits;
     let target = Target::load(target_path)?;
     let dir = lockfile::target_dir(target_path);
+    // How the directory disagrees with the lock as it stands *now*, before
+    // this fit touches it: what a dry run is asked about, and what a failed
+    // fit leaves in place.
+    let drift = match lockfile::Lock::load(target_path) {
+        Ok(Some(lock)) => lockfile::drift(&lock, &target, target_path)
+            .map(|d| d.iter().map(|x| x.message()).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let rels = lockfile::resolve(&target, target_path)?;
 
     if rels.is_empty() {
@@ -589,6 +620,19 @@ pub async fn fit_pile(
         fitted,
         failed,
         needs_review,
+        columns: target
+            .columns
+            .iter()
+            .map(|c| TargetColumnReport {
+                name: c.name.clone(),
+                dtype: crate::fit::render(&c.dtype),
+                nullable: c.nullable,
+                matches: c.matches.clone(),
+                if_missing_null: c.if_missing_null,
+            })
+            .collect(),
+        // A fresh lock supersedes whatever the old one disagreed with.
+        drift: if lock_written.is_some() { Vec::new() } else { drift },
         lock_written,
         dry_run: opts.dry_run,
     })

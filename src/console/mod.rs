@@ -134,6 +134,28 @@ pub struct RawHead {
     pub grid_sheet: Option<String>,
 }
 
+impl RawHead {
+    /// The widest line a renderer will draw for this head: the longest
+    /// text line, sheet line, or grid row (cells clipped as the renderers
+    /// clip them, joined with one space).
+    pub fn max_width(&self) -> usize {
+        let text = self.lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let sheets = self
+            .sheets
+            .iter()
+            .map(|(n, r, c)| format!("sheet \"{n}\": {r} row(s) x {c} col(s)").chars().count())
+            .max()
+            .unwrap_or(0);
+        let grid = self
+            .grid
+            .iter()
+            .map(|row| row.iter().map(|c| c.chars().count().min(14)).sum::<usize>() + row.len().saturating_sub(1))
+            .max()
+            .unwrap_or(0);
+        text.max(sheets).max(grid)
+    }
+}
+
 /// A rendered `ParseSpec`, for `.sniff` and `.show`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecSummary {
