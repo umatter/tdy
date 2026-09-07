@@ -1794,3 +1794,76 @@ fn the_exclude_remedy_on_a_sheet_member_names_the_member() {
     assert!(labels.iter().any(|l| l.contains("exclude \"2025.xlsx#Q2\"")), "{labels:?}");
     assert!(!labels.iter().any(|l| l.contains("exclude \"2025.xlsx\"")), "{labels:?}");
 }
+
+// ---------------------------------------------------------------------------
+// The seamless edit loop: an editor round-trip on the pile's target or a
+// member's sidecar ends in a dry-run refit, and a change made elsewhere is
+// noticed and named rather than acted on.
+// ---------------------------------------------------------------------------
+
+/// After $EDITOR returns successfully on the pile's target, the workbench
+/// dispatches the same dry-run fit the launch line does — through the
+/// console, so the scrollback records it like a typed line.
+#[test]
+fn a_successful_edit_of_the_target_dispatches_a_dry_run_refit() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits)]))), d.path());
+    let target = d.path().join("sales.tdy.sql");
+    assert_eq!(w.after_edit(&target, true), WbAction::Dispatch(".fit sales.tdy.sql --dry-run --propose".into()));
+    assert_eq!(w.after_edit(&target, false), WbAction::None, "an editor that failed changed nothing");
+    assert_eq!(w.after_edit(&d.path().join("notes.txt"), true), WbAction::None, "an unrelated file");
+}
+
+/// A member's sidecar is part of the pile too: editing it re-proves the pile.
+#[test]
+fn a_successful_edit_of_a_member_sidecar_dispatches_a_dry_run_refit() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let mut q1 = member("2025.xlsx", MemberStatus::Fits);
+    q1.sheet = Some("Q1".into());
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits), q1]))), d.path());
+    assert_eq!(
+        w.after_edit(&d.path().join("2025-01.csv.tdy.toml"), true),
+        WbAction::Dispatch(".fit sales.tdy.sql --dry-run --propose".into())
+    );
+    assert_eq!(
+        w.after_edit(&d.path().join("2025.xlsx#Q1.tdy.toml"), true),
+        WbAction::Dispatch(".fit sales.tdy.sql --dry-run --propose".into()),
+        "a sheet member's sidecar counts"
+    );
+    assert_eq!(w.after_edit(&d.path().join("2025-01.csv"), true), WbAction::None, "the data file is not a spec");
+}
+
+/// What the runtime watches for changes made elsewhere: the target and every
+/// member's sidecar. Nothing outside a pile.
+#[test]
+fn the_watched_files_are_the_target_and_the_members_sidecars() {
+    let d = pile();
+    let mut w = wb(&d);
+    assert!(w.watched_files().is_empty());
+    w.begin(".fit sales.tdy.sql");
+    let mut q1 = member("2025.xlsx", MemberStatus::Fits);
+    q1.sheet = Some("Q1".into());
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits), q1]))), d.path());
+    let watched = w.watched_files();
+    assert_eq!(watched.len(), 3, "{watched:?}");
+    assert!(watched.contains(&d.path().join("sales.tdy.sql")));
+    assert!(watched.contains(&d.path().join("2025-01.csv.tdy.toml")));
+    assert!(watched.contains(&d.path().join("2025.xlsx#Q1.tdy.toml")));
+}
+
+/// A change noticed on disk is named in the status line with the key that
+/// acts on it — never acted on without a keypress.
+#[test]
+fn a_change_noticed_on_disk_is_named_not_acted_on() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits)]))), d.path());
+    let act = w.notice_change(&d.path().join("sales.tdy.sql"));
+    assert_eq!(act, WbAction::None);
+    assert!(w.status.contains("sales.tdy.sql") && w.status.contains("changed on disk") && w.status.contains("f refits"), "{}", w.status);
+}
