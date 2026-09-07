@@ -552,16 +552,24 @@ pub fn discover_sheets(
     target: &Target,
     limits: Limits,
 ) -> Result<Option<SheetDiscovery>, FitError> {
-    let draft = sniff_draft(path, target, limits)?;
-    let Some((_, candidates)) = sheet_candidates(path, &draft, limits) else { return Ok(None) };
-    let shapes = crate::engine::excel_sheet_shapes(path, limits).map_err(FitError::Unreadable)?;
+    // The workbook question is asked first, and cheaply. Sniffing the file
+    // to find out whether it is a multi-sheet workbook meant every member of
+    // every fit paid a whole-file type verification — seconds per member on
+    // a plain CSV, for an answer `excel_sheet_shapes` gives in milliseconds
+    // and gives as `Err` for anything that is not a workbook at all.
+    let Ok(shapes) = crate::engine::excel_sheet_shapes(path, limits) else { return Ok(None) };
+    if shapes.len() <= 1 {
+        return Ok(None);
+    }
     let mut fitting = Vec::new();
     let mut rejected = Vec::new();
     for sh in &shapes {
-        let passes = candidates
-            .iter()
-            .find(|(n, _)| *n == sh.name)
-            .map(|(_, d)| fit_framed(path, target, limits, d.clone(), Rigour::Gates).is_ok())
+        // A sheet that cannot even be framed (empty, say) is rejected here;
+        // `total` still counts it, because "of 3 sheets, only one produces
+        // the declared table" is the true claim.
+        let passes = sniff::frame_excel_sheet(path, &sh.name, limits)
+            .ok()
+            .map(|d| fit_framed(path, target, limits, d, Rigour::Gates).is_ok())
             .unwrap_or(false);
         if passes {
             fitting.push(sh.name.clone())

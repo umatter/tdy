@@ -1141,6 +1141,14 @@ fn discovery_names_the_fitting_sheets_and_the_rejected_ones() {
 
     let csv = corpus().join("2025-01.csv");
     assert!(discover_sheets(&csv, &target(), Limits::default()).unwrap().is_none(), "not a workbook");
+
+    // One sheet is not a choice, so there is nothing to discover — and the
+    // answer costs one read of the workbook's shape, not a sniff of it.
+    let one_sheet = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/umsatz.xlsx");
+    assert!(
+        discover_sheets(&one_sheet, &target(), Limits::default()).unwrap().is_none(),
+        "a single-sheet workbook is a plain member"
+    );
 }
 
 /// One named sheet, fully fitted: its own frame, its own sum.
