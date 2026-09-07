@@ -298,7 +298,7 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
         let excluded_by_ref = target
             .exclude
             .iter()
-            .any(|x| x.len() > rel.len() && x.starts_with(rel.as_str()) && x.as_bytes()[rel.len()] == b'#');
+            .any(|x| x.strip_prefix(rel.as_str()).is_some_and(|s| s.starts_with('#')));
         if !excluded_by_ref {
             out.push(Drift::Added(rel.clone()));
         }
