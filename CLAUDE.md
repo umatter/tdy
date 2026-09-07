@@ -273,7 +273,15 @@ root from paths; the console wraps lines by character (`wrap_line`) and marks a 
 transcript; borders are rounded and the browser draws no right border, so the right
 column's blocks draw the seam's junctions (`Seams`, `seam_set`) — the main block has no
 bottom border because the console's top border is that line, which is why
-`main_inner_rows` subtracts one border row for it, not two. `tdy::progress`
+`main_inner_rows` subtracts one border row for it, not two. Slice 2b: `g`/`G` jump between
+members that `needs_attention` (anything not `fits`), `/` toggles `Workbench::pile_filter`
+(`PileFilter::Problems` hides the rest; arrows move among `visible_pile_rows`, and the
+filter is a workbench preference, not part of the context); a multi-sheet workbook's pane
+title names the sheet on show (`sheet 2/3 "Umsatz"`); and a column note in the spec
+summary (`column \`name\`: …`) shows the first three raw values of that column under it,
+read from the raw head beside it (`decision_examples`: the grid by header cell, a text
+file by the extraction's delimiter) — never a guess at which column was meant, so a
+column it cannot find shows nothing. `tdy::progress`
 (owned `Sink`, so a fit can run on a spawned task) is what lets the status line narrate; a
 transient remark must use `Msg::Note`, never `Msg::Progress`, or the UI stays busy forever and
 takes no keys but `q`. The same discipline now reaches query results too:

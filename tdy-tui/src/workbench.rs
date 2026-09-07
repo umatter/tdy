@@ -15,7 +15,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use tdy::console::line::{Edit as LineEdit, LineEditor};
 use tdy::console::{EntryKind, Outcome, Payload, RawHead, SpecSummary, Table, quote_rel};
 use tdy::evidence::Evidence;
-use tdy::report::{MemberReport, PileReport};
+use tdy::report::{MemberStatus, MemberReport, PileReport};
 
 use crate::browser::Browser;
 use crate::remedy::{self, Edit, Remedy};
@@ -26,6 +26,16 @@ pub enum Focus {
     Console,
     Browser,
     Main,
+}
+
+/// The pile view's row filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PileFilter {
+    #[default]
+    All,
+    /// Gaps and members waiting on review — everything that is not simply
+    /// `fits`.
+    Problems,
 }
 
 /// What the main pane shows. Slice 2: Empty and the File views; a completed
@@ -137,6 +147,9 @@ pub struct Workbench {
     /// `openrouter/<model>`): what decides whether a refused file will be
     /// put to a model. Set by the runtime; the state machine only shows it.
     pub backend: String,
+    /// Which pile rows are shown: every member, or only the ones that need
+    /// attention (a gap, or a judgement waiting on a person). `/` toggles.
+    pub pile_filter: PileFilter,
     /// Frames drawn so far; the runtime advances it once per loop so the
     /// status line's spinner turns while a command runs. Zero in tests.
     pub tick: u64,
@@ -210,6 +223,7 @@ impl Workbench {
             zoom: false,
             busy: None,
             backend: "none".into(),
+            pile_filter: PileFilter::All,
             tick: 0,
             status: String::new(),
             should_quit: false,
@@ -242,17 +256,78 @@ impl Workbench {
     /// visible again at the top.
     fn follow_pile_selection(&mut self) {
         let Context::Pile { selected, report, .. } = &self.context else { return };
-        if *selected == 0 {
+        let visible = self.visible_pile_rows();
+        let pos = visible.iter().position(|&i| i == *selected).unwrap_or(0);
+        if pos == 0 {
             self.main_scroll = 0;
             return;
         }
-        let line = crate::wb_ui::pile_header_rows(report) + *selected;
+        let line = crate::wb_ui::pile_header_rows(report, self.pile_filter) + pos;
         let rows = self.main_view_rows.max(1);
         if line < self.main_scroll {
             self.main_scroll = line;
         } else if line >= self.main_scroll + rows {
             self.main_scroll = line + 1 - rows;
         }
+    }
+
+    /// The pile's member indices in draw order under the current filter:
+    /// every member, or only those that need attention. Empty outside a
+    /// Pile context.
+    pub fn visible_pile_rows(&self) -> Vec<usize> {
+        let Context::Pile { report, .. } = &self.context else { return Vec::new() };
+        report
+            .members
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| self.pile_filter == PileFilter::All || needs_attention(m))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Move the pile selection by `delta` visible rows, clamped.
+    fn move_pile_selection(&mut self, delta: i32) {
+        let visible = self.visible_pile_rows();
+        if visible.is_empty() {
+            return;
+        }
+        let Context::Pile { selected, .. } = &mut self.context else { return };
+        let pos = visible.iter().position(|&i| i == *selected).unwrap_or(0) as i32;
+        let next = (pos + delta).clamp(0, visible.len() as i32 - 1) as usize;
+        *selected = visible[next];
+        self.follow_pile_selection();
+    }
+
+    /// `g`/`G`: the next / previous member that needs attention, from the
+    /// selection; the ends of the list are the ends — no wrap, so a `g`
+    /// that does nothing means there is nothing left to look at.
+    fn jump_pile_attention(&mut self, forward: bool) {
+        let Context::Pile { report, selected, .. } = &mut self.context else { return };
+        let cur = *selected;
+        let found = if forward {
+            report.members.iter().enumerate().skip(cur + 1).find(|(_, m)| needs_attention(m)).map(|(i, _)| i)
+        } else {
+            report.members.iter().enumerate().take(cur).rev().find(|(_, m)| needs_attention(m)).map(|(i, _)| i)
+        };
+        if let Some(i) = found {
+            *selected = i;
+            self.follow_pile_selection();
+        }
+    }
+
+    /// `/`: toggle the pile filter. Narrowing moves the selection onto the
+    /// first visible row if it was hidden; widening keeps it.
+    fn toggle_pile_filter(&mut self) {
+        self.pile_filter = match self.pile_filter {
+            PileFilter::All => PileFilter::Problems,
+            PileFilter::Problems => PileFilter::All,
+        };
+        let visible = self.visible_pile_rows();
+        let Context::Pile { selected, .. } = &mut self.context else { return };
+        if !visible.contains(selected) {
+            *selected = visible.first().copied().unwrap_or(0);
+        }
+        self.follow_pile_selection();
     }
 
     /// One key in, one action out. Pure.
@@ -1055,19 +1130,26 @@ impl Workbench {
             KeyCode::Char(']') => return self.switch_sheet(1),
             _ => {}
         }
-        if let Context::Pile { report, selected, .. } = &mut self.context {
-            let len = report.members.len();
+        if let Context::Pile { .. } = &self.context {
             return match k.code {
                 KeyCode::Up => {
-                    *selected = selected.saturating_sub(1);
-                    self.follow_pile_selection();
+                    self.move_pile_selection(-1);
                     WbAction::None
                 }
                 KeyCode::Down => {
-                    if len > 0 {
-                        *selected = (*selected + 1).min(len - 1);
-                    }
-                    self.follow_pile_selection();
+                    self.move_pile_selection(1);
+                    WbAction::None
+                }
+                KeyCode::Char('g') => {
+                    self.jump_pile_attention(true);
+                    WbAction::None
+                }
+                KeyCode::Char('G') => {
+                    self.jump_pile_attention(false);
+                    WbAction::None
+                }
+                KeyCode::Char('/') => {
+                    self.toggle_pile_filter();
                     WbAction::None
                 }
                 KeyCode::Enter => self.enter_pile_member(),
@@ -1435,3 +1517,9 @@ fn member_preview_path(target: &Path, member_rel: &str) -> PathBuf {
     target_dir.join(member_rel)
 }
 
+
+/// A member that is not simply `fits`: a gap, or a judgement waiting on a
+/// person. What `g`/`G` jump between and what the `/` filter keeps.
+pub fn needs_attention(m: &MemberReport) -> bool {
+    m.status != MemberStatus::Fits
+}
