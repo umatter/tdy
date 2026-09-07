@@ -102,6 +102,7 @@ fn pile() -> tempfile::TempDir {
 fn member(path: &str, status: MemberStatus) -> MemberReport {
     MemberReport {
         path: path.into(),
+        sheet: None,
         status,
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],

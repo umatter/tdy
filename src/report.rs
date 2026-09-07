@@ -63,7 +63,12 @@ pub struct TargetColumnReport {
 
 #[derive(Debug, Serialize)]
 pub struct MemberReport {
+    /// The member's file, relative to the target.
     pub path: String,
+    /// One sheet of that file, when the workbook contributed several
+    /// members. `name()` is what the text shows and what `--accept` takes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
     pub status: MemberStatus,
     /// Where the plan came from: heuristic | llm | manual | existing.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,6 +85,12 @@ pub struct MemberReport {
     pub problems: Vec<Problem>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub proposals: Vec<ProposalReport>,
+}
+
+impl MemberReport {
+    pub fn name(&self) -> String {
+        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone() }.name()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -322,41 +333,73 @@ pub async fn fit_pile(
     // changed — drift is what expires them, so re-fitting an untouched
     // dataset must not ask the same question twice.
     let previous = Lock::load(target_path)?;
-    // A member is identified by its path *relative to the target*, so that is
-    // what --accept must name. Matching on the basename accepted the wrong
-    // file when two directories held the same name, and could never accept a
-    // member in a subdirectory at all.
-    let accepted_now: Vec<String> = opts
+
+    use crate::member::MemberRef;
+
+    // Expansion: a workbook whose sheets fit becomes one unit per fitting
+    // sheet. Discovery runs on every fit and is never read back from the
+    // previous lock — membership comes from the fit and is locked.
+    let mut units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
+    for rel in &rels {
+        let p = dir.join(rel);
+        match crate::fit::discover_sheets(&p, &target, limits) {
+            Ok(Some(d)) if d.fitting.len() >= 2 => {
+                let note = format!(
+                    "of {} sheets, {} produce the declared table: {}{}",
+                    d.total,
+                    d.fitting.len(),
+                    d.fitting.join(", "),
+                    if d.rejected.is_empty() { String::new() } else { format!("; {} do not", d.rejected.join(", ")) }
+                );
+                for sheet in &d.fitting {
+                    units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()]));
+                }
+            }
+            // One fitting sheet, none, a non-workbook, or an unreadable
+            // file: a plain member, and `plan` says what is wrong.
+            _ => units.push((MemberRef::file(rel.clone()), Vec::new())),
+        }
+    }
+    // `exclude` also takes exact member references, applied after expansion.
+    units.retain(|(m, _)| !target.exclude.iter().any(|x| x.contains('#') && *x == m.name()));
+
+    // `--accept` names members the way the report does. A member is
+    // identified by its path *relative to the target* (plus an optional
+    // sheet), so that is what --accept must name. Matching on the basename
+    // accepted the wrong file when two directories held the same name, and
+    // could never accept a member in a subdirectory at all.
+    let accepted_now: Vec<MemberRef> = opts
         .accept
         .iter()
         .map(|a| {
             let a = a.strip_prefix(&dir).unwrap_or(a);
-            a.to_string_lossy().replace('\\', "/")
+            let text = a.to_string_lossy().replace('\\', "/");
+            MemberRef::resolve(&text, |m| units.iter().any(|(u, _)| u == m)).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--accept {text:?} is not a member of `{}`. Members are named relative to the \
+                     target: {}",
+                    target.name,
+                    units.iter().take(6).map(|(u, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
+                )
+            })
         })
-        .collect();
-    for a in &accepted_now {
-        if !rels.contains(a) {
-            anyhow::bail!(
-                "--accept {a:?} is not a member of `{}`. Members are named relative to the \
-                 target: {}",
-                target.name,
-                rels.iter().take(6).map(|r| format!("{r:?}")).collect::<Vec<_>>().join(", ")
-            );
-        }
-    }
+        .collect::<Result<_>>()?;
 
     let mut reports: Vec<MemberReport> = Vec::new();
     let mut lock_members: Vec<Member> = Vec::new();
     let mut failed = 0usize;
     let mut needs_review = 0usize;
 
-    let total = rels.len();
-    for (index, rel) in rels.iter().enumerate() {
+    let total = units.len();
+    for (index, (unit, unit_notes)) in units.iter().enumerate() {
+        let rel = &unit.path;
+        let sheet = unit.sheet.as_deref();
+        let name = unit.name();
         let p = dir.join(rel);
         crate::progress::emit(
             opts.progress.as_ref(),
             crate::progress::Event::MemberStarted {
-                path: rel.clone(),
+                path: name.clone(),
                 index,
                 total,
             },
@@ -374,7 +417,7 @@ pub async fn fit_pile(
         // nondeterministic model quietly swap the frame out from under a
         // review, and it would re-spend money answering a settled question.
         // Either way it is re-proved: conformance and a dry run, every time.
-        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = crate::sidecar::load(&p) {
+        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = crate::sidecar::load_member(&p, sheet) {
             let manual = sc.provenance.method == InferenceMethod::Manual;
             let conforming = crate::conform::conforms(&sc.spec, &target).is_ok();
             if manual || conforming {
@@ -388,6 +431,7 @@ pub async fn fit_pile(
                     failed += 1;
                     reports.push(MemberReport {
                         path: rel.clone(),
+                        sheet: unit.sheet.clone(),
                         status: MemberStatus::Contradicts,
                         via: Some(via.into()),
                         sources: Vec::new(),
@@ -416,6 +460,7 @@ pub async fn fit_pile(
                     failed += 1;
                     reports.push(MemberReport {
                         path: rel.clone(),
+                        sheet: unit.sheet.clone(),
                         status: MemberStatus::Error,
                         via: Some(via.into()),
                         sources: Vec::new(),
@@ -453,11 +498,11 @@ pub async fn fit_pile(
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()
-                    .and_then(|l| l.member(rel, None))
+                    .and_then(|l| l.member(rel, sheet))
                     .filter(|m| m.blake3 == blake3 && m.review == review)
                     .map(|m| m.accepted)
                     .unwrap_or(false);
-                let is_accepted = carried || accepted_now.iter().any(|a| a == rel);
+                let is_accepted = carried || accepted_now.contains(unit);
                 let status = match (&review, is_accepted) {
                     (Some(_), false) => {
                         needs_review += 1;
@@ -467,6 +512,7 @@ pub async fn fit_pile(
                 };
                 reports.push(MemberReport {
                     path: rel.clone(),
+                    sheet: unit.sheet.clone(),
                     status,
                     via: Some(via.into()),
                     sources: spec
@@ -485,22 +531,32 @@ pub async fn fit_pile(
                 });
                 lock_members.push(Member {
                     path: rel.clone(),
-                    sheet: None,
+                    sheet: unit.sheet.clone(),
                     blake3,
                     bytes,
-                    spec_digest: lockfile::spec_digest(&p),
+                    spec_digest: lockfile::spec_digest_for(&p, sheet),
                     review,
                     accepted: is_accepted,
                 });
                 break 'member;
             }
         }
-        match crate::fit::plan(&p, &target, cfg, opts.progress.as_ref()).await {
+        let planned = match sheet {
+            Some(s) => crate::fit::fit_sheet(&p, s, &target, limits).map(|fitted| crate::fit::Planned {
+                fitted,
+                method: InferenceMethod::Heuristic,
+                model: None,
+            }),
+            None => crate::fit::plan(&p, &target, cfg, opts.progress.as_ref()).await,
+        };
+        match planned {
             Ok(planned) => {
-                let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
+                let (mut fitted, method, model) = (planned.fitted, planned.method, planned.model);
+                fitted.spec.notes.extend(unit_notes.iter().cloned());
                 if !opts.dry_run {
-                    crate::sidecar::save(
+                    crate::sidecar::save_member(
                         &p,
+                        sheet,
                         &fitted.spec,
                         crate::sidecar::ProvenanceInfo {
                             method,
@@ -513,11 +569,11 @@ pub async fn fit_pile(
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()
-                    .and_then(|l| l.member(rel, None))
+                    .and_then(|l| l.member(rel, sheet))
                     .filter(|m| m.blake3 == blake3 && m.review == fitted.review)
                     .map(|m| m.accepted)
                     .unwrap_or(false);
-                let is_accepted = carried || accepted_now.iter().any(|a| a == rel);
+                let is_accepted = carried || accepted_now.contains(unit);
                 let status = match (&fitted.review, is_accepted) {
                     (Some(_), false) => {
                         needs_review += 1;
@@ -527,6 +583,7 @@ pub async fn fit_pile(
                 };
                 reports.push(MemberReport {
                     path: rel.clone(),
+                    sheet: unit.sheet.clone(),
                     status,
                     via: Some(
                         match method {
@@ -552,10 +609,10 @@ pub async fn fit_pile(
                 });
                 lock_members.push(Member {
                     path: rel.clone(),
-                    sheet: None,
+                    sheet: unit.sheet.clone(),
                     blake3,
                     bytes,
-                    spec_digest: lockfile::spec_digest(&p),
+                    spec_digest: lockfile::spec_digest_for(&p, sheet),
                     review: fitted.review.clone(),
                     accepted: is_accepted,
                 });
@@ -573,6 +630,7 @@ pub async fn fit_pile(
                 };
                 reports.push(MemberReport {
                     path: rel.clone(),
+                    sheet: unit.sheet.clone(),
                     status,
                     via: None,
                     sources: Vec::new(),
@@ -588,7 +646,7 @@ pub async fn fit_pile(
         crate::progress::emit(
             opts.progress.as_ref(),
             crate::progress::Event::MemberFinished {
-                path: rel.clone(),
+                path: name.clone(),
                 index,
                 total,
                 status: reports.last().map(|r| r.status).unwrap_or(MemberStatus::Error),
@@ -675,18 +733,18 @@ pub fn render_pile_text(r: &PileReport) -> String {
                     (true, false) => "REVIEW  ",
                     (false, _) => "fits    ",
                 };
-                line(format!("  {:<24} {word}{label}  {}", m.path, sources.join("  ")));
+                line(format!("  {:<24} {word}{label}  {}", m.name(), sources.join("  ")));
                 if let (Some(rv), false) = (&m.review, m.accepted) {
                     line(format!("      REVIEW: {rv}"));
                     line(
                         "      tdy does not accept a value-changing step on its own judgement."
                             .into(),
                     );
-                    line(format!("      Accept:  tdy fit {} --accept {}", r.target_file, m.path));
+                    line(format!("      Accept:  tdy fit {} --accept {}", r.target_file, m.name()));
                 }
             }
             MemberStatus::Contradicts => {
-                line(format!("  {:<24} CONTRADICTS{label}", m.path));
+                line(format!("  {:<24} CONTRADICTS{label}", m.name()));
                 for pr in &m.problems {
                     for l in pr.message.lines() {
                         line(format!("      {l}"));
@@ -694,7 +752,7 @@ pub fn render_pile_text(r: &PileReport) -> String {
                 }
             }
             MemberStatus::Gaps => {
-                line(format!("  {:<24} GAP", m.path));
+                line(format!("  {:<24} GAP", m.name()));
                 for pr in &m.problems {
                     for l in pr.message.lines() {
                         line(format!("      {l}"));
@@ -708,7 +766,7 @@ pub fn render_pile_text(r: &PileReport) -> String {
                 }
             }
             MemberStatus::Error => {
-                line(format!("  {:<24} ERROR{label}", m.path));
+                line(format!("  {:<24} ERROR{label}", m.name()));
                 for pr in &m.problems {
                     for l in pr.message.lines() {
                         line(format!("      {l}"));

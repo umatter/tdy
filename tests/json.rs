@@ -240,3 +240,29 @@ fn a_pointer_on_a_csv_is_refused_by_validate() {
     let e = format!("{:?}", spec.validate().expect_err("a csv has no JSON to point into"));
     assert!(e.contains("read as delimited"), "{e}");
 }
+
+#[test]
+fn json_members_carry_their_sheet() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+        dir.path().join("2025.xlsx"),
+    )
+    .unwrap();
+    let t = dir.path().join("monat.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE monat (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*.xlsx', date_order = 'dmy');",
+    )
+    .unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["--json", "fit", t.to_str().unwrap(), "--dry-run"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let members = v["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2, "{v:#}");
+    assert_eq!(members[0]["path"], "2025.xlsx");
+    assert_eq!(members[0]["sheet"], "Q1");
+    assert_eq!(members[1]["sheet"], "Q2");
+}

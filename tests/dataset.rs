@@ -987,3 +987,79 @@ fn a_hand_written_lock_over_two_sheets_reads_both_and_names_them() {
     assert!(text.contains("2025.xlsx#Q2") && text.contains("1500.00"), "{text}");
     assert_eq!(text.matches("| 3 ").count(), 2, "three rows per sheet:\n{text}");
 }
+
+fn quarters_pile() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+        dir.path().join("2025.xlsx"),
+    )
+    .unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_one_fits.xlsx"),
+        dir.path().join("2024.xlsx"),
+    )
+    .unwrap();
+    let t = dir.path().join("monat.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE monat (\n  month DATE NOT NULL OPTIONS(matches = 'Datum'),\n  region TEXT NOT NULL OPTIONS(matches = 'Region'),\n  amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n) \
+         WITH (files = '*.xlsx', date_order = 'dmy', provenance = 'true');\n",
+    )
+    .unwrap();
+    (dir, t)
+}
+
+/// Step two of the design: `tdy fit` expands the workbook whose two sheets
+/// fit into two members, keeps the workbook where one sheet fits as one
+/// plain member, locks all three, and the dataset is their sum.
+#[test]
+fn a_workbook_whose_sheets_fit_becomes_one_member_per_sheet() {
+    let (dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025.xlsx#Q1") && text.contains("2025.xlsx#Q2"), "{text}");
+    assert!(text.contains("3 of 3 file(s) fit"), "{text}");
+
+    let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("[[member]]").count(), 3, "{lock}");
+    assert_eq!(lock.matches("sheet = ").count(), 2, "the plain member writes no sheet:\n{lock}");
+    assert!(dir.path().join("2025.xlsx#Q1.tdy.toml").exists());
+    assert!(dir.path().join("2025.xlsx#Q2.tdy.toml").exists());
+    assert!(dir.path().join("2024.xlsx.tdy.toml").exists(), "one fitting sheet stays a plain member");
+    assert!(!dir.path().join("2025.xlsx.tdy.toml").exists(), "an expanded workbook has no plain sidecar");
+    // The expansion is on the record in each sheet member's own spec notes
+    // (the CLI text does not print member notes; the sidecar and --json do).
+    let q1 = std::fs::read_to_string(dir.path().join("2025.xlsx#Q1.tdy.toml")).unwrap();
+    assert!(q1.contains("of 2 sheets, 2 produce the declared table: Q1, Q2"), "{q1}");
+
+    let sql = format!("SELECT count(*), sum(amount) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("| 10 ") && text.contains("3190.00"), "600 + 1500 + 1090 over 3 + 3 + 4 rows:\n{text}");
+}
+
+/// `exclude` takes an exact member reference: one sheet goes, the other stays.
+#[test]
+fn a_sheet_member_can_be_excluded_by_reference() {
+    let (dir, t) = quarters_pile();
+    let ddl = std::fs::read_to_string(&t).unwrap().replace("files = '*.xlsx',", "files = '*.xlsx', exclude = '2025.xlsx#Q2',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
+    assert!(lock.contains("sheet = \"Q1\"") && !lock.contains("sheet = \"Q2\""), "{lock}");
+}
+
+/// `--accept` names a member the way the report does; a reference that
+/// names none is refused with the real names listed.
+#[test]
+fn accept_takes_a_member_reference_and_names_the_members_when_it_misses() {
+    let (_dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "2025.xlsx#Q3"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(err.contains("not a member") && err.contains("2025.xlsx#Q1"), "{err}");
+}
