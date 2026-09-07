@@ -116,7 +116,7 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
         for m in &unreviewed {
             msg.push_str(&format!(
                 "\n  {}: {}",
-                m.path,
+                m.name(),
                 m.review.as_deref().unwrap_or("")
             ));
         }
@@ -144,16 +144,16 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
         };
         // The sidecar must be present *and* fresh: a stale one is a spec no
         // query would use, and this is the one place that cannot re-plan.
-        let spec = match crate::sidecar::load(&path)? {
+        let spec = match crate::sidecar::load_member(&path, m.sheet.as_deref())? {
             crate::sidecar::SidecarStatus::Fresh(sc) => sc.spec,
             crate::sidecar::SidecarStatus::Stale(_) => anyhow::bail!(
                 "{} has changed since it was fitted — run `tdy fit {}`",
-                m.path,
+                m.name(),
                 target_file.display()
             ),
             crate::sidecar::SidecarStatus::Absent => anyhow::bail!(
                 "{} is a member of `{}` but has no spec — run `tdy fit {}`",
-                m.path,
+                m.name(),
                 target.name,
                 target_file.display()
             ),
@@ -161,7 +161,7 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
         // Re-proved on every load, because a sidecar is hand-editable and
         // therefore untrusted input. The check costs no I/O.
         if let Err(mismatches) = conforms(&spec, &target) {
-            let mut msg = format!("{} no longer produces `{}`:", m.path, target.name);
+            let mut msg = format!("{} no longer produces `{}`:", m.name(), target.name);
             for x in &mismatches {
                 msg.push_str(&format!("\n  {}", x.message()));
             }
@@ -169,7 +169,7 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
         }
         members.push(ResolvedMember {
             path,
-            rel: m.path.clone(),
+            rel: m.name(),
             spec: Arc::new(spec),
         });
     }

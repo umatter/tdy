@@ -904,3 +904,86 @@ fn provenance_columns_are_absent_unless_declared() {
     let e = String::from_utf8_lossy(&out.stderr);
     assert!(e.contains("_member"), "{e}");
 }
+
+use tdy::lockfile::{Lock, Member, LOCK_VERSION};
+use tdy::spec::{ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
+
+fn quarter_spec(sheet: &str) -> ParseSpec {
+    let col = |name: &str, source: &str, dtype: DType| ColumnSpec {
+        name: name.into(),
+        source: Some(source.into()),
+        dtype,
+        nullable: false,
+        parse: ValueParsing::default(),
+        pointer: None,
+    };
+    ParseSpec {
+        extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None },
+        transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        columns: vec![
+            col("month", "Datum", DType::Date { format: "%d.%m.%Y".into() }),
+            col("region", "Region", DType::Utf8),
+            col("amount", "Betrag", DType::Decimal { precision: 14, scale: 2 }),
+        ],
+        confidence: Some(1.0),
+        notes: vec![],
+    }
+}
+
+/// Step one of the design: a lock naming two sheets of one workbook, written
+/// by hand with hand-written sheet sidecars, is read by `dataset()` as two
+/// members — the sum of both sheets, each row saying which sheet it came from.
+/// No discovery is involved yet; this proves the identity model alone.
+#[test]
+fn a_hand_written_lock_over_two_sheets_reads_both_and_names_them() {
+    let dir = TempDir::new().unwrap();
+    let book = dir.path().join("2025.xlsx");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+        &book,
+    )
+    .unwrap();
+    let t = dir.path().join("monat.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE monat (\n  month DATE NOT NULL, region TEXT NOT NULL, amount DECIMAL(14,2) NOT NULL\n) \
+         WITH (files = '*.xlsx', date_order = 'dmy', provenance = 'true');\n",
+    )
+    .unwrap();
+    let target = tdy::target::Target::load(&t).unwrap();
+    let prov = || tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
+    for sheet in ["Q1", "Q2"] {
+        tdy::sidecar::save_member(&book, Some(sheet), &quarter_spec(sheet), prov()).unwrap();
+    }
+    let (blake3, bytes) = tdy::sidecar::hash_file(&book).unwrap();
+    let member = |sheet: &str| Member {
+        path: "2025.xlsx".into(),
+        sheet: Some(sheet.into()),
+        blake3: blake3.clone(),
+        bytes,
+        spec_digest: tdy::lockfile::spec_digest_for(&book, Some(sheet)),
+        review: None,
+        accepted: false,
+    };
+    Lock {
+        lock_version: LOCK_VERSION,
+        target: "monat".into(),
+        target_hash: tdy::lockfile::target_hash(&target),
+        tool_version: "test".into(),
+        created_at: "now".into(),
+        members: vec![member("Q1"), member("Q2")],
+    }
+    .save(&t)
+    .unwrap();
+
+    let sql = format!(
+        "SELECT _member, count(*) AS n, sum(amount) AS total FROM dataset('{}') GROUP BY _member ORDER BY _member",
+        t.display()
+    );
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025.xlsx#Q1") && text.contains("600.00"), "{text}");
+    assert!(text.contains("2025.xlsx#Q2") && text.contains("1500.00"), "{text}");
+    assert_eq!(text.matches("| 3 ").count(), 2, "three rows per sheet:\n{text}");
+}
