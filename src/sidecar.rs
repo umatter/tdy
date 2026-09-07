@@ -91,11 +91,42 @@ pub fn load_member(file: &Path, sheet: Option<&str>) -> Result<SidecarStatus> {
             errs.join("\n- ")
         );
     }
+    // A sheet member's sidecar is trusted for exactly one sheet, and both
+    // places that name it are hand-editable: the fingerprint's `sheet` and
+    // the spec's own `sheet_name`. If either disagrees with the sheet being
+    // loaded, `dataset()` would read some other sheet under this member's
+    // label and total a plausible wrong number.
+    if let Some(s) = sheet {
+        let stated = sidecar.source.sheet.as_deref();
+        let framed = match &sidecar.spec.extraction {
+            crate::spec::Extraction::Excel { sheet_name, .. } => sheet_name.as_deref(),
+            _ => None,
+        };
+        if stated != Some(s) || framed != Some(s) {
+            bail!(
+                "sidecar {} is the spec for sheet {:?}, but it says source.sheet = {} and \
+                 reads sheet {}. A sheet member's sidecar must be about its own sheet: \
+                 correct it, or re-run `tdy fit`.",
+                sc_path.display(),
+                s,
+                named(stated),
+                named(framed)
+            );
+        }
+    }
     let (hash, _) = hash_file(file)?;
     if hash == sidecar.source.blake3 {
         Ok(SidecarStatus::Fresh(Box::new(sidecar)))
     } else {
         Ok(SidecarStatus::Stale(Box::new(sidecar)))
+    }
+}
+
+/// A sheet name as it reads in a message: quoted, or "(none)".
+fn named(sheet: Option<&str>) -> String {
+    match sheet {
+        Some(s) => format!("{s:?}"),
+        None => "(none)".to_string(),
     }
 }
 
@@ -367,6 +398,34 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
         save_member(&book, Some("Q2"), &sheet_spec("Q2"), prov()).unwrap();
         assert!(matches!(load_member(&book, Some("Q2")).unwrap(), SidecarStatus::Fresh(_)));
         assert!(matches!(load_member(&book, Some("Q1")).unwrap(), SidecarStatus::Fresh(_)));
+    }
+
+    /// A sheet member's sidecar is trusted for exactly one sheet. A hand
+    /// edit of `sheet_name` would otherwise make `dataset()` read Q1 twice,
+    /// label one of them Q2, and total the wrong number in silence.
+    #[test]
+    fn a_sheet_sidecar_that_reads_another_sheet_is_refused() {
+        let d = tempfile::TempDir::new().unwrap();
+        let book = d.path().join("book.xlsx");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+            &book,
+        )
+        .unwrap();
+        let p = save_member(
+            &book,
+            Some("Q2"),
+            &sheet_spec("Q2"),
+            ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        std::fs::write(&p, text.replace("sheet_name = \"Q2\"", "sheet_name = \"Q1\"")).unwrap();
+        let err = match load_member(&book, Some("Q2")) {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("a sidecar that reads another sheet must not load"),
+        };
+        assert!(err.contains("Q1") && err.contains("Q2"), "{err}");
     }
 
     fn sheet_spec(sheet: &str) -> ParseSpec {

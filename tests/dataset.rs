@@ -1053,6 +1053,27 @@ fn a_sheet_member_can_be_excluded_by_reference() {
     assert!(lock.contains("sheet = \"Q1\"") && !lock.contains("sheet = \"Q2\""), "{lock}");
 }
 
+/// A sheet member's sidecar is about its own sheet. Editing `sheet_name`
+/// to another sheet would otherwise read Q1 twice and total 1200 under two
+/// labels — the silent wrong answer, one hand edit away.
+#[test]
+fn a_sheet_sidecar_pointed_at_another_sheet_fails_the_query() {
+    let (dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let sc = dir.path().join("2025.xlsx#Q2.tdy.toml");
+    let text = std::fs::read_to_string(&sc).unwrap();
+    std::fs::write(&sc, text.replace("sheet_name = \"Q2\"", "sheet_name = \"Q1\"")).unwrap();
+
+    let sql = format!("SELECT sum(amount) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "the query must fail, not answer:\n{text}");
+    assert!(err.contains("2025.xlsx#Q2"), "{err}");
+    assert!(!text.contains("1200.00"), "{text}");
+}
+
 /// `--accept` names a member the way the report does; a reference that
 /// names none is refused with the real names listed.
 #[test]
