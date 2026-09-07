@@ -1573,3 +1573,192 @@ fn browser_status_follows_the_palette() {
     let (x, y) = find(&buf, "no lock").expect("the target's status");
     assert_eq!(fg_at(&buf, x, y), Color::Yellow);
 }
+
+// ---------------------------------------------------------------------------
+// Slice 2a: popups, header and status line, console wrapping, borders.
+// ---------------------------------------------------------------------------
+
+/// The help is a popup over the main pane, not a repaint of it: it floats
+/// inside the pane with the pane's own border still visible around it, and
+/// it leads with the keys that do something *here* before the ones that
+/// work everywhere.
+#[test]
+fn the_help_popup_floats_and_leads_with_this_contexts_keys() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    fitted(&mut w, &d, pile_report(vec![member("2025-01.csv", MemberStatus::Fits)]));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Char('?')));
+    assert!(w.help);
+    let buf = buffer(&mut w, 120, 36);
+    let (x, y) = find(&buf, " keys ").expect("the popup title");
+    // The main pane's own top border is row 1 and its title starts at
+    // column 27; a floating popup sits strictly inside both.
+    assert!(y > 1 && x > 28, "popup at ({x}, {y}) is not floating:\n{}", screen(&mut w, 120, 36).join("\n"));
+    let text = screen(&mut w, 120, 36).join("\n");
+    let here = text.find("re-fit").expect("the pile's own keys");
+    let everywhere = text.find("cycle focus").expect("the global keys");
+    assert!(here < everywhere, "this context's keys come first:\n{text}");
+    assert!(text.contains("everywhere"), "{text}");
+}
+
+/// The confirm popup shows the diff with a dim line-number gutter, the
+/// removed line red and the added line green — and floats like help does.
+#[test]
+fn the_confirm_popup_has_a_dim_gutter_and_coloured_lines() {
+    use ratatui::style::Color;
+    let d = pile();
+    std::fs::write(
+        d.path().join("t.tdy.sql"),
+        "CREATE TABLE t (\n  region TEXT NOT NULL\n) WITH (files = '*.csv');\n",
+    )
+    .unwrap();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = gap_member("a.csv");
+    m.problems[0].header = vec!["Kanton".into(), "Datum".into()];
+    member_with_raw(&mut w, &d, m, raw_of(&["Kanton;Datum"]));
+    w.target_sql = Some(std::fs::read_to_string(d.path().join("t.tdy.sql")).unwrap());
+    w.key(key(KeyCode::Char('1')));
+    assert!(w.pending_edit.is_some());
+    let buf = buffer(&mut w, 120, 36);
+    let (x, y) = find(&buf, " confirm edit ").expect("the popup title");
+    // The pane's own top border is row 1 and its left border column 26; a
+    // popup as wide as its diff still sits one cell inside both.
+    assert!(y > 1 && x >= 28, "popup at ({x}, {y}) is not floating");
+    let (xp, yp) = find(&buf, "+").expect("the added line's marker");
+    assert_eq!(fg_at(&buf, xp, yp), Color::Green);
+    // The gutter (the line number) sits left of the marker and is dim.
+    let gutter = (0..xp).rev().find(|&gx| buf[(gx, yp)].symbol().chars().all(|c| c.is_ascii_digit()) && buf[(gx, yp)].symbol() != " ").expect("a line number in the gutter");
+    assert_eq!(fg_at(&buf, gutter, yp), Color::DarkGray, "gutter is dim");
+}
+
+/// The header carries what changes what a key does: the root, the target
+/// on screen with its lock state, and the backend — and a DRY RUN badge
+/// when the pile on screen is one.
+#[test]
+fn the_header_names_root_target_lock_state_and_backend() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.backend = "openrouter/google/gemini-2.5-flash".into();
+    let mut r = pile_report(vec![member("a.csv", MemberStatus::Fits)]);
+    r.target_file = "t.tdy.sql".into();
+    r.dry_run = true;
+    // The target's name comes from the dispatched line (`Payload::Fitted`
+    // carries no path), so fit the target the browser actually lists.
+    use tdy::console::{Outcome, Payload};
+    w.begin(".fit t.tdy.sql --dry-run");
+    w.apply(
+        Outcome { echo: ".fit t.tdy.sql --dry-run".into(), text: String::new(), ok: true, payload: Payload::Fitted(r) },
+        d.path(),
+    );
+    let lines = screen(&mut w, 120, 30);
+    let header = &lines[0];
+    let root_tail = d.path().canonicalize().unwrap().file_name().unwrap().to_string_lossy().to_string();
+    assert!(header.contains(&root_tail), "root: {header}");
+    assert!(header.contains("t.tdy.sql"), "target: {header}");
+    assert!(header.contains("no lock"), "lock state: {header}");
+    assert!(header.contains("openrouter/google/gemini-2.5-flash"), "backend: {header}");
+    assert!(header.trim_end().ends_with("DRY RUN"), "the badge sits at the right edge: {header}");
+}
+
+/// A busy status line carries a spinner ahead of the progress text, and a
+/// note naming a file under the root names it relative to the root.
+#[test]
+fn the_status_line_spins_while_busy_and_shortens_paths() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.begin(".fit sales.tdy.sql");
+    w.progress("fitting a.csv (1 of 9)".into());
+    let lines = screen(&mut w, 100, 20);
+    let status = lines.last().unwrap();
+    let first = status.trim_start().chars().next().unwrap();
+    assert!("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(first), "spinner glyph first: {status}");
+    assert!(status.contains("fitting a.csv"), "{status}");
+
+    // A note shows once the command is done — busy wins while it runs.
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let abs = w.browser.root().join("a.csv").display().to_string();
+    w.note(format!("warning: heuristics are only 80% confident about {abs}"));
+    let lines = screen(&mut w, 100, 20);
+    let status = lines.last().unwrap();
+    assert!(status.contains("about a.csv"), "relative to the root: {status}");
+    assert!(!status.contains(&abs), "{status}");
+}
+
+/// A console line wider than the pane wraps; it does not lose its tail.
+#[test]
+fn console_lines_wrap_instead_of_clipping() {
+    use tdy::console::{Outcome, Payload};
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.begin(".fit sales.tdy.sql");
+    let long = "Error: 3 file(s) cannot reach the declared schema; no lock written. Fix them, exclude them, or widen the target.";
+    w.apply(Outcome { echo: ".fit sales.tdy.sql".into(), text: long.into(), ok: false, payload: Payload::Nothing }, d.path());
+    let text = screen(&mut w, 90, 24).join("\n");
+    assert!(text.contains("widen the target."), "the tail survives:\n{text}");
+}
+
+/// Scrolled up, the console says so, and says how far.
+#[test]
+fn a_scrolled_console_marks_how_far_it_is_from_the_end() {
+    use tdy::console::{Outcome, Payload};
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    for i in 0..30 {
+        w.begin(".ls");
+        w.apply(Outcome { echo: ".ls".into(), text: format!("line {i}"), ok: true, payload: Payload::Nothing }, d.path());
+    }
+    w.key(key(KeyCode::PageUp));
+    w.key(key(KeyCode::PageUp));
+    assert!(w.scroll > 0);
+    let text = screen(&mut w, 100, 24).join("\n");
+    assert!(text.contains('⋮'), "{text}");
+    assert!(text.contains("PgDn") || text.contains("more"), "{text}");
+}
+
+/// Rounded corners, and one shared line where the browser meets the right
+/// column: a `┬` where it starts at the top, a `├` where the main pane
+/// hands over to the console, a `┴` where it ends.
+#[test]
+fn panes_share_one_border_line_with_junctions() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let buf = buffer(&mut w, 100, 30);
+    let seam = 26u16;
+    assert_eq!(buf[(seam, 1)].symbol(), "┬", "top junction:\n{}", screen(&mut w, 100, 30).join("\n"));
+    assert_eq!(buf[(seam, 28)].symbol(), "┴", "bottom junction");
+    let joins = (2..28).filter(|&y| buf[(seam, y)].symbol() == "├").count();
+    assert_eq!(joins, 1, "exactly one main/console join on the seam");
+    assert_eq!(buf[(0, 1)].symbol(), "╭", "rounded corner");
+    let text = screen(&mut w, 100, 30).join("\n");
+    assert!(text.contains(" files ") && text.contains(" console "), "{text}");
+}
+
+/// When the header does not fit, the root gives way from its left — its
+/// tail is what tells two directories apart — and the target, its lock
+/// state and the backend stay whole. `$HOME` reads as `~`.
+#[test]
+fn a_long_root_yields_to_the_target_and_backend_in_the_header() {
+    let home = std::env::var("HOME").unwrap();
+    let deep = std::path::Path::new(&home).join(".cache").join("tdy-render-test").join("a-rather-long-directory-name").join("and-another-one-beneath-it");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("a.csv"), "A;B\n1;2\n").unwrap();
+    std::fs::write(deep.join("t.tdy.sql"), "CREATE TABLE t (a TEXT) WITH (files='*.csv');").unwrap();
+    let mut w = Workbench::new(Browser::new(&deep).unwrap(), vec![], 0.8);
+    w.backend = "openrouter/google/gemini-2.5-flash".into();
+    w.begin(".fit t.tdy.sql");
+    use tdy::console::{Outcome, Payload};
+    w.apply(
+        Outcome { echo: ".fit t.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(pile_report(vec![member("a.csv", MemberStatus::Fits)])) },
+        &deep,
+    );
+    let lines = screen(&mut w, 90, 20);
+    let header = &lines[0];
+    assert!(header.contains("t.tdy.sql"), "the target stays whole: {header}");
+    assert!(header.contains("no lock"), "{header}");
+    assert!(header.contains("backend openrouter/google/gemini-2.5-flash"), "the backend stays whole: {header}");
+    assert!(header.contains("one-beneath-it"), "the root's tail survives: {header}");
+    assert!(!header.contains(&home), "HOME reads as ~: {header}");
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&home).join(".cache").join("tdy-render-test"));
+}

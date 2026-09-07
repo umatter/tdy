@@ -262,7 +262,18 @@ and evidence rows are `Table`s with numerics right-aligned. Two couplings to res
 `wb_ui::pile_header_rows` is the arithmetic `Workbench::follow_pile_selection` uses,
 so the pile's head lines and the table's header row are counted in one place; and
 `main_scroll` stays the single scroll offset (the table is fed pre-sliced rows rather
-than a `TableState`, which would keep its own). `tdy::progress`
+than a `TableState`, which would keep its own). Slice 2a (2026-09-07) added the frame's
+chrome: help and confirm are floating popups (`popup_rect` + `Clear`, one cell inside the
+pane), help leading with the keys of the *current scope* (`HELP_KEYS` carries a `Scope`;
+`current_scope` reads focus and context); the header names root (`~`-shortened, elided
+from the left so the target, its lock state and the backend stay whole — `Workbench::backend`
+is set by the runtime), plus a DRY RUN badge; the status line spins on `Workbench::tick`
+(advanced by the runtime once per loop, zero in tests) and `Workbench::note` strips the
+root from paths; the console wraps lines by character (`wrap_line`) and marks a scrolled
+transcript; borders are rounded and the browser draws no right border, so the right
+column's blocks draw the seam's junctions (`Seams`, `seam_set`) — the main block has no
+bottom border because the console's top border is that line, which is why
+`main_inner_rows` subtracts one border row for it, not two. `tdy::progress`
 (owned `Sink`, so a fit can run on a spawned task) is what lets the status line narrate; a
 transient remark must use `Msg::Note`, never `Msg::Progress`, or the UI stays busy forever and
 takes no keys but `q`. The same discipline now reaches query results too:
