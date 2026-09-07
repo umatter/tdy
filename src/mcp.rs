@@ -149,7 +149,8 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
 fn tool_list(allow_accept: bool) -> Value {
     let path_arg = |desc: &str| json!({"type": "string", "description": desc});
     let accept_desc = if allow_accept {
-        "Members (paths relative to the target) whose review reasons this call accepts."
+        "Members whose review reasons this call accepts, named as the fit report names \
+         them: a path relative to the target, or `path#sheet` for one sheet of a workbook."
     } else {
         "DISABLED: acceptance is a human judgement, and this server was started without \
          --allow-accept. Relay the review reasons to your user instead."

@@ -144,6 +144,11 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
         };
         // The sidecar must be present *and* fresh: a stale one is a spec no
         // query would use, and this is the one place that cannot re-plan.
+        //
+        // The sheet is composed into the sidecar's *name* (`<file>#<sheet>`),
+        // never into a path, so a lock's `sheet` cannot walk out of the
+        // confined directory whatever it says: the name always begins with
+        // the member file's own, already-confined name.
         let spec = match crate::sidecar::load_member(&path, m.sheet.as_deref())? {
             crate::sidecar::SidecarStatus::Fresh(sc) => sc.spec,
             crate::sidecar::SidecarStatus::Stale(_) => anyhow::bail!(

@@ -9,6 +9,9 @@
 pub struct MemberRef {
     /// Relative to the target's directory, as lock members are.
     pub path: String,
+    /// The sheet of a workbook this member is, by its name in the workbook.
+    /// `None` is the whole file — every other format, and a workbook only
+    /// one of whose sheets produces the declared table.
     pub sheet: Option<String>,
 }
 

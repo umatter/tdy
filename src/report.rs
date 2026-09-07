@@ -463,7 +463,14 @@ pub async fn fit_pile(
             let manual = sc.provenance.method == InferenceMethod::Manual;
             let conforming = crate::conform::conforms(&sc.spec, &target).is_ok();
             if manual || conforming {
-                let spec = sc.spec;
+                let mut spec = sc.spec;
+                // The expansion note is a fact about *this* fit's discovery,
+                // not about the fit the sidecar was written in: a reused
+                // member of a workbook that has since gained or lost a
+                // fitting sheet would otherwise report a different sheet
+                // count from its own siblings.
+                spec.notes.retain(|n| !(n.starts_with("of ") && n.contains(" sheets, ")));
+                spec.notes.extend(unit_notes.iter().cloned());
                 let via = match sc.provenance.method {
                     InferenceMethod::Manual => "manual",
                     InferenceMethod::Llm => "llm",

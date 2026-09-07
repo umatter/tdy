@@ -1160,6 +1160,32 @@ fn validate_and_check_take_a_sheet_member_reference() {
     assert!(!text.contains("NO SIDECAR"), "{text}");
 }
 
+/// The expansion note says what *this* fit discovered. A reused sidecar
+/// carrying an older count would have two members of one workbook
+/// disagreeing about how many sheets it has.
+#[test]
+fn a_reused_sheet_sidecars_expansion_note_is_the_current_one() {
+    let (dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let sc = dir.path().join("2025.xlsx#Q1.tdy.toml");
+    let text = std::fs::read_to_string(&sc).unwrap();
+    std::fs::write(
+        &sc,
+        text.replace(
+            "of 2 sheets, 2 produce the declared table: Q1, Q2",
+            "of 9 sheets, 9 produce the declared table: Q1, Q9",
+        ),
+    )
+    .unwrap();
+
+    let out = tdy(&["--json", "fit", t.to_str().unwrap(), "--dry-run"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("of 2 sheets, 2 produce"), "{text}");
+    assert!(!text.contains("of 9 sheets"), "the stale count must not survive the fit:\n{text}");
+}
+
 /// `--accept` names a member the way the report does; a reference that
 /// names none is refused with the real names listed.
 #[test]
