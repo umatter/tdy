@@ -282,6 +282,67 @@ fn proposals_for(path: &Path, target: &Target, limits: crate::config::Limits) ->
         .collect()
 }
 
+/// The members a pile's files resolve to, in lock order: a workbook whose
+/// sheets fit becomes one unit per fitting sheet, everything else is one
+/// unit for the file. `exclude`'s exact member references (`file#sheet`)
+/// apply here, after expansion — the only place they can, since before it
+/// the members do not exist yet.
+///
+/// Discovery runs on every fit and is never read back from the previous
+/// lock: membership comes from the fit and is what the lock records.
+pub fn expand_units(
+    rels: &[String],
+    target: &Target,
+    dir: &Path,
+    limits: crate::config::Limits,
+) -> Result<Vec<(crate::member::MemberRef, Vec<String>)>> {
+    use crate::member::MemberRef;
+
+    let mut units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
+    for rel in rels {
+        let p = dir.join(rel);
+        match crate::fit::discover_sheets(&p, target, limits) {
+            Ok(Some(d)) if d.fitting.len() >= 2 => {
+                let note = expansion_note(&d);
+                for sheet in &d.fitting {
+                    units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()]));
+                }
+            }
+            // One fitting sheet, none, a non-workbook, or an unreadable
+            // file: a plain member, and `plan` says what is wrong.
+            _ => units.push((MemberRef::file(rel.clone()), Vec::new())),
+        }
+    }
+
+    // `exclude` also takes exact member references, applied after expansion.
+    // An entry that removes nothing is a typo — the member it named is still
+    // in the dataset and nothing said so — which is an error, not a no-op.
+    for x in target.exclude.iter().filter(|x| x.contains('#')) {
+        let before = units.len();
+        units.retain(|(m, _)| *x != m.name());
+        if units.len() == before {
+            anyhow::bail!(
+                "exclude {x:?} removes no member of `{}`. Members are named relative to the \
+                 target: {}",
+                target.name,
+                units.iter().take(6).map(|(u, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
+    Ok(units)
+}
+
+/// What a sheet member's spec records about the expansion it came from.
+fn expansion_note(d: &crate::fit::SheetDiscovery) -> String {
+    format!(
+        "of {} sheets, {} produce the declared table: {}{}",
+        d.total,
+        d.fitting.len(),
+        d.fitting.join(", "),
+        if d.rejected.is_empty() { String::new() } else { format!("; {} do not", d.rejected.join(", ")) }
+    )
+}
+
 /// Fit every member the target's globs match; write sidecars and — if all of
 /// them fit — the lock. Returns the full report either way: a failed pile is
 /// an answer, not an absence of one.
@@ -333,35 +394,16 @@ pub async fn fit_pile(
     // changed — drift is what expires them, so re-fitting an untouched
     // dataset must not ask the same question twice.
     let previous = Lock::load(target_path)?;
-
     use crate::member::MemberRef;
 
-    // Expansion: a workbook whose sheets fit becomes one unit per fitting
-    // sheet. Discovery runs on every fit and is never read back from the
-    // previous lock — membership comes from the fit and is locked.
-    let mut units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
-    for rel in &rels {
-        let p = dir.join(rel);
-        match crate::fit::discover_sheets(&p, &target, limits) {
-            Ok(Some(d)) if d.fitting.len() >= 2 => {
-                let note = format!(
-                    "of {} sheets, {} produce the declared table: {}{}",
-                    d.total,
-                    d.fitting.len(),
-                    d.fitting.join(", "),
-                    if d.rejected.is_empty() { String::new() } else { format!("; {} do not", d.rejected.join(", ")) }
-                );
-                for sheet in &d.fitting {
-                    units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()]));
-                }
-            }
-            // One fitting sheet, none, a non-workbook, or an unreadable
-            // file: a plain member, and `plan` says what is wrong.
-            _ => units.push((MemberRef::file(rel.clone()), Vec::new())),
-        }
+    let units = expand_units(&rels, &target, &dir, limits)?;
+    if units.is_empty() {
+        anyhow::bail!(
+            "every member of `{}` is excluded by its own declaration, so there is no dataset \
+             to lock. Drop an `exclude` entry, or widen `files`.",
+            target.name
+        );
     }
-    // `exclude` also takes exact member references, applied after expansion.
-    units.retain(|(m, _)| !target.exclude.iter().any(|x| x.contains('#') && *x == m.name()));
 
     // `--accept` names members the way the report does. A member is
     // identified by its path *relative to the target* (plus an optional
@@ -797,4 +839,58 @@ pub fn render_pile_text(r: &PileReport) -> String {
         line("--dry-run: no sidecars and no lock written.".into());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pile(exclude: &str) -> (tempfile::TempDir, Target) {
+        let d = tempfile::TempDir::new().unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+            d.path().join("2025.xlsx"),
+        )
+        .unwrap();
+        let t = d.path().join("monat.tdy.sql");
+        std::fs::write(
+            &t,
+            format!(
+                "CREATE TABLE monat (\n  month DATE NOT NULL OPTIONS(matches = 'Datum'),\n  \
+                 region TEXT NOT NULL OPTIONS(matches = 'Region'),\n  \
+                 amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n) \
+                 WITH (files = '*.xlsx', date_order = 'dmy'{exclude});\n"
+            ),
+        )
+        .unwrap();
+        let target = Target::load(&t).unwrap();
+        (d, target)
+    }
+
+    /// Expansion is a function of the files and the declaration, so it can be
+    /// asked directly: a two-sheet workbook is two members, both carrying the
+    /// note that says where they came from.
+    #[test]
+    fn expansion_turns_a_two_sheet_workbook_into_two_members() {
+        let (d, target) = pile("");
+        let units =
+            expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default()).unwrap();
+        let names: Vec<String> = units.iter().map(|(m, _)| m.name()).collect();
+        assert_eq!(names, vec!["2025.xlsx#Q1", "2025.xlsx#Q2"]);
+        assert!(units[0].1[0].contains("of 2 sheets, 2 produce"), "{:?}", units[0].1);
+    }
+
+    #[test]
+    fn a_member_exclude_removes_that_member_and_a_miss_is_an_error() {
+        let (d, target) = pile(", exclude = '2025.xlsx#Q2'");
+        let units =
+            expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default()).unwrap();
+        assert_eq!(units.iter().map(|(m, _)| m.name()).collect::<Vec<_>>(), vec!["2025.xlsx#Q1"]);
+
+        let (d, target) = pile(", exclude = '2025.xlsx#Q9'");
+        let err = expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default())
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("2025.xlsx#Q9") && msg.contains("2025.xlsx#Q1"), "{msg}");
+    }
 }

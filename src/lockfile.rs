@@ -280,7 +280,18 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
     }
 
     for rel in &on_disk {
-        if !locked_files.contains(rel.as_str()) {
+        if locked_files.contains(rel.as_str()) {
+            continue;
+        }
+        // A file every one of whose members the declaration excludes by name
+        // is accounted for: it is absent from the lock *because* the target
+        // says so, and reporting it as `Added` on every query would make a
+        // deliberate exclusion look like unplanned drift for ever.
+        let excluded_by_ref = target
+            .exclude
+            .iter()
+            .any(|x| x.len() > rel.len() && x.starts_with(rel.as_str()) && x.as_bytes()[rel.len()] == b'#');
+        if !excluded_by_ref {
             out.push(Drift::Added(rel.clone()));
         }
     }

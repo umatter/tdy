@@ -1074,6 +1074,63 @@ fn a_sheet_sidecar_pointed_at_another_sheet_fails_the_query() {
     assert!(!text.contains("1200.00"), "{text}");
 }
 
+/// A `#`-exclude that removes nothing is a typo, not a no-op: the member it
+/// meant to drop is still in the dataset, and nothing said so.
+#[test]
+fn a_member_exclude_that_removes_nothing_is_an_error() {
+    let (_dir, t) = quarters_pile();
+    let ddl = std::fs::read_to_string(&t)
+        .unwrap()
+        .replace("files = '*.xlsx',", "files = '*.xlsx', exclude = '2025.xlsx#Q9',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        err.contains("2025.xlsx#Q9") && err.contains("2025.xlsx#Q1") && err.contains("2025.xlsx#Q2"),
+        "{err}"
+    );
+}
+
+/// Excluding every member of the only file leaves no dataset. A zero-member
+/// lock would query as an empty table — the answer nobody asked for.
+#[test]
+fn excluding_every_member_of_the_pile_is_refused() {
+    let (dir, t) = quarters_pile();
+    std::fs::remove_file(dir.path().join("2024.xlsx")).unwrap();
+    let ddl = std::fs::read_to_string(&t)
+        .unwrap()
+        .replace("files = '*.xlsx',", "files = '*.xlsx', exclude = '2025.xlsx#Q1, 2025.xlsx#Q2',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(err.contains("excluded"), "{err}");
+    assert!(!dir.path().join("monat.tdy.lock").exists(), "no lock for an empty dataset");
+}
+
+/// A file every one of whose sheets is excluded is accounted for by the
+/// declaration: it must not read as `Added` drift for ever after.
+#[test]
+fn a_fully_excluded_workbook_is_not_drift() {
+    let (dir, t) = quarters_pile();
+    let ddl = std::fs::read_to_string(&t)
+        .unwrap()
+        .replace("files = '*.xlsx',", "files = '*.xlsx', exclude = '2025.xlsx#Q1, 2025.xlsx#Q2',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("[[member]]").count(), 1, "{lock}");
+    assert!(lock.contains("2024.xlsx") && !lock.contains("2025.xlsx"), "{lock}");
+
+    let sql = format!("SELECT sum(amount) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("1090.00"), "{text}");
+}
+
 /// `--accept` names a member the way the report does; a reference that
 /// names none is refused with the real names listed.
 #[test]
