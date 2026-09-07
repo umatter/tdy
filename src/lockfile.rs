@@ -30,6 +30,12 @@ pub struct Member {
     /// Relative to the directory holding the target file, so a checked-out
     /// repo works wherever it is cloned.
     pub path: String,
+    /// One sheet of a workbook, when a workbook contributes several
+    /// members; absent for a plain member. Two fields rather than a
+    /// `path#sheet` string, so a `#` in either name cannot make the lock
+    /// ambiguous (`crate::member::MemberRef`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
     pub blake3: String,
     pub bytes: u64,
     /// Fingerprint of the *spec*, not the data.
@@ -55,6 +61,13 @@ pub struct Member {
     /// the declaration change.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub accepted: bool,
+}
+
+impl Member {
+    /// The form a person reads and types.
+    pub fn name(&self) -> String {
+        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone() }.name()
+    }
 }
 
 /// The resolved membership of a dataset.
@@ -172,8 +185,8 @@ impl Lock {
         Ok(p)
     }
 
-    pub fn member(&self, path: &str) -> Option<&Member> {
-        self.members.iter().find(|m| m.path == path)
+    pub fn member(&self, path: &str, sheet: Option<&str>) -> Option<&Member> {
+        self.members.iter().find(|m| m.path == path && m.sheet.as_deref() == sheet)
     }
 }
 
@@ -200,7 +213,14 @@ pub enum Drift {
 /// dataset's own load, and inventing a digest here would turn that into a
 /// confusing drift message instead.
 pub fn spec_digest(data_file: &Path) -> String {
-    let p = crate::sidecar::sidecar_path(data_file);
+    spec_digest_for(data_file, None)
+}
+
+/// Fingerprint of a member's spec, as stored in its sidecar — a workbook
+/// member's sidecar is per sheet (`sidecar::sidecar_path_for`), so the sheet
+/// must be named to find the right one.
+pub fn spec_digest_for(data_file: &Path, sheet: Option<&str>) -> String {
+    let p = crate::sidecar::sidecar_path_for(data_file, sheet);
     match std::fs::read(&p) {
         Ok(bytes) => format!("b3:{}", blake3::hash(&bytes).to_hex()),
         Err(_) => String::new(),
@@ -246,33 +266,44 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
 
     let dir = target_dir(target_file);
     let on_disk = resolve(target, target_file)?;
-    let locked: BTreeSet<&str> = lock.members.iter().map(|m| m.path.as_str()).collect();
+    let locked_files: BTreeSet<&str> = lock.members.iter().map(|m| m.path.as_str()).collect();
 
-    // A path listed twice would be read twice and counted twice — a dataset
-    // whose total is silently doubled for one member.
-    if locked.len() != lock.members.len() {
-        let mut seen = BTreeSet::new();
+    // Two sheets of one workbook are two members; the same (path, sheet)
+    // twice would be read twice.
+    {
+        let mut seen: BTreeSet<(&str, Option<&str>)> = BTreeSet::new();
         for m in &lock.members {
-            if !seen.insert(m.path.as_str()) {
-                out.push(Drift::Duplicated(m.path.clone()));
+            if !seen.insert((m.path.as_str(), m.sheet.as_deref())) {
+                out.push(Drift::Duplicated(m.name()));
             }
         }
     }
 
     for rel in &on_disk {
-        if !locked.contains(rel.as_str()) {
+        if !locked_files.contains(rel.as_str()) {
             out.push(Drift::Added(rel.clone()));
         }
     }
+
+    // Per file: the hash covers every sheet, so a renamed, added or edited
+    // sheet is one `Changed` on the file, and the refit rediscovers the
+    // sheet set. Members are grouped by path, in lock order.
+    let mut by_file: Vec<(&str, Vec<&Member>)> = Vec::new();
     for m in &lock.members {
-        let p = dir.join(&m.path);
+        match by_file.iter_mut().find(|(p, _)| *p == m.path.as_str()) {
+            Some((_, ms)) => ms.push(m),
+            None => by_file.push((m.path.as_str(), vec![m])),
+        }
+    }
+    for (path, members) in by_file {
+        let p = dir.join(path);
         if !p.exists() {
-            out.push(Drift::Removed(m.path.clone()));
+            out.push(Drift::Removed(path.to_string()));
             continue;
         }
         let (hash, bytes) = crate::sidecar::hash_file(&p)?;
-        if hash != m.blake3 || bytes != m.bytes {
-            out.push(Drift::Changed(m.path.clone()));
+        if members.iter().any(|m| hash != m.blake3 || bytes != m.bytes) {
+            out.push(Drift::Changed(path.to_string()));
             continue;
         }
         // The spec is the thing that was reviewed, so it is the thing whose
@@ -284,8 +315,13 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
         // conformance plus the dry run still gate it on every load. What an
         // edit must not survive is an acceptance, because the acceptance was
         // given to the spec as it read then.
-        if m.accepted && !m.spec_digest.is_empty() && spec_digest(&p) != m.spec_digest {
-            out.push(Drift::SpecEdited(m.path.clone()));
+        for m in members {
+            if m.accepted
+                && !m.spec_digest.is_empty()
+                && spec_digest_for(&p, m.sheet.as_deref()) != m.spec_digest
+            {
+                out.push(Drift::SpecEdited(m.name()));
+            }
         }
     }
     Ok(out)
@@ -437,6 +473,78 @@ mod tests {
 
     fn t(sql: &str) -> Target {
         Target::parse(sql).unwrap()
+    }
+
+    fn m(path: &str, sheet: Option<&str>) -> Member {
+        Member {
+            path: path.into(),
+            sheet: sheet.map(str::to_string),
+            blake3: "b3:x".into(),
+            bytes: 1,
+            spec_digest: String::new(),
+            review: None,
+            accepted: false,
+        }
+    }
+
+    #[test]
+    fn a_sheet_member_round_trips_through_toml_and_a_plain_one_writes_no_sheet() {
+        let lock = Lock {
+            lock_version: LOCK_VERSION,
+            target: "t".into(),
+            target_hash: "b3:t".into(),
+            tool_version: "0".into(),
+            created_at: "now".into(),
+            members: vec![m("a.xlsx", Some("Q1")), m("b.csv", None)],
+        };
+        let text = toml::to_string_pretty(&lock).unwrap();
+        assert!(text.contains("sheet = \"Q1\""), "{text}");
+        assert_eq!(text.matches("sheet =").count(), 1, "a plain member writes no sheet:\n{text}");
+        let back: Lock = toml::from_str(&text).unwrap();
+        assert_eq!(back.members[0].sheet.as_deref(), Some("Q1"));
+        assert_eq!(back.members[0].name(), "a.xlsx#Q1");
+        assert_eq!(back.members[1].name(), "b.csv");
+        assert!(back.member("a.xlsx", Some("Q1")).is_some());
+        assert!(back.member("a.xlsx", None).is_none(), "the plain member of that file does not exist");
+    }
+
+    /// Two sheets of one workbook are two members; the same sheet twice is a
+    /// duplicate. And a changed workbook is one `Changed`, not one per sheet.
+    #[test]
+    fn drift_is_per_file_and_duplication_is_per_sheet() {
+        let d = tempfile::TempDir::new().unwrap();
+        let book = d.path().join("book.xlsx");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+            &book,
+        )
+        .unwrap();
+        let t = d.path().join("t.tdy.sql");
+        std::fs::write(&t, "CREATE TABLE t (region TEXT) WITH (files = '*.xlsx');").unwrap();
+        let target = crate::target::Target::load(&t).unwrap();
+        let (hash, bytes) = crate::sidecar::hash_file(&book).unwrap();
+        let fresh = |sheet: &str| Member { blake3: hash.clone(), bytes, ..m("book.xlsx", Some(sheet)) };
+        let mut lock = Lock {
+            lock_version: LOCK_VERSION,
+            target: "t".into(),
+            target_hash: target_hash(&target),
+            tool_version: "0".into(),
+            created_at: "now".into(),
+            members: vec![fresh("Q1"), fresh("Q2")],
+        };
+        assert!(drift(&lock, &target, &t).unwrap().is_empty(), "two sheets of one file are two members");
+
+        lock.members.push(fresh("Q1"));
+        let d1 = drift(&lock, &target, &t).unwrap();
+        assert!(matches!(&d1[..], [Drift::Duplicated(n)] if n == "book.xlsx#Q1"), "{d1:?}");
+        lock.members.pop();
+
+        // Touch the workbook: every sheet member's proof is void, said once.
+        let mut bytes_on_disk = std::fs::read(&book).unwrap();
+        bytes_on_disk.push(0);
+        std::fs::write(&book, bytes_on_disk).unwrap();
+        let d2 = drift(&lock, &target, &t).unwrap();
+        assert_eq!(d2, vec![Drift::Changed("book.xlsx".into())], "{d2:?}");
     }
 
     #[test]

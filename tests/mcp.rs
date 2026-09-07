@@ -323,6 +323,7 @@ fn a_lock_member_outside_the_root_is_refused_at_query_time() {
         created_at: "2026-01-01T00:00:00Z".into(),
         members: vec![tdy::lockfile::Member {
             path: "../loot/x.csv".into(),
+            sheet: None,
             blake3,
             bytes,
             spec_digest: String::new(),

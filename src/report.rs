@@ -453,7 +453,7 @@ pub async fn fit_pile(
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()
-                    .and_then(|l| l.member(rel))
+                    .and_then(|l| l.member(rel, None))
                     .filter(|m| m.blake3 == blake3 && m.review == review)
                     .map(|m| m.accepted)
                     .unwrap_or(false);
@@ -485,6 +485,7 @@ pub async fn fit_pile(
                 });
                 lock_members.push(Member {
                     path: rel.clone(),
+                    sheet: None,
                     blake3,
                     bytes,
                     spec_digest: lockfile::spec_digest(&p),
@@ -512,7 +513,7 @@ pub async fn fit_pile(
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()
-                    .and_then(|l| l.member(rel))
+                    .and_then(|l| l.member(rel, None))
                     .filter(|m| m.blake3 == blake3 && m.review == fitted.review)
                     .map(|m| m.accepted)
                     .unwrap_or(false);
@@ -551,6 +552,7 @@ pub async fn fit_pile(
                 });
                 lock_members.push(Member {
                     path: rel.clone(),
+                    sheet: None,
                     blake3,
                     bytes,
                     spec_digest: lockfile::spec_digest(&p),
