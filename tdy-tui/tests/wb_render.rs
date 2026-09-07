@@ -1513,7 +1513,7 @@ fn the_member_view_lists_tried_names_and_the_header_one_per_line() {
     m.problems[0].header = vec!["Datum".into(), "Gebiet".into(), "Betrag".into()];
     member_with_raw(&mut w, &d, m, raw_of(&["Datum;Gebiet;Betrag"]));
     let lines = screen(&mut w, 120, 34);
-    let right = |needle: &str| lines.iter().find(|l| l.trim_start_matches(|c| c == '│' || c == ' ').starts_with(needle) && !l.contains("Datum;")).cloned();
+    let right = |needle: &str| lines.iter().find(|l| l.trim_start_matches(['│', ' ']).starts_with(needle) && !l.contains("Datum;")).cloned();
     assert!(lines.iter().any(|l| l.contains("looked for")), "{}", lines.join("\n"));
     assert!(right("Kanton").is_some(), "each tried name on its own line:\n{}", lines.join("\n"));
     assert!(right("Gebiet").is_some(), "each header cell on its own line:\n{}", lines.join("\n"));
