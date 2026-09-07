@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use datafusion::arrow::array::Array;
 use tdy::config::Limits;
 use tdy::conform::conforms;
-use tdy::fit::{fit, FitError, Gap};
+use tdy::fit::{discover_sheets, fit, fit_sheet, FitError, Gap};
 use tdy::target::Target;
 
 fn corpus() -> PathBuf {
@@ -1114,4 +1114,53 @@ fn an_ordinary_missing_column_still_suggests_matches() {
     let text = gaps.iter().map(|g| g.message()).collect::<Vec<_>>().join("\n");
     assert!(text.contains("OPTIONS(matches"), "{text}");
     assert!(!text.contains("in long form"), "nothing here holds a column name as a value:\n{text}");
+}
+
+// ---------------------------------------------------------------------------
+// Sheet discovery and single-sheet fitting, for the pile-level fit (Task 6).
+// ---------------------------------------------------------------------------
+
+/// Discovery says which sheets pass the gates, in the workbook's order, and
+/// names the ones that do not — without choosing.
+#[test]
+fn discovery_names_the_fitting_sheets_and_the_rejected_ones() {
+    let t = Target::parse(SHEET_TARGET).unwrap();
+    let two = discover_sheets(&frames_fixture("sheet_frames_two_fit.xlsx"), &t, Limits::default())
+        .unwrap()
+        .expect("a two-sheet workbook is discoverable");
+    assert_eq!(two.total, 2);
+    assert_eq!(two.fitting, vec!["Q1".to_string(), "Q2".to_string()]);
+    assert!(two.rejected.is_empty());
+
+    let one = discover_sheets(&frames_fixture("sheet_frames_one_fits.xlsx"), &t, Limits::default())
+        .unwrap()
+        .expect("three sheets");
+    assert_eq!(one.total, 3);
+    assert_eq!(one.fitting, vec!["Daten".to_string()]);
+    assert_eq!(one.rejected, vec!["Hinweise".to_string(), "Legende".to_string()]);
+
+    let csv = corpus().join("2025-01.csv");
+    assert!(discover_sheets(&csv, &target(), Limits::default()).unwrap().is_none(), "not a workbook");
+}
+
+/// One named sheet, fully fitted: its own frame, its own sum.
+#[test]
+fn a_named_sheet_is_fitted_on_its_own() {
+    let t = Target::parse(SHEET_TARGET).unwrap();
+    let p = frames_fixture("sheet_frames_two_fit.xlsx");
+    let q2 = fit_sheet(&p, "Q2", &t, Limits::default()).expect("Q2 fits");
+    assert!(matches!(&q2.spec.extraction, tdy::spec::Extraction::Excel { sheet_name: Some(s), .. } if s == "Q2"));
+    let batches = tdy::engine::execute_batches(&q2.spec, &p, Limits::default()).unwrap();
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, 3);
+    let total: i128 = batches
+        .iter()
+        .flat_map(|b| {
+            let a = b.column_by_name("amount").unwrap();
+            let a = a.as_any().downcast_ref::<datafusion::arrow::array::Decimal128Array>().unwrap();
+            (0..a.len()).map(|i| a.value(i)).collect::<Vec<_>>()
+        })
+        .sum();
+    assert_eq!(total, 150000, "sum(amount) of Q2 is 1500.00");
+    assert!(fit_sheet(&p, "Q9", &t, Limits::default()).is_err(), "a sheet that does not exist");
 }
