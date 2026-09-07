@@ -24,13 +24,24 @@ use crate::spec::{
     InferenceMethod, ParseSpec, Provenance, Sidecar, SourceFingerprint, SPEC_FORMAT_VERSION,
 };
 
-pub fn sidecar_path(file: &Path) -> PathBuf {
+/// `<file>.tdy.toml`, or `<file>#<sheet>.tdy.toml` for one sheet of a
+/// workbook: the selector is part of the sidecar's *name*, so validate,
+/// --stamp, `.edit` and the browser's companion folding need nothing.
+pub fn sidecar_path_for(file: &Path, sheet: Option<&str>) -> PathBuf {
     let mut name = file
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    if let Some(s) = sheet {
+        name.push('#');
+        name.push_str(s);
+    }
     name.push_str(".tdy.toml");
     file.with_file_name(name)
+}
+
+pub fn sidecar_path(file: &Path) -> PathBuf {
+    sidecar_path_for(file, None)
 }
 
 /// blake3 of the file's contents plus its length, streamed.
@@ -38,6 +49,7 @@ pub fn hash_file(file: &Path) -> Result<(String, u64)> {
     fileio::hash_file(file).with_context(|| format!("cannot fingerprint {}", file.display()))
 }
 
+#[derive(Debug)]
 pub enum SidecarStatus {
     Fresh(Box<Sidecar>),
     Stale(Box<Sidecar>),
@@ -53,8 +65,8 @@ impl SidecarStatus {
     }
 }
 
-pub fn load(file: &Path) -> Result<SidecarStatus> {
-    let sc_path = sidecar_path(file);
+pub fn load_member(file: &Path, sheet: Option<&str>) -> Result<SidecarStatus> {
+    let sc_path = sidecar_path_for(file, sheet);
     if !sc_path.exists() {
         return Ok(SidecarStatus::Absent);
     }
@@ -87,6 +99,10 @@ pub fn load(file: &Path) -> Result<SidecarStatus> {
     }
 }
 
+pub fn load(file: &Path) -> Result<SidecarStatus> {
+    load_member(file, None)
+}
+
 pub struct ProvenanceInfo {
     pub method: InferenceMethod,
     pub model: Option<String>,
@@ -94,7 +110,7 @@ pub struct ProvenanceInfo {
     pub sampled_bytes: Option<u64>,
 }
 
-pub fn save(file: &Path, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathBuf> {
+pub fn save_member(file: &Path, sheet: Option<&str>, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathBuf> {
     let (hash, bytes) = hash_file(file)?;
     let sidecar = Sidecar {
         spec_version: SPEC_FORMAT_VERSION,
@@ -105,6 +121,7 @@ pub fn save(file: &Path, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathB
                 .unwrap_or_else(|| file.display().to_string()),
             blake3: hash,
             bytes,
+            sheet: sheet.map(str::to_string),
         },
         provenance: Provenance {
             method: prov.method,
@@ -116,10 +133,14 @@ pub fn save(file: &Path, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathB
         },
         spec: spec.clone(),
     };
-    let sc_path = sidecar_path(file);
+    let sc_path = sidecar_path_for(file, sheet);
     let text = toml::to_string_pretty(&sidecar).context("serializing sidecar")?;
     fileio::atomic_write(&sc_path, &text)?;
     Ok(sc_path)
+}
+
+pub fn save(file: &Path, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathBuf> {
+    save_member(file, None, spec, prov)
 }
 
 /// Re-fingerprint an existing sidecar against the current file, keeping the
@@ -311,5 +332,57 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
         )
         .unwrap();
         assert!(stamp(&f, InferenceMethod::Manual).is_err());
+    }
+
+    #[test]
+    fn a_sheet_sidecar_sits_beside_its_workbook_under_the_sheets_name() {
+        let f = Path::new("/data/2025.xlsx");
+        assert_eq!(sidecar_path_for(f, None), PathBuf::from("/data/2025.xlsx.tdy.toml"));
+        assert_eq!(sidecar_path_for(f, Some("Q1")), PathBuf::from("/data/2025.xlsx#Q1.tdy.toml"));
+        assert_eq!(sidecar_path(f), sidecar_path_for(f, None));
+    }
+
+    #[test]
+    fn a_sheet_sidecar_round_trips_and_states_its_sheet() {
+        let d = tempfile::TempDir::new().unwrap();
+        let book = d.path().join("book.xlsx");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+            &book,
+        )
+        .unwrap();
+        let prov = || ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
+        let p = save_member(&book, Some("Q1"), &sheet_spec("Q1"), prov()).unwrap();
+        assert!(p.ends_with("book.xlsx#Q1.tdy.toml"), "{}", p.display());
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("sheet = \"Q1\""), "the fingerprint names the sheet:\n{text}");
+
+        match load_member(&book, Some("Q1")).unwrap() {
+            SidecarStatus::Fresh(sc) => assert_eq!(sc.source.sheet.as_deref(), Some("Q1")),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+        // The plain sidecar is a different file, and absent.
+        assert!(matches!(load(&book).unwrap(), SidecarStatus::Absent));
+        // A second sheet's sidecar is another file again.
+        save_member(&book, Some("Q2"), &sheet_spec("Q2"), prov()).unwrap();
+        assert!(matches!(load_member(&book, Some("Q2")).unwrap(), SidecarStatus::Fresh(_)));
+        assert!(matches!(load_member(&book, Some("Q1")).unwrap(), SidecarStatus::Fresh(_)));
+    }
+
+    fn sheet_spec(sheet: &str) -> ParseSpec {
+        ParseSpec {
+            extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None },
+            transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+            columns: vec![ColumnSpec {
+                name: "region".into(),
+                source: Some("Region".into()),
+                dtype: DType::Utf8,
+                nullable: false,
+                parse: ValueParsing::default(),
+                pointer: None,
+            }],
+            confidence: Some(1.0),
+            notes: vec![],
+        }
     }
 }
