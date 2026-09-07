@@ -60,16 +60,27 @@ meaning unchanged. Only several fitting sheets produce sheet members.
 `spec_digest` and `hash_file`'s callers take the optional sheet, and the
 single-argument forms remain as the `None` case. `SourceFingerprint` gains
 `sheet` (optional, absent for a plain sidecar), so a sheet sidecar states what
-it is about. Because the selector is part of the sidecar's *name*, `validate`,
-`--stamp`, `.edit`, `$EDITOR` and the browser's companion folding need
-nothing: a sheet sidecar is a `.tdy.toml` beside its file like any other.
+it is about, and `load` refuses a sidecar whose `source.sheet` or whose spec's
+own `sheet_name` disagrees with the sheet being loaded — both are hand-editable,
+and either one lying makes `dataset()` read some other sheet under this
+member's label. Because the selector is part of the sidecar's *name*, the
+browser's companion folding and `$EDITOR` need nothing, and the single-file
+tools take a `file#sheet` reference: `validate`, `--stamp`, `check --against`
+and `.edit` resolve it against the sidecars on disk (`sidecar::resolve_ref`) —
+a sheet sidecar is then a `.tdy.toml` beside its file like any other.
+`check --against` on a workbook that has sheet members and no plain sidecar
+names those members rather than reporting "NO SIDECAR".
 
 **Drift stays per file.** The file's blake3 covers every sheet, so a renamed,
 added, removed or edited sheet is `Changed` on that file — reported **once**,
 not once per sheet member — and the refit rediscovers the sheet set. That is
 the conservative direction the page asked for, and it needs no sheet listing
 in the lock. `Duplicated` is on (path, sheet). `Removed` is a file that is
-gone; `Added` is a file with no member at all.
+gone; `Added` is a file with no member at all — unless the declaration
+excludes its members by name, which accounts for it. A file listed both whole
+and by sheet is `MixedGranularity`: `fit` cannot write that lock, but a lock
+is a text file, and reading the same rows twice sums to a plausible wrong
+number.
 
 `Lock::member(path)` becomes `Lock::member(path, sheet)`; acceptance carry-over
 and `--accept` match on both.

@@ -68,7 +68,8 @@ pub async fn sniff_text(path: &Path, cfg: &Config, opts: SniffCli<'_>) -> Result
 
 /// `tdy validate`'s text. Body lifted from `provider::validate_command`.
 pub fn validate_text(path: &Path, cfg: &Config, restamp: bool) -> Result<String> {
-    let sc_path = sidecar::sidecar_path(path);
+    let (file, sheet) = sidecar::resolve_ref(path);
+    let sc_path = sidecar::sidecar_path_for(&file, sheet.as_deref());
     let notes = provider::validate_quiet(path, cfg, restamp)?;
     let mut text = String::new();
     if restamp {
@@ -138,8 +139,12 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
     let mut bad = 0usize;
     for f in files {
         use crate::sidecar::SidecarStatus;
-        let sc = crate::sidecar::sidecar_path(f);
-        let (spec, stale) = match crate::sidecar::load(f) {
+        // `--against book.xlsx#Q1` checks one sheet member's sidecar, which
+        // is a file beside the workbook rather than a section of anything.
+        let (file, sheet) = crate::sidecar::resolve_ref(f);
+        let (f, sheet) = (file.as_path(), sheet.as_deref());
+        let sc = crate::sidecar::sidecar_path_for(f, sheet);
+        let (spec, stale) = match crate::sidecar::load_member(f, sheet) {
             Ok(SidecarStatus::Fresh(s)) => (s.spec, false),
             // A stale sidecar is still worth *checking* — the shape it
             // produces is a property of the spec, not of the file's current
@@ -151,12 +156,31 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
             // catch.
             Ok(SidecarStatus::Stale(s)) => (s.spec, true),
             Ok(SidecarStatus::Absent) => {
-                writeln!(
-                    text,
-                    "\n{}: NO SIDECAR — run `tdy sniff {}` first",
-                    sc.display(),
-                    f.display()
-                )?;
+                // A workbook expanded into sheet members has no plain
+                // sidecar, and its members are right there in the same
+                // directory: "NO SIDECAR" would be a wrong answer about a
+                // file that is fully planned.
+                let sheets = if sheet.is_none() { crate::sidecar::sheet_sidecars(f) } else { Vec::new() };
+                if !sheets.is_empty() {
+                    writeln!(
+                        text,
+                        "\n{}: has sheet members {} — check one as `tdy check {} --against {}#{}`, \
+                         or the whole dataset with `tdy check {}`",
+                        f.display(),
+                        sheets.join(", "),
+                        target_path.display(),
+                        f.display(),
+                        sheets[0],
+                        target_path.display()
+                    )?;
+                } else {
+                    writeln!(
+                        text,
+                        "\n{}: NO SIDECAR — run `tdy sniff {}` first",
+                        sc.display(),
+                        f.display()
+                    )?;
+                }
                 bad += 1;
                 continue;
             }

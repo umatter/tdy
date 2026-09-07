@@ -1131,6 +1131,35 @@ fn a_fully_excluded_workbook_is_not_drift() {
     assert!(text.contains("1090.00"), "{text}");
 }
 
+/// The single-file tools take a member reference too: a sheet member's
+/// sidecar is a sidecar, and `validate`/`check --against` are how a person
+/// inspects one.
+#[test]
+fn validate_and_check_take_a_sheet_member_reference() {
+    let (dir, t) = quarters_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let q1 = dir.path().join("2025.xlsx#Q1");
+
+    let out = tdy(&["validate", q1.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025.xlsx#Q1.tdy.toml: ok"), "{text}");
+
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", q1.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("CONFORMS"), "{text}");
+
+    // The workbook itself has no plain sidecar, and saying "NO SIDECAR"
+    // about a file whose members are all right there is a wrong answer.
+    let book = dir.path().join("2025.xlsx");
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", book.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("sheet members") && text.contains("2025.xlsx#Q1"), "{text}");
+    assert!(!text.contains("NO SIDECAR"), "{text}");
+}
+
 /// `--accept` names a member the way the report does; a reference that
 /// names none is refused with the real names listed.
 #[test]

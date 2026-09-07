@@ -25,8 +25,10 @@ use crate::spec::{
 };
 
 /// `<file>.tdy.toml`, or `<file>#<sheet>.tdy.toml` for one sheet of a
-/// workbook: the selector is part of the sidecar's *name*, so validate,
-/// --stamp, `.edit` and the browser's companion folding need nothing.
+/// workbook: the selector is part of the sidecar's *name*, so the browser's
+/// companion folding needs nothing, and the single-file tools (`validate`,
+/// `--stamp`, `check --against`, `.edit`) take a `file#sheet` reference
+/// and find it through [`resolve_ref`].
 pub fn sidecar_path_for(file: &Path, sheet: Option<&str>) -> PathBuf {
     let mut name = file
         .file_name()
@@ -42,6 +44,56 @@ pub fn sidecar_path_for(file: &Path, sheet: Option<&str>) -> PathBuf {
 
 pub fn sidecar_path(file: &Path) -> PathBuf {
     sidecar_path_for(file, None)
+}
+
+/// Split a typed reference — `file`, or `file#sheet` — into the data file
+/// and the sheet it names, by asking the filesystem rather than by a rule
+/// (a `#` is legal in a file name and in a sheet name alike).
+///
+/// The plain path wins when it is a file; otherwise the split whose data
+/// file exists *and* has that sheet's sidecar beside it — the pair only the
+/// right reading has, since `2025.xlsx#Q1.tdy.toml` is equally the sidecar
+/// of a file literally called `2025.xlsx#Q1`. Text that names nothing comes
+/// back unchanged, so the caller reports about the name that was typed.
+pub fn resolve_ref(text: &Path) -> (PathBuf, Option<String>) {
+    if text.is_file() {
+        return (text.to_path_buf(), None);
+    }
+    let s = text.to_string_lossy().into_owned();
+    match crate::member::MemberRef::resolve(&s, |m| {
+        let f = Path::new(&m.path);
+        f.is_file() && sidecar_path_for(f, m.sheet.as_deref()).exists()
+    }) {
+        Some(m) => (PathBuf::from(m.path), m.sheet),
+        None => (text.to_path_buf(), None),
+    }
+}
+
+/// The sheets of `file` that have a sidecar beside it, in name order.
+/// A workbook expanded into sheet members has no plain sidecar, and
+/// reporting "no sidecar" about it while its members sit in the same
+/// directory is a wrong answer.
+pub fn sheet_sidecars(file: &Path) -> Vec<String> {
+    let Some(name) = file.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return Vec::new();
+    };
+    let dir = match file.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let prefix = format!("{name}#");
+    let mut out: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            let rest = n.strip_prefix(&prefix)?.strip_suffix(".tdy.toml")?;
+            (!rest.is_empty()).then(|| rest.to_string())
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 /// blake3 of the file's contents plus its length, streamed.
@@ -182,7 +234,13 @@ pub fn save(file: &Path, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathB
 /// way to say "yes, this spec is for this file" without re-running inference
 /// and losing the edit.
 pub fn stamp(file: &Path, method: InferenceMethod) -> Result<PathBuf> {
-    let sc_path = sidecar_path(file);
+    stamp_member(file, None, method)
+}
+
+/// [`stamp`] for one member: a sheet member's sidecar is a different file
+/// beside the same workbook, and it is stamped exactly the same way.
+pub fn stamp_member(file: &Path, sheet: Option<&str>, method: InferenceMethod) -> Result<PathBuf> {
+    let sc_path = sidecar_path_for(file, sheet);
     if !sc_path.exists() {
         bail!(
             "no sidecar at {} to stamp; run `tdy sniff {}` to create one",
