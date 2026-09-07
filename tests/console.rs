@@ -929,3 +929,34 @@ async fn ls_reports_a_workbooks_sheet_specs() {
     let Payload::Listing(entries) = o.payload else { panic!("{:?}", o.payload) };
     assert_eq!(entries.iter().find(|e| e.name == "2025.xlsx").unwrap().status, EntryStatus::Stale);
 }
+
+/// A magnitude reason is a fact about the pile, recorded in the lock rather
+/// than in the member's spec; `.accept`'s step one must find it there.
+#[tokio::test]
+async fn accept_step_one_shows_a_reason_that_lives_in_the_lock() {
+    let d = tempfile::TempDir::new().unwrap();
+    let month = |m: &str, base: u32, factor: u32| {
+        let mut s = String::from("Datum;Region;Betrag\n");
+        for (i, region) in ["Ost", "West", "Nord", "Sued"].iter().enumerate() {
+            s.push_str(&format!("28.{m}.2025;{region};{}.00\n", (base + 10 * i as u32) * factor));
+        }
+        s
+    };
+    std::fs::write(d.path().join("2025-01.csv"), month("01", 1100, 1)).unwrap();
+    std::fs::write(d.path().join("2025-02.csv"), month("02", 1200, 1)).unwrap();
+    std::fs::write(d.path().join("2025-03.csv"), month("03", 1300, 100)).unwrap();
+    std::fs::write(
+        d.path().join("sales.tdy.sql"),
+        "CREATE TABLE sales (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+    let mut s = session(d.path()).await;
+    let fit = s.run(".fit sales.tdy.sql", None).await;
+    assert!(fit.ok, "{}", fit.text);
+    let o = s.run(".accept sales.tdy.sql 2025-03.csv", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains("median"), "step one shows the pile's reason: {}", o.text);
+    assert!(!o.text.contains("nothing to accept"), "{}", o.text);
+    let o = s.run(".accept sales.tdy.sql 2025-03.csv", None).await;
+    assert!(o.ok && o.text.contains("accepted 2025-03.csv"), "{}", o.text);
+}

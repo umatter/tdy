@@ -1253,3 +1253,67 @@ fn acceptance_is_per_sheet_member() {
     let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
     assert_eq!(lock.matches("accepted = true").count(), 1, "{lock}");
 }
+
+fn cents_pile() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let month = |m: &str, base: u32, factor: u32| {
+        let mut s = String::from("Datum;Region;Betrag\n");
+        for (i, region) in ["Ost", "West", "Nord", "Sued"].iter().enumerate() {
+            s.push_str(&format!("28.{m}.2025;{region};{}.00\n", (base + 10 * i as u32) * factor));
+        }
+        s
+    };
+    std::fs::write(dir.path().join("2025-01.csv"), month("01", 1100, 1)).unwrap();
+    std::fs::write(dir.path().join("2025-02.csv"), month("02", 1200, 1)).unwrap();
+    // March is in cents: the same numbers, a hundred times over.
+    std::fs::write(dir.path().join("2025-03.csv"), month("03", 1300, 100)).unwrap();
+    let t = dir.path().join("sales.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE sales (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+    (dir, t)
+}
+
+/// The Rappen class, caught by the pile rather than by a column name: a
+/// month whose typical value is a hundred times its siblings' waits on a
+/// person, is named, and is accepted by name.
+#[test]
+fn a_member_in_a_different_unit_waits_on_a_person_and_is_accepted_by_name() {
+    let (dir, t) = cents_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025-03.csv") && text.contains("REVIEW"), "{text}");
+    assert!(text.contains("median") && text.contains("unit"), "the reason says what was measured: {text}");
+    let lock = std::fs::read_to_string(dir.path().join("sales.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("review = ").count(), 1, "only March: {lock}");
+
+    let sql = format!("SELECT count(*) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("2025-03.csv"), "{err}");
+
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "2025-03.csv"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = tdy(&["query", &sql]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    // Untouched bytes, untouched declaration: the answer is remembered.
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success());
+    let lock = std::fs::read_to_string(dir.path().join("sales.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("accepted = true").count(), 1, "{lock}");
+}
+
+/// Two members cannot say which is out of scale; the check needs three.
+#[test]
+fn a_pile_of_two_is_not_judged_for_magnitude() {
+    let (dir, t) = cents_pile();
+    std::fs::remove_file(dir.path().join("2025-02.csv")).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}");
+    assert!(!text.contains("REVIEW"), "{text}");
+}

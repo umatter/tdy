@@ -19,6 +19,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::fit::{FitError, Gap};
+use crate::member::MemberRef;
 use crate::lockfile::{self, Lock, Member, LOCK_VERSION};
 use crate::spec::InferenceMethod;
 use crate::target::Target;
@@ -343,6 +344,27 @@ fn expansion_note(d: &crate::fit::SheetDiscovery) -> String {
     )
 }
 
+/// Rows read per member for the magnitude check: a median over this many
+/// is settled long before the file ends, and the read is bounded.
+const MAGNITUDE_ROWS: usize = 2000;
+
+/// Was this member's judgement accepted — carried from the previous lock
+/// (same bytes, same reason), or named by `--accept` now?
+fn carry_over(
+    previous: Option<&Lock>,
+    unit: &MemberRef,
+    blake3: &str,
+    review: &Option<String>,
+    accepted_now: &[MemberRef],
+) -> bool {
+    let carried = previous
+        .and_then(|l| l.member(&unit.path, unit.sheet.as_deref()))
+        .filter(|m| m.blake3 == blake3 && m.review == *review)
+        .map(|m| m.accepted)
+        .unwrap_or(false);
+    carried || accepted_now.contains(unit)
+}
+
 /// Fit every member the target's globs match; write sidecars and — if all of
 /// them fit — the lock. Returns the full report either way: a failed pile is
 /// an answer, not an absence of one.
@@ -434,6 +456,9 @@ pub async fn fit_pile(
 
     let mut reports: Vec<MemberReport> = Vec::new();
     let mut lock_members: Vec<Member> = Vec::new();
+    // Every fitted member's spec and file, for the pile-level magnitude
+    // check once all of them are known: (index into `reports`, spec, path).
+    let mut fitted_specs: Vec<(usize, crate::spec::ParseSpec, PathBuf)> = Vec::new();
     let mut failed = 0usize;
     let mut needs_review = 0usize;
 
@@ -583,6 +608,7 @@ pub async fn fit_pile(
                     problems: Vec::new(),
                     proposals: Vec::new(),
                 });
+                fitted_specs.push((reports.len() - 1, spec, p.clone()));
                 lock_members.push(Member {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
@@ -661,6 +687,7 @@ pub async fn fit_pile(
                     problems: Vec::new(),
                     proposals: Vec::new(),
                 });
+                fitted_specs.push((reports.len() - 1, fitted.spec, p.clone()));
                 lock_members.push(Member {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
@@ -706,6 +733,43 @@ pub async fn fit_pile(
                 status: reports.last().map(|r| r.status).unwrap_or(MemberStatus::Error),
             },
         );
+    }
+
+    // The pile-level question no single file can answer: is one member's
+    // money in a different unit? Every fitted member's typical value per
+    // numeric column, against the pile's; an outlier gets a review reason
+    // and waits, like a shift does, and the acceptance carries over on the
+    // same terms — the reason is deterministic, so an unchanged pile asks
+    // once.
+    if fitted_specs.len() >= crate::magnitude::MIN_MEMBERS {
+        let mut medians: Vec<crate::magnitude::Medians> = Vec::with_capacity(fitted_specs.len());
+        for (_, spec, p) in &fitted_specs {
+            medians.push(match crate::engine::preview(spec, p, limits, MAGNITUDE_ROWS) {
+                Ok(batch) => crate::magnitude::medians(&batch),
+                Err(_) => crate::magnitude::Medians::new(),
+            });
+        }
+        for o in crate::magnitude::outliers(&medians, crate::magnitude::THRESHOLD) {
+            let (ri, _, p) = &fitted_specs[o.member];
+            let report = &mut reports[*ri];
+            let unit = MemberRef { path: report.path.clone(), sheet: report.sheet.clone() };
+            let review = match &report.review {
+                Some(r) => Some(format!("{r}; {}", o.reason())),
+                None => Some(o.reason()),
+            };
+            let (blake3, _) = crate::sidecar::hash_file(p)?;
+            let is_accepted = carry_over(previous.as_ref(), &unit, &blake3, &review, &accepted_now);
+            let lock_member = lock_members
+                .iter_mut()
+                .find(|m| m.path == unit.path && m.sheet == unit.sheet)
+                .expect("a fitted member has a lock entry");
+            lock_member.review = review.clone();
+            lock_member.accepted = is_accepted;
+            report.review = review;
+            report.accepted = is_accepted;
+            report.status = if is_accepted { MemberStatus::Fits } else { MemberStatus::NeedsReview };
+        }
+        needs_review = reports.iter().filter(|r| r.status == MemberStatus::NeedsReview).count();
     }
 
     let fitted = lock_members.len();
