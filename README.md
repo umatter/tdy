@@ -789,6 +789,18 @@ simply *lacks* — November predates `Region` — is declarable in the target:
 region TEXT NULL OPTIONS(matches = 'Region', if_missing = 'null')
 ```
 
+Rounding is declared the same way. A file carrying `1234.567` against
+`amount DECIMAL(14,2)` is a gap naming the value, unless the column says so:
+
+```sql
+amount DECIMAL(14,2) NOT NULL OPTIONS(round = 'half_away')
+```
+
+That is the only mode, and it is part of what the lock fingerprints, so
+declaring or retracting it voids the proofs. Without it a fitted member
+refuses such a value at execution and at fit time's whole-file verification;
+a total is never off by a cent nobody was told about.
+
 and the planner null-fills it with a note and **no** review, because the
 declaration sits in the reviewed `.tdy.sql` — the planner is executing your
 decision, not making one. (`if_missing` is refused on a NOT NULL column, and
@@ -994,10 +1006,14 @@ Details worth knowing:
   `strip`-ing the bracket away deletes the sign and reads the value as
   positive, so a `strip` that would do that on a numeric column is refused at
   execution, naming the row and the remedy.
-- **`decimal` rounds half away from zero** when a value has more fractional
-  digits than `scale`. When the sniffer sees an inconsistent number of
-  fractional digits it says so in `notes`, because rows it never read may be
-  rounded.
+- **`decimal` and a value with more fractional digits than `scale`:** a
+  sniffed sidecar rounds half away from zero and says so in `notes`, because
+  rows it never read may be rounded. A sidecar `tdy fit` writes carries
+  `round = "error"` unless the target column declares
+  `OPTIONS(round = 'half_away')`, so such a value is refused naming the row —
+  at execution, and by the whole-file verification at fit time, so a value the
+  probe never saw cannot round silently. Rounding is a value change; the
+  declaration is what authorises it.
 - **A column may declare a JSON `pointer`** (RFC 6901) into its source value,
   so a nested `{"addr": {"city": …}}` becomes a text column instead of a
   string of JSON. Any depth, and the same source may be opened more than once.

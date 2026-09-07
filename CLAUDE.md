@@ -451,7 +451,9 @@ exists to hold that line, and a change that trades it for convenience is a regre
 if every test passes. Concretely: thousands separators must group in threes (only when the
 separator could also be a decimal point), `%Y` demands four digits, ambiguous date orders
 drop confidence below the escalation threshold, leading-zero and oversized integers stay
-text, money becomes `decimal`.
+text, money becomes `decimal`, and a decimal value with more fractional digits than the
+declared scale is refused unless the target column declares `round = 'half_away'`
+(`spec::Rounding`; a sniffed sidecar's unset `round` still means half-away, with its note).
 
 ## Architecture
 

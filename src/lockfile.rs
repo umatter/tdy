@@ -118,6 +118,7 @@ pub fn target_hash(t: &Target) -> String {
         // A fill declared or retracted changes what queries return for a
         // member that lacks the column, so it must void the proofs.
         h.update(if c.if_missing_null { b"~" } else { b"." });
+        h.update(if c.round { b"r" } else { b"." });
         for m in &c.matches {
             h.update(b"\x1f");
             h.update(m.as_bytes());
@@ -743,5 +744,17 @@ mod tests {
         std::fs::write(d.path().join("exports/2025-01.csv"), "").unwrap();
         let got = expand_glob(d.path(), "exports/2025-*.csv").unwrap();
         assert_eq!(got, vec![d.path().join("exports/2025-01.csv")]);
+    }
+
+    /// Declaring or retracting rounding changes what a member may do, so it
+    /// voids the proofs, as `if_missing` does.
+    #[test]
+    fn round_is_part_of_the_targets_meaning() {
+        let a = crate::target::Target::parse("CREATE TABLE t (a DECIMAL(14,2)) WITH (files = '*.csv')").unwrap();
+        let b = crate::target::Target::parse(
+            "CREATE TABLE t (a DECIMAL(14,2) OPTIONS(round = 'half_away')) WITH (files = '*.csv')",
+        )
+        .unwrap();
+        assert_ne!(target_hash(&a), target_hash(&b));
     }
 }

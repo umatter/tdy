@@ -504,10 +504,17 @@ exists and is tested before the model is allowed near it.
 1. **`CREATE TABLE` or `CREATE TIDY`?** The former parses with stock `sqlparser`
    today. The latter reads better and needs a small pre-pass. Cosmetic, but it is
    the first thing a user sees.
-2. **Rounding.** A target declaring `DECIMAL(…,2)` over a file carrying four
-   decimals is silently rounded on every row. This design gates it behind one
-   acceptance per file; the invariant-focused reviewers argued for a hard error
-   with an opt-in per-column `round` policy. The difference matters for money.
+2. ~~**Rounding.**~~ **Settled (2026-09-07): a hard error unless declared.** The
+   reviewers were right. A value with more fractional digits than the declared
+   scale is a gap naming the value, unless the column says
+   `OPTIONS(round = 'half_away')` — the one mode, part of `target_hash`. The
+   enforcement is the executor's (`spec::Rounding` on the column's `parse`), not
+   only the planner's: a fitted sidecar carries `round = "error"` unless
+   declared, so the whole-file verification refuses a late value naming its row,
+   and a sniffed sidecar keeps rounding half away from zero with its note. The
+   acceptance gate this page proposed was never wired; a declaration in the
+   reviewed target is authorisation, an acceptance per file would have been a
+   question asked every month.
 3. ~~**Positional disambiguation.**~~ **Settled: no new syntax.** The sidecar can
    already address the second `Betrag` as `Betrag_2` (`dedupe_names` exists so a
    spec can name a duplicate), and the worry that "second column named Betrag"
