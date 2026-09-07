@@ -604,32 +604,34 @@ impl Workbench {
                     Some(target) => {
                         // Selection survives a refit: when the outgoing
                         // context was a Pile or a Member over the SAME
-                        // target, remember which member's *path* (not
+                        // target, remember which member's *name* (not
                         // index — a refit can insert/remove members ahead
-                        // of it) was selected, before the report it points
+                        // of it, and not `path` alone — a workbook expanded
+                        // into several sheet members shares one path across
+                        // them) was selected, before the report it points
                         // into is replaced below. A different target, or no
                         // prior selection, has nothing to preserve.
-                        let prev_member_path: Option<String> = match &self.context {
+                        let prev_member_name: Option<String> = match &self.context {
                             Context::Pile { target: t, report, selected } if *t == target => {
-                                report.members.get(*selected).map(|m| m.path.clone())
+                                report.members.get(*selected).map(|m| m.name())
                             }
                             Context::Member { target: t, report, member, .. } if *t == target => {
-                                report.members.get(*member).map(|m| m.path.clone())
+                                report.members.get(*member).map(|m| m.name())
                             }
                             // Evidence is the outgoing context of `.accept`
                             // step two, whose `Done` carries the refit —
                             // and it already names the member by its
-                            // report-relative path, the very key the
-                            // lookup below wants. Without this arm the
-                            // member you just accepted is the one member
-                            // the new Pile does not have selected.
+                            // name, the very key the lookup below wants.
+                            // Without this arm the member you just accepted
+                            // is the one member the new Pile does not have
+                            // selected.
                             Context::Evidence { target: t, member, .. } if *t == target => {
                                 Some(member.clone())
                             }
                             _ => None,
                         };
-                        let selected = prev_member_path
-                            .and_then(|p| r.members.iter().position(|m| m.path == p))
+                        let selected = prev_member_name
+                            .and_then(|p| r.members.iter().position(|m| m.name() == p))
                             .unwrap_or(0);
                         self.context = Context::Pile { target, report: r, selected };
                         // A Pile drawn from a fresh report starts at its

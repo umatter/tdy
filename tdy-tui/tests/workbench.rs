@@ -1763,3 +1763,21 @@ fn entering_a_sheet_member_previews_its_sheet() {
         other => panic!("expected PreviewFile, got {other:?}"),
     }
 }
+
+/// A refit keeps the selection on the same *member*, not the first member
+/// of the same file: two sheets of one workbook are two members.
+#[test]
+fn selection_survives_a_refit_for_a_sheet_member() {
+    let d = pile();
+    let mut w = wb(&d);
+    let sheet = |s: &str| { let mut m = member("2025.xlsx", MemberStatus::Fits); m.sheet = Some(s.into()); m };
+    w.begin(".fit sales.tdy.sql");
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![sheet("Q1"), sheet("Q2")]))), d.path());
+    if let Context::Pile { selected, .. } = &mut w.context { *selected = 1; }
+    w.begin(".fit sales.tdy.sql");
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![sheet("Q1"), sheet("Q2")]))), d.path());
+    match &w.context {
+        Context::Pile { selected, report, .. } => assert_eq!(report.members[*selected].name(), "2025.xlsx#Q2"),
+        other => panic!("{other:?}"),
+    }
+}
