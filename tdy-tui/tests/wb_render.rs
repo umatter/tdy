@@ -1857,3 +1857,23 @@ fn a_column_decision_shows_the_values_that_drove_it() {
     let ex_at = text.find(ex.unwrap().trim()).unwrap();
     assert!(ex_at > note_at, "values sit under the note");
 }
+
+/// Two sheet members of one workbook are two rows, each named with its
+/// sheet — never two indistinguishable `2025.xlsx` lines.
+#[test]
+fn sheet_members_are_named_with_their_sheet_in_the_pile() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut q1 = member("2025.xlsx", MemberStatus::Fits);
+    q1.sheet = Some("Q1".into());
+    let mut q2 = member("2025.xlsx", MemberStatus::Fits);
+    q2.sheet = Some("Q2".into());
+    fitted(&mut w, &d, pile_report(vec![q1, q2]));
+    let text = screen(&mut w, 120, 30).join("\n");
+    assert!(text.contains("2025.xlsx#Q1") && text.contains("2025.xlsx#Q2"), "{text}");
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Enter));
+    let text = screen(&mut w, 120, 30).join("\n");
+    assert!(text.contains(" 2025.xlsx#Q1 "), "the member view's title names the sheet: {text}");
+}

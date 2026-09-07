@@ -1746,3 +1746,20 @@ fn slash_filters_the_pile_to_problems_and_arrows_move_among_them() {
     assert_eq!(w.pile_filter, PileFilter::All);
     assert_eq!(sel(&w), 1, "the selection is kept when everything is visible again");
 }
+
+/// Entering a sheet member previews *that sheet*: the raw head asked for is
+/// the member's file with the member's sheet, not the workbook's first.
+#[test]
+fn entering_a_sheet_member_previews_its_sheet() {
+    let d = pile();
+    let mut m = member("2025.xlsx", MemberStatus::Fits);
+    m.sheet = Some("Q2".into());
+    let (_w, act) = pile_and_enter(&d, vec![m], 0);
+    match act {
+        WbAction::PreviewFile { path, sheet } => {
+            assert!(path.ends_with("2025.xlsx"), "{}", path.display());
+            assert_eq!(sheet.as_deref(), Some("Q2"));
+        }
+        other => panic!("expected PreviewFile, got {other:?}"),
+    }
+}

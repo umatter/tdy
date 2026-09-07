@@ -768,13 +768,22 @@ impl Session {
                 // sets it again.
                 let pending = pending_accept;
                 let t = self.resolve(&target)?;
+                // A typed member is resolved against the lock: `book.xlsx#Q1` is
+                // the sheet member if the lock has one, else a file of that name.
+                let dir = crate::lockfile::target_dir(&t);
+                let lock = crate::lockfile::Lock::load(&t)?;
+                let known = |m: &crate::member::MemberRef| {
+                    lock.as_ref().map(|l| l.member(&m.path, m.sheet.as_deref()).is_some()).unwrap_or(false)
+                };
+                let mref = crate::member::MemberRef::resolve(&member, known)
+                    .unwrap_or_else(|| crate::member::MemberRef::file(member.clone()));
                 // The member's path is named relative to the target's own
                 // directory (what the pile report and `fit_pile`'s `accept`
                 // both use), not resolved against `self.cwd` the way a plain
                 // file argument would be — confined the same way `resolve`
                 // is, and with the same error preserved (a typo is "does not
                 // exist", not "outside").
-                let member_path = crate::fileio::confine(&crate::lockfile::target_dir(&t).join(&member), &self.root)
+                let member_path = crate::fileio::confine(&dir.join(&mref.path), &self.root)
                     .with_context(|| member.clone())?;
                 let same = pending.as_ref().map(|(pt, pm)| pt == &t && pm == &member).unwrap_or(false);
                 if same {
@@ -785,7 +794,7 @@ impl Session {
                     return Ok(o);
                 }
                 // Step one: evidence only, nothing written.
-                let sc = match crate::sidecar::load(&member_path)? {
+                let sc = match crate::sidecar::load_member(&member_path, mref.sheet.as_deref())? {
                     crate::sidecar::SidecarStatus::Fresh(sc) => sc,
                     _ => bail!("{member} has no fresh sidecar; run `.fit {target}` first"),
                 };

@@ -598,7 +598,7 @@ fn context_title(ctx: &Context) -> String {
         Context::Member { report, member, .. } => report
             .members
             .get(*member)
-            .map(|m| m.path.clone())
+            .map(|m| m.name())
             .unwrap_or_else(|| "member".to_string()),
         Context::Evidence { member, .. } => format!("accept {member} ?"),
     }
@@ -776,7 +776,7 @@ fn draw_pile(
     // Column widths from the content: the path, the status word, one column
     // per declared column (its name or its widest binding, capped), and the
     // detail taking what is left.
-    let path_w = report.members.iter().map(|m| m.path.chars().count() + 2).max().unwrap_or(8);
+    let path_w = report.members.iter().map(|m| m.name().chars().count() + 2).max().unwrap_or(8);
     let mut widths = vec![Constraint::Length(path_w as u16), Constraint::Length(8)];
     for c in &report.columns {
         let w = report
@@ -809,7 +809,7 @@ fn draw_pile(
         .map(|(i, m)| {
             let marker = if i == selected { "▸ " } else { "  " };
             let mut cells: Vec<Cell> = vec![
-                Cell::from(format!("{marker}{}", m.path)),
+                Cell::from(format!("{marker}{}", m.name())),
                 Cell::from(Span::styled(status_word(m), status_style(m))),
             ];
             for c in &report.columns {

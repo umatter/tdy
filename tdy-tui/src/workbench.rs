@@ -1241,7 +1241,9 @@ impl Workbench {
             self.context = ctx;
             return WbAction::None;
         };
-        let Some(member_path) = report.members.get(selected).map(|m| m.path.clone()) else {
+        let Some((member_path, member_sheet)) =
+            report.members.get(selected).map(|m| (m.path.clone(), m.sheet.clone()))
+        else {
             self.context = Context::Pile { target, report, selected };
             return WbAction::None;
         };
@@ -1253,7 +1255,7 @@ impl Workbench {
         // otherwise open a short raw head scrolled past its end — a blank
         // pane, indistinguishable from an empty file.
         self.main_scroll = 0;
-        self.preview_action(preview_path, None)
+        self.preview_action(preview_path, member_sheet)
     }
 
     /// Esc from a Member: back to the Pile it came from, `selected` on the
@@ -1319,7 +1321,7 @@ impl Workbench {
     fn accept_member(&mut self) -> WbAction {
         let (target_rel, member_rel, reviewable) = match &self.context {
             Context::Member { target, report, member, .. } => match report.members.get(*member) {
-                Some(m) => (self.rel_spelling(target), m.path.clone(), m.review.is_some() && !m.accepted),
+                Some(m) => (self.rel_spelling(target), m.name(), m.review.is_some() && !m.accepted),
                 None => return WbAction::None,
             },
             _ => return WbAction::None,

@@ -846,3 +846,28 @@ async fn a_table_name_that_cannot_name_a_file_is_refused() {
         .any(|e| e.file_name().to_string_lossy().ends_with("dir.tdy.sql"));
     assert!(!stray);
 }
+
+/// `.accept T book.xlsx#Q1` resolves the reference against the lock, so
+/// step one finds the sheet member's sidecar rather than a plain one.
+#[tokio::test]
+async fn accept_resolves_a_sheet_member_reference() {
+    // Stage: the two-sheet workbook, a target, a fit (writes the lock and both sheet sidecars).
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+        dir.path().join("2025.xlsx"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("monat.tdy.sql"),
+        "CREATE TABLE monat (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*.xlsx', date_order = 'dmy');",
+    )
+    .unwrap();
+    let mut s = session(dir.path()).await;
+    let fit = s.run(".fit monat.tdy.sql", None).await;
+    assert!(fit.ok, "{}", fit.text);
+    // Nothing to accept — but the member must be *found*, and the message must say so.
+    let o = s.run(".accept monat.tdy.sql 2025.xlsx#Q1", None).await;
+    assert!(o.text.contains("nothing to accept") || o.text.contains("no judgement"), "{}", o.text);
+    assert!(!o.text.contains("no fresh sidecar"), "the sheet sidecar must be the one loaded: {}", o.text);
+}
