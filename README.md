@@ -763,10 +763,13 @@ holding a cover page, a legend and a data sheet — needs no model and no human
 once a table is declared: `tdy fit` frames every candidate (each sheet gets
 its own framing — its own title rows, its own footer) and tries the
 declaration against each. If exactly one fits, the frame is **proved by
-elimination** and the note says so; if several fit, the file is refused with
-each candidate named, because two complete, well-typed answers with different
-totals is a guess this tool refuses to make; if none fit, you get the
-ordinary gap report.
+elimination** and the note says so; if none fit, you get the ordinary gap
+report. If several fit, the answer depends on what was asked: `tdy fit` on
+the one file refuses, naming each candidate, because "the spec for this
+file" has no single answer; a workbook in a *dataset* becomes one member per
+fitting sheet, as described above; and a JSON document with several fitting
+record arrays is refused either way, since a record array has no name of its
+own to become a member by.
 
 When the layout cannot be enumerated at all — a log line, a report format no
 delimiter sniff can frame — and a backend is configured, `tdy fit` asks the
