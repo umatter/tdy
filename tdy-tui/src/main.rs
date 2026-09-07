@@ -453,7 +453,7 @@ async fn run_workbench(
         // change made elsewhere — another window, a script — and say so.
         // The baseline is re-taken after every command, so a fit's own
         // sidecar writes and an editor round-trip never read as news.
-        if wb.tick % 16 == 0 {
+        if wb.tick.is_multiple_of(16) {
             for changed in changed_since(&wb, &mut watched) {
                 let act = wb.notice_change(&changed);
                 act_on_wb(act, &mut wb, terminal, &line_tx, &tx, &cfg)?;
