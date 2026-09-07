@@ -961,7 +961,6 @@ fn a_workbook_whose_sheets_fit_becomes_one_member_per_sheet() {
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(text.contains("2025.xlsx#Q1") && text.contains("2025.xlsx#Q2"), "{text}");
     assert!(text.contains("3 of 3 file(s) fit"), "{text}");
-    assert!(text.contains("of 3 sheets"), "the rejected sheets are on the record: {text}");
 
     let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
     assert_eq!(lock.matches("[[member]]").count(), 3, "{lock}");
@@ -970,6 +969,10 @@ fn a_workbook_whose_sheets_fit_becomes_one_member_per_sheet() {
     assert!(dir.path().join("2025.xlsx#Q2.tdy.toml").exists());
     assert!(dir.path().join("2024.xlsx.tdy.toml").exists(), "one fitting sheet stays a plain member");
     assert!(!dir.path().join("2025.xlsx.tdy.toml").exists(), "an expanded workbook has no plain sidecar");
+    // The expansion is on the record in each sheet member's own spec notes
+    // (the CLI text does not print member notes; the sidecar and --json do).
+    let q1 = std::fs::read_to_string(dir.path().join("2025.xlsx#Q1.tdy.toml")).unwrap();
+    assert!(q1.contains("of 2 sheets, 2 produce the declared table: Q1, Q2"), "{q1}");
 
     let sql = format!("SELECT count(*), sum(amount) FROM dataset('{}')", t.display());
     let out = tdy(&["query", &sql]);
@@ -1129,7 +1132,9 @@ Every `MemberReport {` literal in `src/report.rs` (five: the reused-sidecar succ
         //                                                        None => crate::fit::plan(&p, &target, cfg, opts.progress.as_ref()).await,
         //                                                    }
         //   every `MemberReport { path: rel.clone(), ..` -> `MemberReport { path: rel.clone(), sheet: unit.sheet.clone(), ..`
-        //   `notes: fitted.spec.notes.clone()`           -> `notes: unit_notes.iter().cloned().chain(fitted.spec.notes.iter().cloned()).collect()`
+        //   after `Ok(planned)` unpacks `fitted`, and before the sidecar is saved:
+        //       `fitted.spec.notes.extend(unit_notes.iter().cloned());`  (so the note lands in the sidecar as the elimination note does)
+        //   `notes: fitted.spec.notes.clone()`           -> unchanged (the extended notes)
         //   `Member { path: rel.clone(), ..`             -> `Member { path: rel.clone(), sheet: unit.sheet.clone(), ..`
     }
 ```
