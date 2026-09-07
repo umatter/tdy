@@ -68,7 +68,7 @@ pub async fn sniff_text(path: &Path, cfg: &Config, opts: SniffCli<'_>) -> Result
 
 /// `tdy validate`'s text. Body lifted from `provider::validate_command`.
 pub fn validate_text(path: &Path, cfg: &Config, restamp: bool) -> Result<String> {
-    let (file, sheet) = sidecar::resolve_ref(path);
+    let (file, sheet) = sidecar::resolve_ref(path)?;
     let sc_path = sidecar::sidecar_path_for(&file, sheet.as_deref());
     let notes = provider::validate_quiet(path, cfg, restamp)?;
     let mut text = String::new();
@@ -141,7 +141,7 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
         use crate::sidecar::SidecarStatus;
         // `--against book.xlsx#Q1` checks one sheet member's sidecar, which
         // is a file beside the workbook rather than a section of anything.
-        let (file, sheet) = crate::sidecar::resolve_ref(f);
+        let (file, sheet) = crate::sidecar::resolve_ref(f)?;
         let (f, sheet) = (file.as_path(), sheet.as_deref());
         let sc = crate::sidecar::sidecar_path_for(f, sheet);
         let (spec, stale) = match crate::sidecar::load_member(f, sheet) {

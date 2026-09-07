@@ -896,3 +896,36 @@ async fn accept_resolves_a_sheet_member_without_a_lock() {
     );
     assert!(!o.text.contains("does not exist"), "{}", o.text);
 }
+
+/// A workbook expanded into sheet members has no plain sidecar; listing it
+/// as unsniffed while two proved specs sit beside it is a wrong answer.
+#[tokio::test]
+async fn ls_reports_a_workbooks_sheet_specs() {
+    let d = tempfile::TempDir::new().unwrap();
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+        d.path().join("2025.xlsx"),
+    )
+    .unwrap();
+    std::fs::write(
+        d.path().join("monat.tdy.sql"),
+        "CREATE TABLE monat (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*.xlsx', date_order = 'dmy');",
+    )
+    .unwrap();
+    let mut s = session(d.path()).await;
+    let fit = s.run(".fit monat.tdy.sql", None).await;
+    assert!(fit.ok, "{}", fit.text);
+    let o = s.run(".ls", None).await;
+    let Payload::Listing(entries) = o.payload else { panic!("{:?}", o.payload) };
+    let book = entries.iter().find(|e| e.name == "2025.xlsx").expect("the workbook is listed");
+    assert_eq!(book.status, EntryStatus::Sheets(2), "{:?}", book.status);
+    assert!(o.text.contains("sheet specs (2)"), "{}", o.text);
+
+    // Edit the workbook: every sheet spec is stale at once.
+    let mut bytes = std::fs::read(d.path().join("2025.xlsx")).unwrap();
+    bytes.push(0);
+    std::fs::write(d.path().join("2025.xlsx"), bytes).unwrap();
+    let o = s.run(".ls", None).await;
+    let Payload::Listing(entries) = o.payload else { panic!("{:?}", o.payload) };
+    assert_eq!(entries.iter().find(|e| e.name == "2025.xlsx").unwrap().status, EntryStatus::Stale);
+}

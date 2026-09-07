@@ -492,6 +492,7 @@ fn entry_status_text(status: &EntryStatus) -> String {
         EntryStatus::NoLock => "no lock".into(),
         EntryStatus::Locked => "locked".into(),
         EntryStatus::Drift(n) => format!("drift ({n})"),
+        EntryStatus::Sheets(n) => format!("✓ {n} sheets"),
     }
 }
 

@@ -492,6 +492,10 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     fit_framed(path, target, limits, draft, Rigour::Full)
 }
 
+/// Every sheet name in the order they are tried, and the ones that could be
+/// framed, each with its draft.
+type SheetCandidates = (Vec<String>, Vec<(String, ParseSpec)>);
+
 /// A workbook's sheets, each framed on its own: the sniffer's pick first (so
 /// a failure message is about the sheet the user would have been shown),
 /// then the rest in workbook order. `None` when the file is not a workbook
@@ -500,7 +504,7 @@ fn sheet_candidates(
     path: &Path,
     draft: &ParseSpec,
     limits: Limits,
-) -> Option<(Vec<String>, Vec<(String, ParseSpec)>)> {
+) -> Option<SheetCandidates> {
     let Extraction::Excel { sheet_name, .. } = &draft.extraction else { return None };
     let shapes = crate::engine::excel_sheet_shapes(path, limits).unwrap_or_default();
     if shapes.len() <= 1 {
