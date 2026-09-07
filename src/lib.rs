@@ -33,6 +33,7 @@ pub mod fileio;
 pub mod fit;
 pub mod infer;
 pub mod lockfile;
+pub mod member;
 pub mod numfmt;
 pub mod provider;
 pub mod sample;
