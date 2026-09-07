@@ -1020,7 +1020,8 @@ fn a_workbook_whose_sheets_fit_becomes_one_member_per_sheet() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(text.contains("2025.xlsx#Q1") && text.contains("2025.xlsx#Q2"), "{text}");
-    assert!(text.contains("3 of 3 file(s) fit"), "{text}");
+    assert!(text.contains("3 of 3 member(s) fit"), "a pile with sheet members counts members: {text}");
+    assert!(text.contains("3 member(s) match"), "{text}");
 
     let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
     assert_eq!(lock.matches("[[member]]").count(), 3, "{lock}");
@@ -1195,4 +1196,60 @@ fn accept_takes_a_member_reference_and_names_the_members_when_it_misses() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     assert!(err.contains("not a member") && err.contains("2025.xlsx#Q1"), "{err}");
+}
+
+/// Acceptance is per member: accepting one sheet's judgement accepts that
+/// sheet, its sibling is untouched, and the acceptance carries over a refit.
+#[test]
+fn acceptance_is_per_sheet_member() {
+    use tdy::spec::{ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
+    let (dir, t) = quarters_pile();
+    // Q1's spec, hand-written: the same frame fit would plan, plus a unit
+    // shift — a judgement no proof can settle, so it waits on a person.
+    let col = |name: &str, source: &str, dtype: DType| ColumnSpec {
+        name: name.into(),
+        source: Some(source.into()),
+        dtype,
+        nullable: false,
+        parse: ValueParsing::default(),
+        pointer: None,
+    };
+    let mut amount = col("amount", "Betrag", DType::Decimal { precision: 14, scale: 2 });
+    amount.parse.decimal_shift = Some(-2);
+    let spec = ParseSpec {
+        extraction: Extraction::Excel { sheet_name: Some("Q1".into()), sheet_index: None, range: None },
+        transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        columns: vec![col("month", "Datum", DType::Date { format: "%d.%m.%Y".into() }), col("region", "Region", DType::Utf8), amount],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    let book = dir.path().join("2025.xlsx");
+    tdy::sidecar::save_member(&book, Some("Q1"), &spec, tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None }).unwrap();
+
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025.xlsx#Q1") && text.contains("REVIEW"), "{text}");
+    let sql = format!("SELECT count(*) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("2025.xlsx#Q1"), "waits on a human, naming the member: {err}");
+
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "2025.xlsx#Q1"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("accepted = true").count(), 1, "exactly one member accepted:\n{lock}");
+    let sql = format!("SELECT _member, sum(amount) AS total FROM dataset('{}') GROUP BY 1 ORDER BY 1", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("2025.xlsx#Q1") && text.contains("6.00"), "Q1 shifted by the accepted judgement: {text}");
+    assert!(text.contains("2025.xlsx#Q2") && text.contains("1500.00"), "Q2 untouched: {text}");
+
+    // A refit without --accept keeps the acceptance: the bytes and the
+    // declaration are unchanged, so the question is not asked again.
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success());
+    let lock = std::fs::read_to_string(dir.path().join("monat.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("accepted = true").count(), 1, "{lock}");
 }

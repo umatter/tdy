@@ -1877,3 +1877,30 @@ fn sheet_members_are_named_with_their_sheet_in_the_pile() {
     let text = screen(&mut w, 120, 30).join("\n");
     assert!(text.contains(" 2025.xlsx#Q1 "), "the member view's title names the sheet: {text}");
 }
+
+/// The browser's status column says a workbook has sheet specs, in its own
+/// compact vocabulary, and colours it as sniffed rather than leaving it blank.
+#[test]
+fn the_browser_shows_a_workbooks_sheet_specs() {
+    use tdy::spec::{ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
+    let d = tempfile::tempdir().unwrap();
+    let book = d.path().join("2025.xlsx");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/sheet_frames_two_fit.xlsx"),
+        &book,
+    )
+    .unwrap();
+    for sheet in ["Q1", "Q2"] {
+        let spec = ParseSpec {
+            extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None },
+            transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+            columns: vec![ColumnSpec { name: "region".into(), source: Some("Region".into()), dtype: DType::Utf8, nullable: false, parse: ValueParsing::default(), pointer: None }],
+            confidence: Some(1.0),
+            notes: vec![],
+        };
+        tdy::sidecar::save_member(&book, Some(sheet), &spec, tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None }).unwrap();
+    }
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let text = screen(&mut w, 100, 20).join("\n");
+    assert!(text.contains("✓ 2 sheets"), "{text}");
+}

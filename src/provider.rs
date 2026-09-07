@@ -846,7 +846,7 @@ pub fn validate_command(path: &Path, cfg: &Config, restamp: bool) -> Result<()> 
 pub fn validate_quiet(path: &Path, cfg: &Config, restamp: bool) -> Result<Vec<String>> {
     // `path` may be a member reference: `book.xlsx#Q1` is one sheet of a
     // workbook, whose sidecar is `book.xlsx#Q1.tdy.toml` beside it.
-    let (file, sheet) = sidecar::resolve_ref(path);
+    let (file, sheet) = sidecar::resolve_ref(path)?;
     let (path, sheet) = (file.as_path(), sheet.as_deref());
     let sc_path = sidecar::sidecar_path_for(path, sheet);
     if !sc_path.exists() {

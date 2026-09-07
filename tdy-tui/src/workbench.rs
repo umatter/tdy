@@ -898,7 +898,7 @@ impl Workbench {
         // Then everything else the file offers, and the structural remedies.
         for p in &m.problems {
             let value = serde_json::to_value(p).unwrap_or_default();
-            for r in remedy::remedies_for(&value, &m.path) {
+            for r in remedy::remedies_for(&value, &m.name()) {
                 push(r, &mut out);
             }
         }
@@ -909,7 +909,7 @@ impl Workbench {
         // exclude-this-file remedy, so the menu is never blank for a member
         // that plainly needs one.
         if out.is_empty() && (m.review.is_some() || !m.problems.is_empty()) {
-            out.push(Remedy::ExcludeFile { rel: m.path.clone() });
+            out.push(Remedy::ExcludeFile { rel: m.name() });
         }
         out
     }

@@ -95,6 +95,9 @@ pub enum EntryStatus {
     Locked,
     /// A target whose lock disagrees with it in N places.
     Drift(usize),
+    /// A workbook expanded into sheet members: no plain sidecar, N sheet
+    /// sidecars beside it, all fresh.
+    Sheets(usize),
 }
 
 /// A table of results, as text — what `.sniff`'s preview, a `.fit` dry run
@@ -799,8 +802,14 @@ impl Session {
                     let f = dir.join(&m.path);
                     f.is_file() && crate::sidecar::sidecar_path_for(&f, m.sheet.as_deref()).exists()
                 };
-                let mref = crate::member::MemberRef::resolve(&member, exists)
-                    .unwrap_or_else(|| crate::member::MemberRef::file(member.clone()));
+                let mref = match crate::member::MemberRef::resolve(&member, exists) {
+                    Ok(Some(m)) => m,
+                    Ok(None) => crate::member::MemberRef::file(member.clone()),
+                    Err(several) => bail!(
+                        "{member} could mean {} — name the file and the sheet unambiguously",
+                        crate::member::MemberRef::names(&several)
+                    ),
+                };
                 // The member's path is named relative to the target's own
                 // directory (what the pile report and `fit_pile`'s `accept`
                 // both use), not resolved against `self.cwd` the way a plain
@@ -1023,7 +1032,21 @@ fn file_status(path: &Path) -> EntryStatus {
             EntryStatus::Sniffed { confidence: sc.spec.confidence, method: method_label(&sc.provenance.method) }
         }
         Ok(SidecarStatus::Stale(_)) => EntryStatus::Stale,
-        Ok(SidecarStatus::Absent) => EntryStatus::None,
+        // No plain sidecar: a workbook expanded into sheet members has its
+        // specs beside it under `<file>#<sheet>.tdy.toml`, and listing it as
+        // unsniffed while they sit there is a wrong answer. Every one must
+        // be fresh; the file's hash covers them all, so one stale is all
+        // stale.
+        Ok(SidecarStatus::Absent) => {
+            let sheets = crate::sidecar::sheet_sidecars(path);
+            if sheets.is_empty() {
+                return EntryStatus::None;
+            }
+            let all_fresh = sheets
+                .iter()
+                .all(|s| matches!(crate::sidecar::load_member(path, Some(s)), Ok(SidecarStatus::Fresh(_))));
+            if all_fresh { EntryStatus::Sheets(sheets.len()) } else { EntryStatus::Stale }
+        }
         Err(_) => EntryStatus::Stale, // unreadable sidecar: not something a query would use
     }
 }
@@ -1065,6 +1088,7 @@ pub fn render_listing(entries: &[Entry]) -> String {
             EntryStatus::NoLock => "target, no lock".into(),
             EntryStatus::Locked => "target, locked".into(),
             EntryStatus::Drift(n) => format!("target, drift ({n})"),
+            EntryStatus::Sheets(n) => format!("sheet specs ({n})"),
         };
         let _ = writeln!(s, "{:<width$}  {status}", e.name, width = width);
     }

@@ -1781,3 +1781,16 @@ fn selection_survives_a_refit_for_a_sheet_member() {
         other => panic!("{other:?}"),
     }
 }
+
+/// The fallback remedy on a sheet member excludes that member, not the
+/// whole workbook its siblings live in.
+#[test]
+fn the_exclude_remedy_on_a_sheet_member_names_the_member() {
+    let d = pile();
+    let mut m = gap_member("2025.xlsx");
+    m.sheet = Some("Q2".into());
+    let (w, _) = pile_and_enter(&d, vec![m], 0);
+    let labels: Vec<String> = w.member_remedies().iter().map(|r| r.label()).collect();
+    assert!(labels.iter().any(|l| l.contains("exclude \"2025.xlsx#Q2\"")), "{labels:?}");
+    assert!(!labels.iter().any(|l| l.contains("exclude \"2025.xlsx\"")), "{labels:?}");
+}

@@ -416,14 +416,19 @@ pub async fn fit_pile(
         .map(|a| {
             let a = a.strip_prefix(&dir).unwrap_or(a);
             let text = a.to_string_lossy().replace('\\', "/");
-            MemberRef::resolve(&text, |m| units.iter().any(|(u, _)| u == m)).ok_or_else(|| {
-                anyhow::anyhow!(
+            match MemberRef::resolve(&text, |m| units.iter().any(|(u, _)| u == m)) {
+                Ok(Some(m)) => Ok(m),
+                Ok(None) => Err(anyhow::anyhow!(
                     "--accept {text:?} is not a member of `{}`. Members are named relative to the \
                      target: {}",
                     target.name,
                     units.iter().take(6).map(|(u, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
-                )
-            })
+                )),
+                Err(several) => Err(anyhow::anyhow!(
+                    "--accept {text:?} could mean {} — name the file and the sheet unambiguously",
+                    MemberRef::names(&several)
+                )),
+            }
         })
         .collect::<Result<_>>()?;
 
@@ -756,8 +761,11 @@ pub fn render_pile_text(r: &PileReport) -> String {
         out.push_str(&s);
         out.push('\n');
     };
+    // A pile with sheet members counts members; a plain pile keeps saying
+    // "file(s)", which is what its readers and tests have always seen.
+    let unit = if r.members.iter().any(|m| m.sheet.is_some()) { "member(s)" } else { "file(s)" };
     line(format!(
-        "{}: {} file(s) match, {} declared column(s)\n",
+        "{}: {} {unit} match, {} declared column(s)\n",
         r.target,
         r.members.len(),
         r.declared_columns
@@ -826,7 +834,7 @@ pub fn render_pile_text(r: &PileReport) -> String {
     }
 
     line(format!(
-        "\n{} of {} file(s) fit `{}`.",
+        "\n{} of {} {unit} fit `{}`.",
         r.fitted,
         r.members.len(),
         r.target

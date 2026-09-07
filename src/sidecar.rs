@@ -55,17 +55,21 @@ pub fn sidecar_path(file: &Path) -> PathBuf {
 /// right reading has, since `2025.xlsx#Q1.tdy.toml` is equally the sidecar
 /// of a file literally called `2025.xlsx#Q1`. Text that names nothing comes
 /// back unchanged, so the caller reports about the name that was typed.
-pub fn resolve_ref(text: &Path) -> (PathBuf, Option<String>) {
+pub fn resolve_ref(text: &Path) -> Result<(PathBuf, Option<String>)> {
     if text.is_file() {
-        return (text.to_path_buf(), None);
+        return Ok((text.to_path_buf(), None));
     }
     let s = text.to_string_lossy().into_owned();
     match crate::member::MemberRef::resolve(&s, |m| {
         let f = Path::new(&m.path);
         f.is_file() && sidecar_path_for(f, m.sheet.as_deref()).exists()
     }) {
-        Some(m) => (PathBuf::from(m.path), m.sheet),
-        None => (text.to_path_buf(), None),
+        Ok(Some(m)) => Ok((PathBuf::from(m.path), m.sheet)),
+        Ok(None) => Ok((text.to_path_buf(), None)),
+        Err(several) => bail!(
+            "{s} could mean {} — name the file and the sheet unambiguously",
+            crate::member::MemberRef::names(&several)
+        ),
     }
 }
 

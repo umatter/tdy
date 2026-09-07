@@ -405,6 +405,14 @@ the pile is where "which members?" is asked. **Drift is per file**: the file's h
 every sheet, so a changed workbook is one `Changed` and the refit rediscovers the sheet set;
 `Duplicated` is per (path, sheet). `dataset()` never lists a workbook's sheets itself.
 Regions (several tables in one text file) are still deferred, behind the review gate.
+Follow-ups from its review, landed the same day: `MemberRef::resolve` returns `Err(candidates)`
+when a reference could mean two members (a `#` in both a file name and a sheet name), and every
+caller names both rather than picking one; `EntryStatus::Sheets(n)` is what `.ls` (`sheet specs
+(n)`) and the browser (`✓ n sheets`) say about a workbook expanded into sheet members, `Stale` if
+any sheet sidecar is; the workbench's fallback remedy excludes the sheet member by name, not the
+whole workbook; and a pile with sheet members says "member(s)" where a plain pile says "file(s)".
+`tests/dataset.rs::acceptance_is_per_sheet_member` is the end-to-end proof that `--accept` takes
+one sheet's judgement and leaves its sibling alone.
 
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
