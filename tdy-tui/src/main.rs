@@ -410,6 +410,11 @@ async fn run_workbench(
     let cfg = tdy::config::load(&Default::default())?;
     let browser = Browser::new(&root)?;
     let mut wb = Workbench::new(browser, load_history(1000), cfg.confidence_threshold);
+    wb.backend = match cfg.backend {
+        tdy::config::Backend::None => "none".to_string(),
+        b if cfg.model.is_empty() => b.label().to_string(),
+        b => format!("{}/{}", b.label(), cfg.model),
+    };
 
     let (tx, mut rx) = mpsc::unbounded_channel::<WbMsg>();
     let line_tx = spawn_console_worker(root, cfg.clone(), tx.clone());
@@ -438,6 +443,7 @@ async fn run_workbench(
         if torn_down.load(Ordering::SeqCst) {
             anyhow::bail!("a background task panicked; the terminal was restored");
         }
+        wb.tick = wb.tick.wrapping_add(1);
         terminal.draw(|f| wb_ui::draw(f, &mut wb))?;
         let size = terminal.size()?;
         wb.set_main_view_rows(wb_ui::main_inner_rows(size.height, &wb));

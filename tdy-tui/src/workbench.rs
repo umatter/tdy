@@ -133,6 +133,13 @@ pub struct Workbench {
     pub zoom: bool,
     /// A command is running; what it said last.
     pub busy: Option<String>,
+    /// The configured backend, as the header names it (`none`, or
+    /// `openrouter/<model>`): what decides whether a refused file will be
+    /// put to a model. Set by the runtime; the state machine only shows it.
+    pub backend: String,
+    /// Frames drawn so far; the runtime advances it once per loop so the
+    /// status line's spinner turns while a command runs. Zero in tests.
+    pub tick: u64,
     /// A transient note (e.g. "Ctrl-Q quits").
     pub status: String,
     pub should_quit: bool,
@@ -202,6 +209,8 @@ impl Workbench {
             console_rows: 8,
             zoom: false,
             busy: None,
+            backend: "none".into(),
+            tick: 0,
             status: String::new(),
             should_quit: false,
             main_scroll: 0,
@@ -581,9 +590,12 @@ impl Workbench {
         self.busy = Some(what);
     }
 
-    /// A transient note from the worker's sink.
+    /// A transient note from the worker's sink. A path under the root is
+    /// shortened to its root-relative form: the status line has one row,
+    /// and an absolute temp path is most of it.
     pub fn note(&mut self, what: String) {
-        self.status = what;
+        let root = format!("{}/", self.browser.root().display());
+        self.status = what.replace(&root, "");
     }
 
     /// A `PreviewFile` action's result arrived (computed off the UI

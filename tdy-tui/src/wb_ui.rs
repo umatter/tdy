@@ -11,9 +11,10 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
+use ratatui::symbols::border;
 use ratatui::widgets::{
-    Block, Cell, List, ListItem, ListState, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Table as TableWidget, Wrap,
+    Block, BorderType, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Scrollbar,
+    ScrollbarOrientation, ScrollbarState, Table as TableWidget, Wrap,
 };
 use ratatui::Frame;
 
@@ -51,40 +52,96 @@ const BROWSER_WIDTH: u16 = 26;
 /// spacing + 3 orientation lines; at 10 the Paragraph clipped the tail.
 const MARK_MIN_HEIGHT: u16 = 13;
 
-/// The current key vocabulary, key then meaning, in one slice so later
-/// tasks (d/D/f/a/t) append a row here rather than hunting across the
-/// module for every place a key is explained. `draw_help` renders it.
-const HELP_KEYS: &[(&str, &str)] = &[
-    ("Tab", "cycle focus"),
-    ("Esc", "focus the console"),
-    ("^Q", "quit"),
-    ("^L", "zoom the console"),
-    ("^Up / ^Down", "resize the console"),
-    ("↑ / ↓", "move selection / scroll"),
-    ("PgUp / PgDn (main)", "scroll the main pane"),
-    ("[ / ] (file / member)", "previous / next sheet of a workbook"),
-    ("Enter", "open file or directory"),
-    ("Backspace", "go up a directory"),
-    ("s", "sniff the selected file"),
-    ("e", "edit the selected file"),
-    ("f", "fit the selected target / re-fit the shown pile"),
-    ("t (pile / member)", "edit the target"),
-    ("d", "mark/unmark the selected file"),
-    ("D", "draft the marked files"),
-    ("↑ / ↓ (pile)", "move the selected member"),
-    ("Enter (pile)", "open the selected member"),
-    ("Esc (pile)", "close the pile"),
-    ("↑ / ↓ (member)", "pick a remedy"),
-    ("e (member)", "edit the file"),
-    ("1-9 (member)", "apply a remedy"),
-    ("Enter (member)", "apply the marked (▸) remedy"),
-    ("a (member / evidence)", "accept — show evidence, then accept"),
-    ("Esc (member)", "back to the pile"),
-    ("↑ / ↓ (evidence)", "scroll"),
-    ("Esc (evidence)", "close (f re-opens the pile)"),
-    ("y / Esc (confirm)", "write the edit / cancel"),
-    ("?", "show this help"),
+/// Where a key applies: everywhere, in one focused pane, or in one main
+/// pane context. The help popup leads with the scope the user is in.
+#[derive(Clone, Copy, PartialEq)]
+enum Scope {
+    Everywhere,
+    Browser,
+    Main,
+    File,
+    Pile,
+    Member,
+    Evidence,
+    Confirm,
+}
+
+impl Scope {
+    fn label(self) -> &'static str {
+        match self {
+            Scope::Everywhere => "everywhere",
+            Scope::Browser => "in the file browser",
+            Scope::Main => "in the main pane",
+            Scope::File => "on a file",
+            Scope::Pile => "on a pile",
+            Scope::Member => "on a member",
+            Scope::Evidence => "on the evidence",
+            Scope::Confirm => "confirming an edit",
+        }
+    }
+}
+
+/// The current key vocabulary — scope, key, meaning — in one slice so a
+/// later task appends a row here rather than hunting across the module for
+/// every place a key is explained. `draw_help` renders it, this context's
+/// scope first.
+const HELP_KEYS: &[(Scope, &str, &str)] = &[
+    (Scope::Everywhere, "Tab", "cycle focus"),
+    (Scope::Everywhere, "Esc", "focus the console"),
+    (Scope::Everywhere, "^Q", "quit"),
+    (Scope::Everywhere, "^L", "zoom the console"),
+    (Scope::Everywhere, "^Up / ^Down", "resize the console"),
+    (Scope::Everywhere, "?", "show this help"),
+    (Scope::Browser, "↑ / ↓", "move the selection (previews the file)"),
+    (Scope::Browser, "Enter", "open file or directory"),
+    (Scope::Browser, "Backspace", "go up a directory"),
+    (Scope::Browser, "s", "sniff the selected file"),
+    (Scope::Browser, "e", "edit the selected file"),
+    (Scope::Browser, "f", "fit the selected target"),
+    (Scope::Browser, "d", "mark/unmark the selected file"),
+    (Scope::Browser, "D", "draft the marked files"),
+    (Scope::Main, "↑ / ↓, PgUp / PgDn", "scroll"),
+    (Scope::File, "[ / ]", "previous / next sheet of a workbook"),
+    (Scope::File, "s", "sniff this file"),
+    (Scope::Pile, "↑ / ↓", "move the selected member"),
+    (Scope::Pile, "Enter", "open the selected member"),
+    (Scope::Pile, "f", "re-fit the pile (for real)"),
+    (Scope::Pile, "t", "edit the target"),
+    (Scope::Pile, "Esc", "close the pile"),
+    (Scope::Member, "↑ / ↓", "pick a remedy"),
+    (Scope::Member, "1-9, Enter", "stage a remedy (shows the diff first)"),
+    (Scope::Member, "a", "accept — show the evidence, then accept"),
+    (Scope::Member, "e", "edit the file"),
+    (Scope::Member, "t", "edit the target"),
+    (Scope::Member, "[ / ]", "previous / next sheet of a workbook"),
+    (Scope::Member, "Esc", "back to the pile"),
+    (Scope::Evidence, "a", "accept"),
+    (Scope::Evidence, "Esc", "close (f re-opens the pile)"),
+    (Scope::Confirm, "y", "write the edit"),
+    (Scope::Confirm, "Esc / n", "cancel"),
 ];
+
+/// The scope the user is in: the confirm overlay if one is up, else the
+/// focused pane, with the main pane refined by its context.
+fn current_scope(w: &Workbench) -> Scope {
+    if w.pending_edit.is_some() {
+        return Scope::Confirm;
+    }
+    match w.focus {
+        Focus::Console => Scope::Everywhere,
+        Focus::Browser => Scope::Browser,
+        Focus::Main => match &w.context {
+            Context::File { .. } => Scope::File,
+            Context::Pile { .. } => Scope::Pile,
+            Context::Member { .. } => Scope::Member,
+            Context::Evidence { .. } => Scope::Evidence,
+            Context::Empty | Context::Query(_) => Scope::Main,
+        },
+    }
+}
+
+/// Spinner frames for the status line while a command runs.
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 pub fn draw(f: &mut Frame, w: &mut Workbench) {
     let [header, body, status] =
@@ -99,39 +156,130 @@ pub fn draw(f: &mut Frame, w: &mut Workbench) {
 /// How many rows of content the main pane can show at `height` terminal
 /// rows — the same arithmetic `draw`/`draw_right` perform with Layout:
 /// 1 header row + 1 status row around the body, `console_rows + 2` for the
-/// console pane, 2 for the main block's own borders. 0 when the console is
-/// zoomed (no main pane on screen) — `set_main_view_rows` ignores 0.
+/// console pane, 1 for the main block's own top border (its bottom edge is
+/// the console's top border — the two share the line). 0 when the console
+/// is zoomed (no main pane on screen) — `set_main_view_rows` ignores 0.
 pub fn main_inner_rows(height: u16, w: &Workbench) -> usize {
     if w.zoom {
         return 0;
     }
     let body = height.saturating_sub(2);
     let main = body.saturating_sub(w.console_rows + 2);
-    main.saturating_sub(2) as usize
+    main.saturating_sub(1) as usize
 }
 
+/// The header names what changes what a key does: where you are (root and
+/// the directory within it), the target on screen with its lock state, and
+/// the backend a refused file would be put to — and a DRY RUN badge at the
+/// right edge when the pile on screen is one, because "this is what would
+/// happen" and "this is what happened" must never blur.
 fn draw_header(f: &mut Frame, area: Rect, w: &Workbench) {
-    let line = format!(" tdy — {}", w.browser.title());
-    f.render_widget(Paragraph::new(Span::styled(line, Style::new().bold())), area);
+    let dim = Style::new().fg(DIM);
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+
+    // The facts that change what a key does are fixed; the root gives way,
+    // from its left, since its tail is what tells two directories apart.
+    let mut fixed: Vec<Span<'static>> = Vec::new();
+    if let Some(target) = header_target(w) {
+        fixed.push(Span::styled("  ·  ", dim));
+        fixed.push(Span::styled(target.name, bold));
+        if let Some((state, style)) = target.state {
+            fixed.push(Span::raw(" "));
+            fixed.push(Span::styled(state, style));
+        }
+    }
+    fixed.push(Span::styled("  ·  backend ", dim));
+    fixed.push(Span::styled(
+        w.backend.clone(),
+        if w.backend == "none" { dim } else { Style::new().fg(WARN) },
+    ));
+
+    let badge = match &w.context {
+        Context::Pile { report, .. } | Context::Member { report, .. } if report.dry_run => {
+            Some(Span::styled(" DRY RUN ", Style::new().fg(Color::Black).bg(WARN).add_modifier(Modifier::BOLD)))
+        }
+        _ => None,
+    };
+    let badge_w = badge.as_ref().map(|b| b.content.chars().count() as u16).unwrap_or(0);
+    let [left, right] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(badge_w)]).areas(area);
+
+    let mut root = w.browser.root().display().to_string();
+    if let Ok(home) = std::env::var("HOME") {
+        if let Some(rest) = root.strip_prefix(&home) {
+            root = format!("~{rest}");
+        }
+    }
+    if w.browser.title() != "." {
+        root.push('/');
+        root.push_str(&w.browser.title());
+    }
+    let prefix = " tdy ";
+    let fixed_w: usize = fixed.iter().map(|sp| sp.content.chars().count()).sum();
+    let room = (left.width as usize).saturating_sub(prefix.chars().count() + fixed_w);
+    let root_n = root.chars().count();
+    if root_n > room {
+        let keep = room.saturating_sub(1);
+        root = format!("…{}", root.chars().skip(root_n - keep).collect::<String>());
+    }
+
+    let mut spans = vec![Span::styled(prefix, bold), Span::raw(root)];
+    spans.extend(fixed);
+    f.render_widget(Paragraph::new(clip_line(Line::from(spans), left.width as usize)), left);
+    if let Some(b) = badge {
+        f.render_widget(Paragraph::new(Line::from(b)), right);
+    }
+}
+
+struct HeaderTarget {
+    name: String,
+    state: Option<(String, Style)>,
+}
+
+/// The target the header names: the one the main pane is showing, else the
+/// one last fitted. Its lock state comes from the browser's listing when the
+/// target is in the current directory (the same `EntryStatus` the browser
+/// column shows), so the two never disagree.
+fn header_target(w: &Workbench) -> Option<HeaderTarget> {
+    let path = match &w.context {
+        Context::Pile { target, .. } | Context::Member { target, .. } | Context::Evidence { target, .. } => {
+            Some(target.clone())
+        }
+        _ => w.last_target.clone(),
+    }?;
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.display().to_string());
+    let state = w
+        .browser
+        .entries
+        .iter()
+        .find(|e| e.name == name)
+        .and_then(|e| match &e.status {
+            EntryStatus::NoLock => Some(("no lock".to_string(), Style::new().fg(WARN))),
+            EntryStatus::Locked => Some(("locked".to_string(), Style::new().fg(OK))),
+            EntryStatus::Drift(n) => Some((format!("drift ({n})"), Style::new().fg(WARN))),
+            _ => None,
+        });
+    Some(HeaderTarget { name, state })
 }
 
 fn draw_body(f: &mut Frame, area: Rect, w: &mut Workbench) {
     if area.width < MIN_WIDTH_FOR_BROWSER {
-        draw_right(f, area, w);
+        draw_right(f, area, w, Seams { browser: false });
         return;
     }
     let [browser, right] =
         Layout::horizontal([Constraint::Length(BROWSER_WIDTH), Constraint::Fill(1)]).areas(area);
     draw_browser(f, browser, w);
-    draw_right(f, right, w);
+    draw_right(f, right, w, Seams { browser: true });
 }
 
-fn draw_right(f: &mut Frame, area: Rect, w: &mut Workbench) {
+fn draw_right(f: &mut Frame, area: Rect, w: &mut Workbench, seams: Seams) {
     // Checked first, ahead of `help` and `zoom`: a staged edit is modal (see
     // `Workbench::key`), and the overlay confirming it must cover the whole
     // right column exactly as the help overlay does, for the same reason —
     // it can be open regardless of whether the console is zoomed.
     if let Some((remedy, edit, ..)) = &w.pending_edit {
+        draw_under_popup(f, area, w, seams);
         draw_confirm(f, area, remedy, edit);
         return;
     }
@@ -141,11 +289,18 @@ fn draw_right(f: &mut Frame, area: Rect, w: &mut Workbench) {
     // the whole right column here rather than a `main` sub-area that may
     // not have been computed — the zoom branch below never runs one.
     if w.help {
-        draw_help(f, area);
+        draw_under_popup(f, area, w, seams);
+        draw_help(f, area, w);
         return;
     }
+    draw_under_popup(f, area, w, seams);
+}
+
+/// What lies under a popup: the ordinary right column, drawn first so the
+/// popup floats over it rather than replacing it.
+fn draw_under_popup(f: &mut Frame, area: Rect, w: &Workbench, seams: Seams) {
     if w.zoom {
-        draw_console(f, area, w);
+        draw_console(f, area, w, seams, false);
         return;
     }
     let [main, console] = Layout::vertical([
@@ -153,67 +308,110 @@ fn draw_right(f: &mut Frame, area: Rect, w: &mut Workbench) {
         Constraint::Length(w.console_rows + 2),
     ])
     .areas(area);
-    draw_main(f, main, w);
-    draw_console(f, console, w);
+    draw_main(f, main, w, seams);
+    draw_console(f, console, w, seams, true);
 }
 
-/// The `?` overlay: a bordered ` keys ` block over the main pane, the mark
-/// beside the key vocabulary. `Workbench::key` owns when this is shown and
-/// how it closes; this only draws it.
-fn draw_help(f: &mut Frame, area: Rect) {
-    let block = Block::bordered()
-        .title(" keys ")
-        .border_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+/// A rect of up to `want_w` x `want_h` centred in `area`, inset by at least
+/// one cell on each side so the pane's own border stays visible around it.
+fn popup_rect(area: Rect, want_w: u16, want_h: u16) -> Rect {
+    let w = want_w.min(area.width.saturating_sub(2)).max(1);
+    let h = want_h.min(area.height.saturating_sub(2)).max(1);
+    Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    }
+}
 
+fn popup_block(title: &str) -> Block<'static> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(format!(" {title} "))
+        .border_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+}
+
+/// The `?` popup: the mark beside the key vocabulary, this context's keys
+/// first, then the ones that work everywhere. `Workbench::key` owns when
+/// this is shown and how it closes; this only draws it.
+fn draw_help(f: &mut Frame, area: Rect, w: &Workbench) {
+    let here = current_scope(w);
+    let key_w = HELP_KEYS.iter().map(|&(_, k, _)| k.chars().count()).max().unwrap_or(0);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let section = |lines: &mut Vec<Line<'static>>, scope: Scope| {
+        let rows: Vec<&(Scope, &str, &str)> = HELP_KEYS.iter().filter(|(s, ..)| *s == scope).collect();
+        if rows.is_empty() {
+            return;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::raw(""));
+        }
+        lines.push(Line::styled(scope.label().to_string(), Style::new().fg(DIM).add_modifier(Modifier::BOLD)));
+        for &(_, k, desc) in rows {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{k:key_w$}"), Style::new().add_modifier(Modifier::BOLD)),
+                Span::raw(format!("  {desc}")),
+            ]));
+        }
+    };
+    if here != Scope::Everywhere {
+        section(&mut lines, here);
+    }
+    section(&mut lines, Scope::Everywhere);
+
+    let text_w = lines.iter().map(|l| l.width()).max().unwrap_or(20) as u16;
+    let mark_w = mark::WIDTH as u16 + 2;
+    let rect = popup_rect(area, mark_w + text_w + 4, lines.len() as u16 + 2);
+    let block = popup_block("keys");
+    let inner = block.inner(rect);
+    f.render_widget(Clear, rect);
+    f.render_widget(block, rect);
     let [mark_area, keys_area] =
-        Layout::horizontal([Constraint::Length(mark::WIDTH as u16 + 2), Constraint::Fill(1)])
-            .areas(inner);
+        Layout::horizontal([Constraint::Length(mark_w), Constraint::Fill(1)]).areas(inner);
     f.render_widget(Paragraph::new(mark_lines()), mark_area);
-
-    let key_w = HELP_KEYS.iter().map(|&(k, _)| k.chars().count()).max().unwrap_or(0);
-    let lines: Vec<Line<'static>> = HELP_KEYS
-        .iter()
-        .map(|&(k, desc)| Line::raw(format!("{k:key_w$}  {desc}")))
-        .collect();
     f.render_widget(Paragraph::new(lines), keys_area);
 }
 
-/// The staged-edit confirm overlay: a bordered ` confirm edit ` block over
-/// the main pane, mirroring `draw_help`'s mechanism — the remedy's label,
-/// then `Edit::diff()`'s lines (`-` red-ish, `+` green-ish), then a footer
-/// naming the two keys `Workbench::key`'s modal branch actually honours.
-/// `Workbench` owns when this is shown and what `y`/`Esc` do; this only
-/// draws it.
+/// The staged-edit confirm popup: the remedy's label, then `Edit::diff()`'s
+/// lines with a dim line-number gutter, `-` lines red and `+` lines green,
+/// then a footer naming the two keys `Workbench::key`'s modal branch
+/// actually honours. `Workbench` owns when this is shown and what `y`/`Esc`
+/// do; this only draws it.
 fn draw_confirm(f: &mut Frame, area: Rect, remedy: &Remedy, edit: &Edit) {
-    let block = Block::bordered()
-        .title(" confirm edit ")
-        .border_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let [content, footer] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
-
-    let mut lines = vec![Line::raw(remedy.label()), Line::raw(String::new())];
+    let mut lines = vec![
+        Line::styled(remedy.label(), Style::new().add_modifier(Modifier::BOLD)),
+        Line::raw(String::new()),
+    ];
     for l in edit.diff().lines() {
         // The diff line is `"{:>4} - {before}"` or `"{:>4} + {after}"` (see
-        // `Edit::diff`): the marker is always the second whitespace-split
-        // token, regardless of how wide the line-number field happened to
-        // print.
-        let style = match l.split_whitespace().nth(1) {
-            Some("-") => Style::new().fg(Color::Red),
-            Some("+") => Style::new().fg(Color::Green),
+        // `Edit::diff`): a four-wide number, a space, the marker, a space,
+        // the text — fixed positions, so parse by position rather than by
+        // splitting on characters the text itself may contain.
+        let n = l.get(..4).unwrap_or("").trim();
+        let marker = l.get(5..6).unwrap_or("");
+        let text = l.get(7..).unwrap_or("");
+        let style = match marker {
+            "-" => Style::new().fg(BAD),
+            "+" => Style::new().fg(OK),
             _ => Style::new(),
         };
-        lines.push(Line::styled(l.to_string(), style));
+        lines.push(Line::from(vec![
+            Span::styled(format!("{n:>4} "), Style::new().fg(DIM)),
+            Span::styled(format!("{marker} "), style.add_modifier(Modifier::BOLD)),
+            Span::styled(text.to_string(), style),
+        ]));
     }
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), content);
-    f.render_widget(
-        Paragraph::new(Line::styled("y writes the target · Esc cancels", Style::new().fg(DIM))),
-        footer,
-    );
+    lines.push(Line::raw(String::new()));
+    lines.push(Line::styled("y writes the target · Esc cancels", Style::new().fg(DIM)));
+
+    let text_w = lines.iter().map(|l| l.width()).max().unwrap_or(20) as u16;
+    let rect = popup_rect(area, text_w + 4, lines.len() as u16 + 2);
+    let block = popup_block("confirm edit");
+    let inner = block.inner(rect);
+    f.render_widget(Clear, rect);
+    f.render_widget(block, rect);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 /// The generated mark (`mark::GRID`) as 8 terminal rows of half-block
@@ -251,7 +449,29 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
     } else {
         Style::new().fg(DIM)
     };
-    Block::bordered().title(title).border_style(style)
+    Block::bordered().border_type(BorderType::Rounded).title(title).border_style(style)
+}
+
+/// Which edges of the right column are shared with a neighbour, so the
+/// blocks there draw junctions rather than corners: the browser's seam on
+/// the left (the browser draws no right border of its own), and the
+/// main/console boundary, which is the console's top border alone.
+#[derive(Clone, Copy)]
+struct Seams {
+    /// A browser pane sits to the left.
+    browser: bool,
+}
+
+/// The rounded set with the left corners turned into junctions where the
+/// block meets the browser's seam. `top` and `bottom` say which of this
+/// block's corners are joins (`┬`/`├`/`┴`) rather than rounded.
+fn seam_set(seams: Seams, top: &'static str, bottom: &'static str) -> border::Set<'static> {
+    let mut set = border::ROUNDED;
+    if seams.browser {
+        set.top_left = top;
+        set.bottom_left = bottom;
+    }
+    set
 }
 
 /// The browser's own compact vocabulary (design doc §6's mock: `✓ 0.95`,
@@ -275,7 +495,8 @@ fn entry_status_text(status: &EntryStatus) -> String {
 
 fn draw_browser(f: &mut Frame, area: Rect, w: &Workbench) {
     let focused = w.focus == Focus::Browser;
-    let block = pane_block(" files ".to_string(), focused);
+    let block = pane_block(" files ".to_string(), focused)
+        .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM);
     // The "▸ " highlight symbol reserves its own two columns on every row,
     // selected or not (ratatui's `List` shifts all row content right by
     // its width) — the text layout has to account for that or the longest
@@ -369,10 +590,14 @@ fn context_title(ctx: &Context) -> String {
     }
 }
 
-fn draw_main(f: &mut Frame, area: Rect, w: &Workbench) {
+fn draw_main(f: &mut Frame, area: Rect, w: &Workbench, seams: Seams) {
     let focused = w.focus == Focus::Main;
     let title = format!(" {} ", context_title(&w.context));
-    let block = pane_block(title, focused);
+    // No bottom border: the console's top border is that line, and draws
+    // the joins. The top-left corner is a `┬` on the browser's seam.
+    let block = pane_block(title, focused)
+        .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+        .border_set(seam_set(seams, "┬", border::ROUNDED.bottom_left));
 
     match &w.context {
         Context::Empty => {
@@ -602,6 +827,39 @@ fn draw_pile(
             &mut state,
         );
     }
+}
+
+/// A line broken into as many lines as it needs at `width` cells, each
+/// span's style kept across the break. Character-based, not word-based:
+/// console output is program text, and a `matches = '…'` remedy broken at a
+/// word boundary would still be the same remedy, only harder to paste.
+fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    let total: usize = line.spans.iter().map(|sp| sp.content.chars().count()).sum();
+    if total <= width || width == 0 {
+        return vec![line];
+    }
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut cur: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for sp in line.spans {
+        let style = sp.style;
+        let mut chars: Vec<char> = sp.content.chars().collect();
+        while !chars.is_empty() {
+            let room = width - used;
+            let take = room.min(chars.len());
+            let piece: String = chars.drain(..take).collect();
+            cur.push(Span::styled(piece, style));
+            used += take;
+            if used == width {
+                out.push(Line::from(std::mem::take(&mut cur)));
+                used = 0;
+            }
+        }
+    }
+    if !cur.is_empty() {
+        out.push(Line::from(cur));
+    }
+    out
 }
 
 /// A line clipped to `width` cells with an ellipsis, span styles kept: a
@@ -1227,9 +1485,17 @@ fn table_header_rows(t: &Table) -> u16 {
 /// must not push the numbers off the pane.
 const TABLE_CELL_MAX: usize = 40;
 
-fn draw_console(f: &mut Frame, area: Rect, w: &Workbench) {
+/// `below_main`: this console sits under the main pane, so its top border
+/// is the line the two share and its top corners are joins (`├`, `┤`)
+/// rather than rounded. Zoomed, it stands alone and keeps its own corners.
+fn draw_console(f: &mut Frame, area: Rect, w: &Workbench, seams: Seams, below_main: bool) {
     let focused = w.focus == Focus::Console;
-    let block = pane_block(" console ".to_string(), focused);
+    let mut set = seam_set(seams, "┬", "┴");
+    if below_main {
+        set.top_left = "├";
+        set.top_right = "┤";
+    }
+    let block = pane_block(" console ".to_string(), focused).border_set(set);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -1253,12 +1519,24 @@ fn draw_console(f: &mut Frame, area: Rect, w: &Workbench) {
             lines.push(Line::raw(l.to_string()));
         }
     }
+    // A line wider than the pane wraps rather than losing its tail — the
+    // tail of an error line is where the remedy is.
+    let width = inner.width.max(1) as usize;
+    let lines: Vec<Line> = lines.into_iter().flat_map(|l| wrap_line(l, width)).collect();
 
     let content_rows = inner.height.saturating_sub(1) as usize;
     let total = lines.len();
     let end = total.saturating_sub(w.scroll);
     let start = end.saturating_sub(content_rows);
     let mut visible: Vec<Line> = lines[start..end].to_vec();
+    if w.scroll > 0 && !visible.is_empty() {
+        // Say so, and how far: a scrolled console that looks like the end
+        // of the transcript is how the last command's error goes unread.
+        visible[0] = Line::styled(
+            format!("⋮ {} more line(s) below · PgDn", total - end),
+            Style::new().fg(WARN),
+        );
+    }
 
     let input = format!("{}{}", w.prompt(), w.editor.text());
     let input_row = visible.len() as u16;
@@ -1275,7 +1553,10 @@ fn draw_console(f: &mut Frame, area: Rect, w: &Workbench) {
 
 fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
     let (text, style) = match &w.busy {
-        Some(what) => (format!(" {what}"), Style::new().fg(Color::Yellow)),
+        Some(what) => (
+            format!(" {} {what}", SPINNER[(w.tick % SPINNER.len() as u64) as usize]),
+            Style::new().fg(WARN),
+        ),
         None => (format!(" {}", w.status), Style::new().fg(DIM)),
     };
     let keys = match w.focus {
