@@ -1677,3 +1677,71 @@ fn esc_from_a_deep_member_keeps_the_pile_selection_on_screen() {
         line
     );
 }
+
+// ---------------------------------------------------------------------------
+// Slice 2b: getting around a pile that is bigger than a screen.
+// ---------------------------------------------------------------------------
+
+/// `g` jumps to the next member that needs attention (a gap or a review),
+/// `G` to the previous; neither wraps, so the end of the list is the end.
+#[test]
+fn g_and_shift_g_jump_between_the_members_that_need_attention() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let members = vec![
+        member("m0.csv", MemberStatus::Fits),
+        member("m1.csv", MemberStatus::Fits),
+        gap_member("m2.csv"),
+        member("m3.csv", MemberStatus::Fits),
+        member("m4.csv", MemberStatus::NeedsReview),
+        member("m5.csv", MemberStatus::Fits),
+    ];
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", members))), d.path());
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    let sel = |w: &Workbench| match &w.context { Context::Pile { selected, .. } => *selected, o => panic!("{o:?}") };
+    w.key(key(KeyCode::Char('g')));
+    assert_eq!(sel(&w), 2);
+    w.key(key(KeyCode::Char('g')));
+    assert_eq!(sel(&w), 4);
+    w.key(key(KeyCode::Char('g')));
+    assert_eq!(sel(&w), 4, "no wrap");
+    w.key(key(KeyCode::Char('G')));
+    assert_eq!(sel(&w), 2);
+    w.key(key(KeyCode::Char('G')));
+    assert_eq!(sel(&w), 2, "no wrap backwards either");
+}
+
+/// `/` narrows the pile to the members that need attention and back; the
+/// selection lands on a visible row, and Up/Down move among visible rows.
+#[test]
+fn slash_filters_the_pile_to_problems_and_arrows_move_among_them() {
+    use tdy_tui::workbench::PileFilter;
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let members = vec![
+        member("m0.csv", MemberStatus::Fits),
+        gap_member("m1.csv"),
+        member("m2.csv", MemberStatus::Fits),
+        member("m3.csv", MemberStatus::NeedsReview),
+    ];
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", members))), d.path());
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    let sel = |w: &Workbench| match &w.context { Context::Pile { selected, .. } => *selected, o => panic!("{o:?}") };
+    assert_eq!(w.pile_filter, PileFilter::All);
+    w.key(key(KeyCode::Char('/')));
+    assert_eq!(w.pile_filter, PileFilter::Problems);
+    assert_eq!(sel(&w), 1, "the selection moves onto a visible row");
+    w.key(key(KeyCode::Down));
+    assert_eq!(sel(&w), 3, "Down skips the hidden fits");
+    w.key(key(KeyCode::Down));
+    assert_eq!(sel(&w), 3);
+    w.key(key(KeyCode::Up));
+    assert_eq!(sel(&w), 1);
+    w.key(key(KeyCode::Char('/')));
+    assert_eq!(w.pile_filter, PileFilter::All);
+    assert_eq!(sel(&w), 1, "the selection is kept when everything is visible again");
+}
