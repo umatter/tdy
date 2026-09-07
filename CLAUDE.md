@@ -281,7 +281,13 @@ title names the sheet on show (`sheet 2/3 "Umsatz"`); and a column note in the s
 summary (`column \`name\`: …`) shows the first three raw values of that column under it,
 read from the raw head beside it (`decision_examples`: the grid by header cell, a text
 file by the extraction's delimiter) — never a guess at which column was meant, so a
-column it cannot find shows nothing. `tdy::progress`
+column it cannot find shows nothing. **The edit loop** (2026-09-07): `Workbench::after_edit(path, ok)` turns a successful `$EDITOR`
+round-trip on the pile's target or a member's sidecar (`watched_files`, sheet sidecars included)
+into a dispatched `.fit <target> --dry-run --propose`, through the console like any shortcut;
+the runtime stats `watched_files` once a second (`changed_since`, re-baselined after every
+command so a fit's own writes are not news) and a change made elsewhere lands in the status
+line via `notice_change` as "… changed on disk — f refits", never as a refit nobody asked for.
+The draft-merge view was decided against (design page §5). `tdy::progress`
 (owned `Sink`, so a fit can run on a spawned task) is what lets the status line narrate; a
 transient remark must use `Msg::Note`, never `Msg::Progress`, or the UI stays busy forever and
 takes no keys but `q`. The same discipline now reaches query results too:

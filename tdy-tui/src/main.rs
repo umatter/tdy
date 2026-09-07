@@ -14,6 +14,7 @@
 //! [`tdy::progress`] events arrive on a channel and the status line says
 //! what is happening while it happens.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -393,7 +394,10 @@ fn act_on_wb(
             // The edit may have changed the file's sidecar status (or
             // nothing at all); either way a refresh is cheap and honest.
             wb.browser.refresh();
+            let ok = status.is_ok();
             after_editing(wb, &path, status);
+            let refit = wb.after_edit(&path, ok);
+            act_on_wb(refit, wb, terminal, line_tx, preview_tx, cfg)?;
         }
     }
     Ok(())
@@ -439,11 +443,22 @@ async fn run_workbench(
         }
     }
 
+    let mut watched: HashMap<PathBuf, Option<std::time::SystemTime>> = HashMap::new();
     loop {
         if torn_down.load(Ordering::SeqCst) {
             anyhow::bail!("a background task panicked; the terminal was restored");
         }
         wb.tick = wb.tick.wrapping_add(1);
+        // Once a second (sixteen 60 ms polls), look at the pile's files for a
+        // change made elsewhere — another window, a script — and say so.
+        // The baseline is re-taken after every command, so a fit's own
+        // sidecar writes and an editor round-trip never read as news.
+        if wb.tick % 16 == 0 {
+            for changed in changed_since(&wb, &mut watched) {
+                let act = wb.notice_change(&changed);
+                act_on_wb(act, &mut wb, terminal, &line_tx, &tx, &cfg)?;
+            }
+        }
         terminal.draw(|f| wb_ui::draw(f, &mut wb))?;
         let size = terminal.size()?;
         wb.set_main_view_rows(wb_ui::main_inner_rows(size.height, &wb));
@@ -465,6 +480,7 @@ async fn run_workbench(
                     let is_continue = matches!(o.payload, Payload::Continue);
                     let was_fitted = matches!(o.payload, Payload::Fitted(_));
                     let action = wb.apply(*o, &cwd);
+                    rebaseline(&wb, &mut watched);
                     if !echo.is_empty() && !is_continue {
                         append_history(&echo);
                     }
@@ -541,6 +557,35 @@ async fn run_workbench(
 /// the human just wrote — but only when the editor succeeded, or there is
 /// nothing new to read. A read failure is reported, not swallowed — and
 /// leaves the old text in place, where the guard will catch it.
+/// The modification time of each watched file, as last seen.
+fn rebaseline(wb: &Workbench, watched: &mut HashMap<PathBuf, Option<std::time::SystemTime>>) {
+    watched.clear();
+    for p in wb.watched_files() {
+        let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+        watched.insert(p, m);
+    }
+}
+
+/// Watched files whose modification time differs from the baseline, which
+/// is then updated so a change is reported once.
+fn changed_since(wb: &Workbench, watched: &mut HashMap<PathBuf, Option<std::time::SystemTime>>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for p in wb.watched_files() {
+        let now = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+        match watched.get(&p) {
+            Some(seen) if *seen != now => {
+                out.push(p.clone());
+                watched.insert(p, now);
+            }
+            Some(_) => {}
+            None => {
+                watched.insert(p, now);
+            }
+        }
+    }
+    out
+}
+
 fn after_editing(wb: &mut Workbench, edited: &Path, editor: Result<()>) {
     let editor_succeeded = editor.is_ok();
     let is_pile_target = wb.pile_target().is_some_and(|target| {

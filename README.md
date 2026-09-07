@@ -849,6 +849,11 @@ previews a browser selection, and leaves no scrollback line behind. `?`
 shows the key list for whichever pane has focus. `tdy console` forces the
 plain console even when the terminal UI is installed.
 
+Editing closes the loop: `t` opens the target (and `e` a member's sidecar)
+in `$EDITOR`, and coming back re-fits the pile as a dry run, in the
+scrollback like a typed line; a change made in another window is named in
+the status line — "changed on disk — f refits" — rather than acted on.
+
 A member view puts the gap next to the file's own rows, in the file's own
 spelling — what a `matches` clause needs — with remedies as numbered one-key
 edits. Picking one shows the diff of your declaration *before* writing it;

@@ -1447,6 +1447,55 @@ impl Workbench {
     /// them would leave the next member's menu in file order. Unlike the
     /// launch line this one is *not* a dry run — `f` is the key that writes
     /// the lock for real.
+    /// The files whose change means the pile on screen may be out of date:
+    /// the target, and every member's sidecar (a sheet member's under its
+    /// own name). Empty outside a pile. The runtime stats these once a
+    /// second and hands a change to `notice_change`.
+    pub fn watched_files(&self) -> Vec<PathBuf> {
+        let (target, report) = match &self.context {
+            Context::Pile { target, report, .. } | Context::Member { target, report, .. } => (target, report),
+            _ => return Vec::new(),
+        };
+        let mut out = vec![target.clone()];
+        for m in &report.members {
+            let file = member_preview_path(target, &m.path);
+            out.push(tdy::sidecar::sidecar_path_for(&file, m.sheet.as_deref()));
+        }
+        out
+    }
+
+    /// A watched file changed on disk, by another hand: say so and name the
+    /// key, never refit on its own — a fit starting while someone is
+    /// mid-edit in another window is the workbench acting without a
+    /// keypress. Silent while a command runs; the running command's result
+    /// is the fresher news.
+    pub fn notice_change(&mut self, path: &Path) -> WbAction {
+        if self.busy.is_none() {
+            self.status = format!("{} changed on disk — f refits", self.rel_spelling(path));
+        }
+        WbAction::None
+    }
+
+    /// $EDITOR came back. A successful edit of the pile's target or of one of
+    /// its members' sidecars re-proves the pile — as a dry run, dispatched
+    /// through the console exactly as the launch line is, so the scrollback
+    /// records it. Anything else (an editor that failed, a file outside the
+    /// pile) changes nothing.
+    pub fn after_edit(&mut self, edited: &Path, ok: bool) -> WbAction {
+        if !ok {
+            return WbAction::None;
+        }
+        let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => a == b,
+        };
+        let Some(target) = self.pile_target().map(Path::to_path_buf) else { return WbAction::None };
+        if !self.watched_files().iter().any(|w| same(w, edited)) {
+            return WbAction::None;
+        }
+        WbAction::Dispatch(format!(".fit {} --dry-run --propose", quote_rel(&self.rel_spelling(&target))))
+    }
+
     fn refit_pile(&self) -> WbAction {
         let Context::Pile { target, .. } = &self.context else { return WbAction::None };
         WbAction::Dispatch(format!(".fit {} --propose", quote_rel(&self.rel_spelling(target))))
