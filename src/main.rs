@@ -462,7 +462,10 @@ async fn main() -> ExitCode {
         default_hook(info);
     }));
 
-    match run().await {
+    let outcome = run().await;
+    // Decompressed copies live for the process; this is the process's end.
+    tdy::fileio::clear_cache();
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("Error: {e:#}");
@@ -556,6 +559,7 @@ async fn run() -> Result<()> {
                 let mut stdout = std::io::stdout();
                 let code = tdy::console::repl::run_batch(&mut session, stdin.lock(), &mut stdout).await?;
                 if code != 0 {
+                    tdy::fileio::clear_cache();
                     std::process::exit(code);
                 }
             }

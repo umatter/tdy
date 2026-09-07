@@ -390,7 +390,18 @@ and names both.
 verdict per operator. Read it before concluding tdy is missing something — and
 before concluding it is not.
 
-**Compressed inputs are deferred** (`docs/design/2026-09-06-compressed-inputs.md`):
+**Compressed inputs are in** (2026-09-07, option B of `docs/design/2026-09-06-compressed-inputs.md`).
+`fileio::materialize(path, ceiling)` decompresses gzip, zstd, bzip2 or xz — by magic bytes, never
+extension — into a process-lifetime cache (`$TMPDIR/tdy-<pid>/<blake3>/<inner name>`, one copy
+per file, removed by `fileio::clear_cache()` at every binary's exit), bounded by
+`[limits].max_decompressed_bytes` (default = `max_file_bytes`) *before* the copy exists. Every
+byte reader goes through it — `read_all`, `read_head_tail`, `stream::open_input`, and
+`engine::open_workbook` (the one door to calamine, `xlguard::preflight` inside it) — so sampling,
+both executors and drift see a real file with byte offsets. lz4 and zip stay refused by name.
+The sidecar fingerprints the **compressed** bytes and records `compressed = "gzip"`; the format
+guess strips the compression extension. The four decoders were already in the tree via `zip`,
+so the direct dependencies cost no compilation. The fixture family is `16_compressed.py`.
+The page's earlier deferral text follows for the record:
 a `.gz` has no byte offsets, so `sample::build`'s head+tail sampling has no
 meaning — the file is now *refused* by magic bytes rather than read as mojibake;
 the check is inside `fileio`'s two readers and the streaming opener, not at call

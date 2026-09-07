@@ -513,7 +513,7 @@ pub(crate) fn read_text(path: &Path, encoding: Option<&str>, opts: &ExtractOpts)
         warn_mojibake(path, encoding, &used, had_errors);
         return Ok(text);
     }
-    let ht = fileio::read_head_tail(path, PREVIEW_BYTES, 0)?;
+    let ht = fileio::read_head_tail(path, PREVIEW_BYTES, 0, opts.limits.max_decompressed_bytes)?;
     let truncated = ht.total > ht.head.len() as u64;
     let (mut text, used, had_errors) = crate::sample::decode_owned(ht.head, encoding);
     warn_mojibake(path, encoding, &used, had_errors);
@@ -629,9 +629,7 @@ fn extract_excel(
 ) -> Result<RawTable> {
     // Bound the container before anything reads it: for .ods, opening the
     // workbook *is* the allocation. See src/xlguard.rs.
-    crate::xlguard::preflight(path, &opts.limits)?;
-    let mut wb = open_workbook_auto(path)
-        .with_context(|| format!("cannot open workbook {}", path.display()))?;
+    let mut wb = open_workbook(path, &opts.limits)?;
     let names = wb.sheet_names().to_vec();
     let name = match (sheet_name, sheet_index) {
         (Some(n), _) => {
@@ -1859,11 +1857,19 @@ pub struct SheetShape {
     pub numeric_cells: usize,
 }
 
+/// Every workbook open goes through here: a compressed workbook is
+/// materialised first, then `xlguard::preflight` bounds the container before
+/// calamine allocates anything, then it is opened.
+pub(crate) fn open_workbook(path: &Path, limits: &Limits) -> Result<Sheets<std::io::BufReader<std::fs::File>>> {
+    let real = crate::fileio::materialize(path, limits.max_decompressed_bytes)?;
+    let real = real.as_ref();
+    crate::xlguard::preflight(real, limits)?;
+    open_workbook_auto(real).with_context(|| format!("cannot open workbook {}", path.display()))
+}
+
 /// One open of a workbook, reporting the shape of every sheet.
 pub fn excel_sheet_shapes(path: &Path, limits: Limits) -> Result<Vec<SheetShape>> {
-    crate::xlguard::preflight(path, &limits)?;
-    let mut wb = open_workbook_auto(path)
-        .with_context(|| format!("cannot open workbook {}", path.display()))?;
+    let mut wb = open_workbook(path, &limits)?;
     let names = wb.sheet_names().to_vec();
     let mut out = Vec::with_capacity(names.len());
     for name in names {
@@ -1917,9 +1923,7 @@ pub fn sheet_grid(
     max_rows: usize,
     max_cols: usize,
 ) -> Result<Vec<Vec<String>>> {
-    crate::xlguard::preflight(path, &limits)?;
-    let mut wb = open_workbook_auto(path)
-        .with_context(|| format!("cannot open workbook {}", path.display()))?;
+    let mut wb = open_workbook(path, &limits)?;
     let range = checked_worksheet_range(&mut wb, sheet, &limits)?;
     let clipped_cols = range.width() > max_cols;
     let clipped_rows = range.height() > max_rows;

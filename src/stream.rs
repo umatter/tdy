@@ -234,6 +234,11 @@ fn open_input(
     encoding: Option<&str>,
     opts: &ExtractOpts,
 ) -> Result<Box<dyn BufRead + Send>> {
+    // A compressed file is read as its materialised copy — the same copy
+    // the engine's readers use — so the two executors cannot disagree about
+    // what the file says, and byte offsets mean what they always did.
+    let materialized = crate::fileio::materialize(path, opts.limits.max_decompressed_bytes)?;
+    let path: &Path = materialized.as_ref();
     let utf8 = match encoding {
         Some(l) => encoding_rs::Encoding::for_label(l.as_bytes())
             .map(|e| e == encoding_rs::UTF_8)

@@ -50,6 +50,12 @@ pub struct SourceFingerprint {
     /// (`<file>#<sheet>.tdy.toml`). Absent for a plain sidecar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheet: Option<String>,
+    /// The compression the file was read through (`gzip`, `zstd`, `bzip2`,
+    /// `xz`), when it was. `blake3` and `bytes` above are of the compressed
+    /// file — the bytes the user has and the ones that arrive again next
+    /// month — and this says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

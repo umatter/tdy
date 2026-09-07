@@ -30,52 +30,211 @@ pub struct HeadTail {
     pub sampled: u64,
 }
 
-/// Refuse a compressed file being read as text, naming the fix.
-///
-/// Without this the bytes decode to mojibake and tdy reads them *confidently*
-/// as a one-column table — not a wrong value exactly, since it faithfully
-/// shows what the bytes are, but a confident answer to a question nobody
-/// asked. A loud refusal naming `gunzip` is the honest reading of a file tdy
-/// cannot open.
-///
-/// Deliberately magic-byte based rather than extension based: a `.csv` that is
-/// really gzip is the case that produces the garbage, and it does not announce
-/// itself in its name. Zip *is* listed even though every xlsx, xlsb and ods is
-/// one: workbooks are routed to calamine by extension before any byte is read
-/// as text, so a zip head reaching a text reader is a compressed export (or a
-/// sidecar forcing a workbook through `delimited`), never a workbook.
+/// A compression tdy can read: the four whose decoders the tree already
+/// carries. Detected by magic bytes, never by extension — a `.csv` that is
+/// really gzip is the case that produced a confident column of mojibake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compression {
+    Gzip,
+    Zstd,
+    Bzip2,
+    Xz,
+}
+
+impl Compression {
+    /// The word the sidecar records.
+    pub fn name(self) -> &'static str {
+        match self {
+            Compression::Gzip => "gzip",
+            Compression::Zstd => "zstd",
+            Compression::Bzip2 => "bzip2",
+            Compression::Xz => "xz",
+        }
+    }
+}
+
+/// What the first bytes say the file is: a readable compression, an archive
+/// tdy refuses (lz4, zip), or plain data.
 ///
 /// Every magic here begins with a byte that cannot start UTF-8 text, except
 /// bzip2's `BZh` — which is why that arm also demands the block-size digit
-/// and the block magic that follow it, or `BZh_code,betrag` would be refused
-/// as an archive.
-///
-/// This is enforced inside `read_all` and `read_head_tail`, so every text
-/// reader in the tree is behind it; the streaming executor's raw opener
-/// calls it on its own first buffer. Support, when it comes, is not a
-/// decoder swap — see `docs/design/2026-09-06-compressed-inputs.md`.
-pub fn refuse_if_compressed(path: &Path, head: &[u8]) -> Result<()> {
-    let kind = match head {
-        [0x1f, 0x8b, ..] => "gzip",
-        [0x28, 0xb5, 0x2f, 0xfd, ..] => "zstd",
+/// and the block magic that follow it, or `BZh_code,betrag` would be taken
+/// for an archive. Zip *is* listed even though every xlsx, xlsb and ods is
+/// one: workbooks are routed to calamine by extension before any byte is
+/// read as text, so a zip head reaching a text reader is an archive.
+enum Magic {
+    Readable(Compression),
+    Refused(&'static str),
+    Plain,
+}
+
+fn magic(head: &[u8]) -> Magic {
+    match head {
+        [0x1f, 0x8b, ..] => Magic::Readable(Compression::Gzip),
+        [0x28, 0xb5, 0x2f, 0xfd, ..] => Magic::Readable(Compression::Zstd),
         // `BZh`, block size 1-9, then a block magic (pi) or, for an empty
         // stream, the end-of-stream magic (sqrt(pi)).
         [b'B', b'Z', b'h', b'1'..=b'9', 0x31, 0x41, 0x59, 0x26, 0x53, 0x59, ..]
-        | [b'B', b'Z', b'h', b'1'..=b'9', 0x17, 0x72, 0x45, 0x38, 0x50, 0x90, ..] => "bzip2",
-        [0xfd, b'7', b'z', b'X', b'Z', ..] => "xz",
-        [0x04, 0x22, 0x4d, 0x18, ..] => "lz4",
-        [0x50, 0x4b, 0x03, 0x04, ..] => "zip",
-        _ => return Ok(()),
-    };
-    anyhow::bail!(
-        "{} is {kind}-compressed, and tdy reads it as text — which would give one column of \
-         mojibake read confidently. Decompress it first (`gunzip`, `unzstd`, …); tdy does not \
-         read compressed files yet",
-        path.display()
-    )
+        | [b'B', b'Z', b'h', b'1'..=b'9', 0x17, 0x72, 0x45, 0x38, 0x50, 0x90, ..] => {
+            Magic::Readable(Compression::Bzip2)
+        }
+        [0xfd, b'7', b'z', b'X', b'Z', ..] => Magic::Readable(Compression::Xz),
+        [0x04, 0x22, 0x4d, 0x18, ..] => Magic::Refused("lz4"),
+        [0x50, 0x4b, 0x03, 0x04, ..] => Magic::Refused("zip"),
+        _ => Magic::Plain,
+    }
 }
 
-pub fn read_head_tail(path: &Path, head_bytes: usize, tail_bytes: usize) -> Result<HeadTail> {
+/// Which readable compression `head` announces, if any.
+pub fn compression_of(head: &[u8]) -> Option<Compression> {
+    match magic(head) {
+        Magic::Readable(c) => Some(c),
+        _ => None,
+    }
+}
+
+/// Which readable compression `path` is, by its first bytes.
+pub fn compression_kind(path: &Path) -> Result<Option<Compression>> {
+    let mut f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let mut head = vec![0u8; 16];
+    read_exact_or_eof(&mut f, &mut head)?;
+    Ok(compression_of(&head))
+}
+
+/// Refuse the archives tdy does not read, naming the ones it does.
+pub fn refuse_if_compressed(path: &Path, head: &[u8]) -> Result<()> {
+    if let Magic::Refused(kind) = magic(head) {
+        anyhow::bail!(
+            "{} is {kind}-compressed, which tdy does not read (it reads gzip, zstd, bzip2 and xz \
+             compressed files, and a workbook by its own extension). Decompress it first",
+            path.display()
+        )
+    }
+    Ok(())
+}
+
+/// `5.0 kB`, `1.2 MB`, `4.3 GB` — a size the way a person reads it.
+fn human_bytes(n: u64) -> String {
+    let n = n as f64;
+    if n >= 1e9 {
+        format!("{:.1} GB", n / 1e9)
+    } else if n >= 1e6 {
+        format!("{:.1} MB", n / 1e6)
+    } else {
+        format!("{:.1} kB", n / 1e3)
+    }
+}
+
+/// The process's cache of decompressed copies, under the system temp
+/// directory and named by this process's id: created on first use, removed
+/// by [`clear_cache`], which every binary calls on its way out. A crash
+/// leaves it to the OS's temp cleanup — never gigabytes beside the user's
+/// data.
+fn cache_dir() -> Result<&'static Path> {
+    static CACHE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let dir = CACHE.get_or_init(|| std::env::temp_dir().join(format!("tdy-{}", std::process::id())));
+    std::fs::create_dir_all(dir).with_context(|| format!("creating the decompression cache {}", dir.display()))?;
+    Ok(dir.as_path())
+}
+
+/// Remove this process's decompressed copies. Called by the binaries on
+/// exit; harmless when nothing was ever materialised.
+pub fn clear_cache() {
+    let dir = std::env::temp_dir().join(format!("tdy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The name a decompressed copy is read under: the file's own name with its
+/// compression extension removed, so the format guess by extension still
+/// works on the copy (`2025-01.csv.gz` reads as `2025-01.csv`). A `.csv`
+/// that is really gzip keeps its name.
+fn inner_name(path: &Path) -> String {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "data".into());
+    let lower = name.to_ascii_lowercase();
+    for ext in [".gz", ".gzip", ".zst", ".zstd", ".bz2", ".bzip2", ".xz", ".lzma"] {
+        if lower.ends_with(ext) && name.len() > ext.len() {
+            return name[..name.len() - ext.len()].to_string();
+        }
+    }
+    name
+}
+
+/// A file as tdy reads it: the file itself, or — for a compressed one — a
+/// decompressed copy in the process's cache, made once per file (keyed by
+/// the compressed bytes' blake3) and bounded by `max_decompressed` before
+/// it exists. Everything above this call sees a real file with byte
+/// offsets: sampling, the streaming executor, xlguard, all unchanged.
+pub fn materialize(path: &Path, max_decompressed: u64) -> Result<std::borrow::Cow<'_, Path>> {
+    use std::borrow::Cow;
+    use std::io::{BufReader, Read as _};
+    let Some(kind) = compression_kind(path)? else { return Ok(Cow::Borrowed(path)) };
+    let (hash, _) = hash_file(path)?;
+    let dir = cache_dir()?.join(hash.trim_start_matches("b3:"));
+    let copy = dir.join(inner_name(path));
+    if copy.is_file() {
+        return Ok(Cow::Owned(copy));
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let f = BufReader::with_capacity(CHUNK, File::open(path).with_context(|| format!("cannot open {}", path.display()))?);
+    let mut reader: Box<dyn Read> = match kind {
+        Compression::Gzip => Box::new(flate2::read::MultiGzDecoder::new(f)),
+        Compression::Zstd => Box::new(zstd::Decoder::new(f).context("opening zstd stream")?),
+        Compression::Bzip2 => Box::new(bzip2::read::MultiBzDecoder::new(f)),
+        Compression::Xz => Box::new(xz2::read::XzDecoder::new_multi_decoder(f)),
+    };
+    // Write to a sibling and rename, so a copy that is present is complete —
+    // a second process, or a second thread, must never read a half-written
+    // one — and a copy that crosses the ceiling is removed, not left. The
+    // sibling's name is unique to this writer: two threads materialising
+    // the same file race to the rename, and the loser must find the copy
+    // in place rather than its own part gone.
+    static WRITER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = WRITER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{}.{}.part", inner_name(path), n));
+    let result = (|| -> Result<()> {
+        let mut out = File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let mut buf = vec![0u8; CHUNK];
+        let mut written: u64 = 0;
+        loop {
+            let n = reader.read(&mut buf).with_context(|| format!("decompressing {}", path.display()))?;
+            if n == 0 {
+                break;
+            }
+            written += n as u64;
+            if written > max_decompressed {
+                bail!(
+                    "{} decompresses to more than {}, above [limits].max_decompressed_bytes \
+                     ({}); raise it in the config if you really mean it",
+                    path.display(),
+                    human_bytes(written),
+                    human_bytes(max_decompressed)
+                );
+            }
+            out.write_all(&buf[..n]).with_context(|| format!("writing {}", tmp.display()))?;
+        }
+        out.sync_all().ok();
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    // Another writer may have placed the copy meanwhile; theirs is as good
+    // as ours (same bytes, same key), so keep it rather than replace it.
+    if copy.is_file() {
+        let _ = std::fs::remove_file(&tmp);
+    } else if let Err(e) = std::fs::rename(&tmp, &copy) {
+        let _ = std::fs::remove_file(&tmp);
+        if !copy.is_file() {
+            return Err(e).with_context(|| format!("placing {}", copy.display()));
+        }
+    }
+    Ok(Cow::Owned(copy))
+}
+
+pub fn read_head_tail(path: &Path, head_bytes: usize, tail_bytes: usize, max_decompressed: u64) -> Result<HeadTail> {
+    let path = materialize(path, max_decompressed)?;
+    let path = path.as_ref();
     let mut f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let total = f
         .metadata()
@@ -85,6 +244,9 @@ pub fn read_head_tail(path: &Path, head_bytes: usize, tail_bytes: usize) -> Resu
     let head_len = head_bytes.min(usize::try_from(total).unwrap_or(usize::MAX));
     let mut head = vec![0u8; head_len];
     read_exact_or_eof(&mut f, &mut head)?;
+    // A readable compression was materialised above and this is its copy;
+    // an archive tdy does not read (lz4, zip) is still the original, and is
+    // refused here by name rather than read as one column of mojibake.
     refuse_if_compressed(path, &head)?;
     let mut sampled = head.len() as u64;
 
@@ -130,15 +292,20 @@ pub fn read_all(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     if meta.is_dir() {
         bail!("{} is a directory, not a data file", path.display());
     }
-    // Before the size check and before the read: a compressed file over the
-    // limit should be told to decompress, not to raise the limit, and one
-    // under it should be refused in constant memory, not after being read.
+    // Before the size check and before the read: an archive tdy does not
+    // read is refused by name in constant memory, and one it does read is
+    // materialised — bounded by the same ceiling an in-memory read has —
+    // so the size checked and the bytes read are the copy's.
     {
         let mut f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
         let mut head = vec![0u8; 16];
         read_exact_or_eof(&mut f, &mut head)?;
         refuse_if_compressed(path, &head)?;
     }
+    let real = materialize(path, max_bytes)?;
+    let real: &Path = real.as_ref();
+    let meta = std::fs::metadata(real)
+        .with_context(|| format!("cannot stat {}", real.display()))?;
     if meta.len() > max_bytes {
         bail!(
             "{} is {:.1} GB, above the {:.1} GB limit for in-memory parsing \
@@ -148,7 +315,7 @@ pub fn read_all(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
             max_bytes as f64 / 1e9
         );
     }
-    std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))
+    std::fs::read(real).with_context(|| format!("cannot read {}", real.display()))
 }
 
 /// blake3 of a file's contents, streamed through a fixed buffer.
@@ -261,38 +428,90 @@ mod tests {
         (d, p)
     }
 
-    /// A gzip member of `region,betrag\nZH,10\n` (mtime 0), so the trailer
-    /// is a real CRC32 and ISIZE — gunzip would accept it.
-    const GZ: &[u8] = &[
-        31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 43, 74, 77, 207, 204, 207, 211, 73, 74, 45, 41, 74, 76,
-        231, 138, 242, 208, 49, 52, 224, 2, 0, 129, 245, 9, 214, 20, 0, 0, 0,
-    ];
+    fn gz_of(text: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(text).unwrap();
+        e.finish().unwrap()
+    }
 
+    /// A compressed file is materialised once — into the process's cache
+    /// under its inner name — and read as its contents. A second touch finds
+    /// the copy rather than decompressing again.
     #[test]
-    fn read_all_refuses_a_compressed_file_by_its_bytes() {
-        let (_d, p) = tmpfile(GZ);
-        let e = format!("{:#}", read_all(&p, u64::MAX).unwrap_err());
-        assert!(e.contains("gzip-compressed"), "{e}");
+    fn a_gzip_file_is_materialised_once_and_read_as_its_contents() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().join("x.csv.gz");
+        std::fs::write(&p, gz_of(b"region,betrag\nZH,10\nBE,11\n")).unwrap();
+        let m1 = materialize(&p, u64::MAX).unwrap().into_owned();
+        assert!(m1.ends_with("x.csv"), "the inner name, so the format guess still works: {}", m1.display());
+        assert_ne!(m1, p);
+        assert_eq!(std::fs::read(&m1).unwrap(), b"region,betrag\nZH,10\nBE,11\n");
+        let stamp = std::fs::metadata(&m1).unwrap().modified().unwrap();
+        let m2 = materialize(&p, u64::MAX).unwrap().into_owned();
+        assert_eq!(m1, m2, "the same file materialises to the same copy");
+        assert_eq!(std::fs::metadata(&m2).unwrap().modified().unwrap(), stamp, "and was not rewritten");
+        // A plain file is handed back as itself.
+        let plain = d.path().join("y.csv");
+        std::fs::write(&plain, b"a,b\n").unwrap();
+        assert_eq!(materialize(&plain, u64::MAX).unwrap().as_ref(), plain.as_path());
     }
 
     #[test]
-    fn read_head_tail_refuses_a_compressed_file_by_its_bytes() {
-        let (_d, p) = tmpfile(GZ);
-        let e = match read_head_tail(&p, 1024, 256) {
-            Ok(_) => panic!("read gzip bytes as text"),
-            Err(e) => format!("{e:#}"),
-        };
-        assert!(e.contains("gzip-compressed"), "{e}");
+    fn the_readers_see_the_decompressed_bytes() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().join("x.csv.gz");
+        std::fs::write(&p, gz_of(b"region,betrag\nZH,10\n")).unwrap();
+        assert_eq!(read_all(&p, u64::MAX).unwrap(), b"region,betrag\nZH,10\n");
+        let ht = read_head_tail(&p, 6, 4, u64::MAX).unwrap();
+        assert_eq!(ht.head, b"region");
+        assert_eq!(ht.tail.as_deref(), Some(&b",10\n"[..]));
+        assert_eq!(ht.total, 20, "the decompressed size, which is what sampling reasons about");
     }
 
-    /// A file over the size limit is told to decompress, not to raise the
-    /// limit — and is refused without being read into memory first.
+    /// Every format the tree already knows how to decode, and the two it
+    /// still refuses — naming what it does read.
     #[test]
-    fn an_oversized_compressed_file_is_told_to_decompress_not_to_raise_the_limit() {
-        let (_d, p) = tmpfile(GZ);
-        let e = format!("{:#}", read_all(&p, 8).unwrap_err());
-        assert!(e.contains("gzip-compressed"), "{e}");
-        assert!(!e.contains("max_file_bytes"), "{e}");
+    fn zstd_bzip2_and_xz_materialise_and_lz4_and_zip_are_refused_by_name() {
+        use std::io::Write as _;
+        let d = tempfile::TempDir::new().unwrap();
+        let text = b"a,b\n1,2\n";
+        let zst = zstd::encode_all(&text[..], 3).unwrap();
+        let mut bz = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        bz.write_all(text).unwrap();
+        let bz = bz.finish().unwrap();
+        let mut xz = xz2::write::XzEncoder::new(Vec::new(), 6);
+        xz.write_all(text).unwrap();
+        let xz = xz.finish().unwrap();
+        for (name, bytes) in [("x.csv.zst", zst), ("x.csv.bz2", bz), ("x.csv.xz", xz)] {
+            let p = d.path().join(name);
+            std::fs::write(&p, bytes).unwrap();
+            assert_eq!(read_all(&p, u64::MAX).unwrap(), text, "{name}");
+            assert!(materialize(&p, u64::MAX).unwrap().ends_with("x.csv"), "{name}");
+        }
+        for (name, head) in [("x.csv.lz4", &[0x04u8, 0x22, 0x4d, 0x18, 0, 0][..]), ("x.csv.zip", b"PK\x03\x04\x14\x00")] {
+            let p = d.path().join(name);
+            std::fs::write(&p, head).unwrap();
+            let e = format!("{:#}", read_all(&p, u64::MAX).unwrap_err());
+            assert!(e.contains("gzip, zstd, bzip2 and xz"), "{name}: {e}");
+            assert!(e.to_lowercase().contains("decompress"), "{name}: {e}");
+        }
+    }
+
+    /// The decompressed size is bounded before it exists: a copy that would
+    /// cross the ceiling is refused naming the setting, and no partial copy
+    /// is left behind.
+    #[test]
+    fn a_decompressed_file_over_the_ceiling_is_refused_and_leaves_nothing() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().join("big.csv.gz");
+        let text: Vec<u8> = std::iter::repeat_n(b"0123456789\n", 1000).flatten().copied().collect();
+        std::fs::write(&p, gz_of(&text)).unwrap();
+        let e = format!("{:#}", materialize(&p, 5_000).unwrap_err());
+        assert!(e.contains("max_decompressed_bytes"), "{e}");
+        assert!(e.contains("5"), "the ceiling is named: {e}");
+        let partial = materialize(&p, u64::MAX).unwrap().into_owned();
+        assert_eq!(std::fs::read(&partial).unwrap().len(), text.len(), "a later, allowed read gets the whole file");
     }
 
     /// Real bzip2 is `BZh`, a block-size digit, then the block magic. Text
@@ -304,11 +523,12 @@ mod tests {
     }
 
     #[test]
-    fn a_real_bzip2_head_is_refused() {
+    fn a_real_bzip2_head_is_recognised_as_bzip2() {
         // `bz2.compress(b"region,betrag\nZH,10\n")[:12]`
         let head = [66u8, 90, 104, 57, 49, 65, 89, 38, 83, 89, 219, 58];
-        let e = format!("{:#}", refuse_if_compressed(Path::new("x.csv"), &head).unwrap_err());
-        assert!(e.contains("bzip2-compressed"), "{e}");
+        assert_eq!(compression_of(&head), Some(Compression::Bzip2));
+        assert!(refuse_if_compressed(Path::new("x.csv"), &head).is_ok(), "readable, so not refused");
+        assert_eq!(compression_of(b"BZh9 is a nice bus\n"), None);
     }
 
     /// Nothing that reaches a text reader can be a workbook — those are
@@ -326,7 +546,7 @@ mod tests {
     #[test]
     fn small_file_is_all_head_no_tail() {
         let (_d, p) = tmpfile(b"hello world");
-        let ht = read_head_tail(&p, 1024, 256).unwrap();
+        let ht = read_head_tail(&p, 1024, 256, u64::MAX).unwrap();
         assert_eq!(ht.head, b"hello world");
         assert!(ht.tail.is_none());
         assert_eq!(ht.total, 11);
@@ -337,7 +557,7 @@ mod tests {
     fn large_file_reads_only_the_ends() {
         let body: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
         let (_d, p) = tmpfile(&body);
-        let ht = read_head_tail(&p, 1000, 100).unwrap();
+        let ht = read_head_tail(&p, 1000, 100, u64::MAX).unwrap();
         assert_eq!(ht.head.len(), 1000);
         assert_eq!(ht.head[..], body[..1000]);
         let tail = ht.tail.unwrap();
@@ -352,7 +572,7 @@ mod tests {
         // The size band where the end of the file used to be invisible.
         let body: Vec<u8> = (0..1500u32).map(|i| b'a' + (i % 26) as u8).collect();
         let (_d, p) = tmpfile(&body);
-        let ht = read_head_tail(&p, 1000, 400).unwrap();
+        let ht = read_head_tail(&p, 1000, 400, u64::MAX).unwrap();
         let tail = ht.tail.expect("a file longer than the head must expose its end");
         assert_eq!(tail.last(), body.last(), "the tail must reach the last byte");
     }
@@ -361,7 +581,7 @@ mod tests {
     fn head_and_tail_never_overlap() {
         let body: Vec<u8> = vec![b'x'; 1200];
         let (_d, p) = tmpfile(&body);
-        let ht = read_head_tail(&p, 1000, 400).unwrap();
+        let ht = read_head_tail(&p, 1000, 400, u64::MAX).unwrap();
         assert_eq!(ht.head.len(), 1000);
         assert_eq!(ht.tail.map(|t| t.len()), Some(200), "tail must start where the head ended");
     }
@@ -369,7 +589,7 @@ mod tests {
     #[test]
     fn empty_file() {
         let (_d, p) = tmpfile(b"");
-        let ht = read_head_tail(&p, 1024, 256).unwrap();
+        let ht = read_head_tail(&p, 1024, 256, u64::MAX).unwrap();
         assert!(ht.head.is_empty());
         assert!(ht.tail.is_none());
         assert_eq!(ht.total, 0);

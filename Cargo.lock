@@ -3742,6 +3742,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "blake3",
+ "bzip2",
  "calamine",
  "chardetng",
  "chrono",
@@ -3751,6 +3752,7 @@ dependencies = [
  "datafusion",
  "dirs",
  "encoding_rs",
+ "flate2",
  "futures",
  "quick-xml",
  "regex",
@@ -3761,7 +3763,9 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "xz2",
  "zip",
+ "zstd",
 ]
 
 [[package]]

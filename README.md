@@ -1167,6 +1167,15 @@ roughly 6 GB.
 memory cost that follows the cell count — it holds neither the rows nor the
 decoded text. `max_file_bytes` is normally what stops a long run first.
 
+A compressed input — gzip, zstd, bzip2 or xz, recognised by its bytes, so a
+`.csv` that is really gzip counts — is decompressed once per run into a
+temporary copy that every reader then uses, and `max_decompressed_bytes`
+(default: `max_file_bytes`) refuses one that would grow past it before the
+copy exists. The sidecar fingerprints the compressed file, since that is what
+arrives again next month, and records the format. lz4 and zip archives are
+refused by name: a zip of several CSVs is a container of members, not a
+compressed file.
+
 For spreadsheets the limits are checked against what the file **declares**,
 before its grid is allocated. They have to be: a spreadsheet's size is a
 claim rather than a consequence, so 899 bytes of `.ods` can ask for a

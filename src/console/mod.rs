@@ -1205,6 +1205,8 @@ pub fn raw_head(path: &Path, limits: crate::config::Limits, sheet: Option<&str>)
         anyhow::bail!("--sheet {want:?} applies to workbooks; {} is not one", path.display());
     }
     use std::io::Read;
+    let materialized = crate::fileio::materialize(path, limits.max_decompressed_bytes)?;
+    let path: &Path = materialized.as_ref();
     let mut f = std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let mut buf = Vec::with_capacity(HEAD_BYTES);
     f.by_ref().take(HEAD_BYTES as u64).read_to_end(&mut buf)?;

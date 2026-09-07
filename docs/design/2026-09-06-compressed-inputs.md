@@ -90,7 +90,14 @@ question nobody asked, which is the same failure in different clothes.
 
 ## 4. Recommendation
 
-**C now, B when someone actually has the pile.**
+**C now, B when someone actually has the pile.** *B landed on 2026-09-07:*
+`fileio::materialize` decompresses gzip, zstd, bzip2 and xz (the decoders the
+tree already carried) into a process-lifetime cache keyed by the compressed
+bytes' blake3, bounded by `[limits].max_decompressed_bytes` before the copy
+exists; every byte reader and the one workbook opener go through it, the
+sidecar fingerprints the compressed bytes and records the format. lz4 and zip
+stay refused. The cache is cleared at each binary's exit; a crash leaves it to
+the OS. What follows is the reasoning as it stood before that.
 
 C landed with this page. `fileio::refuse_if_compressed` matches gzip, zstd,
 bzip2 (magic *and* block header, since `BZh` alone is printable text), xz, lz4

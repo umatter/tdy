@@ -1960,31 +1960,33 @@ fn a_headerless_file_with_nothing_discarded_stays_confident() {
     );
 }
 
-/// A compressed file read as text used to *succeed*: one column of mojibake,
-/// produced confidently, with a real confidence score attached. Not a wrong
-/// value in the strict sense — the bytes really are those bytes — but a
-/// confident answer to a question nobody asked, which is the same failure
-/// wearing different clothes.
-///
+/// A compressed file read as text used to *succeed* as one column of
+/// mojibake, then was refused, and now is read as its contents: the copy is
+/// materialised once per process, the sidecar fingerprints the *compressed*
+/// bytes (those are what arrive again next month) and records the format.
 /// Checked by magic bytes rather than by extension, because a `.csv` that is
-/// really gzip is the case that produced the garbage and it does not announce
-/// itself in its name.
+/// really gzip is the case that produced the garbage in the first place.
 #[test]
-fn a_compressed_file_is_refused_rather_than_read_as_mojibake() {
+fn a_gzip_file_named_csv_is_read_as_its_contents_and_fingerprinted_as_gzip() {
     let dir = TempDir::new().unwrap();
-    // A real gzip member of `region,betrag\nZH,10\n` (mtime 0): the trailer
-    // is a genuine CRC32 and ISIZE, so gunzip would accept it too.
+    // A real gzip member of `region,betrag\nZH,10\n` (mtime 0).
     let gz: Vec<u8> = vec![
         31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 43, 74, 77, 207, 204, 207, 211, 73, 74, 45, 41, 74, 76,
         231, 138, 242, 208, 49, 52, 224, 2, 0, 129, 245, 9, 214, 20, 0, 0, 0,
     ];
-    // Deliberately named `.csv`: the extension lies, the bytes do not.
     let f = write_bytes(&dir, "looks_like.csv", &gz);
-
-    let e = format!("{:#}", sniff_via_cli(&f).expect_err("a gzip stream is not a csv"));
-    assert!(e.contains("gzip-compressed"), "the format must be named: {e}");
-    assert!(e.contains("gunzip"), "and the fix: {e}");
-    assert!(!f.with_extension("csv.tdy.toml").exists(), "and no sidecar may be left behind");
+    sniff_via_cli(&f).unwrap_or_else(|e| panic!("a gzip csv is a csv: {e}"));
+    let sc = std::fs::read_to_string(dir.path().join("looks_like.csv.tdy.toml")).unwrap();
+    assert!(sc.contains("compressed = \"gzip\""), "the fingerprint records the format:\n{sc}");
+    assert!(sc.contains("bytes = 40"), "and the compressed size, not the inner one:\n{sc}");
+    assert!(sc.contains("name = \"region\"") && sc.contains("name = \"betrag\""), "{sc}");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["query", "--frozen", &format!("SELECT betrag FROM messy('{}')", f.display())])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("10"), "{text}");
 }
 
 /// The most common Windows export is a zip, and a zip head can never be a

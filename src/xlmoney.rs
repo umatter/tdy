@@ -49,7 +49,10 @@ pub(crate) fn money_columns(path: &Path, sheet_name: &str) -> HashSet<usize> {
 }
 
 fn money_columns_inner(path: &Path, sheet_name: &str) -> Option<HashSet<usize>> {
-    let f = File::open(path).ok()?;
+    // By now the workbook has been materialised by the sniff that called
+    // this; a cache hit costs a stat. The default ceiling bounds a cold path.
+    let materialized = crate::fileio::materialize(path, crate::config::Limits::default().max_decompressed_bytes).ok()?;
+    let f = File::open(materialized.as_ref()).ok()?;
     let mut zip = zip::ZipArchive::new(BufReader::new(f)).ok()?;
 
     let styles_xml = read_part(&mut zip, "xl/styles.xml")?;
