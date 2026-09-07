@@ -346,7 +346,9 @@ a command like any other, not a special case carved out for the review gate. `ev
 (`src/evidence.rs`); `tdy-tui` no longer re-exports it — every caller inside `tdy-tui` reaches
 it as `tdy::evidence` directly.
 
-The console's raw-mode line editor (`src/console/line.rs`, `src/console/repl.rs`) needs
+The console's raw-mode line editor (`src/console/line.rs`, `src/console/repl.rs`) recalls
+history by prefix when something is typed (fish's Up: `.sn` then Up skips every `.fit`;
+a prefix nothing starts with leaves the draft alone) and plainly when nothing is. It needs
 `crossterm` for key events, so `crossterm` is a **direct** dependency of `tdy` itself — root
 `Cargo.toml`, not only `tdy-tui/Cargo.toml`. `ratatui` alone stays `tdy-tui`-only, and that
 is what the root `Cargo.toml`'s workspace comment now says.
