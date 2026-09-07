@@ -396,10 +396,11 @@ an extraction one).
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
 2,290 files each with one isolated deviation from RFC 4180) through Pollock's
-own metrics, so the numbers compare with the paper. Last run: 2,287 of 2,290
-load, record F1 0.991 (tying duckdbparse), cell precision 0.996 against recall
-0.942 — tdy emits more cells than the source and almost never a wrong one, which
-is `PadNulls` widening rather than dropping. It found two defects nothing else
+own metrics, so the numbers compare with the paper. Last run (2026-09-07, after the
+compression guard and the long-form change; identical to the run before them):
+2,287 of 2,290 load, record F1 0.991 (tying duckdbparse), cell precision 0.996
+against recall 0.942 — tdy emits more cells than the source and almost never a
+wrong one, which is `PadNulls` widening rather than dropping. It found two defects nothing else
 had, so re-run it after touching extraction or framing.
 
 ## Real data
