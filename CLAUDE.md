@@ -412,7 +412,10 @@ caller names both rather than picking one; `EntryStatus::Sheets(n)` is what `.ls
 any sheet sidecar is; the workbench's fallback remedy excludes the sheet member by name, not the
 whole workbook; and a pile with sheet members says "member(s)" where a plain pile says "file(s)".
 `tests/dataset.rs::acceptance_is_per_sheet_member` is the end-to-end proof that `--accept` takes
-one sheet's judgement and leaves its sibling alone.
+one sheet's judgement and leaves its sibling alone. **Swept against the corpus**
+(`scripts/sweep_workbooks.py`, 2026-09-07): of 34 multi-sheet xlsx/xlsm workbooks, 18 stay a
+plain member and 16 expand into sheet members — the sixteen the draft slice had refused as
+`AmbiguousFrame` — with no refusal, error or timeout. Re-run it after touching discovery.
 
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
