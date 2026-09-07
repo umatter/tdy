@@ -137,7 +137,7 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
             Some(r) => crate::fileio::confine(&dir.join(&m.path), r).with_context(|| {
                 format!(
                     "{} is a member of `{}` but does not resolve inside the served root",
-                    m.path, target.name
+                    m.name(), target.name
                 )
             })?,
             None => dir.join(&m.path),
