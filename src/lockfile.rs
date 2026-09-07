@@ -197,12 +197,16 @@ pub enum Drift {
     Added(String),
     /// A file is in the lock and no longer on disk.
     Removed(String),
-    /// A member's contents changed since it was fitted.
+    /// A file's contents changed since it was fitted — one drift for the
+    /// file, covering every member of it.
     Changed(String),
     /// The declaration itself changed, so every member's proof is void.
     TargetChanged,
-    /// The same file is listed twice.
+    /// The same member is listed twice.
     Duplicated(String),
+    /// One file is listed both whole and by sheet, so its rows would be read
+    /// twice — once entire, once per sheet.
+    MixedGranularity(String),
     /// The data is unchanged but its spec was edited after it was fitted.
     SpecEdited(String),
 }
@@ -242,6 +246,10 @@ impl Drift {
             Drift::Duplicated(p) => {
                 format!("{p} is listed twice in the lock — run `tdy fit` to rebuild it")
             }
+            Drift::MixedGranularity(p) => format!(
+                "{p} is listed both as a whole file and by sheet, so its rows would be read \
+                 twice — run `tdy fit` to rebuild it"
+            ),
             Drift::SpecEdited(p) => format!(
                 "{p}'s spec was edited after it was accepted — the acceptance was given to \
                  the plan as it read then. Re-accept it:  tdy fit <TARGET> --accept {p}"
@@ -307,6 +315,13 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
         }
     }
     for (path, members) in by_file {
+        // A whole-file member covers every sheet the file has, so listing it
+        // beside a sheet member of the same file reads those rows twice and
+        // sums to a plausible wrong number. `fit` cannot produce this — a
+        // file is expanded or it is not — but a lock is a text file.
+        if members.len() > 1 && members.iter().any(|m| m.sheet.is_none()) {
+            out.push(Drift::MixedGranularity(path.to_string()));
+        }
         let p = dir.join(path);
         if !p.exists() {
             out.push(Drift::Removed(path.to_string()));
@@ -517,6 +532,42 @@ mod tests {
         assert_eq!(back.members[1].name(), "b.csv");
         assert!(back.member("a.xlsx", Some("Q1")).is_some());
         assert!(back.member("a.xlsx", None).is_none(), "the plain member of that file does not exist");
+    }
+
+    /// A file listed both whole and by sheet would be read twice — once
+    /// entire, once per sheet — and the sum would be plausible.
+    #[test]
+    fn a_file_listed_both_whole_and_by_sheet_is_drift() {
+        let d = tempfile::TempDir::new().unwrap();
+        let book = d.path().join("book.xlsx");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/sheet_frames_two_fit.xlsx"),
+            &book,
+        )
+        .unwrap();
+        let t = d.path().join("t.tdy.sql");
+        std::fs::write(&t, "CREATE TABLE t (region TEXT) WITH (files = '*.xlsx');").unwrap();
+        let target = crate::target::Target::load(&t).unwrap();
+        let (hash, bytes) = crate::sidecar::hash_file(&book).unwrap();
+        let fresh = |sheet: Option<&str>| Member {
+            blake3: hash.clone(),
+            bytes,
+            ..m("book.xlsx", sheet)
+        };
+        let lock = Lock {
+            lock_version: LOCK_VERSION,
+            target: "t".into(),
+            target_hash: target_hash(&target),
+            tool_version: "0".into(),
+            created_at: "now".into(),
+            members: vec![fresh(None), fresh(Some("Q1"))],
+        };
+        let d1 = drift(&lock, &target, &t).unwrap();
+        assert!(
+            matches!(&d1[..], [Drift::MixedGranularity(n)] if n == "book.xlsx"),
+            "{d1:?}"
+        );
+        assert!(d1[0].message().contains("whole") && d1[0].message().contains("sheet"), "{}", d1[0].message());
     }
 
     /// Two sheets of one workbook are two members; the same sheet twice is a
