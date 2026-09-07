@@ -738,7 +738,15 @@ And then it still does not run:
 That is the sharpest line in the design. Everything the planner does is
 mechanically checked, and none of it can establish that a column of integers is
 *units* rather than *cents* — so a person says so, once, and the acceptance is
-recorded against that file's bytes and that declaration. Re-fitting an untouched
+recorded against that file's bytes and that declaration.
+
+The pile can raise the same question on its own. With three members or more,
+`tdy fit` compares each member's typical value per numeric column (the median
+of a bounded read) with the pile's, and a member ten times above or below
+waits on a person too — `` `amount`: this member's typical value (median
+130000) is 100× the pile's (median 1150) — a different unit? `` — accepted the
+same way, by name. A busy month is not ten times a normal one; a month in cents
+is a hundred. Re-fitting an untouched
 dataset does not ask again; editing the file expires the acceptance, because it
 was about those bytes.
 

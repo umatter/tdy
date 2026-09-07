@@ -823,7 +823,18 @@ impl Session {
                     crate::sidecar::SidecarStatus::Fresh(sc) => sc,
                     _ => bail!("{member} has no fresh sidecar; run `.fit {target}` first"),
                 };
-                let reasons = crate::fit::review_reasons(&sc.spec);
+                // A reason can live in the spec (a shift, a constant, a
+                // model's frame) or in the lock alone (a pile-level fact,
+                // such as a member out of scale with its siblings). Both
+                // are what a person is asked to accept.
+                let mut reasons = crate::fit::review_reasons(&sc.spec);
+                if let Some(r) = lock.as_ref().and_then(|l| l.member(&mref.path, mref.sheet.as_deref())).and_then(|m| m.review.clone()) {
+                    for part in r.split("; ") {
+                        if !reasons.iter().any(|x| x == part) {
+                            reasons.push(part.to_string());
+                        }
+                    }
+                }
                 if reasons.is_empty() {
                     bail!("nothing to accept: {member} has no judgement waiting on review");
                 }

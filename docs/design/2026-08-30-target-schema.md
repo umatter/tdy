@@ -533,9 +533,15 @@ exists and is tested before the model is allowed near it.
    from the prefix of those files is a plan `fit` calls fittable and the query
    then dies on. The O(total bytes) objection stands and `'head'` is its answer;
    what it does not justify is making the unsafe reading the default.
-5. **Magnitude threshold.** 10× catches the Rappen class and nothing smaller. A
-   partial final month will produce false positives, and the remedy is a
-   per-member acceptance rather than a global switch.
+5. ~~**Magnitude threshold.**~~ **Settled (2026-09-07): built, as a review reason.**
+   `src/magnitude.rs`: after every member of a pile fits, and only with three or
+   more members, each member's *median* absolute value per numeric column (a
+   bounded typed read of its head) is compared with the median of those
+   medians; a member 10× above or below waits on a person, the reason naming the
+   column, both medians and the factor, and `--accept` records the answer on the
+   same terms as a shift. Medians rather than totals are what make a partial
+   final month a non-event. The reason lives in the lock, not the spec — it is a
+   fact about the pile — and the console's `.accept` reads it there.
 6. ~~**Lock merge conflicts.**~~ **Settled: one file, conflicts resolved by
    regeneration.** The lock is derived state — every byte of it is a function of
    the target and the members on disk — so the resolution for *any* merge
