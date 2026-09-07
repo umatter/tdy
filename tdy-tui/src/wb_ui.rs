@@ -23,7 +23,7 @@ use tdy::report::{MemberReport, MemberStatus, PileReport};
 
 use crate::mark;
 use crate::remedy::{Edit, Remedy};
-use crate::workbench::{Context, Focus, Workbench};
+use crate::workbench::{needs_attention, Context, Focus, PileFilter, Workbench};
 
 const DIM: Color = Color::DarkGray;
 /// The palette, by meaning rather than by screen: what fits is green, a
@@ -105,6 +105,8 @@ const HELP_KEYS: &[(Scope, &str, &str)] = &[
     (Scope::File, "s", "sniff this file"),
     (Scope::Pile, "↑ / ↓", "move the selected member"),
     (Scope::Pile, "Enter", "open the selected member"),
+    (Scope::Pile, "g / G", "next / previous member that needs attention"),
+    (Scope::Pile, "/", "show problems only / show all"),
     (Scope::Pile, "f", "re-fit the pile (for real)"),
     (Scope::Pile, "t", "edit the target"),
     (Scope::Pile, "Esc", "close the pile"),
@@ -572,10 +574,22 @@ fn browser_row(name: &str, status: String, status_style: Style, width: usize) ->
 fn context_title(ctx: &Context) -> String {
     match ctx {
         Context::Empty => "main".to_string(),
-        Context::File { path, .. } => path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.display().to_string()),
+        Context::File { path, raw, .. } => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            // A workbook with several sheets says which one is on show:
+            // `[`/`]` page the grid, and a title that does not move with
+            // them would caption every sheet as the first.
+            match (&raw.grid_sheet, raw.sheets.len()) {
+                (Some(sheet), n) if n > 1 => {
+                    let i = raw.sheets.iter().position(|(s, ..)| s == sheet).map(|i| i + 1).unwrap_or(1);
+                    format!("{name} · sheet {i}/{n} \"{sheet}\"")
+                }
+                _ => name,
+            }
+        }
         Context::Query(_) => "result".to_string(),
         Context::Pile { target, .. } => target
             .file_name()
@@ -636,7 +650,7 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench, seams: Seams) {
             draw_table(f, inner, t, w.main_scroll);
         }
         Context::Pile { report, selected, .. } => {
-            draw_pile(f, area, block, report, *selected, w.main_scroll);
+            draw_pile(f, area, block, report, *selected, w.main_scroll, w.pile_filter);
         }
         Context::Member { report, member, .. } => {
             match report.members.get(*member) {
@@ -732,6 +746,7 @@ fn draw_pile(
     report: &PileReport,
     selected: usize,
     scroll: usize,
+    filter: PileFilter,
 ) {
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -739,7 +754,7 @@ fn draw_pile(
         return;
     }
 
-    let head = pile_head_lines(report);
+    let head = pile_head_lines(report, filter);
     let header_rows = head.len();
     let head_visible: Vec<Line<'static>> = head
         .into_iter()
@@ -781,10 +796,15 @@ fn draw_pile(
     header.extend(report.columns.iter().map(|c| Cell::from(c.name.clone())));
     header.push(Cell::from("detail"));
 
-    let rows: Vec<Row> = report
+    let shown: Vec<(usize, &MemberReport)> = report
         .members
         .iter()
         .enumerate()
+        .filter(|(_, m)| filter == PileFilter::All || needs_attention(m))
+        .collect();
+    let total = shown.len();
+    let rows: Vec<Row> = shown
+        .into_iter()
         .skip(row_offset)
         .map(|(i, m)| {
             let marker = if i == selected { "▸ " } else { "  " };
@@ -817,7 +837,6 @@ fn draw_pile(
     // A scrollbar only when there is something to scroll: rows beyond the
     // pane, or rows scrolled off its top.
     let visible = table_area.height.saturating_sub(1) as usize;
-    let total = report.members.len();
     if total > visible || row_offset > 0 {
         let mut state =
             ScrollbarState::new(total.saturating_sub(visible).max(1)).position(row_offset);
@@ -888,7 +907,7 @@ fn clip_line(line: Line<'static>, width: usize) -> Line<'static> {
 
 /// The lines above the pile table: coloured counts and lock state, what the
 /// target declares, and any drift against the lock as it stood.
-fn pile_head_lines(report: &PileReport) -> Vec<Line<'static>> {
+fn pile_head_lines(report: &PileReport, filter: PileFilter) -> Vec<Line<'static>> {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let sep = || Span::styled(" · ", Style::new().fg(DIM));
     let mut counts: Vec<Span<'static>> = vec![
@@ -948,6 +967,13 @@ fn pile_head_lines(report: &PileReport) -> Vec<Line<'static>> {
             Style::new().fg(WARN),
         ));
     }
+    if filter == PileFilter::Problems {
+        let n = report.members.iter().filter(|m| needs_attention(m)).count();
+        lines.push(Line::styled(
+            format!("showing problems only ({n} of {}) · / shows all", report.members.len()),
+            Style::new().fg(WARN),
+        ));
+    }
     lines.push(Line::raw(""));
     lines
 }
@@ -955,8 +981,8 @@ fn pile_head_lines(report: &PileReport) -> Vec<Line<'static>> {
 /// How many lines `draw_pile` puts above the first member row: its head
 /// lines plus the table's own header row. `Workbench::follow_pile_selection`
 /// reads this so the selection it keeps on screen is the one drawn.
-pub fn pile_header_rows(report: &PileReport) -> usize {
-    pile_head_lines(report).len() + 1
+pub fn pile_header_rows(report: &PileReport, filter: PileFilter) -> usize {
+    pile_head_lines(report, filter).len() + 1
 }
 
 /// The palette applied to a member's status word.
@@ -1352,7 +1378,7 @@ fn draw_file_with_spec(
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
     draw_raw_head(f, left, raw, scroll, &Highlights::default());
-    f.render_widget(Paragraph::new(spec_lines(spec, w.confidence_threshold)), right);
+    f.render_widget(Paragraph::new(spec_lines(spec, w.confidence_threshold, raw)), right);
 
     if let (Some(bottom), Some(t)) = (bottom, preview) {
         draw_table(f, bottom, t, 0);
@@ -1363,7 +1389,7 @@ fn draw_file_with_spec(
 /// configured `confidence_threshold`, the same number the engine escalates
 /// to the model below), each column as `name ← "source" : TYPE`, then the
 /// notes as a decisions list.
-fn spec_lines(spec: &SpecSummary, threshold: f32) -> Vec<Line<'static>> {
+fn spec_lines(spec: &SpecSummary, threshold: f32, raw: &RawHead) -> Vec<Line<'static>> {
     let mut lines = vec![Line::raw(format!("method: {}", spec.method))];
     lines.push(match spec.confidence {
         Some(c) => {
@@ -1399,9 +1425,53 @@ fn spec_lines(spec: &SpecSummary, threshold: f32) -> Vec<Line<'static>> {
         lines.push(Line::raw(""));
         for note in &spec.notes {
             lines.push(Line::raw(format!("• {note}")));
+            // A decision about a column, beside the values that drove it:
+            // the first few of that column from the head on the left, so
+            // "read as decimal(2)" sits next to `1'100.00`.
+            let examples = decision_examples(note, spec, raw);
+            if !examples.is_empty() {
+                lines.push(Line::styled(
+                    format!("  e.g. {}", examples.join(" · ")),
+                    Style::new().fg(DIM),
+                ));
+            }
         }
     }
     lines
+}
+
+/// The first few raw values of the column a note is about (`column
+/// \`name\`: …`), read from the raw head: a workbook's grid by header cell,
+/// a text file's lines by the extraction's delimiter. Empty when the note
+/// is not about a column, or the column cannot be found in the head —
+/// never a guess at which column was meant.
+fn decision_examples(note: &str, spec: &SpecSummary, raw: &RawHead) -> Vec<String> {
+    let Some(rest) = note.strip_prefix("column `") else { return Vec::new() };
+    let Some(end) = rest.find('`') else { return Vec::new() };
+    let name = &rest[..end];
+    let Some((_, source, _)) = spec.columns.iter().find(|(n, ..)| n == name) else { return Vec::new() };
+
+    let (header, rows): (Vec<String>, Vec<Vec<String>>) = if !raw.grid.is_empty() {
+        (raw.grid[0].clone(), raw.grid[1..].to_vec())
+    } else {
+        let delim: Option<char> = serde_json::from_str::<serde_json::Value>(&spec.extraction)
+            .ok()
+            .and_then(|v| v.get("delimiter").and_then(|d| d.as_str()).and_then(|d| d.chars().next()));
+        let Some(delim) = delim else { return Vec::new() };
+        let split = |l: &str| -> Vec<String> {
+            l.split(delim).map(|c| c.trim().trim_matches('"').to_string()).collect()
+        };
+        let mut it = raw.lines.iter();
+        let Some(h) = it.next() else { return Vec::new() };
+        (split(h), it.map(|l| split(l)).collect())
+    };
+    let Some(idx) = header.iter().position(|h| h == source) else { return Vec::new() };
+    rows.iter()
+        .filter_map(|r| r.get(idx))
+        .filter(|v| !v.trim().is_empty())
+        .take(3)
+        .cloned()
+        .collect()
 }
 
 /// A `Table`, drawn as one: a bold header (with the column types beneath
@@ -1571,7 +1641,7 @@ fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
         // it — consistent with `Console`/`Browser`/`File` above, none of
         // which drop it either.
         Focus::Main => match &w.context {
-            Context::Pile { .. } => "↑↓ member · enter open · f refit · t edit target · ^Q quit",
+            Context::Pile { .. } => "↑↓ member · g next problem · / filter · enter open · f refit · t edit target · ^Q quit",
             Context::Member { .. } => "↑↓ remedy · enter/1-9 stage · a accept · e edit · Esc back · ^Q quit",
             Context::Evidence { .. } => "a accept · Esc close · PgUp/Dn scroll · ^Q quit",
             Context::File { raw, .. } if raw.sheets.len() > 1 => {

@@ -1762,3 +1762,97 @@ fn a_long_root_yields_to_the_target_and_backend_in_the_header() {
     assert!(!header.contains(&home), "HOME reads as ~: {header}");
     let _ = std::fs::remove_dir_all(std::path::Path::new(&home).join(".cache").join("tdy-render-test"));
 }
+
+// ---------------------------------------------------------------------------
+// Slice 2b: a filtered pile, the sheet on show, decisions with their values.
+// ---------------------------------------------------------------------------
+
+/// A filtered pile draws only the members that need attention, and says
+/// that it is filtered and how to get everything back.
+#[test]
+fn a_filtered_pile_shows_only_problem_rows_and_says_so() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    fitted(&mut w, &d, pile_report(vec![
+        member("2025-01.csv", MemberStatus::Fits),
+        gap_member("2025-02.csv"),
+        member("2025-03.csv", MemberStatus::NeedsReview),
+    ]));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Char('/')));
+    let text = screen(&mut w, 120, 30).join("\n");
+    let main: String = text.lines().filter(|l| !l.contains("│▸ 2025-01") && !l.starts_with("│  2025-01")).collect::<Vec<_>>().join("\n");
+    assert!(main.contains("2025-02.csv") && main.contains("2025-03.csv"), "{text}");
+    assert!(!main.contains("  2025-01.csv   fits"), "fits rows are hidden:\n{text}");
+    assert!(text.contains("problems only"), "{text}");
+    assert!(text.contains("/ shows all") || text.contains("/ all"), "{text}");
+}
+
+/// A workbook's pane title names the sheet on show and how many there are.
+#[test]
+fn a_workbook_file_title_names_the_sheet_shown() {
+    use tdy::console::RawHead;
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.context = tdy_tui::workbench::Context::File {
+        path: d.path().join("book.xlsx"),
+        raw: RawHead {
+            lines: vec![],
+            truncated: false,
+            sheets: vec![("Umsatz".into(), 7, 3), ("Legende".into(), 4, 2)],
+            grid: vec![vec!["Datum".into(), "Betrag".into()]],
+            grid_sheet: Some("Umsatz".into()),
+        },
+        spec: None,
+        preview: None,
+        stale: false,
+    };
+    let text = screen(&mut w, 120, 30).join("\n");
+    assert!(text.contains("book.xlsx · sheet 1/2 \"Umsatz\""), "{text}");
+}
+
+/// A column decision in the spec summary shows the raw values that drove
+/// it — the first few of that column, from the file's own head beside it.
+#[test]
+fn a_column_decision_shows_the_values_that_drove_it() {
+    use tdy::console::{Outcome, Payload, RawHead, SpecSummary};
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let raw = RawHead {
+        lines: vec![
+            "Datum;Region;Betrag".into(),
+            "31.01.2025;Ost;1'100.00".into(),
+            "31.01.2025;West;1'110.00".into(),
+            "31.01.2025;Nord;1'120.00".into(),
+            "31.01.2025;Sued;1'130.00".into(),
+        ],
+        truncated: false,
+        sheets: vec![],
+        grid: vec![],
+        grid_sheet: None,
+    };
+    let spec = SpecSummary {
+        method: "heuristic".into(),
+        confidence: Some(0.95),
+        extraction: r#"{"format":"delimited","delimiter":";","quote":"\"","ragged":"pad_nulls"}"#.into(),
+        transforms: vec![],
+        columns: vec![
+            ("datum".into(), "Datum".into(), "DATE (%d.%m.%Y)".into()),
+            ("betrag".into(), "Betrag".into(), "DECIMAL(38,2)".into()),
+        ],
+        notes: vec!["column `betrag`: read as decimal(2) — scale inferred from the first 500 rows".into()],
+    };
+    w.begin(".show 2025-01.csv");
+    w.apply(
+        Outcome { echo: ".show 2025-01.csv".into(), text: String::new(), ok: true, payload: Payload::Shown { path: d.path().join("2025-01.csv"), raw, spec: Some(spec), stale: false } },
+        d.path(),
+    );
+    let lines = screen(&mut w, 130, 34);
+    let ex = lines.iter().find(|l| l.contains("1'100.00") && l.contains("1'110.00") && !l.contains("Datum;")).cloned();
+    assert!(ex.is_some(), "the note's driving values on one line:\n{}", lines.join("\n"));
+    let text = lines.join("\n");
+    let note_at = text.find("column `betrag`").expect("the note");
+    let ex_at = text.find(ex.unwrap().trim()).unwrap();
+    assert!(ex_at > note_at, "values sit under the note");
+}
