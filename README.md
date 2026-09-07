@@ -449,8 +449,10 @@ tdy> .output totals.parquet
 tdy> SELECT region, sum(amount) FROM dataset('sales.tdy.sql') GROUP BY 1;
 ```
 
-`.help` lists them. Globs are expanded by the console itself; every path is
-confined to the directory the console was started in. The text a command
+`.help` lists them. Up recalls history, and with something already typed it
+recalls only the lines that start with it — `.sn` then Up finds the last
+`.sniff`, past every `.fit` in between. Globs are expanded by the console
+itself; every path is confined to the directory the console was started in. The text a command
 prints is the same text the subcommand prints — one function produces both,
 and a test holds them equal — so nothing you learn in one place is wrong in
 the other.

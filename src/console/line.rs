@@ -132,21 +132,32 @@ impl LineEditor {
         self.stash.clear();
     }
 
+    /// Walk the history by one step. With something typed, only the lines
+    /// that start with it are visited (fish's and zsh's Up), so `.sn` then
+    /// Up finds the last `.sniff` past every `.fit`; a prefix nothing starts
+    /// with leaves the draft alone. `pos` indexes the full history either
+    /// way — the filter decides which indices are stops.
     fn browse(&mut self, dir: i32) {
         if self.history.is_empty() {
             return;
         }
+        if self.pos.is_none() && dir < 0 {
+            self.stash = self.buf.clone();
+        }
+        let prefix: String = self.stash.iter().collect();
+        let stops = |i: usize| self.history[i].starts_with(&prefix);
         let next = match (self.pos, dir) {
-            (None, -1) => {
-                self.stash = self.buf.clone();
-                Some(self.history.len() - 1)
-            }
+            (None, -1) => (0..self.history.len()).rev().find(|&i| stops(i)),
             (None, _) => None,
-            (Some(0), -1) => Some(0),
-            (Some(i), -1) => Some(i - 1),
-            (Some(i), _) if i + 1 >= self.history.len() => None,
-            (Some(i), _) => Some(i + 1),
+            (Some(i), -1) => (0..i).rev().find(|&j| stops(j)).or(Some(i)),
+            (Some(i), _) => (i + 1..self.history.len()).find(|&j| stops(j)),
         };
+        // A first Up that finds nothing is not a browse: the draft stays
+        // and the stash is dropped so a later Up starts afresh.
+        if self.pos.is_none() && next.is_none() {
+            self.stash.clear();
+            return;
+        }
         self.pos = next;
         self.buf = match next {
             Some(i) => self.history[i].chars().collect(),
@@ -196,7 +207,6 @@ mod tests {
     #[test]
     fn history_recall_keeps_the_draft() {
         let mut ed = LineEditor::new(vec!["first".into(), "second".into()]);
-        type_str(&mut ed, "draft");
         ed.key(k(KeyCode::Up));
         assert_eq!(ed.text().as_str(), "second");
         ed.key(k(KeyCode::Up));
@@ -205,7 +215,39 @@ mod tests {
         assert_eq!(ed.text().as_str(), "first");
         ed.key(k(KeyCode::Down));
         ed.key(k(KeyCode::Down));
-        assert_eq!(ed.text().as_str(), "draft"); // the draft comes back
+        assert_eq!(ed.text().as_str(), ""); // the (empty) draft comes back
+    }
+
+    /// Up with something typed recalls only the lines that start with it,
+    /// the way fish and zsh do: `.sn` then Up finds the last `.sniff`,
+    /// skipping every `.fit` in between, and a prefix nothing starts with
+    /// leaves the draft alone rather than replacing it with an unrelated
+    /// line. Down walks back the same way and ends on the draft.
+    #[test]
+    fn up_with_a_draft_recalls_by_prefix() {
+        let mut ed = LineEditor::new(vec![
+            ".sniff a.csv".into(),
+            ".fit t.tdy.sql".into(),
+            ".sniff b.csv".into(),
+            ".fit t.tdy.sql --dry-run".into(),
+        ]);
+        type_str(&mut ed, ".sn");
+        ed.key(k(KeyCode::Up));
+        assert_eq!(ed.text().as_str(), ".sniff b.csv");
+        ed.key(k(KeyCode::Up));
+        assert_eq!(ed.text().as_str(), ".sniff a.csv");
+        ed.key(k(KeyCode::Up)); // no older `.sn…`: stays
+        assert_eq!(ed.text().as_str(), ".sniff a.csv");
+        ed.key(k(KeyCode::Down));
+        assert_eq!(ed.text().as_str(), ".sniff b.csv");
+        ed.key(k(KeyCode::Down));
+        assert_eq!(ed.text().as_str(), ".sn"); // the draft comes back
+        assert_eq!(ed.cursor(), 3);
+
+        let mut ed = LineEditor::new(vec![".ls".into()]);
+        type_str(&mut ed, "SELECT");
+        ed.key(k(KeyCode::Up));
+        assert_eq!(ed.text().as_str(), "SELECT", "nothing starts with it: the draft stays");
     }
 
     #[test]
