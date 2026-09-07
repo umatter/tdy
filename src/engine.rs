@@ -1560,7 +1560,8 @@ pub(crate) fn build_column_at(
             (ArrowType::Float64, Arc::new(Float64Array::from(out)))
         }
         DType::Decimal { precision, scale } => {
-            let out = parse_all!(i128, |s: &str| parse_decimal(&numeric(s)?, *precision, *scale));
+            let round = p.round.unwrap_or(crate::spec::Rounding::HalfAway);
+            let out = parse_all!(i128, |s: &str| parse_decimal(&numeric(s)?, *precision, *scale, round));
             let arr = Decimal128Array::from(out)
                 .with_precision_and_scale(*precision, *scale)
                 .context("decimal precision/scale")?;
@@ -1668,9 +1669,11 @@ fn parse_bool(s: &str, p: &ValueParsing) -> Result<bool> {
     }
 }
 
-/// Exact decimal parse to a scaled i128 mantissa. Rounds half away from zero
-/// when the value has more fractional digits than `scale`.
-fn parse_decimal(s: &str, precision: u8, scale: i8) -> Result<i128> {
+/// Exact decimal parse to a scaled i128 mantissa. A value with more
+/// fractional digits than `scale` is rounded half away from zero or refused,
+/// as `round` says; trailing zeros are never excess, since dropping them
+/// changes nothing.
+fn parse_decimal(s: &str, precision: u8, scale: i8, round: crate::spec::Rounding) -> Result<i128> {
     let s = s.trim().trim_start_matches('+');
     let (neg, s) = match s.strip_prefix('-') {
         Some(rest) => (true, rest),
@@ -1697,6 +1700,14 @@ fn parse_decimal(s: &str, precision: u8, scale: i8) -> Result<i128> {
     let mut frac = frac_part.to_string();
     let mut round_up = false;
     if frac.len() > scale_u {
+        if round == crate::spec::Rounding::Error && frac[scale_u..].bytes().any(|b| b != b'0') {
+            bail!(
+                "{s:?} has {} fractional digits, more than the declared scale {scale}; rounding is \
+                 a value change, so it has to be declared — `round = \"half_away\"` in the \
+                 sidecar, or OPTIONS(round = 'half_away') on the target column",
+                frac_part.len()
+            );
+        }
         let next = frac.as_bytes()[scale_u] - b'0';
         round_up = next >= 5;
         frac.truncate(scale_u);
@@ -2002,14 +2013,21 @@ mod tests {
 
     #[test]
     fn decimal_rounding_and_bounds() {
-        assert_eq!(parse_decimal("1.005", 12, 2).unwrap(), 101);
-        assert_eq!(parse_decimal("-1.005", 12, 2).unwrap(), -101);
-        assert_eq!(parse_decimal("2.344", 12, 2).unwrap(), 234);
-        assert_eq!(parse_decimal("1200.50", 12, 2).unwrap(), 120050);
-        assert_eq!(parse_decimal("0", 12, 2).unwrap(), 0);
-        assert!(parse_decimal("12345.67", 5, 2).is_err());
-        assert!(parse_decimal("abc", 12, 2).is_err());
-        assert!(parse_decimal("", 12, 2).is_err());
+        use crate::spec::Rounding::{Error, HalfAway};
+        assert_eq!(parse_decimal("1.005", 12, 2, HalfAway).unwrap(), 101);
+        assert_eq!(parse_decimal("-1.005", 12, 2, HalfAway).unwrap(), -101);
+        assert_eq!(parse_decimal("2.344", 12, 2, HalfAway).unwrap(), 234);
+        assert_eq!(parse_decimal("1200.50", 12, 2, HalfAway).unwrap(), 120050);
+        assert_eq!(parse_decimal("0", 12, 2, HalfAway).unwrap(), 0);
+        assert!(parse_decimal("12345.67", 5, 2, HalfAway).is_err());
+        assert!(parse_decimal("abc", 12, 2, HalfAway).is_err());
+        assert!(parse_decimal("", 12, 2, HalfAway).is_err());
+        // Under `error`, excess digits are refused — and trailing zeros are
+        // not excess, since dropping them changes nothing.
+        let e = parse_decimal("1.005", 12, 2, Error).unwrap_err();
+        assert!(format!("{e}").contains("3 fractional digits"), "{e}");
+        assert_eq!(parse_decimal("1.200", 12, 2, Error).unwrap(), 120);
+        assert_eq!(parse_decimal("1.2", 12, 2, Error).unwrap(), 120);
     }
 
     #[test]

@@ -62,6 +62,7 @@ use crate::spec::parse_fixed_offset;
 enum ColOpt {
     Matches(Vec<String>),
     IfMissingNull,
+    RoundHalfAway,
 }
 
 /// A per-column `OPTIONS(...)` entry.
@@ -85,10 +86,22 @@ fn column_option(o: &SqlOption) -> std::result::Result<ColOpt, String> {
                  'null' (a constant value belongs in the sidecar, gated by review)"
             )),
         },
+        "round" => match text.to_ascii_lowercase().as_str() {
+            // One mode. Rounding is a value change, and the declaration is
+            // what authorises it; a second mode would be a second thing to
+            // get wrong about money.
+            "half_away" => Ok(ColOpt::RoundHalfAway),
+            other => Err(format!(
+                "round = {other:?} is not supported; the only declarable rounding is 'half_away' \
+                 (half away from zero). Without it, a value with more fractional digits than \
+                 the scale is refused."
+            )),
+        },
         other => Err(format!(
             "unknown column option `{other}`. Known: matches (header cells this column \
              may be read from), if_missing ('null' to fill the column with nulls in a \
-             file that lacks it)."
+             file that lacks it), round ('half_away' to round a value with more fractional \
+             digits than the scale instead of refusing it)."
         )),
     }
 }
@@ -142,6 +155,12 @@ pub struct TargetColumn {
     /// parse, because a NOT NULL column of nulls could never conform anyway
     /// and the contradiction should be caught in the file that states it.
     pub if_missing_null: bool,
+    /// `round = 'half_away'`: a value with more fractional digits than the
+    /// scale is rounded half away from zero rather than refused. Rounding is
+    /// a value change, so it is declared here — in the reviewed
+    /// declaration, which is what authorises it — and it is part of
+    /// `target_hash` for the same reason `if_missing_null` is.
+    pub round: bool,
 }
 
 /// How a file's header cell is matched to a declared column name.
@@ -294,6 +313,7 @@ impl Target {
             let mut nullable = true;
             let mut matches: Vec<String> = Vec::new();
             let mut if_missing_null = false;
+            let mut round = false;
             for opt in &c.options {
                 match &opt.option {
                     ColumnOption::NotNull => nullable = false,
@@ -303,6 +323,7 @@ impl Target {
                             match column_option(o) {
                                 Ok(ColOpt::Matches(m)) => matches.extend(m),
                                 Ok(ColOpt::IfMissingNull) => if_missing_null = true,
+                                Ok(ColOpt::RoundHalfAway) => round = true,
                                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
                             }
                         }
@@ -323,13 +344,21 @@ impl Target {
                 ));
             }
             match arrow_type_of(&c.data_type) {
-                Ok(dtype) => columns.push(TargetColumn {
-                    name: cname,
-                    matches,
-                    dtype,
-                    nullable,
-                    if_missing_null,
-                }),
+                Ok(dtype) => {
+                    if round && !matches!(dtype, ArrowType::Decimal128(..)) {
+                        errs.push(format!(
+                            "column `{cname}`: round = 'half_away' only applies to a DECIMAL column"
+                        ));
+                    }
+                    columns.push(TargetColumn {
+                        name: cname,
+                        matches,
+                        dtype,
+                        nullable,
+                        if_missing_null,
+                        round,
+                    })
+                }
                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
             }
         }
@@ -1097,5 +1126,23 @@ mod tests {
         assert_eq!(s.field(0).name(), "m");
         assert_eq!(s.field(0).data_type(), &ArrowType::Date32);
         assert_eq!(s.field(1).data_type(), &ArrowType::Decimal128(14, 2));
+    }
+
+    #[test]
+    fn round_is_declarable_on_a_decimal_column_only_and_only_half_away() {
+        let t = Target::parse(
+            "CREATE TABLE t (a DECIMAL(14,2) OPTIONS(round = 'half_away'), b DECIMAL(14,2)) WITH (files = '*.csv')",
+        )
+        .unwrap();
+        assert!(t.columns[0].round);
+        assert!(!t.columns[1].round);
+
+        let e = Target::parse("CREATE TABLE t (a TEXT OPTIONS(round = 'half_away')) WITH (files = '*.csv')")
+            .expect_err("only a decimal rounds");
+        assert!(format!("{e:#}").contains("DECIMAL"), "{e:#}");
+
+        let e = Target::parse("CREATE TABLE t (a DECIMAL(14,2) OPTIONS(round = 'banker')) WITH (files = '*.csv')")
+            .expect_err("one mode");
+        assert!(format!("{e:#}").contains("half_away"), "{e:#}");
     }
 }

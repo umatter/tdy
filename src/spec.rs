@@ -528,6 +528,21 @@ pub enum DType {
 /// Never inferred. The sniffer notices the shape and says so (lowering
 /// confidence), but a convention is a claim about what the file's author meant,
 /// and `(5)` is a footnote marker at least as often as it is minus five.
+/// What a decimal column does with a value that carries more fractional
+/// digits than its scale. Unset means `half_away` — what every sidecar
+/// written before this option existed did, and what a sniffed spec still
+/// does, its note saying so. A fitted column that did not declare rounding
+/// gets `error`, so a value the probe never saw cannot round silently: the
+/// whole-file verification refuses it, naming the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Rounding {
+    /// Round half away from zero (1.005 → 1.01, -1.005 → -1.01).
+    HalfAway,
+    /// Refuse the value, naming the row.
+    Error,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NegativeStyle {
@@ -595,6 +610,9 @@ pub struct ValueParsing {
     /// separators then see an ordinary number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub negative: Option<NegativeStyle>,
+    /// See [`Rounding`]. Only meaningful on a `decimal` column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<Rounding>,
     /// Read this column as an integer count since 1970 in the given unit.
     ///
     /// Only on a `date` or `timestamp` column, and only alongside
@@ -714,6 +732,13 @@ impl ParseSpec {
             // Moving a decimal point means nothing outside a number, and a
             // shift big enough to be a typo is more likely one than a
             // deliberate 40-place move.
+            if c.parse.round.is_some() && !matches!(c.dtype, DType::Decimal { .. }) {
+                errs.push(format!(
+                    "column `{}`: `round` only applies to a decimal column — this one is {}",
+                    c.name,
+                    crate::commands::describe_dtype(&c.dtype)
+                ));
+            }
             if let Some(shift) = c.parse.decimal_shift {
                 if !matches!(c.dtype, DType::Decimal { .. } | DType::Float64 | DType::Int64) {
                     errs.push(format!(

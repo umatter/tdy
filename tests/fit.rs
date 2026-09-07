@@ -289,28 +289,61 @@ fn a_column_that_cannot_produce_the_declared_type_is_a_gap() {
     }
 }
 
-/// Rounding is a value change, so it is said out loud rather than discovered
-/// later in a total that is off by a rappen.
+/// Rounding is a value change. A value with more fractional digits than the
+/// declared scale is a gap naming the column and the value — unless the
+/// target says `round = 'half_away'`, which is authorisation written in the
+/// reviewed declaration, not a judgement the planner makes.
 #[test]
-fn rounding_to_the_declared_scale_is_reported() {
+fn more_fractional_digits_than_the_scale_is_a_gap_unless_the_target_declares_rounding() {
     let dir = tempfile::TempDir::new().unwrap();
     let p = dir.path().join("r.csv");
-    // Four fractional digits, so the separator cannot be a thousands group
-    // and the column is unambiguously decimal — see the test below for what
-    // happens when it is not.
-    std::fs::write(&p, "id;amount\n1;1.0056\n2;2.9942\n").unwrap();
+    std::fs::write(&p, "id;amount\n1;1.0056\n2;2.9942\n3;3.10\n").unwrap();
 
     let t = Target::parse(
-        "CREATE TABLE t (id BIGINT NOT NULL, amount DECIMAL(14,2) NOT NULL) \
+        "CREATE TABLE t (id BIGINT NOT NULL, amount DECIMAL(14,2) NOT NULL) WITH (files = 'r.csv')",
+    )
+    .unwrap();
+    let err = fit(&p, &t, Limits::default()).expect_err("rounding must not be silent");
+    let FitError::Gaps(gaps) = err else { panic!("expected gaps, got {err:?}") };
+    let text = gaps.iter().map(|g| g.message()).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("`amount`"), "{text}");
+    assert!(text.contains("fractional digits"), "{text}");
+    assert!(text.contains("1.0056"), "an offending value is named: {text}");
+    assert!(text.contains("round = 'half_away'"), "the declaration that allows it is named: {text}");
+
+    let t = Target::parse(
+        "CREATE TABLE t (id BIGINT NOT NULL, amount DECIMAL(14,2) NOT NULL OPTIONS(round = 'half_away')) \
          WITH (files = 'r.csv')",
     )
     .unwrap();
     let f = fit(&p, &t, Limits::default()).unwrap_or_else(|e| panic!("{e}"));
-    assert!(
-        f.spec.notes.iter().any(|n| n.contains("rounded")),
-        "rounding was not reported: {:?}",
-        f.spec.notes
-    );
+    assert!(f.spec.notes.iter().any(|n| n.contains("rounded")), "{:?}", f.spec.notes);
+    let amount = f.spec.columns.iter().find(|c| c.name == "amount").unwrap();
+    assert_eq!(amount.parse.round, Some(tdy::spec::Rounding::HalfAway));
+    assert!(f.review.is_none(), "declared rounding is not a judgement: {:?}", f.review);
+}
+
+/// A fitted decimal column that did not declare rounding refuses at
+/// execution too, so a value the probe never saw cannot round silently: the
+/// whole-file verification finds it and the member is refused, naming the row.
+#[test]
+fn a_late_value_with_extra_digits_is_caught_by_verification_not_rounded() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let p = dir.path().join("late.csv");
+    let mut body = String::from("id;amount\n");
+    for i in 1..=2600 {
+        body.push_str(&format!("{i};{}.50\n", i % 100));
+    }
+    body.push_str("2601;7.125\n");
+    std::fs::write(&p, body).unwrap();
+    let t = Target::parse(
+        "CREATE TABLE t (id BIGINT NOT NULL, amount DECIMAL(14,2) NOT NULL) WITH (files = 'late.csv')",
+    )
+    .unwrap();
+    let err = fit(&p, &t, Limits::default()).expect_err("row 2601 has three fractional digits");
+    let msg = format!("{err}");
+    assert!(msg.contains("7.125") && msg.contains("row 2601"), "the value and its row are named: {msg}");
+    assert!(msg.contains("past the sample"), "found by the whole-file verification, not the probe: {msg}");
 }
 
 /// Every gap in one pass. A user fixing a pile wants the whole list, not a

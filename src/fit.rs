@@ -53,7 +53,7 @@ use crate::conform::{conforms, Mismatch};
 use crate::engine::{self, ExtractOpts};
 use crate::numfmt;
 use crate::sniff;
-use crate::spec::{ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
+use crate::spec::{Rounding, ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
 use crate::target::{DateOrder, MatchMode, Target, Verify};
 
 /// A declared column this file cannot supply, and why.
@@ -410,10 +410,7 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
                 rows.iter().map(|r| r.get(i).map(|s| s.as_str()).unwrap_or("")).collect();
             let addressable = header.get(i).cloned().unwrap_or_else(|| name.clone());
             if type_for(
-                &tc.name,
-                &addressable,
-                &tc.dtype,
-                tc.nullable,
+                &Want { column: &tc.name, source: &addressable, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round },
                 &values,
                 target.date_order,
                 target.decimal_separator,
@@ -998,10 +995,7 @@ fn fit_framed(
             rows.iter().map(|r| r.get(idx).map(|s| s.as_str()).unwrap_or("")).collect();
 
         match type_for(
-            &tc.name,
-            &source,
-            &tc.dtype,
-            tc.nullable,
+            &Want { column: &tc.name, source: &source, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round },
             &values,
             target.date_order,
             target.decimal_separator,
@@ -1308,15 +1302,25 @@ struct Ctx<'a> {
 /// Nothing here *infers* a type — the target already said what it wants. Each
 /// candidate is checked by building the column with the executor's own
 /// function, so anything accepted here parses identically at execution.
-fn type_for(
-    column: &str,
-    source: &str,
-    want: &ArrowType,
+/// What a declared column asks of a source column: the name, the file's
+/// spelling, the Arrow type, nullability, and whether rounding onto the
+/// scale is declared. One struct rather than five parameters, for the same
+/// reason `Ctx` exists.
+struct Want<'a> {
+    column: &'a str,
+    source: &'a str,
+    dtype: &'a ArrowType,
     nullable: bool,
+    round: bool,
+}
+
+fn type_for(
+    req: &Want<'_>,
     values: &[&str],
     date_order: Option<DateOrder>,
     decimal_separator: Option<char>,
 ) -> Result<(DType, ValueParsing, Option<String>), Gap> {
+    let Want { column, source, dtype: want, nullable, round } = *req;
     let untypable = |why: String| Gap::Untypable {
         column: column.to_string(),
         source: source.to_string(),
@@ -1375,17 +1379,32 @@ fn type_for(
         ArrowType::Decimal128(p, s) => {
             let cands = numeric_candidates(&ctx)?;
             let dtype = DType::Decimal { precision: *p, scale: *s };
-            let (d, parse, _) = first_ok(&ctx, dtype, cands).map_err(untypable)?;
-            // Rounding is a value change, so it is said out loud rather than
-            // discovered later in a total that is off by a rappen.
-            let over = values
+            let (d, mut parse, _) = first_ok(&ctx, dtype, cands).map_err(untypable)?;
+            // Rounding is a value change. Declared, it happens and is said
+            // out loud; undeclared, a value that would need it is a gap
+            // naming the value — and the spec carries `round = "error"`, so
+            // a value the probe never saw is refused at verification and at
+            // execution rather than rounded silently.
+            let over: Vec<&str> = values
                 .iter()
-                .filter(|v| !sniff::is_na(v))
-                .any(|v| frac_digits(v, &parse) > *s as usize);
-            let note = over.then(|| {
+                .copied()
+                .filter(|v| !sniff::is_na(v) && frac_digits(v, &parse) > *s as usize)
+                .collect();
+            if !over.is_empty() && !round {
+                return Err(untypable(format!(
+                    "{} of {} sampled value(s) carry more than {s} fractional digits (e.g. {:?}); \
+                     rounding is a value change, so declare it:\n      {column} DECIMAL({p},{s}) \
+                     OPTIONS(round = 'half_away')",
+                    over.len(),
+                    values.iter().filter(|v| !sniff::is_na(v)).count(),
+                    over[0].trim()
+                )));
+            }
+            parse.round = Some(if round { Rounding::HalfAway } else { Rounding::Error });
+            let note = (!over.is_empty()).then(|| {
                 format!(
                     "`{column}`: some values carry more than {s} fractional digits and are \
-                     rounded half away from zero"
+                     rounded half away from zero, as the target declares"
                 )
             });
             Ok((d, parse, note))
