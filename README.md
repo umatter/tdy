@@ -674,6 +674,15 @@ wrote sales.tdy.lock
 $ tdy query "SELECT region, sum(amount) FROM dataset('sales.tdy.sql') GROUP BY 1"
 ```
 
+A workbook with one sheet per period is the same pile in one file. `tdy fit`
+frames every sheet and tries the declaration against each; when several
+produce the declared table, each becomes a member of its own, named
+`book.xlsx#Q1`, with its own sidecar beside the workbook (`book.xlsx#Q1.tdy.toml`)
+and its own line in the lock. A sheet that does not fit is named in the notes,
+`exclude = 'book.xlsx#Cover'` removes one by name, and a sheet added next year
+changes the workbook's hash, so it is drift — named — and the next fit picks it
+up. `source_name { from = "sheet" }` turns the sheet into a column.
+
 A member is named by its path relative to the target — `exports/2025-07.csv`,
 not `2025-07.csv` — and that is the name `--accept` takes.
 
