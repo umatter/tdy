@@ -546,3 +546,37 @@ fn a_single_file_fit_of_a_stacked_file_names_the_split_it_did_not_do() {
     assert!(text.contains("3 stacked tables") || text.contains("3 tables"), "{text}");
     assert!(text.contains("tdy fit") && text.contains(&t.display().to_string()), "{text}");
 }
+
+/// A hand-edited sidecar the loader refuses is discarded and the member is
+/// re-planned from the split's own window — which is right, since the window
+/// is the one thing the sidecar cannot be trusted about. Doing it in silence
+/// is what is wrong: nothing told the person their edit had no effect, and
+/// the member reads exactly as it did before. So the refusal is a note.
+#[test]
+fn a_refused_sidecar_says_so_and_is_re_planned() {
+    let (dir, t) = three_pile_accepted();
+    // Only the ordinal: the window still names block 2's own lines, so this
+    // is a sidecar that contradicts *itself*, which `load_member` refuses.
+    edit_window(dir.path(), "report.csv#2", 5, 9, 1);
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("sidecar refused:"), "the refusal is said out loud: {text}");
+    assert!(text.contains("ordinal"), "and it carries the loader's own reason: {text}");
+    assert!(text.contains("re-planned"), "and what happened instead: {text}");
+    let row = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("report.csv#2 "))
+        .unwrap_or_else(|| panic!("no member row: {text}"));
+    assert!(!row.contains("(existing spec)"), "re-planned, not reused: {row}");
+
+    let sql = format!("SELECT sum(amount) AS total FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("3000.00"), "{text}");
+    let sql = format!("SELECT sum(amount) AS total FROM dataset('{}') WHERE _member = 'report.csv#2'", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("1500.00"), "block 2 is block 2 again: {text}");
+}

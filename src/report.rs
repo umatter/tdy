@@ -451,6 +451,25 @@ fn is_dropped_note(n: &str) -> bool {
     n.starts_with("a run of ") && n.ends_with("was not read")
 }
 
+/// Did a hand-edited sidecar get thrown away for this member? The prefix is
+/// fixed so `render_pile_text` can find it.
+fn is_refusal_note(n: &str) -> bool {
+    n.starts_with("sidecar refused: ")
+}
+
+/// The notes the CLI shows under a member. Most of a spec's notes are
+/// sidecar detail; these are the ones about lines nothing read and about an
+/// edit that was discarded, which a person reading the pile has to see.
+fn shown_notes(m: &MemberReport) -> impl Iterator<Item = &String> {
+    m.notes.iter().filter(|n| is_dropped_note(n) || is_refusal_note(n))
+}
+
+/// A multi-line message as one line — a sidecar's refusal can list several
+/// validation problems, and a note is one line under the member.
+fn one_line(s: &str) -> String {
+    s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
 /// A window as a person counts lines: 1-based and inclusive, or "the whole
 /// file" when there is none.
 fn lines_of(w: Option<RowWindow>) -> String {
@@ -629,7 +648,20 @@ pub async fn fit_pile(
         // nondeterministic model quietly swap the frame out from under a
         // review, and it would re-spend money answering a settled question.
         // Either way it is re-proved: conformance and a dry run, every time.
-        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = crate::sidecar::load_member(&p, sheet, region) {
+        let loaded = crate::sidecar::load_member(&p, sheet, region);
+        // A sidecar the loader refuses is a person's edit being discarded.
+        // Re-planning is the right thing to do — the split's own window is
+        // the one fact a sidecar cannot be trusted about — but doing it in
+        // silence leaves the member reading exactly as it did before, with
+        // nothing to say why the edit had no effect.
+        let refused: Option<String> = loaded
+            .as_ref()
+            .err()
+            .map(|e| {
+                let m = one_line(&format!("{e:#}"));
+                format!("sidecar refused: {}; re-planned", m.trim_end_matches('.'))
+            });
+        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = loaded {
             let manual = sc.provenance.method == InferenceMethod::Manual;
             let conforming = crate::conform::conforms(&sc.spec, &target).is_ok();
             if manual || conforming {
@@ -892,7 +924,14 @@ pub async fn fit_pile(
                         .collect(),
                     review: fitted.review.clone(),
                     accepted: is_accepted,
-                    notes: fitted.spec.notes.clone(),
+                    notes: {
+                        // On the report, not in the spec: the refusal is a
+                        // fact about *this* fit, and the sidecar just written
+                        // is the plan that replaced the refused one.
+                        let mut ns = fitted.spec.notes.clone();
+                        ns.extend(refused.clone());
+                        ns
+                    },
                     problems: Vec::new(),
                     proposals: Vec::new(),
                 });
@@ -929,7 +968,7 @@ pub async fn fit_pile(
                     sources: Vec::new(),
                     review: None,
                     accepted: false,
-                    notes: Vec::new(),
+                    notes: refused.into_iter().collect(),
                     problems: problems_of_error(&e),
                     proposals,
                 });
@@ -1074,7 +1113,7 @@ pub fn render_pile_text(r: &PileReport) -> String {
                 // Lines the split discarded are not sidecar trivia: with a
                 // window applied nothing reads them, so a member that fits
                 // says so out loud, accepted or not.
-                for n in m.notes.iter().filter(|n| is_dropped_note(n)) {
+                for n in shown_notes(m) {
                     line(format!("      note: {n}"));
                 }
                 if let (Some(rv), false) = (&m.review, m.accepted) {
@@ -1096,6 +1135,9 @@ pub fn render_pile_text(r: &PileReport) -> String {
             }
             MemberStatus::Gaps => {
                 line(format!("  {:<24} GAP", m.name()));
+                for n in shown_notes(m) {
+                    line(format!("      note: {n}"));
+                }
                 for pr in &m.problems {
                     for l in pr.message.lines() {
                         line(format!("      {l}"));
@@ -1110,6 +1152,9 @@ pub fn render_pile_text(r: &PileReport) -> String {
             }
             MemberStatus::Error => {
                 line(format!("  {:<24} ERROR{label}", m.name()));
+                for n in shown_notes(m) {
+                    line(format!("      note: {n}"));
+                }
                 for pr in &m.problems {
                     for l in pr.message.lines() {
                         line(format!("      {l}"));
