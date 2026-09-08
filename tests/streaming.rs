@@ -929,3 +929,54 @@ fn a_row_window_selects_a_block_on_both_executors() {
     let e = format!("{:#}", engine::execute_batches(&past, &p, Limits::default()).unwrap_err());
     assert!(e.contains("past the end") && e.contains("8 rows"), "{e}");
 }
+
+/// `read_text` caps a preview/dry-run read to a 4 MiB prefix whenever
+/// `max_rows` is set, regardless of how generous that row cap is. A window
+/// declared deep in a bigger-than-4-MiB file is real — the uncapped
+/// executor finds it — but a capped read never reaches it, and that must
+/// read as "the sample didn't get far enough", not "there is no such row".
+#[test]
+fn a_region_past_a_capped_sample_is_truncated_not_past_the_end() {
+    let dir = TempDir::new().unwrap();
+    // 200,001 rows, each `id,padding` — long enough that the file is well
+    // over 4 MiB (`PREVIEW_BYTES`) and row 150,000 sits well past the 4 MiB
+    // mark, so a capped read never reaches the window below.
+    let pad = "x".repeat(30);
+    let mut body = String::with_capacity(7_500_000);
+    for i in 0..200_001u32 {
+        body.push_str(&i.to_string());
+        body.push(',');
+        body.push_str(&pad);
+        body.push('\n');
+    }
+    assert!(body.len() as u64 > 4 * 1024 * 1024, "fixture must exceed the preview cap");
+    let p = write(&dir, "big.csv", &body);
+
+    let mut s = spec(vec![], vec![col("col_1", DType::Int64)]);
+    s.extraction = Extraction::Delimited {
+        delimiter: ',', quote: Some('"'), escape: None, encoding: None, comment: None,
+        ragged: RaggedPolicy::PadNulls, region: Some(RowWindow { start: 150_000, end: 150_005 }),
+    };
+
+    // A real, in-bounds window: the uncapped executor (both paths) reads it.
+    let rendered = render(&engine::execute_batches(&s, &p, Limits::default()).unwrap());
+    assert!(rendered.contains("150000") && rendered.contains("150004"), "{rendered}");
+    assert_paths_agree(&s, &p, "a region past a capped sample");
+
+    // A dry run/preview caps the read well short of row 150,000 on this
+    // file, so the window's own rows never appear in the sample: the same
+    // spec, unchanged, must still come back Ok (an empty, truncated read),
+    // not the spurious "past the end" refusal.
+    engine::dry_run(&s, &p, Limits::default())
+        .expect("a region past the capped sample must read as truncated, not as an error");
+
+    // A window that starts past the file's *real* end (200,001 rows) is
+    // still refused, naming the true row count — this read is uncapped, so
+    // the file's whole length is known and the refusal is not spurious.
+    let mut past = s.clone();
+    if let Extraction::Delimited { region, .. } = &mut past.extraction {
+        *region = Some(RowWindow { start: 300_000, end: 300_005 });
+    }
+    let e = format!("{:#}", engine::execute_batches(&past, &p, Limits::default()).unwrap_err());
+    assert!(e.contains("past the end") && e.contains("200001 rows"), "{e}");
+}

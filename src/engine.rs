@@ -509,11 +509,25 @@ const PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 /// Decode the text this extraction needs — the whole file for a real run,
 /// a bounded prefix when the caller asked for at most N rows.
 pub(crate) fn read_text(path: &Path, encoding: Option<&str>, opts: &ExtractOpts) -> Result<String> {
+    Ok(read_text_ex(path, encoding, opts)?.0)
+}
+
+/// As [`read_text`], but also says whether the returned text is the *whole*
+/// file (`true`) or a capped prefix a `max_rows` read stopped short of the
+/// real end (`false`). A caller that needs to tell "there is no such row"
+/// from "the sample never got that far" — a `region` past what came back —
+/// needs this; nothing else does, which is why `read_text` still exists as
+/// the plain form everyone else calls.
+pub(crate) fn read_text_ex(
+    path: &Path,
+    encoding: Option<&str>,
+    opts: &ExtractOpts,
+) -> Result<(String, bool)> {
     if opts.max_rows.is_none() {
         let bytes = fileio::read_all(path, opts.limits.max_file_bytes)?;
         let (text, used, had_errors) = crate::sample::decode_owned(bytes, encoding);
         warn_mojibake(path, encoding, &used, had_errors);
-        return Ok(text);
+        return Ok((text, true));
     }
     let ht = fileio::read_head_tail(path, PREVIEW_BYTES, 0, opts.limits.max_decompressed_bytes)?;
     let truncated = ht.total > ht.head.len() as u64;
@@ -526,7 +540,7 @@ pub(crate) fn read_text(path: &Path, encoding: Option<&str>, opts: &ExtractOpts)
             text.truncate(i + 1);
         }
     }
-    Ok(text)
+    Ok((text, !truncated))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -542,7 +556,10 @@ fn extract_delimited(
     opts: &ExtractOpts,
 ) -> Result<RawTable> {
     // validate() guarantees these are ASCII, so the byte casts are lossless.
-    let text = read_text(path, encoding, opts)?;
+    // `complete` says whether `text` is the whole file or a `max_rows`
+    // read's capped prefix — a `region` past what came back means two very
+    // different things depending on which.
+    let (text, complete) = read_text_ex(path, encoding, opts)?;
     let mut builder = csv::ReaderBuilder::new();
     builder
         .has_headers(false)
@@ -562,14 +579,15 @@ fn extract_delimited(
     let mut truncated = false;
     let mut record = csv::StringRecord::new();
     let mut cells: u64 = 0;
-    // Counts records exactly as the csv reader yields them (a quoted
-    // newline is inside a record, not a boundary), so `region` addresses
-    // the same rows both executors do. A blank line produces no record —
-    // `read_record` silently discards it — so it is recovered from the
-    // physical-line delta the CSV core tracks: a record whose line count
-    // advanced by more than its own terminator (minus any newlines the
-    // record's own quoted fields carry) had that many blank lines ahead of
-    // it, each its own raw row.
+    // A record's index is the line its first byte is on: `region` is a
+    // window over the file's raw physical lines, not over the records
+    // `read_record` yields. A blank line consumes an index although
+    // `read_record` silently discards it and never yields it as a record,
+    // so it is recovered from the physical-line delta the CSV core tracks:
+    // a record whose line count advanced by more than its own terminator
+    // (minus any newlines the record's own quoted fields carry, which
+    // advance the line count without being a row boundary) had that many
+    // blank lines ahead of it, each its own raw row.
     let mut raw_index: u64 = 0;
     loop {
         if cells > opts.limits.max_cells {
@@ -617,13 +635,20 @@ fn extract_delimited(
     }
     if let Some(w) = region {
         if raw_index <= w.start {
-            bail!(
-                "region rows {}..{} start past the end of {} ({} rows)",
-                w.start,
-                w.end,
-                path.display(),
-                raw_index
-            );
+            if complete {
+                bail!(
+                    "region rows {}..{} start past the end of {} ({} rows)",
+                    w.start,
+                    w.end,
+                    path.display(),
+                    raw_index
+                );
+            }
+            // `text` was only a `max_rows` read's capped prefix, and the
+            // window's own rows never showed up in it — that says nothing
+            // about whether the file, read whole, would have them. A
+            // preview of a block beyond the sample is empty, not wrong.
+            truncated = true;
         }
     }
     Ok(RawTable::new(rows, ragged, truncated))
@@ -1331,6 +1356,31 @@ pub fn to_record_batch(spec: &ParseSpec, table: &mut RawTable) -> Result<RecordB
 /// The projection, produced in bounded chunks.
 pub fn to_record_batches(spec: &ParseSpec, table: &mut RawTable) -> Result<Vec<RecordBatch>> {
     table.ensure_header()?;
+
+    // A `region` can put every row of interest outside a `max_rows`-capped
+    // preview/dry-run sample: the table then has zero rows, and since a
+    // Delimited extraction supplies no header of its own, there is no
+    // header text to resolve a declared column against either — not
+    // because anything is wrong, but because the sample never reached
+    // that far. That combination cannot arise any other way (every other
+    // extractor's `truncated` only ever fires after already keeping
+    // `max_rows` rows, so it is never true with zero rows kept), so this is
+    // new with `region`, not a relaxation of an existing check: a preview
+    // that saw nothing has no evidence about columns and must say so with
+    // an empty batch of the declared shape, not by claiming one is missing.
+    if table.truncated && table.rows.is_empty() {
+        let mut fields = Vec::with_capacity(spec.columns.len());
+        let mut arrays: Vec<ArrayRef> = Vec::with_capacity(spec.columns.len());
+        for col in &spec.columns {
+            let (field, array) = build_column_at(col, &[], 0)
+                .with_context(|| format!("building column `{}`", col.name))?;
+            fields.push(field);
+            arrays.push(array);
+        }
+        let schema = Arc::new(Schema::new(fields));
+        return Ok(vec![RecordBatch::try_new(schema, arrays).context("assembling record batch")?]);
+    }
+
     let index = table.header_index()?;
     let mut resolved: Vec<(&ColumnSpec, usize)> = Vec::with_capacity(spec.columns.len());
     for col in &spec.columns {

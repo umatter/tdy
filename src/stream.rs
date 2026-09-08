@@ -305,9 +305,12 @@ enum Source {
         rec: csv::ByteRecord,
         /// `region`'s [start, end), or None for the whole file.
         window: Option<(u64, u64)>,
-        /// Records consulted so far, counted exactly as the reader yields
-        /// them (a quoted newline is inside a record) — the same count a
-        /// `RowWindow` addresses.
+        /// The next record's index in the file's raw physical lines — a
+        /// record's index is the line its first byte is on. A blank line
+        /// consumes an index although the reader never yields it as a
+        /// record; a quoted newline inside a record does not advance the
+        /// index of the *next* record beyond that record's own extent.
+        /// The same count a `RowWindow` addresses.
         raw_index: u64,
     },
     Lines {

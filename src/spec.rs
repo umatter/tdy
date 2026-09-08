@@ -181,12 +181,16 @@ pub enum Extraction {
     },
 }
 
-/// A 0-based, half-open window of raw records: `[start, end)`. Applied by a
-/// `Delimited` extraction before anything else — skip_rows, promote_header,
-/// every transform all see only the rows inside it.
+/// A 0-based, half-open window over the file's raw physical lines:
+/// `[start, end)`. Applied by a `Delimited` extraction before anything
+/// else — skip_rows, promote_header, every transform all see only the
+/// records inside it.
 ///
-/// Counts *records* the way the CSV reader yields them, not lines: a
-/// quoted newline is inside a record, not a boundary between two.
+/// A record's index is the line its first byte is on. A blank line
+/// consumes an index of its own even though the CSV reader never yields it
+/// as a record — it is still a line the file has. A quoted newline inside
+/// a record is not a boundary: it does not advance the index of the
+/// *next* record beyond that record's own extent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RowWindow {
     pub start: u64,
