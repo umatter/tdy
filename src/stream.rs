@@ -300,7 +300,16 @@ fn text_of(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
 /// delimited record, a log line, a slice of a fixed-width line. JSON is not
 /// here because a document has to be parsed whole before its records exist.
 enum Source {
-    Delimited { rdr: csv::Reader<Box<dyn BufRead + Send>>, rec: csv::ByteRecord },
+    Delimited {
+        rdr: csv::Reader<Box<dyn BufRead + Send>>,
+        rec: csv::ByteRecord,
+        /// `region`'s [start, end), or None for the whole file.
+        window: Option<(u64, u64)>,
+        /// Records consulted so far, counted exactly as the reader yields
+        /// them (a quoted newline is inside a record) — the same count a
+        /// `RowWindow` addresses.
+        raw_index: u64,
+    },
     Lines {
         rdr: Box<dyn BufRead + Send>,
         buf: Vec<u8>,
@@ -447,10 +456,12 @@ impl Source {
     ) -> Result<(Self, Option<Vec<String>>)> {
         let input = open_input(path, extraction.encoding(), opts)?;
         Ok(match extraction {
-            Extraction::Delimited { .. } => (
+            Extraction::Delimited { region, .. } => (
                 Source::Delimited {
                     rdr: reader_for(extraction).from_reader(input),
                     rec: csv::ByteRecord::new(),
+                    window: region.map(|w| (w.start, w.end)),
+                    raw_index: 0,
                 },
                 None,
             ),
@@ -513,10 +524,26 @@ impl Source {
     /// OS, which is the same thing as far as the machine is concerned.
     fn next_width(&mut self) -> Result<Option<usize>> {
         match self {
-            Source::Delimited { rdr, rec } => match rdr.read_byte_record(rec) {
-                Ok(true) => Ok(Some(rec.len())),
-                Ok(false) => Ok(None),
-                Err(e) => Err(anyhow!("{e}")),
+            Source::Delimited { rdr, rec, window, raw_index } => loop {
+                let lines_before = window.map(|_| rdr.position().line());
+                match rdr.read_byte_record(rec) {
+                    Ok(true) => {
+                        if let Some((start, end)) = *window {
+                            advance_raw_index(rdr, rec, lines_before.unwrap(), raw_index);
+                            let idx = *raw_index;
+                            *raw_index += 1;
+                            if idx < start {
+                                continue;
+                            }
+                            if idx >= end {
+                                return Ok(None);
+                            }
+                        }
+                        return Ok(Some(rec.len()));
+                    }
+                    Ok(false) => return Ok(None),
+                    Err(e) => return Err(anyhow!("{e}")),
+                }
             },
             Source::Lines { rdr, buf, re, names, on_no_match, line_no } => {
                 while read_line(rdr.as_mut(), buf)? {
@@ -563,10 +590,26 @@ impl Source {
     /// here so the caller only ever sees data.
     fn next_row(&mut self) -> Result<Option<Vec<String>>> {
         match self {
-            Source::Delimited { rdr, rec } => match rdr.read_byte_record(rec) {
-                Ok(true) => Ok(Some(rec.iter().map(|b| text_of(b).into_owned()).collect())),
-                Ok(false) => Ok(None),
-                Err(e) => Err(anyhow!("{e}")),
+            Source::Delimited { rdr, rec, window, raw_index } => loop {
+                let lines_before = window.map(|_| rdr.position().line());
+                match rdr.read_byte_record(rec) {
+                    Ok(true) => {
+                        if let Some((start, end)) = *window {
+                            advance_raw_index(rdr, rec, lines_before.unwrap(), raw_index);
+                            let idx = *raw_index;
+                            *raw_index += 1;
+                            if idx < start {
+                                continue;
+                            }
+                            if idx >= end {
+                                return Ok(None);
+                            }
+                        }
+                        return Ok(Some(rec.iter().map(|b| text_of(b).into_owned()).collect()));
+                    }
+                    Ok(false) => return Ok(None),
+                    Err(e) => return Err(anyhow!("{e}")),
+                }
             },
             Source::Lines { rdr, buf, re, names, on_no_match, line_no } => {
                 while read_line(rdr.as_mut(), buf)? {
@@ -640,6 +683,35 @@ impl Source {
             }
         }
     }
+
+    /// Records consulted so far, for a delimited source. Used only to name
+    /// a `region`'s end when its start is past the file — the counting pass
+    /// has already read to end of file by the time it knows that.
+    fn raw_records_seen(&self) -> Option<u64> {
+        match self {
+            Source::Delimited { raw_index, .. } => Some(*raw_index),
+            _ => None,
+        }
+    }
+}
+
+/// Recovers the raw rows a blank line silently discards. `read_byte_record`
+/// swallows an empty line without ever yielding it, so the record that
+/// follows one shows a bigger jump in the CSV core's physical line count
+/// than its own content explains. That gap — minus any newlines the
+/// record's own quoted fields carry, which advance the line count without
+/// being a row boundary — is that many blank rows, each its own raw index;
+/// mirrors `engine::extract_delimited`'s identical recovery so both
+/// executors number the same rows.
+fn advance_raw_index(
+    rdr: &csv::Reader<Box<dyn BufRead + Send>>,
+    rec: &csv::ByteRecord,
+    lines_before: u64,
+    raw_index: &mut u64,
+) {
+    let advanced = rdr.position().line() - lines_before;
+    let embedded: u64 = rec.iter().map(|f| f.iter().filter(|&&b| b == b'\n').count() as u64).sum();
+    *raw_index += advanced.saturating_sub(1 + embedded);
 }
 
 /// The delimited reader, configured identically to the materialising path.
@@ -1282,7 +1354,24 @@ pub fn execute_with(
         // of the file, which is how a 987 MB CSV reached 2 GB.
         let (mut counting, _) =
             Source::open(path, &spec.extraction, &opts, provided_header.as_deref())?;
-        Some(measure(&mut counting, &limits, path)?)
+        let shape = measure(&mut counting, &limits, path)?;
+        // A window whose start never arrived means the counting pass ran to
+        // the true end of file without seeing a record inside it — that
+        // count is `n` for the error. Only the counting pass has it; the
+        // body pass need not check.
+        if shape.rows == 0 {
+            if let Extraction::Delimited { region: Some(w), .. } = &spec.extraction {
+                let n = counting.raw_records_seen().unwrap_or(0);
+                bail!(
+                    "region rows {}..{} start past the end of {} ({} rows)",
+                    w.start,
+                    w.end,
+                    path.display(),
+                    n
+                );
+            }
+        }
+        Some(shape)
     } else {
         None
     };

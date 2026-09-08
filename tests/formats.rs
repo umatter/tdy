@@ -89,6 +89,7 @@ fn delim(d: char, ragged: RaggedPolicy) -> Extraction {
         encoding: None,
         comment: None,
         ragged,
+        region: None,
     }
 }
 
@@ -292,6 +293,7 @@ fn comment_lines_are_skipped() {
             encoding: None,
             comment: Some('#'),
             ragged: RaggedPolicy::PadNulls,
+            region: None,
         },
         vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![col("a", DType::Int64)],
@@ -314,6 +316,7 @@ fn declared_encoding_is_honoured() {
             encoding: Some("windows-1252".into()),
             comment: None,
             ragged: RaggedPolicy::PadNulls,
+            region: None,
         },
         vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![col("name", DType::Utf8)],

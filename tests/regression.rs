@@ -1634,6 +1634,7 @@ fn ledger_spec(negative: Option<NegativeStyle>, strip: Option<&str>) -> ParseSpe
             encoding: None,
             comment: None,
             ragged: RaggedPolicy::Error,
+            region: None,
         },
         transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         columns: vec![

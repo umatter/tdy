@@ -224,6 +224,7 @@ fn a_pointer_on_a_csv_is_refused_by_validate() {
             encoding: None,
             comment: None,
             ragged: RaggedPolicy::Error,
+            region: None,
         },
         transforms: vec![],
         columns: vec![ColumnSpec {

@@ -470,6 +470,7 @@ fn sniff_delimited(
         encoding: if sample.ascii_only { None } else { sample.encoding.clone() },
         comment: None,
         ragged: RaggedPolicy::PadNulls,
+        region: None,
     };
 
     let mut table = engine::extract(&extraction, path, &ExtractOpts::capped(limits, PROBE_ROWS))

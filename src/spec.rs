@@ -130,6 +130,11 @@ pub enum Extraction {
         comment: Option<char>,
         #[serde(default)]
         ragged: RaggedPolicy,
+        /// A block of raw records to read, applied before anything else
+        /// (skip_rows, promote_header, every transform). None = the whole
+        /// file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<RowWindow>,
     },
     /// Via calamine. Merged cells surface as value-in-top-left + blanks;
     /// deliberately handled by `fill_down` / header fill-right, not here.
@@ -174,6 +179,18 @@ pub enum Extraction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pointer: Option<String>,
     },
+}
+
+/// A 0-based, half-open window of raw records: `[start, end)`. Applied by a
+/// `Delimited` extraction before anything else — skip_rows, promote_header,
+/// every transform all see only the rows inside it.
+///
+/// Counts *records* the way the CSV reader yields them, not lines: a
+/// quoted newline is inside a record, not a boundary between two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RowWindow {
+    pub start: u64,
+    pub end: u64,
 }
 
 impl Extraction {
@@ -900,7 +917,7 @@ impl ParseSpec {
         }
 
         match &self.extraction {
-            Extraction::Delimited { delimiter, quote, escape, comment, .. } => {
+            Extraction::Delimited { delimiter, quote, escape, comment, region, .. } => {
                 // Every one of these is handed to the CSV reader as a single
                 // byte; a multi-byte character would be truncated into a
                 // different, arbitrary one.
@@ -940,6 +957,14 @@ impl ParseSpec {
                 }
                 if *delimiter == '\n' || *delimiter == '\r' {
                     errs.push("delimiter must not be a newline".into());
+                }
+                if let Some(w) = region {
+                    if w.start >= w.end {
+                        errs.push(format!(
+                            "region: start ({}) must be below end ({})",
+                            w.start, w.end
+                        ));
+                    }
                 }
             }
             Extraction::Excel { range, sheet_index, .. } => {
@@ -1375,6 +1400,7 @@ mod tests {
                 encoding: None,
                 comment: None,
                 ragged: RaggedPolicy::Error,
+                region: None,
             },
             transforms: vec![],
             columns: vec![ColumnSpec {
@@ -1440,6 +1466,7 @@ mod tests {
             encoding: None,
             comment: None,
             ragged: RaggedPolicy::Error,
+            region: None,
         };
         assert!(errs(&s).iter().any(|e| e.contains("ASCII")));
     }
@@ -1454,6 +1481,7 @@ mod tests {
             encoding: None,
             comment: None,
             ragged: RaggedPolicy::Error,
+            region: None,
         };
         assert!(errs(&s).iter().any(|e| e.contains("must differ")));
     }
@@ -1533,6 +1561,7 @@ mod tests {
             encoding: Some("utf8x".into()),
             comment: None,
             ragged: RaggedPolicy::Error,
+            region: None,
         };
         assert!(errs(&s).iter().any(|e| e.contains("unknown encoding")));
         s.extraction = Extraction::Delimited {
@@ -1542,6 +1571,7 @@ mod tests {
             encoding: Some("windows-1252".into()),
             comment: None,
             ragged: RaggedPolicy::Error,
+            region: None,
         };
         assert!(s.validate().is_ok());
     }
@@ -1578,5 +1608,15 @@ mod tests {
     fn unknown_field_rejected() {
         let j = r#"{"extraction":{"format":"json","lines":true},"columns":[{"name":"a","dtype":{"type":"utf8"}}],"bogus":1}"#;
         assert!(serde_json::from_str::<ParseSpec>(j).is_err());
+    }
+
+    #[test]
+    fn a_row_window_must_be_forward() {
+        let mut s = minimal_spec();
+        if let Extraction::Delimited { region, .. } = &mut s.extraction {
+            *region = Some(RowWindow { start: 5, end: 5 });
+        }
+        let errs = s.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("region") && e.contains("start")), "{errs:?}");
     }
 }

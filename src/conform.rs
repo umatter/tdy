@@ -280,6 +280,7 @@ mod tests {
                 encoding: None,
                 comment: None,
                 ragged: RaggedPolicy::PadNulls,
+                region: None,
             },
             transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
             columns,

@@ -206,6 +206,7 @@ fn delimited() -> Extraction {
         encoding: None,
         comment: None,
         ragged: RaggedPolicy::PadNulls,
+        region: None,
     }
 }
 
@@ -252,6 +253,7 @@ fn utf8_spec() -> ParseSpec {
         encoding: Some("utf-8".into()),
         comment: None,
         ragged: RaggedPolicy::PadNulls,
+        region: None,
     };
     s
 }
@@ -485,6 +487,7 @@ fn a_ragged_file_is_refused_with_the_offending_row() {
             encoding: None,
             comment: None,
             ragged: RaggedPolicy::Error,
+            region: None,
         },
         transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         columns: vec![col("k", DType::Utf8), col("v", DType::Int64)],
@@ -895,4 +898,34 @@ fn a_json_array_is_not_streamed() {
         notes: vec![],
     };
     assert!(!stream::can_stream(&pointed));
+}
+
+/// A region is a row window applied before anything else, identically by
+/// both executors; a window past the end is an error naming the file's
+/// length, never an empty table.
+#[test]
+fn a_row_window_selects_a_block_on_both_executors() {
+    let dir = TempDir::new().unwrap();
+    let body = "Datum;Region;Betrag\n28.01.2025;Ost;190.00\n28.02.2025;West;200.00\n\nDatum;Region;Betrag\n28.04.2025;Ost;490.00\n28.05.2025;West;500.00\n28.06.2025;Nord;510.00\n";
+    let p = write(&dir, "two.csv", body);
+    // The fixture's header text is title-cased ("Region", "Betrag"); column
+    // resolution is case-sensitive (confirmed general behaviour, unrelated
+    // to `region`), so the columns must match the file's own spelling.
+    let mut s = spec(
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("Region", DType::Utf8), col("Betrag", DType::Decimal { precision: 14, scale: 2 })],
+    );
+    s.extraction = Extraction::Delimited {
+        delimiter: ';', quote: Some('"'), escape: None, encoding: None, comment: None,
+        ragged: RaggedPolicy::PadNulls, region: Some(RowWindow { start: 4, end: 8 }),
+    };
+    let a = render(&engine::execute_batches(&s, &p, Limits::default()).unwrap());
+    assert!(a.contains("Nord") && a.contains("510.00") && !a.contains("190.00"), "{a}");
+    assert_eq!(a.matches("2025").count(), 0, "the date column is projected away; only the block's rows: {a}");
+    assert_paths_agree(&s, &p, "row window");
+
+    let mut past = s.clone();
+    if let Extraction::Delimited { region, .. } = &mut past.extraction { *region = Some(RowWindow { start: 40, end: 50 }); }
+    let e = format!("{:#}", engine::execute_batches(&past, &p, Limits::default()).unwrap_err());
+    assert!(e.contains("past the end") && e.contains("8 rows"), "{e}");
 }

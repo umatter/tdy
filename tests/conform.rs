@@ -153,6 +153,7 @@ fn spec_with(columns: Vec<ColumnSpec>) -> ParseSpec {
             encoding: None,
             comment: None,
             ragged: RaggedPolicy::PadNulls,
+            region: None,
         },
         transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         columns,
@@ -190,6 +191,7 @@ fn a_conforming_spec_really_produces_the_declared_dataset() {
             encoding: Some("utf-8".into()),
             comment: None,
             ragged: RaggedPolicy::PadNulls,
+            region: None,
         },
         transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         columns: vec![
@@ -261,6 +263,7 @@ fn a_spec_that_parses_the_file_but_reads_the_wrong_columns_is_refused() {
             encoding: Some("utf-8".into()),
             comment: None,
             ragged: RaggedPolicy::PadNulls,
+            region: None,
         },
         transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         columns: vec![ColumnSpec {

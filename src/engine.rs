@@ -36,7 +36,7 @@ use crate::fileio;
 use crate::numfmt;
 use crate::sample::render_cell;
 use crate::spec::{
-    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, EpochUnit, Extraction, FillDirection, NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, ShortSplit, SourcePart,
+    parse_a1_range, parse_fixed_offset, ColumnSpec, DType, EpochUnit, Extraction, FillDirection, NegativeStyle, NoMatchPolicy, ParseSpec, RaggedPolicy, RowWindow, ShortSplit, SourcePart,
     SplitBy, Transform, ValueParsing,
 };
 
@@ -436,6 +436,7 @@ pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Resu
             encoding,
             comment,
             ragged,
+            region,
         } => extract_delimited(
             path,
             *delimiter,
@@ -444,6 +445,7 @@ pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Resu
             encoding.as_deref(),
             *comment,
             *ragged,
+            *region,
             opts,
         ),
         Extraction::Excel { sheet_name, sheet_index, range } => {
@@ -536,6 +538,7 @@ fn extract_delimited(
     encoding: Option<&str>,
     comment: Option<char>,
     ragged: RaggedPolicy,
+    region: Option<RowWindow>,
     opts: &ExtractOpts,
 ) -> Result<RawTable> {
     // validate() guarantees these are ASCII, so the byte casts are lossless.
@@ -559,6 +562,15 @@ fn extract_delimited(
     let mut truncated = false;
     let mut record = csv::StringRecord::new();
     let mut cells: u64 = 0;
+    // Counts records exactly as the csv reader yields them (a quoted
+    // newline is inside a record, not a boundary), so `region` addresses
+    // the same rows both executors do. A blank line produces no record —
+    // `read_record` silently discards it — so it is recovered from the
+    // physical-line delta the CSV core tracks: a record whose line count
+    // advanced by more than its own terminator (minus any newlines the
+    // record's own quoted fields carry) had that many blank lines ahead of
+    // it, each its own raw row.
+    let mut raw_index: u64 = 0;
     loop {
         if cells > opts.limits.max_cells {
             bail!(
@@ -569,8 +581,23 @@ fn extract_delimited(
                 rows.len()
             );
         }
+        let lines_before = region.map(|_| rdr.position().line());
         match rdr.read_record(&mut record) {
             Ok(true) => {
+                if let Some(w) = region {
+                    let advanced = rdr.position().line() - lines_before.unwrap();
+                    let embedded: u64 =
+                        record.iter().map(|f| f.matches('\n').count() as u64).sum();
+                    raw_index += advanced.saturating_sub(1 + embedded);
+                    let idx = raw_index;
+                    raw_index += 1;
+                    if idx < w.start {
+                        continue;
+                    }
+                    if idx >= w.end {
+                        break;
+                    }
+                }
                 // Read first, then check the cap: a file with exactly
                 // `max_rows` rows is complete, not truncated, and marking it
                 // truncated would suppress its `skip_rows` tail.
@@ -586,6 +613,17 @@ fn extract_delimited(
                 return Err(anyhow!("{e}"))
                     .with_context(|| format!("CSV parse error at record {}", rows.len() + 1))
             }
+        }
+    }
+    if let Some(w) = region {
+        if raw_index <= w.start {
+            bail!(
+                "region rows {}..{} start past the end of {} ({} rows)",
+                w.start,
+                w.end,
+                path.display(),
+                raw_index
+            );
         }
     }
     Ok(RawTable::new(rows, ragged, truncated))
