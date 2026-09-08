@@ -55,13 +55,13 @@ dirs = "5"
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 crossterm = "0.29"
-# `draft` writes a stacked block's own lines to a scratch file (same
-# extension as the source) so the ordinary sniffer can run on it unchanged;
-# every other use is still test-only, but that one production path is why
-# this is a real dependency rather than a dev one.
-tempfile = "3"
 
 [dev-dependencies]
+# Test-only. `draft`'s stacked-block sniff needs a scratch file too, but it
+# takes one from `fileio`'s own process-lifetime cache dir
+# (`fileio::scratch_file`, cleared at exit) rather than putting a dependency
+# in the published crate's tree for it.
+tempfile = "3"
 
 # One shared vCPU in typical CI-ish environments: skip debuginfo for a much
 # faster and smaller build. Flip to `debug = true` when you need a debugger.

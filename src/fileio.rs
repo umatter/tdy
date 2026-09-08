@@ -137,6 +137,24 @@ fn cache_dir() -> Result<&'static Path> {
     Ok(dir.as_path())
 }
 
+/// A path inside this process's cache directory for something that has to
+/// exist as a real file for a moment — `draft`'s stacked-block sniff, which
+/// writes one block's own lines out so the ordinary sniffer can run on them
+/// unchanged (format guessing reads the extension, so `name` should carry
+/// the source's).
+///
+/// The file is not created here, and the caller should remove it when it is
+/// done; whatever it leaves behind goes with [`clear_cache`] at exit, never
+/// beside the user's data. The name is made unique per call, so two threads
+/// drafting at once cannot write into one path.
+pub fn scratch_file(name: &str) -> Result<PathBuf> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = cache_dir()?.join("scratch");
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(dir.join(format!("{n}-{name}")))
+}
+
 /// Remove this process's decompressed copies. Called by the binaries on
 /// exit; harmless when nothing was ever materialised.
 pub fn clear_cache() {

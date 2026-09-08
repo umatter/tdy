@@ -340,21 +340,29 @@ fn record_columns(
 /// the whole reason a block gets the sniffer's full machinery — title rows,
 /// separator/date inference, type widening — rather than a cut-down pass of
 /// its own that could disagree with what a plain file gets.
+///
+/// The scratch file lives in `fileio`'s own process-lifetime cache
+/// (`$TMPDIR/tdy-<pid>/scratch/`), removed here and, whatever happens, by
+/// `fileio::clear_cache()` at exit — so the one production path that needs
+/// a temporary file costs the published crate no dependency.
 fn sniff_block(path: &Path, window: RowWindow, limits: Limits) -> Result<crate::spec::ParseSpec> {
     let bytes = block_bytes(path, window, limits)
         .with_context(|| format!("reading block {} of {}", window.ordinal, path.display()))?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("csv");
-    let mut tmp = tempfile::Builder::new()
-        .suffix(&format!(".{ext}"))
-        .tempfile()
+    let tmp = crate::fileio::scratch_file(&format!("block.{ext}"))
         .context("creating a scratch file for the block")?;
-    std::io::Write::write_all(&mut tmp, &bytes)
-        .with_context(|| format!("writing block {} of {} to a scratch file", window.ordinal, path.display()))?;
-    let sample = crate::sample::build(tmp.path(), 16 * 1024, limits)
-        .with_context(|| format!("sampling block {} of {}", window.ordinal, path.display()))?;
-    crate::sniff::sniff(tmp.path(), &sample, limits)
-        .map(|r| r.spec)
-        .with_context(|| format!("sniffing block {} of {}", window.ordinal, path.display()))
+    std::fs::write(&tmp, &bytes).with_context(|| {
+        format!("writing block {} of {} to a scratch file", window.ordinal, path.display())
+    })?;
+    let sniffed = (|| {
+        let sample = crate::sample::build(&tmp, 16 * 1024, limits)
+            .with_context(|| format!("sampling block {} of {}", window.ordinal, path.display()))?;
+        crate::sniff::sniff(&tmp, &sample, limits)
+            .map(|r| r.spec)
+            .with_context(|| format!("sniffing block {} of {}", window.ordinal, path.display()))
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    sniffed
 }
 
 /// The raw bytes of one stacked block, by physical line number — the same

@@ -1300,7 +1300,8 @@ const GRID_CELL_MAX: usize = 14;
 
 /// The text part of a raw head: one `sheet "Name": R row(s) x C col(s)`
 /// line per sheet, the file's own lines (the first — the header — carrying
-/// `marks`), the caption naming the sheet the grid came from, and a `…`
+/// `marks` — for a region member, the first line of its own *block*), the
+/// caption naming the sheet the grid came from, and a `…`
 /// when the text read was truncated. The grid itself is a table, drawn by
 /// `draw_raw_head`. `window`, when this is a region member, dims every
 /// file line outside `[start, end)` and bolds the ones inside — `raw.lines`
@@ -1317,10 +1318,17 @@ fn raw_text_lines(raw: &RawHead, marks: &Highlights, window: Option<RowWindow>) 
     for (name, rows, cols) in &raw.sheets {
         lines.push(Line::raw(format!("sheet \"{name}\": {rows} row(s) x {cols} col(s)")));
     }
+    // The marked line is this member's own header — the first line of its
+    // block, not of the file, which for `report.csv#2` is line 5, not line
+    // 0. Being the block's first line it is inside the window, so it keeps
+    // its marks rather than being dimmed with everything outside; `marked`
+    // says so directly rather than leaving that to arithmetic.
+    let header = window.map_or(0, |w| w.start as usize);
     for (i, l) in raw.lines.iter().enumerate() {
-        let line = if i == 0 { marks.line(l) } else { Line::raw(l.clone()) };
+        let marked = i == header;
+        let line = if marked { marks.line(l) } else { Line::raw(l.clone()) };
         lines.push(match window {
-            Some(w) => style_for_window(line, (w.start..w.end).contains(&(i as u64))),
+            Some(w) => style_for_window(line, marked || (w.start..w.end).contains(&(i as u64))),
             None => line,
         });
     }

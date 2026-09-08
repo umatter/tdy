@@ -1366,13 +1366,20 @@ pub fn execute_with(
         let (mut counting, _) =
             Source::open(path, &spec.extraction, &opts, provided_header.as_deref())?;
         let shape = measure(&mut counting, &limits, path)?;
-        // A window whose start never arrived means the counting pass ran to
-        // the true end of file without seeing a record inside it — that
+        // A window whose start the index never reached means the counting
+        // pass ran to the true end of file without getting that far — that
         // count is `n` for the error. Only the counting pass has it; the
         // body pass need not check.
-        if shape.rows == 0 {
-            if let Extraction::Delimited { region: Some(w), .. } = &spec.extraction {
-                let n = counting.raw_records_seen().unwrap_or(0);
+        //
+        // The predicate is `engine::extract_delimited`'s own,
+        // `raw_index <= start`, not "the pass produced no rows": a window
+        // naming only blank lines *inside* the file also produces no rows,
+        // and it is an empty block, not a missing one. Refusing it here
+        // while the materialising executor returned an empty table made the
+        // two executors answer differently about one file.
+        if let Extraction::Delimited { region: Some(w), .. } = &spec.extraction {
+            let n = counting.raw_records_seen().unwrap_or(0);
+            if n <= w.start {
                 bail!(
                     "region rows {}..{} start past the end of {} ({} rows)",
                     w.start,

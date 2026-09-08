@@ -205,32 +205,6 @@ fn a_sheet_region_is_addressed_from_the_used_ranges_own_origin() {
     assert!(text.contains("600.00") && text.contains("1500.00") && text.contains("900.00"), "{text}");
 }
 
-/// `regions_of` must stream a text file rather than materialise it — a
-/// blank-row split runs on every plain member on every `tdy fit`, including
-/// the sidecar-reuse fast path, so an O(file) read there would turn a
-/// cheap freshness check into an expensive one. This proves the streaming
-/// path's *correctness* on a large file (one block, no blank line, of
-/// ~50 MB: still no regions) without a size assumption baked into the
-/// assertion — cargo's test harness has no practical way to assert a peak-
-/// RSS bound from inside the process being measured.
-///
-/// Ignored by default (building the fixture is real I/O on every run).
-/// To confirm the *memory* claim by hand — that peak RSS stays flat and
-/// does not track the file's ~50 MB — build the test binary and measure it
-/// directly, not through `cargo test` (which would measure cargo's own
-/// process):
-///
-/// ```text
-/// cargo test --release --test regions --no-run
-/// BIN=$(find target/release/deps -maxdepth 1 -name 'regions-*' -type f -executable | head -1)
-/// /usr/bin/time -f "wall %es peak_rss %MkB" "$BIN" --ignored --exact \
-///   regions_of_streams_a_large_file
-/// ```
-///
-/// Compare the reported `peak_rss` against the same command run on a
-/// `~5 MB` fixture (shrink `TARGET_BYTES` below) — a streaming split's
-/// peak RSS should not move with the file size; the old whole-file
-/// `read_text` path would show it growing roughly linearly.
 /// A `source_name` column reading `from = "region"` holds the block's own
 /// 1-based ordinal, in every row — the same fact `#N` names the member by,
 /// now readable as data rather than only as a member name.
@@ -307,6 +281,32 @@ fn source_name_from_region_fails_without_a_region() {
     assert!(err.contains("from = \"region\""), "{err}");
 }
 
+/// `regions_of` must stream a text file rather than materialise it — a
+/// blank-row split runs on every plain member on every `tdy fit`, including
+/// the sidecar-reuse fast path, so an O(file) read there would turn a
+/// cheap freshness check into an expensive one. This proves the streaming
+/// path's *correctness* on a large file (one block, no blank line, of
+/// ~50 MB: still no regions) without a size assumption baked into the
+/// assertion — cargo's test harness has no practical way to assert a peak-
+/// RSS bound from inside the process being measured.
+///
+/// Ignored by default (building the fixture is real I/O on every run).
+/// To confirm the *memory* claim by hand — that peak RSS stays flat and
+/// does not track the file's ~50 MB — build the test binary and measure it
+/// directly, not through `cargo test` (which would measure cargo's own
+/// process):
+///
+/// ```text
+/// cargo test --release --test regions --no-run
+/// BIN=$(find target/release/deps -maxdepth 1 -name 'regions-*' -type f -executable | head -1)
+/// /usr/bin/time -f "wall %es peak_rss %MkB" "$BIN" --ignored --exact \
+///   regions_of_streams_a_large_file
+/// ```
+///
+/// Compare the reported `peak_rss` against the same command run on a
+/// `~5 MB` fixture (shrink `TARGET_BYTES` below) — a streaming split's
+/// peak RSS should not move with the file size; the old whole-file
+/// `read_text` path would show it growing roughly linearly.
 #[test]
 #[ignore]
 fn regions_of_streams_a_large_file() {
@@ -476,4 +476,73 @@ fn validate_and_check_can_name_a_region_member() {
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(!text.contains("could mean"), "one member, one reading: {text}");
     assert!(out.status.success(), "{text}");
+}
+
+/// CRLF line endings: `\r` is ASCII whitespace, so a `\r\n`-only line is
+/// blank to the splitter and a `\r\n` terminator is one line, exactly as a
+/// bare `\n` is. Two stacked blocks land on {0,4} and {5,9}, and both
+/// executors read each block's own sum from them — this pins the behaviour
+/// rather than leaving it to the reader of `is_ascii_whitespace`.
+#[test]
+fn a_crlf_file_splits_on_the_same_windows_and_both_executors_agree() {
+    use tdy::spec::{ColumnSpec, DType, Extraction, ParseSpec, RaggedPolicy, Transform, ValueParsing};
+    let dir = tempfile::TempDir::new().unwrap();
+    let p = dir.path().join("crlf.csv");
+    let body = [
+        "Datum;Region;Betrag",
+        "05.01.2025;Ost;190.00",
+        "12.01.2025;West;200.00",
+        "19.01.2025;Nord;210.00",
+        "",
+        "Datum;Region;Betrag",
+        "05.02.2025;Ost;490.00",
+        "12.02.2025;West;500.00",
+        "19.02.2025;Nord;510.00",
+    ]
+    .join("\r\n")
+        + "\r\n";
+    std::fs::write(&p, &body).unwrap();
+    let r = tdy::engine::regions_of(&p, None, Limits::default()).unwrap();
+    assert_eq!(
+        r.windows,
+        [RowWindow { start: 0, end: 4, ordinal: 1 }, RowWindow { start: 5, end: 9, ordinal: 2 }]
+    );
+    assert!(r.dropped.is_empty(), "{r:?}");
+
+    for (w, want) in [(r.windows[0], "190.00"), (r.windows[1], "490.00")] {
+        let spec = ParseSpec {
+            extraction: Extraction::Delimited {
+                delimiter: ';', quote: Some('"'), escape: None, encoding: None, comment: None,
+                ragged: RaggedPolicy::PadNulls, region: Some(w),
+            },
+            transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+            columns: vec![ColumnSpec {
+                name: "Betrag".into(), source: None, dtype: DType::Decimal { precision: 14, scale: 2 },
+                nullable: false, parse: ValueParsing::default(), pointer: None,
+            }],
+            confidence: Some(1.0),
+            notes: vec![],
+        };
+        let render = |bs: &[datafusion::arrow::array::RecordBatch]| {
+            datafusion::arrow::util::pretty::pretty_format_batches(bs).unwrap().to_string()
+        };
+        let a = render(&tdy::engine::execute_batches(&spec, &p, Limits::default()).unwrap());
+        let b = render(&tdy::stream::execute_batches(&spec, &p, Limits::default()).unwrap());
+        assert_eq!(a, b, "the executors must agree on block {}", w.ordinal);
+        assert!(a.contains(want), "block {}: {a}", w.ordinal);
+    }
+}
+
+/// `tdy fit TARGET FILE` reads the file as one table — the single-file
+/// question has no answer for a file holding three. Its refusal says so and
+/// names the command that does split it, instead of leaving a header read
+/// as data looking like a type problem.
+#[test]
+fn a_single_file_fit_of_a_stacked_file_names_the_split_it_did_not_do() {
+    let (dir, t) = three_pile();
+    let out = tdy(&["fit", t.to_str().unwrap(), dir.path().join("report.csv").to_str().unwrap()]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("3 stacked tables") || text.contains("3 tables"), "{text}");
+    assert!(text.contains("tdy fit") && text.contains(&t.display().to_string()), "{text}");
 }

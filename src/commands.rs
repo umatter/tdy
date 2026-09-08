@@ -340,6 +340,12 @@ pub async fn fit_one_text(
         Err(FitError::Gaps(gaps)) => {
             writeln!(text, "{} cannot reach `{}`:\n", file.display(), target.name)?;
             write!(text, "{}", FitError::Gaps(gaps))?;
+            // A stacked file's gaps are about a header read as data, which
+            // reads as a type problem and is not one. Say what the file is,
+            // and which command splits it.
+            if let Some(n) = crate::fit::stacked_note(file, target_path, limits) {
+                writeln!(text, "\n  {n}")?;
+            }
             if propose {
                 writeln!(text, "  suggestions:")?;
                 write_proposals(&mut text, file, &target, limits)?;

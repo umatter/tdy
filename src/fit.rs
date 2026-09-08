@@ -681,6 +681,33 @@ fn col_letter(mut idx: u32) -> String {
     s.iter().rev().collect()
 }
 
+/// The sentence a single-file refusal needs when the file it was asked
+/// about is really several tables stacked at blank rows: `fit()` reads the
+/// file as one table, so its gaps are about a header read as data rather
+/// than about the columns. Only called on a refusal, so an ordinary fit
+/// pays nothing for it; `None` for a file with no split and for anything
+/// that cannot be read.
+pub fn stacked_note(path: &Path, target_file: &Path, limits: Limits) -> Option<String> {
+    let sheet = region_read_hint(path, None, limits)?;
+    let n = engine::regions_of(path, sheet.as_deref(), limits).ok()?.windows.len();
+    (n >= 2).then(|| {
+        format!(
+            "{} holds {n} stacked tables, split at blank rows, and `tdy fit TARGET FILE` \
+             reads a file as one table. Fit the pile instead — `tdy fit {}` — which makes \
+             each block its own member, `{}#1` … `{}#{n}`, each waiting on a person.",
+            path.display(),
+            target_file.display(),
+            short_name(path),
+            short_name(path),
+        )
+    })
+}
+
+/// A path as a member reference spells it: its file name.
+fn short_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+}
+
 /// The sheet name a region read of this unit should use: the unit's own
 /// sheet when it has one (`Some(Some(name))`), else — for a plain member
 /// that happens to be a single-sheet workbook — that workbook's only sheet,
@@ -1757,4 +1784,31 @@ fn first_ok(
         }
     }
     Err(last)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A sheet region's `range` is built from the used range's own column
+    /// index, so the base-26 carry has to be right at the boundaries: 25 is
+    /// `Z`, 26 is `AA` (there is no zero digit), 51 is `AZ`, 52 is `BA`. A
+    /// carry off by one would address a neighbouring column and read a
+    /// plausible wrong block.
+    #[test]
+    fn a_column_index_becomes_its_a1_letters() {
+        for (idx, want) in [
+            (0, "A"),
+            (1, "B"),
+            (25, "Z"),
+            (26, "AA"),
+            (27, "AB"),
+            (51, "AZ"),
+            (52, "BA"),
+            (701, "ZZ"),
+            (702, "AAA"),
+        ] {
+            assert_eq!(col_letter(idx), want, "column index {idx}");
+        }
+    }
 }

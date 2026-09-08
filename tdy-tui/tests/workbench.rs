@@ -1850,12 +1850,17 @@ fn the_watched_files_are_the_target_and_the_members_sidecars() {
     w.begin(".fit sales.tdy.sql");
     let mut q1 = member("2025.xlsx", MemberStatus::Fits);
     q1.sheet = Some("Q1".into());
-    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits), q1]))), d.path());
+    // A region member's sidecar carries its ordinal in its name too; the
+    // file the workbench watches is that one, not the plain file's.
+    let mut r2 = member("report.csv", MemberStatus::Fits);
+    r2.region = Some(2);
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![member("2025-01.csv", MemberStatus::Fits), q1, r2]))), d.path());
     let watched = w.watched_files();
-    assert_eq!(watched.len(), 3, "{watched:?}");
+    assert_eq!(watched.len(), 4, "{watched:?}");
     assert!(watched.contains(&d.path().join("sales.tdy.sql")));
     assert!(watched.contains(&d.path().join("2025-01.csv.tdy.toml")));
     assert!(watched.contains(&d.path().join("2025.xlsx#Q1.tdy.toml")));
+    assert!(watched.contains(&d.path().join("report.csv#2.tdy.toml")), "{watched:?}");
 }
 
 /// A change noticed on disk is named in the status line with the key that

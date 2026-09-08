@@ -1448,8 +1448,10 @@ impl Workbench {
     /// launch line this one is *not* a dry run — `f` is the key that writes
     /// the lock for real.
     /// The files whose change means the pile on screen may be out of date:
-    /// the target, and every member's sidecar (a sheet member's under its
-    /// own name). Empty outside a pile. The runtime stats these once a
+    /// the target, and every member's sidecar (a sheet or region member's
+    /// under its own name — `report.csv#2.tdy.toml`, never the plain
+    /// file's, which a region pile does not even have). Empty outside a
+    /// pile. The runtime stats these once a
     /// second and hands a change to `notice_change`.
     pub fn watched_files(&self) -> Vec<PathBuf> {
         let (target, report) = match &self.context {
@@ -1459,7 +1461,7 @@ impl Workbench {
         let mut out = vec![target.clone()];
         for m in &report.members {
             let file = member_preview_path(target, &m.path);
-            out.push(tdy::sidecar::sidecar_path_for(&file, m.sheet.as_deref(), None));
+            out.push(tdy::sidecar::sidecar_path_for(&file, m.sheet.as_deref(), m.region));
         }
         out
     }

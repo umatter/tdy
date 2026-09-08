@@ -1028,3 +1028,41 @@ fn a_quoted_newline_does_not_shift_the_next_blocks_window() {
     assert!(a.contains("490.00") && a.contains("500.00") && a.contains("510.00"), "{a}");
     assert_eq!(a.matches("2025").count(), 0, "block 2's header was promoted, not read as data: {a}");
 }
+
+/// A window that names only blank lines *inside* the file is empty, not
+/// past the end. The materialising executor says so (its refusal is
+/// `raw_index <= start` after a complete read, and the index ran past the
+/// window); the streaming one refused on "the counting pass produced no
+/// rows", which is also true of an empty block. Same file, same spec, two
+/// different answers is the disagreement the streaming sweep exists to
+/// prevent.
+#[test]
+fn a_window_on_blank_lines_inside_the_file_is_empty_on_both_executors() {
+    let dir = TempDir::new().unwrap();
+    let body = "Datum;Region;Betrag\n28.01.2025;Ost;190.00\n28.02.2025;West;200.00\n\n\nDatum;Region;Betrag\n28.04.2025;Ost;490.00\n";
+    let p = write(&dir, "gap.csv", body);
+    let mut s = spec(vec![], vec![col("col_1", DType::Utf8)]);
+    s.extraction = Extraction::Delimited {
+        delimiter: ';', quote: Some('"'), escape: None, encoding: None, comment: None,
+        ragged: RaggedPolicy::PadNulls, region: Some(RowWindow { start: 3, end: 5, ordinal: 1 }),
+    };
+    let a = engine::execute_batches(&s, &p, Limits::default())
+        .map(|b| render(&b))
+        .map_err(|e| format!("{e:#}"));
+    let b = stream::execute_batches(&s, &p, Limits::default())
+        .map(|b| render(&b))
+        .map_err(|e| format!("{e:#}"));
+    // Both refuse, and for the same reason: the block is empty, so the
+    // declared column has nothing to come from. (The two spell DataFusion's
+    // projection failure slightly differently — that is general to the two
+    // paths and what `assert_paths_agree` already tolerates; what must not
+    // differ is *why* the file was refused.)
+    for (which, r) in [("engine", &a), ("stream", &b)] {
+        let msg = r.as_ref().expect_err("an empty block cannot supply a column");
+        assert!(msg.contains("col_1"), "{which}: {msg}");
+        assert!(
+            !msg.contains("past the end"),
+            "{which}: the window is inside the file; it is empty, not missing: {msg}"
+        );
+    }
+}

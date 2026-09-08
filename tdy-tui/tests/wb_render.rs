@@ -47,6 +47,15 @@ fn find(buf: &ratatui::buffer::Buffer, needle: &str) -> Option<(u16, u16)> {
     }))
 }
 
+/// `find`, but starting the search at row `from` — for a needle that
+/// legitimately appears twice (two blocks with the same header line).
+fn find_from(buf: &ratatui::buffer::Buffer, needle: &str, from: u16) -> Option<(u16, u16)> {
+    (from..buf.area.height).find_map(|y| row_text(buf, y).find(needle).map(|i| {
+        let col = row_text(buf, y)[..i].chars().count() as u16;
+        (col, y)
+    }))
+}
+
 fn fg_at(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> ratatui::style::Color {
     buf[(x, y)].fg
 }
@@ -1945,4 +1954,39 @@ fn a_region_members_raw_head_dims_rows_outside_the_window() {
     let (x5, y5) = find(&buf, "h5").unwrap();
     assert_ne!(fg_at(&buf, x5, y5), Color::DarkGray, "line 5 is inside the window");
     assert!(buf[(x5, y5)].modifier.contains(Modifier::BOLD), "line 5 gains bold");
+}
+
+/// A region member's header is its *block's* first line, not the file's. The
+/// marks that point at `--propose`'s candidate therefore belong on the line
+/// the window starts at — and that line, being inside the window, must keep
+/// them rather than be dimmed with everything outside.
+#[test]
+fn a_region_members_marks_land_on_its_own_header_line() {
+    use ratatui::style::Color;
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = gap_member("report.csv");
+    m.region = Some(2);
+    m.window = Some(RowWindow { start: 5, end: 9, ordinal: 2 });
+    m.problems[0].header = vec!["Datum".into(), "Kanton".into(), "Betrag".into()];
+    m.proposals = vec![tdy::report::ProposalReport {
+        column: "region".into(),
+        want: "TEXT".into(),
+        candidates: vec![("Kanton".into(), "all 4 sampled value(s) parse as TEXT".into())],
+        message: String::new(),
+    }];
+    // Block 1's header on line 0, block 2's on line 5 — identical text, so
+    // only the line index can tell the two apart.
+    let head = "Datum;Kanton;Betrag";
+    member_with_raw(
+        &mut w,
+        &d,
+        m,
+        raw_of(&[head, "31.01.2025;BE;1.00", "01.02.2025;BE;2.00", "02.02.2025;BE;3.00", "", head, "31.03.2025;BE;4.00"]),
+    );
+    let buf = buffer(&mut w, 120, 34);
+    let (x0, y0) = find(&buf, head).unwrap();
+    assert_eq!(fg_at(&buf, x0 + 6, y0), Color::DarkGray, "line 0 is not this member's header");
+    let (x5, y5) = find_from(&buf, head, y0 + 1).unwrap();
+    assert_eq!(fg_at(&buf, x5 + 6, y5), Color::Green, "line 5 is, and keeps its marks");
 }
