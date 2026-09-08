@@ -332,15 +332,7 @@ impl Unit {
     fn whole_file_notes(&self) -> Vec<String> {
         let mut ns: Vec<String> =
             self.notes.iter().filter(|n| !is_dropped_note(n)).cloned().collect();
-        ns.extend(self.dropped.iter().map(|d| {
-            format!(
-                "the split found a run of {} line(s) at lines {}–{} outside the proper \
-                 block; this spec reads the whole file",
-                d.end - d.start,
-                d.start + 1,
-                d.end
-            )
-        }));
+        ns.extend(self.dropped.iter().map(read_anyway_note));
         ns
     }
 
@@ -542,6 +534,25 @@ fn dropped_note(d: &crate::engine::DroppedRun) -> String {
     )
 }
 
+/// The same run, for a member whose spec reads the file whole: those lines
+/// are read after all, so the note that says nothing read them is false and
+/// this one replaces it. Prefix fixed for the same two reasons
+/// [`dropped_note`]'s is.
+fn read_anyway_note(d: &crate::engine::DroppedRun) -> String {
+    format!(
+        "the split found a run of {} line(s) at lines {}–{} outside the proper block; \
+         this spec reads the whole file",
+        d.end - d.start,
+        d.start + 1,
+        d.end
+    )
+}
+
+/// [`read_anyway_note`]'s own shape.
+fn is_read_anyway_note(n: &str) -> bool {
+    n.starts_with("the split found a run of ")
+}
+
 /// Does this note name lines nothing read? [`dropped_note`]'s own shape.
 fn is_dropped_note(n: &str) -> bool {
     n.starts_with("a run of ") && n.ends_with("was not read")
@@ -557,9 +568,9 @@ fn is_refusal_note(n: &str) -> bool {
 /// sidecar detail; these are the ones about lines nothing read and about an
 /// edit that was discarded, which a person reading the pile has to see.
 fn shown_notes(m: &MemberReport) -> impl Iterator<Item = &String> {
-    m.notes.iter().filter(|n| {
-        is_dropped_note(n) || is_refusal_note(n) || n.starts_with("the split found a run of ")
-    })
+    m.notes
+        .iter()
+        .filter(|n| is_dropped_note(n) || is_read_anyway_note(n) || is_refusal_note(n))
 }
 
 /// A multi-line message as one line — a sidecar's refusal can list several
@@ -773,7 +784,7 @@ pub async fn fit_pile(
                 spec.notes.retain(|n| !(n.starts_with("table ") && n.ends_with("split at blank rows")));
                 spec.notes.retain(|n| !n.starts_with("one proper block in this file"));
                 spec.notes.retain(|n| !is_dropped_note(n));
-                spec.notes.retain(|n| !n.starts_with("the split found a run of "));
+                spec.notes.retain(|n| !is_read_anyway_note(n));
                 // The split's notes and its review reason are true of a spec
                 // that reads one block. A plain member may legitimately reuse
                 // a hand-written whole-file spec instead — and then those
