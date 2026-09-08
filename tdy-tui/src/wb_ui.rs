@@ -20,6 +20,7 @@ use ratatui::Frame;
 
 use tdy::console::{EntryStatus, RawHead, SpecSummary, Table};
 use tdy::report::{MemberReport, MemberStatus, PileReport};
+use tdy::spec::RowWindow;
 
 use crate::mark;
 use crate::remedy::{Edit, Remedy};
@@ -600,7 +601,14 @@ fn context_title(ctx: &Context) -> String {
         Context::Member { report, member, .. } => report
             .members
             .get(*member)
-            .map(|m| m.name())
+            .map(|m| match m.window {
+                // 1-based, inclusive, en dash: `w.start..w.end` is the
+                // 0-based half-open window the spec carries, and a title
+                // in that vocabulary would read as an off-by-one to a
+                // person counting lines in an editor.
+                Some(w) => format!("{} · rows {}–{}", m.name(), w.start + 1, w.end),
+                None => m.name(),
+            })
             .unwrap_or_else(|| "member".to_string()),
         Context::Evidence { member, .. } => format!("accept {member} ?"),
     }
@@ -1069,7 +1077,7 @@ fn draw_member(f: &mut Frame, area: Rect, block: Block<'static>, m: &MemberRepor
         Layout::horizontal([Constraint::Length(raw_w), Constraint::Fill(1)]).areas(inner);
 
     match raw {
-        Some(r) => draw_raw_head(f, left, r, w.main_scroll, &marks),
+        Some(r) => draw_raw_head(f, left, r, w.main_scroll, &marks, m.window),
         None => f.render_widget(Paragraph::new(Line::styled("loading…", Style::new().fg(DIM))), left),
     }
 
@@ -1234,8 +1242,15 @@ fn problem_lines(p: &tdy::report::Problem, marks: &Highlights) -> Vec<Line<'stat
 /// a table whose first row carries them too. `scroll` moves the text
 /// lines first and the grid rows after them, so a text file's scroll is
 /// exactly the old paragraph scroll.
-fn draw_raw_head(f: &mut Frame, area: Rect, raw: &RawHead, scroll: usize, marks: &Highlights) {
-    let text_lines = raw_text_lines(raw, marks);
+fn draw_raw_head(
+    f: &mut Frame,
+    area: Rect,
+    raw: &RawHead,
+    scroll: usize,
+    marks: &Highlights,
+    window: Option<RowWindow>,
+) {
+    let text_lines = raw_text_lines(raw, marks, window);
     if raw.grid.is_empty() {
         f.render_widget(Paragraph::new(text_lines).scroll((scroll as u16, 0)), area);
         return;
@@ -1287,8 +1302,14 @@ const GRID_CELL_MAX: usize = 14;
 /// line per sheet, the file's own lines (the first — the header — carrying
 /// `marks`), the caption naming the sheet the grid came from, and a `…`
 /// when the text read was truncated. The grid itself is a table, drawn by
-/// `draw_raw_head`.
-fn raw_text_lines(raw: &RawHead, marks: &Highlights) -> Vec<Line<'static>> {
+/// `draw_raw_head`. `window`, when this is a region member, dims every
+/// file line outside `[start, end)` and bolds the ones inside — `raw.lines`
+/// is a bounded prefix starting at line 0 of the file, so its index there
+/// is directly comparable to the window's raw physical line indices; a
+/// window past the read prefix's end simply dims everything shown, which
+/// is correct (the member's own rows are just not in the sample), not a
+/// bug to special-case.
+fn raw_text_lines(raw: &RawHead, marks: &Highlights, window: Option<RowWindow>) -> Vec<Line<'static>> {
     if raw.lines.is_empty() && raw.sheets.is_empty() && raw.grid.is_empty() {
         return vec![Line::styled("reading…", Style::new().fg(DIM))];
     }
@@ -1297,7 +1318,11 @@ fn raw_text_lines(raw: &RawHead, marks: &Highlights) -> Vec<Line<'static>> {
         lines.push(Line::raw(format!("sheet \"{name}\": {rows} row(s) x {cols} col(s)")));
     }
     for (i, l) in raw.lines.iter().enumerate() {
-        lines.push(if i == 0 { marks.line(l) } else { Line::raw(l.clone()) });
+        let line = if i == 0 { marks.line(l) } else { Line::raw(l.clone()) };
+        lines.push(match window {
+            Some(w) => style_for_window(line, (i as u64) >= w.start && (i as u64) < w.end),
+            None => line,
+        });
     }
     // The grid is whichever sheet `grid_sheet` names — the first by
     // default, another when `--sheet`/`[`/`]` picked it. A workbook may
@@ -1310,6 +1335,24 @@ fn raw_text_lines(raw: &RawHead, marks: &Highlights) -> Vec<Line<'static>> {
         lines.push(Line::styled("…", Style::new().fg(DIM)));
     }
     lines
+}
+
+/// Applies a region window's verdict on one raw-head line to every span it
+/// already carries (a header line may hold several, from `marks`): outside
+/// the window gets `DIM` — overriding whatever colour marking already put
+/// there, since a line that is not this member's own data should not read
+/// as one of its candidates or problems — and inside keeps its style but
+/// gains `Modifier::BOLD`.
+fn style_for_window(line: Line<'static>, in_window: bool) -> Line<'static> {
+    let spans: Vec<Span<'static>> = line
+        .spans
+        .into_iter()
+        .map(|s| {
+            let style = if in_window { s.style.add_modifier(Modifier::BOLD) } else { s.style.fg(DIM) };
+            Span::styled(s.content, style)
+        })
+        .collect();
+    Line::from(spans)
 }
 
 /// No sidecar: raw head only, plus a footer naming the fact that it is
@@ -1330,7 +1373,7 @@ fn draw_file_no_spec(
     f.render_widget(block, area);
     let [content, footer] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inner);
-    draw_raw_head(f, content, raw, scroll, &Highlights::default());
+    draw_raw_head(f, content, raw, scroll, &Highlights::default(), None);
     let footer_text = if stale { "sidecar stale — `.sniff --force`" } else { "not sniffed — press s" };
     f.render_widget(
         Paragraph::new(Line::styled(footer_text, Style::new().fg(DIM))),
@@ -1379,7 +1422,7 @@ fn draw_file_with_spec(
 
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
-    draw_raw_head(f, left, raw, scroll, &Highlights::default());
+    draw_raw_head(f, left, raw, scroll, &Highlights::default(), None);
     f.render_widget(Paragraph::new(spec_lines(spec, w.confidence_threshold, raw)), right);
 
     if let (Some(bottom), Some(t)) = (bottom, preview) {

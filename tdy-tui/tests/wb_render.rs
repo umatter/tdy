@@ -9,6 +9,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tdy::report::{MemberReport, MemberStatus, PileReport, Problem, SourceBinding};
+use tdy::spec::RowWindow;
 use tdy_tui::browser::Browser;
 use tdy_tui::wb_ui;
 use tdy_tui::workbench::Workbench;
@@ -104,6 +105,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         path: path.into(),
         sheet: None,
         region: None,
+        window: None,
         status,
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
@@ -1904,4 +1906,43 @@ fn the_browser_shows_a_workbooks_sheet_specs() {
     let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     let text = screen(&mut w, 100, 20).join("\n");
     assert!(text.contains("✓ 2 sheets"), "{text}");
+}
+
+/// A region member's title names the rows it reads — 1-based, inclusive,
+/// en dash — never the 0-based half-open window the spec carries.
+#[test]
+fn a_region_member_title_names_its_rows() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = member("report.csv", MemberStatus::Fits);
+    m.region = Some(2);
+    m.window = Some(RowWindow { start: 5, end: 9, ordinal: 2 });
+    fitted(&mut w, &d, pile_report(vec![m]));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Enter));
+    let text = screen(&mut w, 120, 30).join("\n");
+    assert!(text.contains("report.csv#2 · rows 6–9"), "{text}");
+}
+
+/// The raw head dims every line outside the region's window and bolds the
+/// ones inside it — the bounded prefix's own honesty about which rows are
+/// *this* member, on a member view that otherwise shows the whole file.
+#[test]
+fn a_region_members_raw_head_dims_rows_outside_the_window() {
+    use ratatui::style::{Color, Modifier};
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = member("report.csv", MemberStatus::Fits);
+    m.region = Some(2);
+    m.window = Some(RowWindow { start: 5, end: 9, ordinal: 2 });
+    let lines = ["h0", "h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"];
+    member_with_raw(&mut w, &d, m, raw_of(&lines));
+    let buf = buffer(&mut w, 120, 34);
+    let (x0, y0) = find(&buf, "h0").unwrap();
+    assert_eq!(fg_at(&buf, x0, y0), Color::DarkGray, "line 0 is outside the window");
+    assert!(!buf[(x0, y0)].modifier.contains(Modifier::BOLD), "line 0 is not bold");
+    let (x5, y5) = find(&buf, "h5").unwrap();
+    assert_ne!(fg_at(&buf, x5, y5), Color::DarkGray, "line 5 is inside the window");
+    assert!(buf[(x5, y5)].modifier.contains(Modifier::BOLD), "line 5 gains bold");
 }

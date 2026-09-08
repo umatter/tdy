@@ -4,6 +4,7 @@ use tdy::console::{Outcome, Payload, RawHead, Table};
 use tdy::report::{
     MemberReport, MemberStatus, PileReport, Problem, ProposalReport, SourceBinding,
 };
+use tdy::spec::RowWindow;
 use tdy_tui::browser::Browser;
 use tdy_tui::remedy::Remedy;
 use tdy_tui::workbench::{Context, Focus, WbAction, Workbench};
@@ -53,6 +54,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         path: path.into(),
         sheet: None,
         region: None,
+        window: None,
         status,
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
@@ -1867,4 +1869,24 @@ fn a_change_noticed_on_disk_is_named_not_acted_on() {
     let act = w.notice_change(&d.path().join("sales.tdy.sql"));
     assert_eq!(act, WbAction::None);
     assert!(w.status.contains("sales.tdy.sql") && w.status.contains("changed on disk") && w.status.contains("f refits"), "{}", w.status);
+}
+
+/// A region member's window travels with it into `Context::Member` — no
+/// I/O, since `fit_pile` already filled it in on the `MemberReport` itself.
+#[test]
+fn entering_a_region_member_previews_its_window() {
+    let d = pile();
+    let mut m = member("report.csv", MemberStatus::Fits);
+    m.region = Some(2);
+    m.window = Some(RowWindow { start: 5, end: 9, ordinal: 2 });
+    let (w, _act) = pile_and_enter(&d, vec![m], 0);
+    match &w.context {
+        Context::Member { report, member, .. } => {
+            assert_eq!(
+                report.members[*member].window,
+                Some(RowWindow { start: 5, end: 9, ordinal: 2 })
+            );
+        }
+        other => panic!("expected Member context, got {other:?}"),
+    }
 }

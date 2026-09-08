@@ -21,8 +21,18 @@ use crate::config::Config;
 use crate::fit::{FitError, Gap};
 use crate::member::MemberRef;
 use crate::lockfile::{self, Lock, Member, LOCK_VERSION};
-use crate::spec::{InferenceMethod, RowWindow};
+use crate::spec::{Extraction, InferenceMethod, ParseSpec, RowWindow};
 use crate::target::Target;
+
+/// The region window a fitted spec's extraction carries, if any — `None`
+/// for a whole-file/whole-sheet member and for a workbook region (which
+/// carries its ordinal on the `Excel` arm, not a `RowWindow`).
+fn spec_window(spec: &ParseSpec) -> Option<RowWindow> {
+    match &spec.extraction {
+        Extraction::Delimited { region, .. } => *region,
+        _ => None,
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct PileReport {
@@ -74,6 +84,12 @@ pub struct MemberReport {
     /// in file order — `None` is the whole file or sheet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<u32>,
+    /// The raw physical line window this member reads, when it is a
+    /// `Delimited` region (`report.csv#2`) rather than a whole file or
+    /// sheet — read from the fitted spec, not re-derived, so it always
+    /// agrees with what actually executes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<RowWindow>,
     pub status: MemberStatus,
     /// Where the plan came from: heuristic | llm | manual | existing.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -580,6 +596,7 @@ pub async fn fit_pile(
                         path: rel.clone(),
                         sheet: unit.sheet.clone(),
                         region,
+                        window: spec_window(&spec),
                         status: MemberStatus::Contradicts,
                         via: Some(via.into()),
                         sources: Vec::new(),
@@ -610,6 +627,7 @@ pub async fn fit_pile(
                         path: rel.clone(),
                         sheet: unit.sheet.clone(),
                         region,
+                        window: spec_window(&spec),
                         status: MemberStatus::Error,
                         via: Some(via.into()),
                         sources: Vec::new(),
@@ -664,6 +682,7 @@ pub async fn fit_pile(
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
                     region,
+                    window: spec_window(&spec),
                     status,
                     via: Some(via.into()),
                     sources: spec
@@ -750,6 +769,7 @@ pub async fn fit_pile(
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
                     region,
+                    window: spec_window(&fitted.spec),
                     status,
                     via: Some(
                         match method {
@@ -800,6 +820,7 @@ pub async fn fit_pile(
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
                     region,
+                    window: None,
                     status,
                     via: None,
                     sources: Vec::new(),
