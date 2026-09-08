@@ -753,3 +753,44 @@ fn an_exclude_that_names_both_a_file_and_a_member_is_refused() {
     let lock = std::fs::read_to_string(dir.path().join("q.tdy.lock")).unwrap();
     assert!(lock.contains("region = 2") && !lock.contains("region = 3"), "{lock}");
 }
+
+/// An `exclude` entry containing `#` can be a plain file's own name rather
+/// than a member reference. `lockfile::resolve_excluded`'s glob pass already
+/// dropped `odd#name.csv` before `expand_units` ever runs, so the
+/// member-reference pass — which finds no member called `odd#name.csv`,
+/// because it was never a member at all — must not then say the entry
+/// "removes no member". It already removed one, as a file.
+#[test]
+fn an_exclude_that_removed_a_file_by_glob_is_not_removes_no_member() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_three.csv"), dir.path().join("report.csv")).unwrap();
+    std::fs::write(dir.path().join("odd#name.csv"), "x,y\n1,2\n").unwrap();
+    let t = dir.path().join("q.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*', date_order = 'dmy', exclude = 'odd#name.csv');",
+    )
+    .unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{text}");
+    for n in 1..=3 {
+        assert!(text.contains(&format!("report.csv#{n}")), "{text}");
+    }
+    assert!(dir.path().join("q.tdy.lock").exists(), "lock written: {text}");
+}
+
+/// The control for the case above: an `exclude` entry with `#` that removes
+/// nothing at all — not a file by glob, not a member by reference — is still
+/// refused as a typo, exactly as before.
+#[test]
+fn an_exclude_naming_no_member_anywhere_is_still_refused() {
+    let (dir, t) = three_pile();
+    let ddl = std::fs::read_to_string(&t).unwrap().replace("files = '*.csv',", "files = '*.csv', exclude = 'report.csv#99',");
+    std::fs::write(&t, ddl).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("removes no member"), "{text}");
+    assert!(!dir.path().join("q.tdy.lock").exists(), "no lock: {text}");
+}

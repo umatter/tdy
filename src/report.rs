@@ -499,7 +499,11 @@ pub fn expand_units(
         }
         let before = units.len();
         units.retain(|u| *x != u.member.name());
-        if units.len() == before {
+        // An entry that already removed a FILE in the glob pass has removed
+        // something, even when — as here, `file` is `Some` and `named` is
+        // `None` — it names no member: `odd#name.csv` is a plain file whose
+        // own name happens to contain `#`, not a table nothing dropped.
+        if units.len() == before && file.is_none() {
             anyhow::bail!(
                 "exclude {x:?} removes no member of `{}`. Members are named relative to the \
                  target: {}",
