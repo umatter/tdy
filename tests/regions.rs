@@ -69,3 +69,99 @@ fn a_hand_written_lock_over_three_regions_reads_all_and_names_them() {
     assert!(text.contains("report.csv#2") && text.contains("1500.00"), "{text}");
     assert!(text.contains("report.csv#3") && text.contains("900.00"), "{text}");
 }
+
+fn three_pile() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_three.csv"), dir.path().join("report.csv")).unwrap();
+    let t = dir.path().join("q.tdy.sql");
+    std::fs::write(&t, "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*.csv', date_order = 'dmy', provenance = 'true');").unwrap();
+    (dir, t)
+}
+
+/// Three stacked tables become three members, every one waiting on a person,
+/// accepted by name one at a time; the acceptance survives a refit.
+#[test]
+fn stacked_tables_become_region_members_that_wait_on_a_person() {
+    let (dir, t) = three_pile();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    for n in 1..=3 { assert!(text.contains(&format!("report.csv#{n}")), "{text}"); }
+    // `render_pile_text` prints "REVIEW" twice per unaccepted member — once
+    // as the status word, once as the "REVIEW: <reason>" detail line — the
+    // same established format `tests/dataset.rs`'s single-member review
+    // assertions check with `.contains`, so three members is six, not three.
+    assert_eq!(text.matches("REVIEW").count(), 6, "{text}");
+    assert!(text.contains("split at blank rows"), "{text}");
+    let sql = format!("SELECT _member, sum(amount) AS total FROM dataset('{}') GROUP BY 1 ORDER BY 1", t.display());
+    let out = tdy(&["query", &sql]);
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("report.csv#1"));
+    for n in 1..=3 {
+        let out = tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("report.csv#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("600.00") && text.contains("1500.00") && text.contains("900.00"), "{text}");
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(out.status.success());
+    let lock = std::fs::read_to_string(dir.path().join("q.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("accepted = true").count(), 3, "{lock}");
+    assert_eq!(lock.matches("region = ").count(), 3, "{lock}");
+    assert!(dir.path().join("report.csv#2.tdy.toml").exists() && !dir.path().join("report.csv.tdy.toml").exists());
+}
+
+/// A block of a different kind is a gap for the declared table; its sibling fits.
+#[test]
+fn a_summary_block_is_a_gap_not_merged_into_the_table_above_it() {
+    let (dir, t) = three_pile();
+    std::fs::copy(fixture("regions_summary.csv"), dir.path().join("report.csv")).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("report.csv#1") && text.contains("report.csv#2"), "{text}");
+    assert!(text.contains("GAP"), "{text}");
+    assert!(!dir.path().join("q.tdy.lock").exists(), "no partial lock");
+}
+
+/// A title block above one table is one plain member with a note and no review.
+#[test]
+fn one_block_under_a_title_is_a_plain_member_without_review() {
+    let (dir, t) = three_pile();
+    std::fs::copy(fixture("regions_titled.csv"), dir.path().join("report.csv")).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("REVIEW") && !text.contains("#1"), "{text}");
+    let sc = std::fs::read_to_string(dir.path().join("report.csv.tdy.toml")).unwrap();
+    assert!(sc.contains("[spec.extraction.region]") || sc.contains("region = {"), "the window is in the plain sidecar: {sc}");
+}
+
+/// The sheet form: a block on a sheet of a workbook. A one-sheet workbook is
+/// not a *sheet* member (discovery asks regions of the plain unit, whose
+/// sheet is the workbook's only sheet), so the expected name is
+/// `book.xlsx#2`, not `book.xlsx#Data#2` — only a sheet that was itself
+/// expanded into a member gets `#Sheet#N`.
+#[test]
+fn stacked_tables_on_a_sheet_become_sheet_region_members() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_three.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let t = dir.path().join("q.tdy.sql");
+    std::fs::write(&t, "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*.xlsx', date_order = 'dmy');").unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("book.xlsx#2"), "{text}");
+    assert!(dir.path().join("book.xlsx#2.tdy.toml").exists());
+}
+
+#[test]
+fn a_region_member_can_be_excluded_by_reference() {
+    let (dir, t) = three_pile();
+    let ddl = std::fs::read_to_string(&t).unwrap().replace("files = '*.csv',", "files = '*.csv', exclude = 'report.csv#3',");
+    std::fs::write(&t, ddl).unwrap();
+    for n in 1..=2 { tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("report.csv#{n}")]); }
+    let lock = std::fs::read_to_string(dir.path().join("q.tdy.lock")).unwrap();
+    assert!(lock.contains("region = 2") && !lock.contains("region = 3"), "{lock}");
+}

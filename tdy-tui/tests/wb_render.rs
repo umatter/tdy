@@ -103,6 +103,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
     MemberReport {
         path: path.into(),
         sheet: None,
+        region: None,
         status,
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],

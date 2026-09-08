@@ -21,7 +21,7 @@ use crate::config::Config;
 use crate::fit::{FitError, Gap};
 use crate::member::MemberRef;
 use crate::lockfile::{self, Lock, Member, LOCK_VERSION};
-use crate::spec::InferenceMethod;
+use crate::spec::{InferenceMethod, RowWindow};
 use crate::target::Target;
 
 #[derive(Debug, Serialize)]
@@ -70,6 +70,10 @@ pub struct MemberReport {
     /// members. `name()` is what the text shows and what `--accept` takes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sheet: Option<String>,
+    /// One of several tables stacked in the file or sheet, counted from 1
+    /// in file order — `None` is the whole file or sheet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<u32>,
     pub status: MemberStatus,
     /// Where the plan came from: heuristic | llm | manual | existing.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,7 +94,8 @@ pub struct MemberReport {
 
 impl MemberReport {
     pub fn name(&self) -> String {
-        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone(), region: None }.name()
+        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone(), region: self.region }
+            .name()
     }
 }
 
@@ -285,9 +290,11 @@ fn proposals_for(path: &Path, target: &Target, limits: crate::config::Limits) ->
 
 /// The members a pile's files resolve to, in lock order: a workbook whose
 /// sheets fit becomes one unit per fitting sheet, everything else is one
-/// unit for the file. `exclude`'s exact member references (`file#sheet`)
-/// apply here, after expansion — the only place they can, since before it
-/// the members do not exist yet.
+/// unit for the file; a unit whose file or sheet holds several tables
+/// stacked at blank rows then becomes one region unit per table.
+/// `exclude`'s exact member references (`file#sheet`, `file#N`,
+/// `file#sheet#N`) apply here, after expansion — the only place they can,
+/// since before it the members do not exist yet.
 ///
 /// Discovery runs on every fit and is never read back from the previous
 /// lock: membership comes from the fit and is what the lock records.
@@ -296,22 +303,57 @@ pub fn expand_units(
     target: &Target,
     dir: &Path,
     limits: crate::config::Limits,
-) -> Result<Vec<(crate::member::MemberRef, Vec<String>)>> {
-    use crate::member::MemberRef;
-
-    let mut units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
+) -> Result<Vec<(MemberRef, Vec<String>, Option<RowWindow>)>> {
+    let mut sheet_units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
     for rel in rels {
         let p = dir.join(rel);
         match crate::fit::discover_sheets(&p, target, limits) {
             Ok(Some(d)) if d.fitting.len() >= 2 => {
                 let note = expansion_note(&d);
                 for sheet in &d.fitting {
-                    units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()]));
+                    sheet_units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()]));
                 }
             }
             // One fitting sheet, none, a non-workbook, or an unreadable
             // file: a plain member, and `plan` says what is wrong.
-            _ => units.push((MemberRef::file(rel.clone()), Vec::new())),
+            _ => sheet_units.push((MemberRef::file(rel.clone()), Vec::new())),
+        }
+    }
+
+    // Regions: ask every unit so far (plain or sheet) whether its file or
+    // sheet is really several tables stacked at blank rows. A plain unit
+    // that happens to be a single-sheet workbook still needs that sheet
+    // named for `regions_of` to read the right thing, even though the
+    // member itself stays plain (`book.xlsx#2`, never `book.xlsx#Data#2` —
+    // only a sheet that was itself expanded into a member gets `#Sheet#N`).
+    let mut units: Vec<(MemberRef, Vec<String>, Option<RowWindow>)> = Vec::new();
+    for (unit, notes) in sheet_units {
+        let p = dir.join(&unit.path);
+        let windows = match crate::fit::region_read_hint(&p, unit.sheet.as_deref(), limits) {
+            Some(sheet_hint) => {
+                crate::engine::regions_of(&p, sheet_hint.as_deref(), limits).unwrap_or_default()
+            }
+            // A workbook with several sheets whose member is not tied to
+            // one of them: nothing here can say which sheet is meant, so no
+            // region discovery runs for it.
+            None => Vec::new(),
+        };
+        match windows.len() {
+            0 => units.push((unit, notes, None)),
+            1 => {
+                let mut notes = notes;
+                notes.push("one proper block in this file, split at blank rows".to_string());
+                units.push((unit, notes, Some(windows[0])));
+            }
+            n => {
+                for (i, w) in windows.into_iter().enumerate() {
+                    let mut member = unit.clone();
+                    member.region = Some((i + 1) as u32);
+                    let mut notes = notes.clone();
+                    notes.push(format!("table {} of {n} in this file, split at blank rows", i + 1));
+                    units.push((member, notes, Some(w)));
+                }
+            }
         }
     }
 
@@ -320,13 +362,13 @@ pub fn expand_units(
     // in the dataset and nothing said so — which is an error, not a no-op.
     for x in target.exclude.iter().filter(|x| x.contains('#')) {
         let before = units.len();
-        units.retain(|(m, _)| *x != m.name());
+        units.retain(|(m, _, _)| *x != m.name());
         if units.len() == before {
             anyhow::bail!(
                 "exclude {x:?} removes no member of `{}`. Members are named relative to the \
                  target: {}",
                 target.name,
-                units.iter().take(6).map(|(u, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
+                units.iter().take(6).map(|(u, _, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
             );
         }
     }
@@ -347,6 +389,29 @@ fn expansion_note(d: &crate::fit::SheetDiscovery) -> String {
 /// Rows read per member for the magnitude check: a median over this many
 /// is settled long before the file ends, and the read is bounded.
 const MAGNITUDE_ROWS: usize = 2000;
+
+/// The review sentence for a region member: the "table N of M" note
+/// `expand_units` wrote for it, with the reason a person needs added —
+/// `None` for a plain unit (`unit.region` is `None`), which never asks for
+/// review on the strength of the split alone.
+fn region_review_reason(unit: &MemberRef, unit_notes: &[String]) -> Option<String> {
+    unit.region?;
+    unit_notes
+        .iter()
+        .find(|n| n.starts_with("table ") && n.ends_with("split at blank rows"))
+        .map(|n| format!("{n} — accept only if it is the same kind of table as the others"))
+}
+
+/// Append a second review reason to the first, the way the magnitude pass
+/// merges its own reason into a member's `review`.
+fn merge_reason(base: Option<String>, extra: Option<String>) -> Option<String> {
+    match (base, extra) {
+        (Some(b), Some(e)) => Some(format!("{b}; {e}")),
+        (Some(b), None) => Some(b),
+        (None, Some(e)) => Some(e),
+        (None, None) => None,
+    }
+}
 
 /// Was this member's judgement accepted — carried from the previous lock
 /// (same bytes, same reason), or named by `--accept` now?
@@ -438,13 +503,13 @@ pub async fn fit_pile(
         .map(|a| {
             let a = a.strip_prefix(&dir).unwrap_or(a);
             let text = a.to_string_lossy().replace('\\', "/");
-            match MemberRef::resolve(&text, |m| units.iter().any(|(u, _)| u == m)) {
+            match MemberRef::resolve(&text, |m| units.iter().any(|(u, _, _)| u == m)) {
                 Ok(Some(m)) => Ok(m),
                 Ok(None) => Err(anyhow::anyhow!(
                     "--accept {text:?} is not a member of `{}`. Members are named relative to the \
                      target: {}",
                     target.name,
-                    units.iter().take(6).map(|(u, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
+                    units.iter().take(6).map(|(u, _, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
                 )),
                 Err(several) => Err(anyhow::anyhow!(
                     "--accept {text:?} could mean {} — name the file and the sheet unambiguously",
@@ -463,7 +528,7 @@ pub async fn fit_pile(
     let mut needs_review = 0usize;
 
     let total = units.len();
-    for (index, (unit, unit_notes)) in units.iter().enumerate() {
+    for (index, (unit, unit_notes, window)) in units.iter().enumerate() {
         let rel = &unit.path;
         let sheet = unit.sheet.as_deref();
         let region = unit.region;
@@ -501,6 +566,8 @@ pub async fn fit_pile(
                 // fitting sheet would otherwise report a different sheet
                 // count from its own siblings.
                 spec.notes.retain(|n| !(n.starts_with("of ") && n.contains(" sheets, ")));
+                spec.notes.retain(|n| !(n.starts_with("table ") && n.ends_with("split at blank rows")));
+                spec.notes.retain(|n| n != "one proper block in this file, split at blank rows");
                 spec.notes.extend(unit_notes.iter().cloned());
                 let via = match sc.provenance.method {
                     InferenceMethod::Manual => "manual",
@@ -512,6 +579,7 @@ pub async fn fit_pile(
                     reports.push(MemberReport {
                         path: rel.clone(),
                         sheet: unit.sheet.clone(),
+                        region,
                         status: MemberStatus::Contradicts,
                         via: Some(via.into()),
                         sources: Vec::new(),
@@ -541,6 +609,7 @@ pub async fn fit_pile(
                     reports.push(MemberReport {
                         path: rel.clone(),
                         sheet: unit.sheet.clone(),
+                        region,
                         status: MemberStatus::Error,
                         via: Some(via.into()),
                         sources: Vec::new(),
@@ -575,6 +644,7 @@ pub async fn fit_pile(
                     }
                     (!rs.is_empty()).then(|| rs.join("; "))
                 };
+                let review = merge_reason(review, region_review_reason(unit, unit_notes));
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()
@@ -593,6 +663,7 @@ pub async fn fit_pile(
                 reports.push(MemberReport {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
+                    region,
                     status,
                     via: Some(via.into()),
                     sources: spec
@@ -623,18 +694,29 @@ pub async fn fit_pile(
                 break 'member;
             }
         }
-        let planned = match sheet {
-            Some(s) => crate::fit::fit_sheet(&p, s, &target, limits).map(|fitted| crate::fit::Planned {
-                fitted,
-                method: InferenceMethod::Heuristic,
-                model: None,
-            }),
-            None => crate::fit::plan(&p, &target, cfg, opts.progress.as_ref()).await,
+        let planned = match window {
+            Some(w) => {
+                let region_sheet = crate::fit::region_read_hint(&p, sheet, limits).flatten();
+                crate::fit::fit_region(&p, region_sheet.as_deref(), *w, &target, limits).map(|fitted| {
+                    crate::fit::Planned { fitted, method: InferenceMethod::Heuristic, model: None }
+                })
+            }
+            None => match sheet {
+                Some(s) => {
+                    crate::fit::fit_sheet(&p, s, &target, limits).map(|fitted| crate::fit::Planned {
+                        fitted,
+                        method: InferenceMethod::Heuristic,
+                        model: None,
+                    })
+                }
+                None => crate::fit::plan(&p, &target, cfg, opts.progress.as_ref()).await,
+            },
         };
         match planned {
             Ok(planned) => {
                 let (mut fitted, method, model) = (planned.fitted, planned.method, planned.model);
                 fitted.spec.notes.extend(unit_notes.iter().cloned());
+                fitted.review = merge_reason(fitted.review, region_review_reason(unit, unit_notes));
                 if !opts.dry_run {
                     crate::sidecar::save_member(
                         &p,
@@ -667,6 +749,7 @@ pub async fn fit_pile(
                 reports.push(MemberReport {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
+                    region,
                     status,
                     via: Some(
                         match method {
@@ -716,6 +799,7 @@ pub async fn fit_pile(
                 reports.push(MemberReport {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
+                    region,
                     status,
                     via: None,
                     sources: Vec::new(),
@@ -756,7 +840,7 @@ pub async fn fit_pile(
         for o in crate::magnitude::outliers(&medians, crate::magnitude::THRESHOLD) {
             let (ri, _, p) = &fitted_specs[o.member];
             let report = &mut reports[*ri];
-            let unit = MemberRef { path: report.path.clone(), sheet: report.sheet.clone(), region: None };
+            let unit = MemberRef { path: report.path.clone(), sheet: report.sheet.clone(), region: report.region };
             let review = match &report.review {
                 Some(r) => Some(format!("{r}; {}", o.reason())),
                 None => Some(o.reason()),
@@ -958,7 +1042,7 @@ mod tests {
         let (d, target) = pile("");
         let units =
             expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default()).unwrap();
-        let names: Vec<String> = units.iter().map(|(m, _)| m.name()).collect();
+        let names: Vec<String> = units.iter().map(|(m, _, _)| m.name()).collect();
         assert_eq!(names, vec!["2025.xlsx#Q1", "2025.xlsx#Q2"]);
         assert!(units[0].1[0].contains("of 2 sheets, 2 produce"), "{:?}", units[0].1);
     }
@@ -968,7 +1052,7 @@ mod tests {
         let (d, target) = pile(", exclude = '2025.xlsx#Q2'");
         let units =
             expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default()).unwrap();
-        assert_eq!(units.iter().map(|(m, _)| m.name()).collect::<Vec<_>>(), vec!["2025.xlsx#Q1"]);
+        assert_eq!(units.iter().map(|(m, _, _)| m.name()).collect::<Vec<_>>(), vec!["2025.xlsx#Q1"]);
 
         let (d, target) = pile(", exclude = '2025.xlsx#Q9'");
         let err = expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default())

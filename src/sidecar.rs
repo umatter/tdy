@@ -88,7 +88,11 @@ pub fn resolve_ref(text: &Path) -> Result<(PathBuf, Option<String>, Option<u32>)
 /// A tail that parses fully as a positive integer is a region of the plain
 /// file (`report.csv#2.tdy.toml`), not a sheet named `"2"` — the same
 /// exclusion [`region_sidecars`] applies in reverse to tell a sheet name
-/// from a region ordinal.
+/// from a region ordinal. A tail ending in `#<N>` is a *region of a sheet*
+/// (`book.xlsx#Q1#2.tdy.toml`): the ordinal is stripped before what remains
+/// is treated as the sheet name, or a sheet split into regions would be
+/// reported as a sheet literally called `"Q1#2"` — a name that appears once
+/// per region sidecar, when it is really one sheet.
 pub fn sheet_sidecars(file: &Path) -> Vec<String> {
     let Some(name) = file.file_name().map(|n| n.to_string_lossy().into_owned()) else {
         return Vec::new();
@@ -105,13 +109,24 @@ pub fn sheet_sidecars(file: &Path) -> Vec<String> {
         .filter_map(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
             let rest = n.strip_prefix(&prefix)?.strip_suffix(".tdy.toml")?;
-            if rest.is_empty() || rest.parse::<u32>().is_ok() {
+            if rest.is_empty() {
                 return None;
             }
-            Some(rest.to_string())
+            // Strip a trailing region ordinal, if there is one, before
+            // judging whether what remains is a sheet name or itself a bare
+            // ordinal (a region of the plain file).
+            let sheet = match rest.rsplit_once('#') {
+                Some((head, tail)) if !head.is_empty() && tail.parse::<u32>().is_ok() => head,
+                _ => rest,
+            };
+            if sheet.parse::<u32>().is_ok() {
+                return None;
+            }
+            Some(sheet.to_string())
         })
         .collect();
     out.sort();
+    out.dedup();
     out
 }
 
@@ -607,6 +622,25 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
         save_member(&p, None, Some(2), &spec, prov()).unwrap();
         assert!(sheet_sidecars(&p).is_empty(), "a region ordinal is not a sheet name");
         assert_eq!(region_sidecars(&p, None), vec![2]);
+    }
+
+    /// A sheet split into stacked regions has one sidecar per region and no
+    /// plain sheet sidecar — `book.xlsx#Q1#1.tdy.toml`,
+    /// `book.xlsx#Q1#2.tdy.toml` — and `sheet_sidecars` must report the
+    /// sheet once, not report a sheet literally called `"Q1#2"` for every
+    /// region sidecar it finds.
+    #[test]
+    fn sheet_sidecars_collapses_a_sheets_region_sidecars_to_one_sheet_name() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().join("book.xlsx");
+        std::fs::write(&p, b"not read as a workbook here; only the bytes are hashed").unwrap();
+        let mut spec = sheet_spec("Q1");
+        spec.extraction =
+            Extraction::Excel { sheet_name: Some("Q1".into()), sheet_index: None, range: Some("A1:B1".into()) };
+        let prov = || ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
+        save_member(&p, Some("Q1"), Some(1), &spec, prov()).unwrap();
+        save_member(&p, Some("Q1"), Some(2), &spec, prov()).unwrap();
+        assert_eq!(sheet_sidecars(&p), vec!["Q1".to_string()]);
     }
 
     fn sheet_spec(sheet: &str) -> ParseSpec {

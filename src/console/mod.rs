@@ -1057,9 +1057,7 @@ fn file_status(path: &Path) -> EntryStatus {
         Ok(SidecarStatus::Absent) => {
             let sheets = crate::sidecar::sheet_sidecars(path);
             if !sheets.is_empty() {
-                let all_fresh = sheets
-                    .iter()
-                    .all(|s| matches!(crate::sidecar::load_member(path, Some(s), None), Ok(SidecarStatus::Fresh(_))));
+                let all_fresh = sheets.iter().all(|s| sheet_is_fresh(path, s));
                 return if all_fresh { EntryStatus::Sheets(sheets.len()) } else { EntryStatus::Stale };
             }
             let regions = crate::sidecar::region_sidecars(path, None);
@@ -1072,6 +1070,28 @@ fn file_status(path: &Path) -> EntryStatus {
             if all_fresh { EntryStatus::Regions(regions.len()) } else { EntryStatus::Stale }
         }
         Err(_) => EntryStatus::Stale, // unreadable sidecar: not something a query would use
+    }
+}
+
+/// Is this sheet's own plan fresh — its plain sheet sidecar
+/// (`book.xlsx#Q1.tdy.toml`), or, when that is absent because the sheet was
+/// itself split into stacked regions, every one of its region sidecars
+/// (`book.xlsx#Q1#1.tdy.toml`, `book.xlsx#Q1#2.tdy.toml`, ...)?
+fn sheet_is_fresh(path: &Path, sheet: &str) -> bool {
+    use crate::sidecar::SidecarStatus;
+    match crate::sidecar::load_member(path, Some(sheet), None) {
+        Ok(SidecarStatus::Fresh(_)) => true,
+        Ok(SidecarStatus::Absent) => {
+            let regions = crate::sidecar::region_sidecars(path, Some(sheet));
+            !regions.is_empty()
+                && regions.iter().all(|r| {
+                    matches!(
+                        crate::sidecar::load_member(path, Some(sheet), Some(*r)),
+                        Ok(SidecarStatus::Fresh(_))
+                    )
+                })
+        }
+        _ => false,
     }
 }
 

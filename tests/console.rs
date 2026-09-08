@@ -981,6 +981,54 @@ async fn ls_reports_a_files_region_specs() {
     assert!(o.text.contains("region specs (2)"), "{}", o.text);
 }
 
+/// A sheet split into stacked regions has one sidecar per region and no
+/// plain sheet sidecar — `book.xlsx#Q1#1.tdy.toml`, `book.xlsx#Q1#2.tdy.toml`
+/// — and must still list as `Sheets(1)`, not `Stale`: a sheet's own
+/// freshness now also asks its region sidecars when its own plain sidecar
+/// is absent, mirroring `ls_reports_a_workbooks_sheet_specs` for the region
+/// dimension and `sheet_sidecars`' collapse of `"Q1#2"` back to `"Q1"`.
+#[tokio::test]
+async fn ls_reports_a_workbooks_sheet_specs_split_into_regions() {
+    fn region_spec(range: &str) -> tdy::spec::ParseSpec {
+        tdy::spec::ParseSpec {
+            extraction: tdy::spec::Extraction::Excel {
+                sheet_name: Some("Q1".into()),
+                sheet_index: None,
+                range: Some(range.into()),
+            },
+            transforms: vec![tdy::spec::Transform::PromoteHeader { rows: 1, join: " ".into() }],
+            columns: vec![tdy::spec::ColumnSpec {
+                name: "a".into(),
+                source: Some("A".into()),
+                dtype: tdy::spec::DType::Utf8,
+                nullable: true,
+                parse: tdy::spec::ValueParsing::default(),
+                pointer: None,
+            }],
+            confidence: Some(1.0),
+            notes: vec![],
+        }
+    }
+    let d = tempfile::TempDir::new().unwrap();
+    let f = d.path().join("book.xlsx");
+    std::fs::write(&f, b"not read as a workbook here; only its bytes are hashed").unwrap();
+    let prov = || tdy::sidecar::ProvenanceInfo {
+        method: tdy::spec::InferenceMethod::Manual,
+        model: None,
+        prompt_version: None,
+        sampled_bytes: None,
+    };
+    tdy::sidecar::save_member(&f, Some("Q1"), Some(1), &region_spec("A1:A2"), prov()).unwrap();
+    tdy::sidecar::save_member(&f, Some("Q1"), Some(2), &region_spec("A3:A4"), prov()).unwrap();
+
+    let mut s = session(d.path()).await;
+    let o = s.run(".ls", None).await;
+    let Payload::Listing(entries) = o.payload else { panic!("{:?}", o.payload) };
+    let book = entries.iter().find(|e| e.name == "book.xlsx").expect("the workbook is listed");
+    assert_eq!(book.status, EntryStatus::Sheets(1), "{:?}", book.status);
+    assert!(o.text.contains("sheet specs (1)"), "{}", o.text);
+}
+
 /// A magnitude reason is a fact about the pile, recorded in the lock rather
 /// than in the member's spec; `.accept`'s step one must find it there.
 #[tokio::test]

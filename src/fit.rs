@@ -589,6 +589,106 @@ pub fn fit_sheet(path: &Path, sheet: &str, target: &Target, limits: Limits) -> R
     fit_framed(path, target, limits, draft, Rigour::Full)
 }
 
+/// Fit one region — one of several tables stacked in a file or a sheet —
+/// fully, reusing the same frame `fit`/`fit_sheet` would find for the whole
+/// file or sheet and narrowing it to the block's own rows.
+///
+/// For text (`sheet: None`), the sniffer's whole-file draft is reused with
+/// its `region` window set to the block; any `SkipRows` transform is
+/// dropped first — a title block above the first table is a fact about the
+/// *file*, not about a block that never contains it, and re-applying it here
+/// would drop rows the block does not have. For a sheet, `frame_excel_sheet`'s
+/// draft is reused with `range` narrowed to the block's own rows, over the
+/// sheet's used-range column span.
+pub fn fit_region(
+    path: &Path,
+    sheet: Option<&str>,
+    window: crate::spec::RowWindow,
+    target: &Target,
+    limits: Limits,
+) -> Result<Fitted, FitError> {
+    let draft = match sheet {
+        Some(s) => {
+            let mut d = sniff::frame_excel_sheet(path, s, limits)
+                .with_context(|| format!("framing sheet {s:?} of {}", path.display()))
+                .map_err(FitError::Unreadable)?;
+            let width = {
+                let mut wb = engine::open_workbook(path, &limits).map_err(FitError::Unreadable)?;
+                engine::checked_worksheet_range(&mut wb, s, &limits)
+                    .map_err(FitError::Unreadable)?
+                    .width()
+            };
+            let last_col = col_letter(width.saturating_sub(1) as u32);
+            match &mut d.extraction {
+                Extraction::Excel { range, .. } => {
+                    *range = Some(format!("A{}:{last_col}{}", window.start + 1, window.end));
+                }
+                other => {
+                    return Err(FitError::Unreadable(anyhow::anyhow!(
+                        "sheet {s:?} of {} framed as {}, not excel",
+                        path.display(),
+                        other.format_name()
+                    )))
+                }
+            }
+            d
+        }
+        None => {
+            let mut d = sniff_draft(path, target, limits)?;
+            match &mut d.extraction {
+                Extraction::Delimited { region, .. } => *region = Some(window),
+                other => {
+                    return Err(FitError::Unreadable(anyhow::anyhow!(
+                        "{} framed as {}; region splitting is only implemented for delimited \
+                         text and excel sheets",
+                        path.display(),
+                        other.format_name()
+                    )))
+                }
+            }
+            // A title block belongs to the whole file, not this block: a
+            // whole-file `skip_rows` re-applied here would drop rows the
+            // block does not have.
+            d.transforms.retain(|t| !matches!(t, Transform::SkipRows { .. }));
+            d
+        }
+    };
+    fit_framed(path, target, limits, draft, Rigour::Full)
+}
+
+/// A 0-based column index as A1 letters ("A", "Z", "AA", ...).
+fn col_letter(mut idx: u32) -> String {
+    let mut s = Vec::new();
+    loop {
+        s.push((b'A' + (idx % 26) as u8) as char);
+        if idx < 26 {
+            break;
+        }
+        idx = idx / 26 - 1;
+    }
+    s.iter().rev().collect()
+}
+
+/// The sheet name a region read of this unit should use: the unit's own
+/// sheet when it has one (`Some(Some(name))`), else — for a plain member
+/// that happens to be a single-sheet workbook — that workbook's only sheet,
+/// because `regions_of`/`fit_region` need to know which sheet even though a
+/// plain unit's own name never carries it (only a sheet that was itself
+/// expanded into a member does — see `report::expand_units`).
+/// `Some(None)` means read the file as text; `None` means a workbook with
+/// several sheets whose member is not tied to one of them, so nothing here
+/// can say which is meant and no region discovery should run at all.
+pub(crate) fn region_read_hint(path: &Path, sheet: Option<&str>, limits: Limits) -> Option<Option<String>> {
+    if let Some(s) = sheet {
+        return Some(Some(s.to_string()));
+    }
+    match engine::excel_sheet_shapes(path, limits) {
+        Ok(shapes) if shapes.len() == 1 => Some(Some(shapes[0].name.clone())),
+        Ok(_) => None,
+        Err(_) => Some(None),
+    }
+}
+
 /// The enumerable frames of one file, labelled for the messages.
 struct FrameCandidates {
     /// What kind of thing is being chosen between: "record arrays", "sheets".
