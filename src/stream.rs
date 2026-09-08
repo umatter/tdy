@@ -308,9 +308,10 @@ enum Source {
         /// The next record's index in the file's raw physical lines — a
         /// record's index is the line its first byte is on. A blank line
         /// consumes an index although the reader never yields it as a
-        /// record; a quoted newline inside a record does not advance the
-        /// index of the *next* record beyond that record's own extent.
-        /// The same count a `RowWindow` addresses.
+        /// record; a record's own quoted newlines spread it across: a
+        /// record spanning three physical lines occupies three indices, so
+        /// the record after it starts three later. The same count a
+        /// `RowWindow` addresses.
         raw_index: u64,
     },
     Lines {

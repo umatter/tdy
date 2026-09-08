@@ -304,14 +304,6 @@ fn proposals_for(path: &Path, target: &Target, limits: crate::config::Limits) ->
         .collect()
 }
 
-/// The members a pile's files resolve to, in lock order: a workbook whose
-/// sheets fit becomes one unit per fitting sheet, everything else is one
-/// unit for the file; a unit whose file or sheet holds several tables
-/// stacked at blank rows then becomes one region unit per table.
-/// `exclude`'s exact member references (`file#sheet`, `file#N`,
-/// `file#sheet#N`) apply here, after expansion — the only place they can,
-/// since before it the members do not exist yet.
-///
 /// One member the pile expanded to, before it is fitted: who it is, what
 /// the expansion knows about it, and the block window it reads.
 #[derive(Debug, Clone)]
@@ -326,6 +318,14 @@ pub struct Unit {
     pub review: Option<String>,
 }
 
+/// The members a pile's files resolve to, in lock order: a workbook whose
+/// sheets fit becomes one unit per fitting sheet, everything else is one
+/// unit for the file; a unit whose file or sheet holds several tables
+/// stacked at blank rows then becomes one region unit per table.
+/// `exclude`'s exact member references (`file#sheet`, `file#N`,
+/// `file#sheet#N`) apply here, after expansion — the only place they can,
+/// since before it the members do not exist yet.
+///
 /// Discovery runs on every fit and is never read back from the previous
 /// lock: membership comes from the fit and is what the lock records.
 pub fn expand_units(
