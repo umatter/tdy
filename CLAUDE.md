@@ -428,7 +428,8 @@ when a reference could mean two members (a `#` in both a file name and a sheet n
 caller names both rather than picking one; `EntryStatus::Sheets(n)` is what `.ls` (`sheet specs
 (n)`) and the browser (`✓ n sheets`) say about a workbook expanded into sheet members, `Stale` if
 any sheet sidecar is; the workbench's fallback remedy excludes the sheet member by name, not the
-whole workbook; and a pile with sheet members says "member(s)" where a plain pile says "file(s)".
+whole workbook; and a pile with sheet **or region** members says "member(s)" where a plain
+pile says "file(s)".
 `tests/dataset.rs::acceptance_is_per_sheet_member` is the end-to-end proof that `--accept` takes
 one sheet's judgement and leaves its sibling alone. **The magnitude check** (`src/magnitude.rs`,
 2026-09-07): with three members or more, each member's median absolute value per numeric column
@@ -509,7 +510,28 @@ the grouping note fired across one file's own blocks as though they were
 unrelated files. `source_name` gains `from = "region"` (`SourcePart::Region`),
 the block's ordinal as a column. The workbench carries `MemberReport.window`;
 a region member's title reads `report.csv#2 · rows 6–9` (1-based, inclusive);
-the raw head bolds the rows inside the window and dims the rows outside it.
+the raw head bolds the rows inside the window, dims the rows outside it, and
+puts the `--propose`/problem marks on the *block's* own header line
+(`window.start`, not line 0), which keeps them since that line is inside the
+window. `watched_files` watches `report.csv#2.tdy.toml`, the sidecar a region
+member actually has.
+
+Follow-ups from its own review (2026-09-08): the two filesystem fallbacks
+that resolve a typed member reference — `sidecar::resolve_ref` and the
+console's `.accept` — asked only whether a sidecar path *existed*, and
+`report.csv#2.tdy.toml` is the path of sheet `"2"` and of region 2 alike, so
+`MemberRef::resolve` saw two candidates and `tdy validate`, `tdy check
+--against` and `.accept` could not name a single region member.
+`sidecar::declares_member` reads the sidecar's own `source` block instead;
+one file, one declaration, at most one true candidate. `sheet_sidecars`'s
+numeric-tail exclusion has a floor of 1 (`is_ordinal`), so a sheet literally
+named `0` is listed again. `stream`'s past-the-end refusal mirrors
+`engine`'s `raw_index <= start` rather than "no rows", so a window on blank
+lines inside a file is empty on both executors instead of missing on one.
+`tdy fit TARGET FILE` on a stacked file names the split it did not do
+(`fit::stacked_note`). `tempfile` is a dev-dependency again: `draft`'s block
+sniff takes its scratch file from `fileio::scratch_file`, inside the
+process-lifetime cache `clear_cache()` already removes.
 
 Out of scope, named on the design page: tables sitting **beside** each other
 in a sheet (a two-dimensional segmentation problem a declared `range` already

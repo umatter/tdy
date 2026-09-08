@@ -691,17 +691,26 @@ there is more than one, every block becomes a member named by its ordinal,
 
 ```
 $ tdy fit q.tdy.sql
-q: 3 file(s) match, 3 declared column(s)
+q: 3 member(s) match, 3 declared column(s)
 
   report.csv#1             REVIEW    month<-"Datum"  region<-"Region"  amount<-"Betrag"
       REVIEW: table 1 of 3 in this file, split at blank rows — accept only if it is the same kind of table as the others
+      tdy does not accept a value-changing step on its own judgement.
+      Accept:  tdy fit q.tdy.sql --accept report.csv#1
   report.csv#2             REVIEW    month<-"Datum"  region<-"Region"  amount<-"Betrag"
       REVIEW: table 2 of 3 in this file, split at blank rows — accept only if it is the same kind of table as the others
+      tdy does not accept a value-changing step on its own judgement.
+      Accept:  tdy fit q.tdy.sql --accept report.csv#2
   report.csv#3             REVIEW    month<-"Datum"  region<-"Region"  amount<-"Betrag"
       REVIEW: table 3 of 3 in this file, split at blank rows — accept only if it is the same kind of table as the others
+      tdy does not accept a value-changing step on its own judgement.
+      Accept:  tdy fit q.tdy.sql --accept report.csv#3
 
-3 of 3 file(s) fit `q`.
+3 of 3 member(s) fit `q`.
 3 member(s) need a human before they can join. Nothing is wrong with them mechanically — that is the point.
+wrote q.tdy.lock
+
+Query it:  tdy query "SELECT * FROM dataset('q.tdy.sql')"
 ```
 
 A blank line is proof the split is *possible*, not proof the blocks belong
@@ -711,8 +720,18 @@ difference. `tdy fit q.tdy.sql --accept report.csv#2` accepts one block by
 name and leaves its siblings waiting; `exclude = 'report.csv#3'` drops one for
 good, the same as excluding a whole file or a sheet. A file with exactly one
 block after the split — a title row above an otherwise ordinary table, say —
-never asks: there was only one reading, so it becomes a plain member with a
-note, unreviewed.
+usually never asks: there was only one reading, so it becomes a plain member
+with a note, unreviewed.
+
+What the split *discards* is part of its answer, though. A run shorter than
+three rows is not a block, so once a window is applied nothing reads those
+lines — and a member that quietly answers for part of a file is exactly the
+wrong value tdy exists to refuse. Every member says which lines were left
+out, in a note the report prints; and a discarded run as wide as the blocks
+that were kept — a stray two-row table, a `Total;;1500` footer — waits on a
+person, because a blank line cannot say whether those rows were data. A
+one-field title banner over a three-field table is not one of those, and
+still asks nothing.
 
 A member is named by its path relative to the target — `exports/2025-07.csv`,
 not `2025-07.csv` — and that is the name `--accept` takes.
