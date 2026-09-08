@@ -55,8 +55,18 @@ FIXTURES  (all in testdata/, named regions_*)
    `regions_of` returns exactly one window, {3,7} — not two — which is
    the case the minimum exists for.
 
+5. regions_three_offset.xlsx
+   The same three blocks and amounts as #2, but the used range starts at
+   C5, not A1 (two blank columns of margin, four blank rows). `regions_of`
+   returns windows relative to the used range — {0,4},{5,9},{10,14}, same
+   as #2 — but an A1 address for a window has to add the used range's own
+   `start()` back in, or the read lands on the wrong sheet rows/columns.
+   This is the case that motivates that: reading it as if the sheet's data
+   began at A1 would read sheet rows 1-4 (blank) instead of 5-8.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
-sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}].
+sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
+regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx.
 """
 import os
 import re
@@ -161,6 +171,39 @@ def build_regions_three_xlsx():
     )
 
 
+def build_regions_three_offset_xlsx():
+    """Same three blocks as regions_three.xlsx, but the used range does not
+    start at the sheet's own A1: two blank columns (A, B) and four blank
+    rows of margin push the first block's header to C5. `regions_of` reads
+    row indices *of the used range*, so a window of {0,4} here is sheet row
+    5, not sheet row 1 — the case that motivates reading the used range's
+    own `start()` before turning a window into an A1 address, rather than
+    assuming it is (0, 0).
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    row, col = 5, 3  # first block's header lands at C5
+    for i, block in enumerate((BLOCK1, BLOCK2, BLOCK3)):
+        if i > 0:
+            row += 1  # one fully blank row between blocks
+        for j, cell in enumerate(("Datum", "Region", "Betrag")):
+            ws.cell(row=row, column=col + j, value=cell)
+        row += 1
+        for d, r, b in block:
+            for j, v in enumerate((d, r, b)):
+                ws.cell(row=row, column=col + j, value=v)
+            row += 1
+    save_workbook(
+        wb,
+        "regions_three_offset.xlsx",
+        "same three blocks as regions_three.xlsx, sheet \"Data\", used range starts at "
+        "C5 (2 blank columns, 4 blank rows of margin)",
+    )
+
+
 def build_regions_summary_csv():
     recap = ["Region;Total"] + [f"{r};{b}" for _, r, b in BLOCK1]
     lines = csv_block(BLOCK1) + [""] + recap
@@ -184,10 +227,12 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
     build_regions_three_xlsx()
+    build_regions_three_offset_xlsx()
     build_regions_summary_csv()
     build_regions_titled_csv()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
-          "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]")
+          "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
+          "regions_three_offset.xlsx -> same sums, used range starts at C5")
 
 
 if __name__ == "__main__":

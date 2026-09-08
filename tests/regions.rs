@@ -165,3 +165,75 @@ fn a_region_member_can_be_excluded_by_reference() {
     let lock = std::fs::read_to_string(dir.path().join("q.tdy.lock")).unwrap();
     assert!(lock.contains("region = 2") && !lock.contains("region = 3"), "{lock}");
 }
+
+/// The used range does not always start at the sheet's own A1. `regions_of`
+/// returns windows relative to the used range, so turning a window into an
+/// A1 address has to add the range's own `start()` back in — otherwise the
+/// read still succeeds, just against the wrong sheet rows and columns
+/// (blank margin, or a neighbouring block), which is exactly the silent
+/// wrong-value failure this project refuses.
+#[test]
+fn a_sheet_region_is_addressed_from_the_used_ranges_own_origin() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_three_offset.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let t = dir.path().join("q.tdy.sql");
+    std::fs::write(&t, "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*.xlsx', date_order = 'dmy', provenance = 'true');").unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    for n in 1..=3 { assert!(text.contains(&format!("book.xlsx#{n}")), "{text}"); }
+    for n in 1..=3 {
+        let out = tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("book.xlsx#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let sql = format!("SELECT _member, sum(amount) AS total FROM dataset('{}') GROUP BY 1 ORDER BY 1", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("600.00") && text.contains("1500.00") && text.contains("900.00"), "{text}");
+}
+
+/// `regions_of` must stream a text file rather than materialise it — a
+/// blank-row split runs on every plain member on every `tdy fit`, including
+/// the sidecar-reuse fast path, so an O(file) read there would turn a
+/// cheap freshness check into an expensive one. This proves the streaming
+/// path's *correctness* on a large file (one block, no blank line, of
+/// ~50 MB: still no regions) without a size assumption baked into the
+/// assertion — cargo's test harness has no practical way to assert a peak-
+/// RSS bound from inside the process being measured.
+///
+/// Ignored by default (building the fixture is real I/O on every run).
+/// To confirm the *memory* claim by hand — that peak RSS stays flat and
+/// does not track the file's ~50 MB — build the test binary and measure it
+/// directly, not through `cargo test` (which would measure cargo's own
+/// process):
+///
+/// ```text
+/// cargo test --release --test regions --no-run
+/// BIN=$(find target/release/deps -maxdepth 1 -name 'regions-*' -type f -executable | head -1)
+/// /usr/bin/time -f "wall %es peak_rss %MkB" "$BIN" --ignored --exact \
+///   regions_of_streams_a_large_file
+/// ```
+///
+/// Compare the reported `peak_rss` against the same command run on a
+/// `~5 MB` fixture (shrink `TARGET_BYTES` below) — a streaming split's
+/// peak RSS should not move with the file size; the old whole-file
+/// `read_text` path would show it growing roughly linearly.
+#[test]
+#[ignore]
+fn regions_of_streams_a_large_file() {
+    use std::io::Write;
+    const TARGET_BYTES: usize = 50 * 1024 * 1024;
+    let dir = tempfile::TempDir::new().unwrap();
+    let p = dir.path().join("big.csv");
+    let mut f = std::fs::File::create(&p).unwrap();
+    writeln!(f, "a,b,c").unwrap();
+    let row = "1,2,3\n";
+    let rows = TARGET_BYTES / row.len();
+    for _ in 0..rows {
+        f.write_all(row.as_bytes()).unwrap();
+    }
+    drop(f);
+    let w = tdy::engine::regions_of(&p, None, Limits::default()).unwrap();
+    assert!(w.is_empty(), "one block, no blank line anywhere, is no region: {w:?}");
+}

@@ -612,16 +612,27 @@ pub fn fit_region(
             let mut d = sniff::frame_excel_sheet(path, s, limits)
                 .with_context(|| format!("framing sheet {s:?} of {}", path.display()))
                 .map_err(FitError::Unreadable)?;
-            let width = {
+            // `regions_of` counts rows *of the used range*, not of the
+            // sheet: a window of {0,4} means the used range's own first 4
+            // rows, wherever on the sheet that range actually starts. Add
+            // its `start()` back in before turning the window into an A1
+            // address, or a sheet whose data begins at, say, C5 has its
+            // window read against blank margin (or a neighbouring block)
+            // instead of the rows it names.
+            let (start, width) = {
                 let mut wb = engine::open_workbook(path, &limits).map_err(FitError::Unreadable)?;
-                engine::checked_worksheet_range(&mut wb, s, &limits)
-                    .map_err(FitError::Unreadable)?
-                    .width()
+                let r = engine::checked_worksheet_range(&mut wb, s, &limits).map_err(FitError::Unreadable)?;
+                (r.start().unwrap_or((0, 0)), r.width())
             };
-            let last_col = col_letter(width.saturating_sub(1) as u32);
+            let first_col = col_letter(start.1);
+            let last_col = col_letter(start.1 + width.saturating_sub(1) as u32);
             match &mut d.extraction {
                 Extraction::Excel { range, .. } => {
-                    *range = Some(format!("A{}:{last_col}{}", window.start + 1, window.end));
+                    *range = Some(format!(
+                        "{first_col}{}:{last_col}{}",
+                        start.0 + window.start as u32 + 1,
+                        start.0 + window.end as u32
+                    ));
                 }
                 other => {
                     return Err(FitError::Unreadable(anyhow::anyhow!(

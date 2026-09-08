@@ -2062,27 +2062,77 @@ pub fn sheet_grid(
 /// (`sample::render_cell`). The windows returned are row indices of that
 /// used range, in the same half-open form.
 pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Vec<RowWindow>> {
-    let blanks: Vec<bool> = match sheet {
+    match sheet {
         Some(name) => {
+            // A sheet is materialised by calamine regardless, so there is
+            // nothing to stream here — the whole grid already exists.
             let mut wb = open_workbook(path, &limits)?;
             let range = checked_worksheet_range(&mut wb, name, &limits)?;
-            range
+            let blanks: Vec<bool> = range
                 .rows()
                 .map(|row| row.iter().all(|c| render_cell(c).trim().is_empty()))
-                .collect()
+                .collect();
+            Ok(blocks_from(&blanks))
         }
-        None => {
-            let text = read_text(path, None, &ExtractOpts::full(limits))?;
-            let mut lines: Vec<&str> = text.split('\n').collect();
-            // A trailing newline produces one empty trailing split that is
-            // not a line the file actually has.
-            if lines.last() == Some(&"") {
-                lines.pop();
+        // A text file is read line by line instead: `expand_units` calls
+        // this on every plain member on every fit (including the
+        // sidecar-reuse fast path), so materialising the whole file into a
+        // `String` here — the old `read_text` call — turned an O(1)
+        // sidecar-reuse check into an O(file) one. `regions_of_lines` keeps
+        // only the run boundaries found so far, so memory here is O(runs),
+        // not O(file).
+        None => regions_of_lines(path, limits),
+    }
+}
+
+/// [`regions_of`]'s text-file path: streams raw lines through a `BufReader`
+/// over the materialised file (the same opener the streaming executor
+/// uses), tracking only the current run and the runs already closed —
+/// never the file's lines themselves. A line's index is its raw line
+/// number, exactly as [`read_text`]'s whole-file split counts it: the final
+/// line contributes no phantom trailing entry when the file ends in `\n`,
+/// because `read_until` simply returns nothing on the next call.
+///
+/// Blankness does not need decoding: a line is blank when every byte in it,
+/// after the line terminator is stripped, is ASCII whitespace (which is
+/// exactly what trimming a `\r` and ordinary spaces/tabs means) — a
+/// non-UTF-8 byte elsewhere in the line makes it non-blank, which is the
+/// only thing that question needs to get right.
+fn regions_of_lines(path: &Path, limits: Limits) -> Result<Vec<RowWindow>> {
+    let real = fileio::materialize(path, limits.max_decompressed_bytes)?;
+    let file = std::fs::File::open(real.as_ref())
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut runs: Vec<(u64, u64)> = Vec::new();
+    let mut run_start: Option<u64> = None;
+    let mut index: u64 = 0;
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        buf.clear();
+        let n = std::io::BufRead::read_until(&mut reader, b'\n', &mut buf)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        let mut line = buf.as_slice();
+        if line.last() == Some(&b'\n') {
+            line = &line[..line.len() - 1];
+        }
+        let blank = line.iter().all(|b| b.is_ascii_whitespace());
+        match (blank, run_start) {
+            (false, None) => run_start = Some(index),
+            (true, Some(s)) => {
+                runs.push((s, index));
+                run_start = None;
             }
-            lines.iter().map(|l| l.trim().is_empty()).collect()
+            _ => {}
         }
-    };
-    Ok(blocks_from(&blanks))
+        index += 1;
+    }
+    if let Some(s) = run_start {
+        runs.push((s, index));
+    }
+    Ok(windows_from_runs(runs))
 }
 
 /// Maximal runs of `false` (non-blank) in `blanks`, as half-open
@@ -2116,13 +2166,21 @@ fn raw_runs(blanks: &[bool]) -> Vec<(usize, usize)> {
 /// second region, and must not turn a single table into one spurious
 /// window by making its one run fall short of the file's own start or end.
 fn blocks_from(blanks: &[bool]) -> Vec<RowWindow> {
-    let runs = raw_runs(blanks);
+    let runs = raw_runs(blanks).into_iter().map(|(s, e)| (s as u64, e as u64)).collect();
+    windows_from_runs(runs)
+}
+
+/// [`blocks_from`]'s filtering rule, shared with [`regions_of_lines`] (which
+/// finds its runs by streaming rather than by materialising a `blanks`
+/// vector first) so the two paths cannot drift apart on what counts as a
+/// region.
+fn windows_from_runs(runs: Vec<(u64, u64)>) -> Vec<RowWindow> {
     if runs.len() == 1 {
         return Vec::new();
     }
     runs.into_iter()
         .filter(|(s, e)| e - s >= 3)
-        .map(|(s, e)| RowWindow { start: s as u64, end: e as u64 })
+        .map(|(s, e)| RowWindow { start: s, end: e })
         .collect()
 }
 
