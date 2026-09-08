@@ -377,9 +377,16 @@ slicing, "stacked tables".
 **Messy → clean:** one sheet holds three tables separated by blank rows, or a
 summary block beside the data block.
 
-**`partial`** — a declared `range` extracts one block, and the frame-elimination
-machinery picks between *sheets*, not between *blocks within a sheet*. There is
-no operator that says "this file contains N tables; here they are."
+**`partial`** — landed 2026-09-08 for stacked tables (`docs/design/2026-09-08-regions.md`):
+`engine::regions_of` splits a text file or a sheet at runs of blank lines/rows,
+and `report::expand_units` turns several blocks into one member per block —
+`report.csv#2` — each fully fitted and each behind the review gate, since a
+blank row proves a boundary exists but not that the blocks are the same kind
+of table. Exactly one proper block needs no review; the elimination proved it.
+Still `partial`: side-by-side tables in one sheet remain out of scope — a
+two-dimensional segmentation problem a declared `range` already answers by
+hand, and the design page named it deliberately excluded rather than merely
+undone.
 
 **Revised upward after the literature pass**, on two counts. First, it is
 measurable: **188 of 3,712 real-world CSVs (5.1%) contain multiple tables**,

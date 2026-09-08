@@ -3,7 +3,7 @@
 *2026-09-06. A sidecar is per file, so a twelve-sheet workbook contributes one
 sheet to a dataset and a file holding three tables contributes one. The
 operator catalogue's C9 (sheet half) and B10 are the same question seen from
-two sides, and the question is about **identity**, not extraction. Steps 1 and 2 of §4 landed on 2026-09-07 — `docs/design/2026-09-07-workbook-members.md`; regions (step 3) remain deferred.*
+two sides, and the question is about **identity**, not extraction. Steps 1 and 2 of §4 landed on 2026-09-07 — `docs/design/2026-09-07-workbook-members.md`; step 3 (regions) landed 2026-09-08 — `docs/design/2026-09-08-regions.md`.*
 
 ---
 

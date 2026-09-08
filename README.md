@@ -683,6 +683,37 @@ and its own line in the lock. A sheet that does not fit is named in the notes,
 changes the workbook's hash, so it is drift — named — and the next fit picks it
 up. `source_name { from = "sheet" }` turns the sheet into a column.
 
+A file can also stack several tables one above the other — a quarterly report
+with one block per region and a summary block underneath, separated by blank
+lines. `tdy fit` splits at the blank rows and fits each block on its own; when
+there is more than one, every block becomes a member named by its ordinal,
+`report.csv#2` for the second, and none of them can join the pile on its own:
+
+```
+$ tdy fit q.tdy.sql
+q: 3 file(s) match, 3 declared column(s)
+
+  report.csv#1             REVIEW    month<-"Datum"  region<-"Region"  amount<-"Betrag"
+      REVIEW: table 1 of 3 in this file, split at blank rows — accept only if it is the same kind of table as the others
+  report.csv#2             REVIEW    month<-"Datum"  region<-"Region"  amount<-"Betrag"
+      REVIEW: table 2 of 3 in this file, split at blank rows — accept only if it is the same kind of table as the others
+  report.csv#3             REVIEW    month<-"Datum"  region<-"Region"  amount<-"Betrag"
+      REVIEW: table 3 of 3 in this file, split at blank rows — accept only if it is the same kind of table as the others
+
+3 of 3 file(s) fit `q`.
+3 member(s) need a human before they can join. Nothing is wrong with them mechanically — that is the point.
+```
+
+A blank line is proof the split is *possible*, not proof the blocks belong
+together — a summary block under three regional ones is a different table
+that happens to sit in the same file, and only a person can tell the
+difference. `tdy fit q.tdy.sql --accept report.csv#2` accepts one block by
+name and leaves its siblings waiting; `exclude = 'report.csv#3'` drops one for
+good, the same as excluding a whole file or a sheet. A file with exactly one
+block after the split — a title row above an otherwise ordinary table, say —
+never asks: there was only one reading, so it becomes a plain member with a
+note, unreviewed.
+
 A member is named by its path relative to the target — `exports/2025-07.csv`,
 not `2025-07.csv` — and that is the name `--accept` takes.
 

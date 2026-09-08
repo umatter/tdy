@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 589 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 790 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -421,7 +421,8 @@ several fitting sheets with `AmbiguousFrame` — "the spec for this file" has no
 the pile is where "which members?" is asked. **Drift is per file**: the file's hash covers
 every sheet, so a changed workbook is one `Changed` and the refit rediscovers the sheet set;
 `Duplicated` is per (path, sheet). `dataset()` never lists a workbook's sheets itself.
-Regions (several tables in one text file) are still deferred, behind the review gate.
+Regions (several tables stacked in one text file or sheet) landed 2026-09-08 — see
+**Regions are in** below.
 Follow-ups from its review, landed the same day: `MemberRef::resolve` returns `Err(candidates)`
 when a reference could mean two members (a `#` in both a file name and a sheet name), and every
 caller names both rather than picking one; `EntryStatus::Sheets(n)` is what `.ls` (`sheet specs
@@ -437,6 +438,67 @@ console's `.accept` reads both places. Medians, not totals, so a partial month i
 (`scripts/sweep_workbooks.py`, 2026-09-07): of 34 multi-sheet xlsx/xlsm workbooks, 18 stay a
 plain member and 16 expand into sheet members — the sixteen the draft slice had refused as
 `AmbiguousFrame` — with no refusal, error or timeout. Re-run it after touching discovery.
+
+**Regions are in (2026-09-08).** `docs/design/2026-09-08-regions.md`. A member
+is now `(path, sheet, region)` — `MemberRef` in `src/member.rs` gains a third
+field, `region: Option<u32>`, the 1-based ordinal of a table stacked in a file
+or sheet, counted in file order. Textual form is `report.csv#2` (a text file's
+second block) or `book.xlsx#Q1#2` (sheet `Q1`'s second block); `MemberRef::resolve`
+tries every right-to-left split, including a region candidate whenever the
+rightmost segment parses as a positive integer, and keeps only members that
+exist — `Q2` is a sheet, `2` is a region, and a sheet literally called `2`
+alongside two regions is the ambiguity the resolver names, exactly as a sheet
+name already is. The sidecar is `report.csv#2.tdy.toml` /
+`book.xlsx#Q1#2.tdy.toml` (`sidecar::sidecar_path_for(file, sheet, region)`,
+`load_member`/`save_member`); `EntryStatus::Regions(n)` is what `.ls` and the
+browser say about a file split into region members; the lock's `Member.region`
+and `Drift::MixedGranularity` extend to the triple, since a file listed whole
+and by region is the same mistake as whole and by sheet.
+
+Mechanically a region is a **row window**, not a name that carries its own
+rows: `Extraction::Delimited` gains `region: Option<RowWindow>`
+(`{ start, end, ordinal }`, 0-based half-open raw physical line numbers of the
+file, applied by `extract_delimited` and mirrored by `stream.rs`'s `raw_index`
+before anything else — `skip_rows`, `promote_header` and every transform act
+inside the block, exactly as they act on a whole file). A sheet has no
+row-window field at all — `range` already says which rows — so a sheet region
+carries only `region_ordinal: Option<u32>` beside the `range` `fit::fit_region`
+writes. Detection is `engine::regions_of(path, sheet, limits) -> Vec<RowWindow>`:
+it splits at runs of blank lines or rows, keeps blocks of at least three rows,
+and returns nothing when the file has exactly one run at all — a table with
+blank padding above or below it is not split. It streams the text
+(`regions_of_lines`) rather than materialising it, so memory is O(runs), not
+O(file): measured 3.9 MB peak RSS on a 50 MB fixture
+(`tests/regions.rs::regions_of_streams_a_large_file`, `#[ignore]`, run by hand
+under `/usr/bin/time`, since a peak-RSS claim is not a `cargo test` assertion).
+
+The review line: several blocks means `report::expand_units` gives each its
+own member, each carrying `report::region_review_reason`'s text — "table `i`
+of `n` in this file, split at blank rows — accept only if it is the same kind
+of table as the others" — and `dataset()` refuses it until
+`--accept report.csv#2` (or `.accept` in the console); exactly one proper
+block means one plain member with the window and a note, **no review**,
+because the elimination proved it, as it does for a sheet. `fit::fit_region`
+was got wrong twice: a text block must drop any `SkipRows` transform the
+whole-file sniff proposed, since a title block belongs to the file and would
+delete rows the block does not have; a sheet block's A1 `range` has to be
+offset by the used range's own start (`col_letter`), since `regions_of` counts
+rows of the used range, not of the sheet, and the naive address read a sheet
+whose data starts at C5 against blank margin instead. `tdy draft` gains the
+same split (`draft::sniff_block`, via a scratch file), drafting each block's
+columns separately and naming which block each column came from; presence and
+heterogeneity notes count physical files, not blocks — got wrong first, when
+the grouping note fired across one file's own blocks as though they were
+unrelated files. `source_name` gains `from = "region"` (`SourcePart::Region`),
+the block's ordinal as a column. The workbench carries `MemberReport.window`;
+a region member's title reads `report.csv#2 · rows 6–9` (1-based, inclusive);
+the raw head bolds the rows inside the window and dims the rows outside it.
+
+Out of scope, named on the design page: tables sitting **beside** each other
+in a sheet (a two-dimensional segmentation problem a declared `range` already
+answers by hand), splitting on anything other than blank rows, and a region
+inside a JSON document — a JSON array's frame question belongs to the pointer,
+not to this.
 
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
