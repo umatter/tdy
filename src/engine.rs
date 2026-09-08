@@ -2041,7 +2041,10 @@ pub fn sheet_grid(
 /// the whole file (or sheet) is not a region either: there is nothing to
 /// choose between, so this returns an empty `Vec` the same way it would for
 /// a file with no blank line in it at all — `compressed_plain.csv` is that
-/// control fixture.
+/// control fixture. "Spans the whole file" means exactly one non-blank run
+/// exists, full stop — a leading or trailing blank line is padding, not a
+/// second region, so it does not make an otherwise-single table look like
+/// two blocks either.
 ///
 /// For a text file (`sheet: None`) this reads the whole file
 /// (`read_text`) and splits on raw *lines*: a line is blank when it is
@@ -2082,35 +2085,45 @@ pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Ve
     Ok(blocks_from(&blanks))
 }
 
-/// Maximal runs of `false` (non-blank) in `blanks`, kept only when at least
-/// 3 long, as half-open `RowWindow`s over the row index — unless exactly
-/// one run exists and it spans the whole slice, in which case there is
-/// nothing to split and the answer is "no regions" (an empty `Vec`).
-fn blocks_from(blanks: &[bool]) -> Vec<RowWindow> {
-    let mut runs: Vec<RowWindow> = Vec::new();
+/// Maximal runs of `false` (non-blank) in `blanks`, as half-open
+/// `(start, end)` row ranges, in order.
+fn raw_runs(blanks: &[bool]) -> Vec<(usize, usize)> {
+    let mut runs = Vec::new();
     let mut start: Option<usize> = None;
     for (i, blank) in blanks.iter().enumerate() {
         match (*blank, start) {
             (false, None) => start = Some(i),
             (true, Some(s)) => {
-                if i - s >= 3 {
-                    runs.push(RowWindow { start: s as u64, end: i as u64 });
-                }
+                runs.push((s, i));
                 start = None;
             }
             _ => {}
         }
     }
     if let Some(s) = start {
-        let end = blanks.len();
-        if end - s >= 3 {
-            runs.push(RowWindow { start: s as u64, end: end as u64 });
-        }
-    }
-    if runs.len() == 1 && runs[0].start == 0 && runs[0].end == blanks.len() as u64 {
-        return Vec::new();
+        runs.push((s, blanks.len()));
     }
     runs
+}
+
+/// The runs from [`raw_runs`], kept only when at least 3 rows long, as
+/// half-open `RowWindow`s over the row index — unless exactly one run
+/// exists at all, in which case there is nothing to split and the answer is
+/// "no regions" (an empty `Vec`), whatever the run's own length or
+/// position. "One block spanning the whole file" means exactly one
+/// non-blank run exists, not that the run happens to start at row 0 and end
+/// at the last row: a leading or trailing blank line is padding, not a
+/// second region, and must not turn a single table into one spurious
+/// window by making its one run fall short of the file's own start or end.
+fn blocks_from(blanks: &[bool]) -> Vec<RowWindow> {
+    let runs = raw_runs(blanks);
+    if runs.len() == 1 {
+        return Vec::new();
+    }
+    runs.into_iter()
+        .filter(|(s, e)| e - s >= 3)
+        .map(|(s, e)| RowWindow { start: s as u64, end: e as u64 })
+        .collect()
 }
 
 /// The same pipeline, but producing at most `max_rows` output rows.

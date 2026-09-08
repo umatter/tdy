@@ -31,7 +31,7 @@ FIXTURES  (all in testdata/, named regions_*)
    plus 3 data rows, separated by one blank line: raw lines 0-3, 5-8,
    10-13 (14 raw lines total, `\n` endings). Block sums: 600.00 (Ost
    190.00, West 200.00, Nord 210.00), 1500.00 (Ost 490.00, West 500.00,
-   Nord 510.00), 300.00 (Ost 90.00, West 100.00, Nord 110.00). Ground
+   Nord 510.00), 900.00 (Ost 290.00, West 300.00, Nord 310.00). Ground
    truth for `regions_of`: three RowWindows, {0,4}, {5,9}, {10,14}.
 
 2. regions_three.xlsx
@@ -56,7 +56,7 @@ FIXTURES  (all in testdata/, named regions_*)
    the case the minimum exists for.
 
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
-sums 600.00 / 1500.00 / 300.00; regions_titled.csv -> [{3,7}].
+sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}].
 """
 import os
 import re
@@ -82,9 +82,9 @@ BLOCK2 = [
     ("19.02.2025", "Nord", "510.00"),
 ]
 BLOCK3 = [
-    ("05.03.2025", "Ost", "90.00"),
-    ("12.03.2025", "West", "100.00"),
-    ("19.03.2025", "Nord", "110.00"),
+    ("05.03.2025", "Ost", "290.00"),
+    ("12.03.2025", "West", "300.00"),
+    ("19.03.2025", "Nord", "310.00"),
 ]
 
 
@@ -138,7 +138,7 @@ def build_regions_three_csv():
     write_csv(
         "regions_three.csv",
         lines,
-        "three stacked tables (600.00 / 1500.00 / 300.00); windows {0,4} {5,9} {10,14}",
+        "three stacked tables (600.00 / 1500.00 / 900.00); windows {0,4} {5,9} {10,14}",
     )
 
 
@@ -187,7 +187,7 @@ def main():
     build_regions_summary_csv()
     build_regions_titled_csv()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
-          "sums 600.00/1500.00/300.00; regions_titled.csv -> [{3,7}]")
+          "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]")
 
 
 if __name__ == "__main__":
