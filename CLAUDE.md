@@ -482,6 +482,11 @@ a person rules on whether it was data. It streams the text
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
 (`tests/regions.rs::regions_of_streams_a_large_file`, `#[ignore]`, run by hand
 under `/usr/bin/time`, since a peak-RSS claim is not a `cargo test` assertion).
+`draft_target` pays this same streamed pass once per text file, on top of the
+sniff's own whole-file type verification: measured on a debug build over a
+50 MB single-block CSV, `tdy draft` wall time moved from ~37.6 s with the
+regions pass skipped to ~39.2 s with it in, a ~4% cost — well under the ~25%
+that would have called for optimising it, so it is left as is.
 
 The review line: several blocks means `report::expand_units` gives each its
 own member, each carrying `report::region_review_reason`'s text — "table `i`
