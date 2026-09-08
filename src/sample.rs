@@ -60,7 +60,7 @@ pub fn guess_format(path: &Path) -> FormatGuess {
     let stripped = [".gz", ".gzip", ".zst", ".zstd", ".bz2", ".bzip2", ".xz", ".lzma"]
         .iter()
         .find_map(|ext| name.strip_suffix(ext))
-        .map(|inner| std::path::PathBuf::from(inner));
+        .map(std::path::PathBuf::from);
     let path = stripped.as_deref().unwrap_or(path);
     match path
         .extension()
