@@ -801,9 +801,13 @@ impl Session {
                     // Both halves matter: `2025.xlsx#Q1.tdy.toml` is a sidecar
                     // whether it is read as sheet Q1 of `2025.xlsx` or as a
                     // file literally called `2025.xlsx#Q1`, and only the first
-                    // has a data file beside it.
+                    // has a data file beside it. And the sidecar has to say
+                    // which member it is *about*, not merely be at that path:
+                    // `report.csv#2.tdy.toml` is the region-2 path and the
+                    // sheet-"2" path alike, so mere existence made every
+                    // region member ambiguous with itself.
                     let f = dir.join(&m.path);
-                    f.is_file() && crate::sidecar::sidecar_path_for(&f, m.sheet.as_deref(), m.region).exists()
+                    f.is_file() && crate::sidecar::declares_member(&f, m.sheet.as_deref(), m.region)
                 };
                 let mref = match crate::member::MemberRef::resolve(&member, exists) {
                     Ok(Some(m)) => m,

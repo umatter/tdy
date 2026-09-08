@@ -447,3 +447,33 @@ fn a_region_sidecar_whose_window_is_not_the_blocks_is_a_contradiction() {
     assert!(!text.contains("2100.00"), "block 1 must never be read twice: {text}");
     assert!(!out.status.success(), "{text}");
 }
+
+/// The single-file tools take a member reference and find its sidecar
+/// through `sidecar::resolve_ref`. `report.csv#2.tdy.toml` is the sidecar
+/// path of the sheet reading *and* of the region reading, so a fallback
+/// that only asked whether the file existed saw two candidates and refused
+/// every region member by name. A sidecar declares which member it is
+/// about; one file cannot declare two.
+#[test]
+fn validate_and_check_can_name_a_region_member() {
+    let (dir, t) = three_pile_accepted();
+    let cwd = dir.path();
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+            .args(args)
+            .current_dir(cwd)
+            .env("TDY_BACKEND", "none")
+            .output()
+            .unwrap()
+    };
+    let out = run(&["validate", "report.csv#2"]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("could mean"), "one member, one reading: {text}");
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("region 2") || text.contains("#2"), "{text}");
+
+    let out = run(&["check", t.to_str().unwrap(), "--against", "report.csv#2"]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("could mean"), "one member, one reading: {text}");
+    assert!(out.status.success(), "{text}");
+}

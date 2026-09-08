@@ -57,11 +57,13 @@ pub fn sidecar_path(file: &Path) -> PathBuf {
 /// sheet name alike).
 ///
 /// The plain path wins when it is a file; otherwise the split whose data
-/// file exists *and* has that candidate's sidecar beside it — the pair only
-/// the right reading has, since `2025.xlsx#Q1.tdy.toml` is equally the
-/// sidecar of a file literally called `2025.xlsx#Q1`. Text that names
-/// nothing comes back unchanged, so the caller reports about the name that
-/// was typed.
+/// file exists *and* has a sidecar beside it that declares itself to be
+/// about that member — see [`declares_member`]. Existence alone is not
+/// enough: `report.csv#2.tdy.toml` is equally the sidecar of sheet `2`, of
+/// region 2, and of a file literally called `report.csv#2`, so a check that
+/// only asked whether the path exists saw two readings of every region
+/// member and refused it as ambiguous. Text that names nothing comes back
+/// unchanged, so the caller reports about the name that was typed.
 pub fn resolve_ref(text: &Path) -> Result<(PathBuf, Option<String>, Option<u32>)> {
     if text.is_file() {
         return Ok((text.to_path_buf(), None, None));
@@ -69,7 +71,7 @@ pub fn resolve_ref(text: &Path) -> Result<(PathBuf, Option<String>, Option<u32>)
     let s = text.to_string_lossy().into_owned();
     match crate::member::MemberRef::resolve(&s, |m| {
         let f = Path::new(&m.path);
-        f.is_file() && sidecar_path_for(f, m.sheet.as_deref(), m.region).exists()
+        f.is_file() && declares_member(f, m.sheet.as_deref(), m.region)
     }) {
         Ok(Some(m)) => Ok((PathBuf::from(m.path), m.sheet, m.region)),
         Ok(None) => Ok((text.to_path_buf(), None, None)),
@@ -77,6 +79,26 @@ pub fn resolve_ref(text: &Path) -> Result<(PathBuf, Option<String>, Option<u32>)
             "{s} could mean {} — name the file and the sheet unambiguously",
             crate::member::MemberRef::names(&several)
         ),
+    }
+}
+
+/// Is there a sidecar beside `file` that says it is the spec for *this*
+/// member — that sheet and that region, as its own fingerprint records
+/// them?
+///
+/// The sidecar's name cannot answer this: `report.csv#2.tdy.toml` is the
+/// path of the region-2 reading and of the sheet-`"2"` reading alike, and a
+/// resolver that took existence for an answer therefore found two members
+/// wherever there was one. The sidecar's `source` block says which reading
+/// it is, and one file holds one declaration, so at most one candidate can
+/// be true. Anything unreadable or unparseable is not a declaration and
+/// answers `false`; the caller's ordinary "no such member" follows.
+pub fn declares_member(file: &Path, sheet: Option<&str>, region: Option<u32>) -> bool {
+    let p = sidecar_path_for(file, sheet, region);
+    let Ok(text) = std::fs::read_to_string(&p) else { return false };
+    match toml::from_str::<Sidecar>(&text) {
+        Ok(sc) => sc.source.sheet.as_deref() == sheet && sc.source.region == region,
+        Err(_) => false,
     }
 }
 

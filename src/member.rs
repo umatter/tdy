@@ -41,10 +41,16 @@ impl MemberRef {
 
     /// Resolve a typed reference against the members that exist. Every
     /// split at a `#` is a candidate — the whole text as a plain member,
-    /// then each `path#sheet` split from the right, and also region candidates
-    /// if the rightmost segment is a positive integer — and the first that
-    /// `exists` is the answer; `Ok(None)` names no member, and `Err` carries
-    /// every member the text could mean when there is more than one.
+    /// then each `path#sheet` split from the right, and also region
+    /// candidates if the rightmost segment is a positive integer.
+    ///
+    /// It does not stop at the first candidate that `exists`: it collects
+    /// *all* of them, so `Ok(Some(m))` means exactly one reading was true.
+    /// `Ok(None)` names no member, and `Err` carries every member the text
+    /// could mean when more than one was — taking the first would be
+    /// picking one of two answers in silence. `exists` therefore has to be
+    /// exact: a predicate that says yes to two readings of one member makes
+    /// that member unnameable (see `sidecar::declares_member`).
     pub fn resolve(text: &str, exists: impl Fn(&MemberRef) -> bool) -> Result<Option<MemberRef>, Vec<MemberRef>> {
         let mut found: Vec<MemberRef> = Vec::new();
         let mut consider = |m: MemberRef| { if exists(&m) && !found.contains(&m) { found.push(m); } };

@@ -1063,3 +1063,41 @@ async fn accept_step_one_shows_a_reason_that_lives_in_the_lock() {
     let o = s.run(".accept sales.tdy.sql 2025-03.csv", None).await;
     assert!(o.ok && o.text.contains("accepted 2025-03.csv"), "{}", o.text);
 }
+
+/// A region pile, fitted: three region sidecars beside one CSV, no lock
+/// deleted. `.accept T report.csv#2` has to resolve that name.
+fn region_pile() -> tempfile::TempDir {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/regions_three.csv"),
+        dir.path().join("report.csv"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("q.tdy.sql"),
+        "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), \
+         region TEXT NOT NULL OPTIONS(matches='Region'), \
+         amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) \
+         WITH (files = '*.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+    dir
+}
+
+/// `report.csv#2` is one member, not two readings of one name. The
+/// filesystem fallback used to answer "yes" to both the sheet reading and
+/// the region reading, because `report.csv#2.tdy.toml` is the sidecar path
+/// of either — so every region member was unnameable. A sidecar says which
+/// it is; that is what settles it.
+#[tokio::test]
+async fn accept_resolves_a_region_member_reference() {
+    let dir = region_pile();
+    let mut s = session(dir.path()).await;
+    let fit = s.run(".fit q.tdy.sql", None).await;
+    assert!(fit.ok, "{}", fit.text);
+    let o = s.run(".accept q.tdy.sql report.csv#2", None).await;
+    assert!(!o.text.contains("could mean"), "one member, one reading: {}", o.text);
+    assert!(o.text.contains("split at blank rows"), "step one shows the reason: {}", o.text);
+    let o = s.run(".accept q.tdy.sql report.csv#2", None).await;
+    assert!(o.ok && o.text.contains("accepted report.csv#2"), "{}", o.text);
+}
