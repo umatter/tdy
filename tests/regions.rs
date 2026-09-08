@@ -712,3 +712,44 @@ fn two_members_with_one_name_refuse_the_whole_pile() {
         "{v}"
     );
 }
+
+/// `exclude` is applied twice: once as a glob over files, in
+/// `lockfile::resolve`, and once as an exact member reference, in
+/// `expand_units`. One entry can match in both passes — `report.csv#2` is a
+/// real file's name *and* block 2 of `report.csv` — and then it drops two
+/// different things at once. Nothing said so: the pile reported `2 of 2
+/// member(s) fit`, wrote the lock and exited 0, having lost a table. The
+/// duplicate-name refusal cannot catch it, because both removals happen
+/// before it looks.
+#[test]
+fn an_exclude_that_names_both_a_file_and_a_member_is_refused() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_three.csv"), dir.path().join("report.csv")).unwrap();
+    std::fs::write(
+        dir.path().join("report.csv#2"),
+        "Datum;Region;Betrag\n05.03.2025;Ost;10.00\n12.03.2025;West;20.00\n",
+    )
+    .unwrap();
+    let t = dir.path().join("q.tdy.sql");
+    let ddl = |opts: &str| format!("CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*', date_order = 'dmy'{opts});");
+    std::fs::write(&t, ddl(", exclude = 'report.csv#2'")).unwrap();
+
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("the file `report.csv#2`"), "{text}");
+    assert!(text.contains("block 2 of `report.csv`"), "{text}");
+    assert!(text.contains("rename"), "the remedy: {text}");
+    assert!(!dir.path().join("q.tdy.lock").exists(), "no lock: {text}");
+
+    // The control: an exclude that names only a member still just removes
+    // that member. Nothing about the ordinary case moves.
+    std::fs::remove_file(dir.path().join("report.csv#2")).unwrap();
+    std::fs::write(&t, ddl(", exclude = 'report.csv#3'")).unwrap();
+    for n in 1..=2 {
+        let out = tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("report.csv#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let lock = std::fs::read_to_string(dir.path().join("q.tdy.lock")).unwrap();
+    assert!(lock.contains("region = 2") && !lock.contains("region = 3"), "{lock}");
+}

@@ -399,6 +399,22 @@ pub fn target_dir(target_file: &Path) -> PathBuf {
 /// Sorted because the union reads members in this order and the row order of
 /// a dataset must not depend on how a directory happens to be laid out.
 pub fn resolve(target: &Target, target_file: &Path) -> Result<Vec<String>> {
+    resolve_excluded(target, target_file).map(|(rels, _)| rels)
+}
+
+/// The same, plus which `exclude` entry removed which file.
+///
+/// `exclude` is applied twice — here as a glob over file names, and again in
+/// `report::expand_units` as an exact member reference, which is the only
+/// place a member reference *can* be applied. One entry can match in both
+/// passes (`report.csv#2` is a file's name and block 2 of `report.csv`), and
+/// then it drops two different things at once. The caller cannot see that
+/// without knowing what this pass removed, and a second directory walk to
+/// find out would be a walk that could disagree with this one.
+pub fn resolve_excluded(
+    target: &Target,
+    target_file: &Path,
+) -> Result<(Vec<String>, Vec<(String, String)>)> {
     let dir = target_dir(target_file);
     let mut out: BTreeSet<String> = BTreeSet::new();
 
@@ -423,6 +439,7 @@ pub fn resolve(target: &Target, target_file: &Path) -> Result<Vec<String>> {
         }
     }
 
+    let mut removed: Vec<(String, String)> = Vec::new();
     for pat in &target.exclude {
         let (sub, name_pat) = split_pattern(pat);
         out.retain(|rel| {
@@ -432,11 +449,15 @@ pub fn resolve(target: &Target, target_file: &Path) -> Result<Vec<String>> {
             // requiring it to repeat the files= prefix made it silently do
             // nothing.
             let dir_matches = sub.is_empty() || rsub == sub;
-            !(dir_matches && matches_glob(&name_pat, &rname))
+            let hit = dir_matches && matches_glob(&name_pat, &rname);
+            if hit {
+                removed.push((pat.clone(), rel.clone()));
+            }
+            !hit
         });
     }
 
-    Ok(out.into_iter().collect())
+    Ok((out.into_iter().collect(), removed))
 }
 
 /// One pattern against one directory, for a caller with no shell in front of

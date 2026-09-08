@@ -368,6 +368,7 @@ pub fn expand_units(
     target: &Target,
     dir: &Path,
     limits: crate::config::Limits,
+    excluded_files: &[(String, String)],
 ) -> Result<Vec<Unit>> {
     let mut sheet_units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
     for rel in rels {
@@ -475,6 +476,27 @@ pub fn expand_units(
     // An entry that removes nothing is a typo — the member it named is still
     // in the dataset and nothing said so — which is an error, not a no-op.
     for x in target.exclude.iter().filter(|x| x.contains('#')) {
+        // The same entry in both passes: it removed a file by glob back in
+        // `lockfile::resolve_excluded`, and it names a member here. Applying
+        // both drops two different things at once — the file, and a table of
+        // another file — and the pile fits, locks and exits 0 having lost
+        // one. Neither reading is more right than the other, so the pile is
+        // refused before anything is fitted, exactly as two members under
+        // one name are.
+        let file = excluded_files.iter().find(|(pat, _)| pat == x).map(|(_, rel)| rel);
+        let named = units.iter().find(|u| *x == u.member.name());
+        if let (Some(rel), Some(u)) = (file, named) {
+            anyhow::bail!(
+                "exclude {x:?} of `{}` names two things: the file `{rel}`, which it removed \
+                 as a file name, and {}, which it removes as a member reference. A `#` in a \
+                 file name collides with the way sheet and region members are named, and \
+                 dropping both at once loses a table without saying so. The remedy is to \
+                 rename the file whose own name contains `#`, or to narrow `files` so it is \
+                 not a member.",
+                target.name,
+                describe_member(&u.member),
+            );
+        }
         let before = units.len();
         units.retain(|u| *x != u.member.name());
         if units.len() == before {
@@ -651,7 +673,7 @@ pub async fn fit_pile(
             .unwrap_or_default(),
         _ => Vec::new(),
     };
-    let rels = lockfile::resolve(&target, target_path)?;
+    let (rels, excluded_files) = lockfile::resolve_excluded(&target, target_path)?;
 
     if rels.is_empty() {
         anyhow::bail!(
@@ -684,7 +706,7 @@ pub async fn fit_pile(
     let previous = Lock::load(target_path)?;
     use crate::member::MemberRef;
 
-    let units = expand_units(&rels, &target, &dir, limits)?;
+    let units = expand_units(&rels, &target, &dir, limits, &excluded_files)?;
     if units.is_empty() {
         anyhow::bail!(
             "every member of `{}` is excluded by its own declaration, so there is no dataset \
@@ -1348,7 +1370,7 @@ mod tests {
     fn expansion_turns_a_two_sheet_workbook_into_two_members() {
         let (d, target) = pile("");
         let units =
-            expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default()).unwrap();
+            expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default(), &[]).unwrap();
         let names: Vec<String> = units.iter().map(|u| u.member.name()).collect();
         assert_eq!(names, vec!["2025.xlsx#Q1", "2025.xlsx#Q2"]);
         assert!(units[0].notes[0].contains("of 2 sheets, 2 produce"), "{:?}", units[0].notes);
@@ -1358,11 +1380,11 @@ mod tests {
     fn a_member_exclude_removes_that_member_and_a_miss_is_an_error() {
         let (d, target) = pile(", exclude = '2025.xlsx#Q2'");
         let units =
-            expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default()).unwrap();
+            expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default(), &[]).unwrap();
         assert_eq!(units.iter().map(|u| u.member.name()).collect::<Vec<_>>(), ["2025.xlsx#Q1"]);
 
         let (d, target) = pile(", exclude = '2025.xlsx#Q9'");
-        let err = expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default())
+        let err = expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default(), &[])
             .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("2025.xlsx#Q9") && msg.contains("2025.xlsx#Q1"), "{msg}");

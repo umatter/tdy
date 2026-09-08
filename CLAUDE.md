@@ -503,7 +503,13 @@ person's edit in silence left the member reading exactly as before with
 nothing to say why. Two members with one name (a file literally called
 `report.csv#2` beside a split `report.csv`) share one sidecar path and cannot
 be two specs, so `expand_units` refuses the whole pile before anything is
-fitted rather than letting the collision surface at `--accept`. And when a
+fitted rather than letting the collision surface at `--accept`. The same
+collision reaches `exclude`, which is applied twice — as a glob over files in
+`lockfile::resolve_excluded`, then as an exact member reference in
+`expand_units` — so one entry matching in both passes dropped a file *and* a
+block and still exited 0; an entry that matches both is now refused as
+ambiguous, which is why the glob pass reports what it removed instead of the
+member pass walking the directory again. And when a
 plain member reuses a hand-written *whole-file* spec, the split's dropped-run
 note and review reason are reworded rather than attached — that spec reads
 those lines, so the question becomes whether reading the whole file is
