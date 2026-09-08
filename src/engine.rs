@@ -231,6 +231,9 @@ pub struct RawTable {
 pub struct SourceRef {
     pub path: Option<std::path::PathBuf>,
     pub sheet: Option<String>,
+    /// The 1-based ordinal of the stacked block this table was read from,
+    /// when the extraction was narrowed to one region of a file or sheet.
+    pub region: Option<u32>,
 }
 
 impl RawTable {
@@ -448,7 +451,7 @@ pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Resu
             *region,
             opts,
         ),
-        Extraction::Excel { sheet_name, sheet_index, range } => {
+        Extraction::Excel { sheet_name, sheet_index, range, .. } => {
             extract_excel(path, sheet_name.as_deref(), *sheet_index, range.as_deref(), opts)
         }
         Extraction::FixedWidth { encoding, fields } => {
@@ -464,6 +467,11 @@ pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Resu
         path: Some(path.to_path_buf()),
         sheet: match extraction {
             Extraction::Excel { sheet_name, .. } => sheet_name.clone(),
+            _ => None,
+        },
+        region: match extraction {
+            Extraction::Delimited { region, .. } => region.map(|w| w.ordinal),
+            Extraction::Excel { region_ordinal, .. } => *region_ordinal,
             _ => None,
         },
     };
@@ -1203,6 +1211,12 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                         anyhow!(
                             "source_name `{name}`: `from = \"sheet\"` needs a workbook whose \
                              sheet the spec names; this extraction has none"
+                        )
+                    })?,
+                    SourcePart::Region => src.region.map(|r| r.to_string()).ok_or_else(|| {
+                        anyhow!(
+                            "source_name `{name}`: `from = \"region\"` needs a spec that reads \
+                             one block of a file; this extraction reads the whole file"
                         )
                     })?,
                 };
@@ -2180,7 +2194,8 @@ fn windows_from_runs(runs: Vec<(u64, u64)>) -> Vec<RowWindow> {
     }
     runs.into_iter()
         .filter(|(s, e)| e - s >= 3)
-        .map(|(s, e)| RowWindow { start: s, end: e })
+        .enumerate()
+        .map(|(i, (s, e))| RowWindow { start: s, end: e, ordinal: (i + 1) as u32 })
         .collect()
 }
 

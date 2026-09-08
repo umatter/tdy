@@ -1,3 +1,4 @@
+use datafusion::arrow::array::{Array, StringArray};
 use std::path::{Path, PathBuf};
 use tdy::config::Limits;
 use tdy::spec::RowWindow;
@@ -10,13 +11,13 @@ fn tdy(args: &[&str]) -> std::process::Output {
 #[test]
 fn stacked_blocks_are_found_at_blank_rows_in_file_order() {
     let w = tdy::engine::regions_of(&fixture("regions_three.csv"), None, Limits::default()).unwrap();
-    assert_eq!(w, vec![RowWindow { start: 0, end: 4 }, RowWindow { start: 5, end: 9 }, RowWindow { start: 10, end: 14 }]);
+    assert_eq!(w, vec![RowWindow { start: 0, end: 4, ordinal: 1 }, RowWindow { start: 5, end: 9, ordinal: 2 }, RowWindow { start: 10, end: 14, ordinal: 3 }]);
     let w = tdy::engine::regions_of(&fixture("regions_three.xlsx"), Some("Data"), Limits::default()).unwrap();
     assert_eq!(w.len(), 3);
     assert!(tdy::engine::regions_of(&fixture("compressed_plain.csv"), None, Limits::default()).unwrap().is_empty(), "one block is no region");
     // A title block above one table: the split finds one proper block, not two.
     let w = tdy::engine::regions_of(&fixture("regions_titled.csv"), None, Limits::default()).unwrap();
-    assert_eq!(w, vec![RowWindow { start: 3, end: 7 }]);
+    assert_eq!(w, vec![RowWindow { start: 3, end: 7, ordinal: 1 }]);
 }
 
 /// "One block spanning the whole file" means the file has exactly one
@@ -56,9 +57,9 @@ fn a_hand_written_lock_over_three_regions_reads_all_and_names_them() {
         confidence: Some(1.0), notes: vec![],
     };
     let prov = || tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
-    tdy::sidecar::save_member(&f, None, Some(1), &spec(RowWindow { start: 0, end: 4 }), prov()).unwrap();
-    tdy::sidecar::save_member(&f, None, Some(2), &spec(RowWindow { start: 5, end: 9 }), prov()).unwrap();
-    tdy::sidecar::save_member(&f, None, Some(3), &spec(RowWindow { start: 10, end: 14 }), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(1), &spec(RowWindow { start: 0, end: 4, ordinal: 1 }), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(2), &spec(RowWindow { start: 5, end: 9, ordinal: 2 }), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(3), &spec(RowWindow { start: 10, end: 14, ordinal: 3 }), prov()).unwrap();
     let (blake3, bytes) = tdy::sidecar::hash_file(&f).unwrap();
     let member = |n: u32| Member { path: "report.csv".into(), sheet: None, region: Some(n), blake3: blake3.clone(), bytes, spec_digest: tdy::lockfile::spec_digest_for(&f, None, Some(n)), review: None, accepted: false };
     Lock { lock_version: LOCK_VERSION, target: "q".into(), target_hash: tdy::lockfile::target_hash(&target), tool_version: "test".into(), created_at: "now".into(), members: vec![member(1), member(2), member(3)] }.save(&t).unwrap();
@@ -219,6 +220,82 @@ fn a_sheet_region_is_addressed_from_the_used_ranges_own_origin() {
 /// `~5 MB` fixture (shrink `TARGET_BYTES` below) — a streaming split's
 /// peak RSS should not move with the file size; the old whole-file
 /// `read_text` path would show it growing roughly linearly.
+/// A `source_name` column reading `from = "region"` holds the block's own
+/// 1-based ordinal, in every row — the same fact `#N` names the member by,
+/// now readable as data rather than only as a member name.
+#[test]
+fn source_name_from_region_puts_the_ordinal_in_a_column() {
+    use tdy::spec::{ColumnSpec, DType, SourcePart, Transform, ValueParsing};
+    let (dir, t) = three_pile();
+    for n in 1..=3 {
+        let out = tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("report.csv#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let f = dir.path().join("report.csv");
+    let mut spec = match tdy::sidecar::load_member(&f, None, Some(2)).unwrap() {
+        tdy::sidecar::SidecarStatus::Fresh(sc) => sc.spec,
+        other => panic!("expected a fresh region-2 sidecar: {other:?}"),
+    };
+    spec.transforms.push(Transform::SourceName {
+        name: "block".into(),
+        from: SourcePart::Region,
+        pattern: None,
+    });
+    spec.columns.push(ColumnSpec {
+        name: "block".into(),
+        source: None,
+        dtype: DType::Utf8,
+        nullable: false,
+        parse: ValueParsing::default(),
+        pointer: None,
+    });
+    let batches = tdy::engine::execute_batches(&spec, &f, Limits::default()).unwrap();
+    let mut rows_seen = 0usize;
+    for b in &batches {
+        let idx = b.schema().index_of("block").unwrap();
+        let col = b.column(idx).as_any().downcast_ref::<StringArray>().unwrap();
+        for i in 0..col.len() {
+            assert_eq!(col.value(i), "2", "every row of region 2 must read \"2\"");
+            rows_seen += 1;
+        }
+    }
+    assert!(rows_seen > 0, "expected at least one row");
+}
+
+/// The same transform on a plain (whole-file) spec has no region to read —
+/// this must fail loudly naming `from = "region"`, not silently emit an
+/// empty or wrong column.
+#[test]
+fn source_name_from_region_fails_without_a_region() {
+    use tdy::spec::{ColumnSpec, DType, Extraction, RaggedPolicy, SourcePart, Transform, ValueParsing};
+    let dir = tempfile::TempDir::new().unwrap();
+    let f = dir.path().join("plain.csv");
+    std::fs::write(&f, "a\n1\n2\n").unwrap();
+    let spec = tdy::spec::ParseSpec {
+        extraction: Extraction::Delimited {
+            delimiter: ',',
+            quote: None,
+            escape: None,
+            encoding: None,
+            comment: None,
+            ragged: RaggedPolicy::PadNulls,
+            region: None,
+        },
+        transforms: vec![
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::SourceName { name: "block".into(), from: SourcePart::Region, pattern: None },
+        ],
+        columns: vec![
+            ColumnSpec { name: "a".into(), source: None, dtype: DType::Utf8, nullable: true, parse: ValueParsing::default(), pointer: None },
+            ColumnSpec { name: "block".into(), source: None, dtype: DType::Utf8, nullable: false, parse: ValueParsing::default(), pointer: None },
+        ],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    let err = format!("{:#}", tdy::engine::execute_batches(&spec, &f, Limits::default()).unwrap_err());
+    assert!(err.contains("from = \"region\""), "{err}");
+}
+
 #[test]
 #[ignore]
 fn regions_of_streams_a_large_file() {

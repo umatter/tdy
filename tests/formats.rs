@@ -632,7 +632,7 @@ wb.save(os.path.join(d, "sheets.xlsx"))
     let p = dir.path().join("sheets.xlsx");
 
     let by_name = spec(
-        Extraction::Excel { sheet_name: Some("Daten".into()), sheet_index: None, range: None },
+        Extraction::Excel { sheet_name: Some("Daten".into()), sheet_index: None, range: None, region_ordinal: None },
         vec![
             Transform::SkipRows { head: 1, tail: 0 },
             Transform::PromoteHeader { rows: 1, join: " ".into() },
@@ -643,7 +643,7 @@ wb.save(os.path.join(d, "sheets.xlsx"))
     assert_eq!(strings(&b, 0), vec!["a", "b"]);
 
     let by_index = spec(
-        Extraction::Excel { sheet_name: None, sheet_index: Some(1), range: None },
+        Extraction::Excel { sheet_name: None, sheet_index: Some(1), range: None, region_ordinal: None },
         vec![
             Transform::SkipRows { head: 1, tail: 0 },
             Transform::PromoteHeader { rows: 1, join: " ".into() },
@@ -657,6 +657,7 @@ wb.save(os.path.join(d, "sheets.xlsx"))
             sheet_name: Some("Daten".into()),
             sheet_index: None,
             range: Some("A2:B4".into()),
+            region_ordinal: None,
         },
         vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![col("v", DType::Int64)],
@@ -682,7 +683,7 @@ wb.save(os.path.join(sys.argv[1], "one.xlsx"))
     }
     let p = dir.path().join("one.xlsx");
     let s = spec(
-        Extraction::Excel { sheet_name: Some("Nope".into()), sheet_index: None, range: None },
+        Extraction::Excel { sheet_name: Some("Nope".into()), sheet_index: None, range: None, region_ordinal: None },
         vec![],
         vec![col("col_1", DType::Utf8)],
     );
@@ -709,7 +710,7 @@ wb.save(os.path.join(sys.argv[1], "err.xlsx"))
     }
     let p = dir.path().join("err.xlsx");
     let s = spec(
-        Extraction::Excel { sheet_name: None, sheet_index: None, range: None },
+        Extraction::Excel { sheet_name: None, sheet_index: None, range: None, region_ordinal: None },
         vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![col("v", DType::Utf8)],
     );
@@ -767,7 +768,7 @@ fn an_ods_repeated_cell_run_expands_to_the_columns_it_claims() {
     assert!(p.exists(), "missing fixture — run `python3 gen_fixtures.py`");
 
     let s = spec(
-        Extraction::Excel { sheet_name: Some("Sparse".into()), sheet_index: None, range: None },
+        Extraction::Excel { sheet_name: Some("Sparse".into()), sheet_index: None, range: None, region_ordinal: None },
         vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         ["a", "b", "c", "d", "e"].into_iter().map(|n| col(n, DType::Utf8)).collect(),
     );

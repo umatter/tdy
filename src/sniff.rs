@@ -666,6 +666,7 @@ fn sniff_excel_sheet(
         sheet_name: sheet,
         sheet_index: None,
         range: None,
+        region_ordinal: None,
     };
 
     // No row cap here, unlike the text formats: calamine materialises the

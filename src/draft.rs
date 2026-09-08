@@ -15,10 +15,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::config::Limits;
-use crate::spec::DType;
+use crate::sample::FormatGuess;
+use crate::spec::{DType, RowWindow};
 
 /// One declared-column-to-be, merged across the pile.
 struct DraftColumn {
@@ -40,15 +41,51 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
 
     let mut columns: Vec<DraftColumn> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
-    // Per file, its sanitized column names — the raw material for noticing
-    // that a pile is not one dataset.
+    // Per file (or per block, for a split file), its sanitized column
+    // names — the raw material for noticing that a pile is not one dataset.
     let mut file_sets: Vec<(String, BTreeSet<String>)> = Vec::new();
     let mut day_first = false;
     let mut month_first = false;
     let mut sniffed = 0usize;
+    // One line per file that turned out to hold several stacked tables.
+    let mut split_files: Vec<String> = Vec::new();
 
     for f in files {
         let label = short(f);
+        // Excel is out of scope here: `regions_of(_, None, _)` is the
+        // text-file path (it streams raw lines looking for blank-row
+        // boundaries), and an .xlsx/.xls/.xlsb/.ods is binary — reading it
+        // that way answers a question about the wrong bytes, not "no
+        // regions". Splitting a *sheet* is `report.rs::expand_units`'s job,
+        // which has a sheet name to ask `regions_of` with; a draft never
+        // does.
+        let windows = if crate::sample::guess_format(f) == FormatGuess::Excel {
+            Vec::new()
+        } else {
+            crate::engine::regions_of(f, None, limits).unwrap_or_default()
+        };
+        if windows.len() >= 2 {
+            split_files.push(format!(
+                "{label} holds {} stacked tables; each is drafted as {label}#i",
+                windows.len()
+            ));
+            for w in &windows {
+                let block_label = format!("{label}#{}", w.ordinal);
+                match sniff_block(f, *w, limits) {
+                    Ok(spec) => record_columns(
+                        &mut columns,
+                        &mut file_sets,
+                        &mut day_first,
+                        &mut month_first,
+                        &mut sniffed,
+                        block_label,
+                        &spec,
+                    ),
+                    Err(e) => failures.push((block_label, format!("{e:#}"))),
+                }
+            }
+            continue;
+        }
         let spec = match crate::sample::build(f, 16 * 1024, limits)
             .and_then(|s| crate::sniff::sniff(f, &s, limits))
         {
@@ -58,47 +95,7 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
                 continue;
             }
         };
-        sniffed += 1;
-        file_sets.push((
-            label.clone(),
-            spec.columns.iter().map(|c| c.name.clone()).collect(),
-        ));
-        for c in &spec.columns {
-            match &c.dtype {
-                DType::Date { format } | DType::Timestamp { format, .. } => {
-                    if format.starts_with("%d") {
-                        day_first = true;
-                    }
-                    if format.starts_with("%m") {
-                        month_first = true;
-                    }
-                }
-                _ => {}
-            }
-            let origin = c.source_name().to_string();
-            match columns.iter_mut().find(|d| d.name == c.name) {
-                Some(d) => {
-                    if !d.origins.contains(&origin) {
-                        d.origins.push(origin);
-                    }
-                    if !d.files.contains(&label) {
-                        d.files.push(label.clone());
-                    }
-                    let (merged, caveat) = merge(&d.dtype, &c.dtype, &label);
-                    d.dtype = merged;
-                    if d.caveat.is_none() {
-                        d.caveat = caveat;
-                    }
-                }
-                None => columns.push(DraftColumn {
-                    name: c.name.clone(),
-                    origins: vec![origin],
-                    dtype: c.dtype.clone(),
-                    caveat: None,
-                    files: vec![label.clone()],
-                }),
-            }
-        }
+        record_columns(&mut columns, &mut file_sets, &mut day_first, &mut month_first, &mut sniffed, label, &spec);
     }
 
     if sniffed == 0 {
@@ -126,6 +123,12 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
          --   * a column absent from some files is either a mistake in those files or a\n\
          --     fact about them — declare `if_missing = 'null'` only if it is a fact\n"
     ));
+    if !split_files.is_empty() {
+        out.push_str("--\n");
+        for note in &split_files {
+            out.push_str(&format!("-- NOTE: {note}\n"));
+        }
+    }
     // A directory is not a dataset. When the files' column sets barely
     // overlap, the union target below would demand every column of every
     // file and refuse the whole pile — mechanically correct and humanly
@@ -195,6 +198,109 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
         (false, false) => {}
     }
     out.push_str("\n);\n");
+    Ok(out)
+}
+
+/// Fold one sniffed spec's columns into the merged `columns`/`file_sets`
+/// tallies, under `label` (a whole file, or `"{file}#{ordinal}"` for one
+/// stacked block of it). Shared by the whole-file path and the split-file
+/// path so the two cannot tally differently.
+fn record_columns(
+    columns: &mut Vec<DraftColumn>,
+    file_sets: &mut Vec<(String, BTreeSet<String>)>,
+    day_first: &mut bool,
+    month_first: &mut bool,
+    sniffed: &mut usize,
+    label: String,
+    spec: &crate::spec::ParseSpec,
+) {
+    *sniffed += 1;
+    file_sets.push((label.clone(), spec.columns.iter().map(|c| c.name.clone()).collect()));
+    for c in &spec.columns {
+        match &c.dtype {
+            DType::Date { format } | DType::Timestamp { format, .. } => {
+                if format.starts_with("%d") {
+                    *day_first = true;
+                }
+                if format.starts_with("%m") {
+                    *month_first = true;
+                }
+            }
+            _ => {}
+        }
+        let origin = c.source_name().to_string();
+        match columns.iter_mut().find(|d| d.name == c.name) {
+            Some(d) => {
+                if !d.origins.contains(&origin) {
+                    d.origins.push(origin);
+                }
+                if !d.files.contains(&label) {
+                    d.files.push(label.clone());
+                }
+                let (merged, caveat) = merge(&d.dtype, &c.dtype, &label);
+                d.dtype = merged;
+                if d.caveat.is_none() {
+                    d.caveat = caveat;
+                }
+            }
+            None => columns.push(DraftColumn {
+                name: c.name.clone(),
+                origins: vec![origin],
+                dtype: c.dtype.clone(),
+                caveat: None,
+                files: vec![label.clone()],
+            }),
+        }
+    }
+}
+
+/// Sniff one stacked block of `path` as if it were its own file: copy the
+/// block's own raw lines out to a scratch file with the same extension (so
+/// format guessing — which reads the extension, not the bytes — sees a
+/// `.csv` for a `.csv`), then run the ordinary sniffer over that. This is
+/// the whole reason a block gets the sniffer's full machinery — title rows,
+/// separator/date inference, type widening — rather than a cut-down pass of
+/// its own that could disagree with what a plain file gets.
+fn sniff_block(path: &Path, window: RowWindow, limits: Limits) -> Result<crate::spec::ParseSpec> {
+    let bytes = block_bytes(path, window, limits)
+        .with_context(|| format!("reading block {} of {}", window.ordinal, path.display()))?;
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("csv");
+    let mut tmp = tempfile::Builder::new()
+        .suffix(&format!(".{ext}"))
+        .tempfile()
+        .context("creating a scratch file for the block")?;
+    std::io::Write::write_all(&mut tmp, &bytes)
+        .with_context(|| format!("writing block {} of {} to a scratch file", window.ordinal, path.display()))?;
+    let sample = crate::sample::build(tmp.path(), 16 * 1024, limits)?;
+    crate::sniff::sniff(tmp.path(), &sample, limits).map(|r| r.spec)
+}
+
+/// The raw bytes of one stacked block, by physical line number — the same
+/// indexing `regions_of` counted `window` against, so a window it returned
+/// names exactly these lines and no others.
+fn block_bytes(path: &Path, window: RowWindow, limits: Limits) -> Result<Vec<u8>> {
+    let real = crate::fileio::materialize(path, limits.max_decompressed_bytes)?;
+    let file = std::fs::File::open(real.as_ref())
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut out = Vec::new();
+    let mut index: u64 = 0;
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        if index >= window.end {
+            break;
+        }
+        buf.clear();
+        let n = std::io::BufRead::read_until(&mut reader, b'\n', &mut buf)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        if index >= window.start {
+            out.extend_from_slice(&buf);
+        }
+        index += 1;
+    }
     Ok(out)
 }
 

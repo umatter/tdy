@@ -153,6 +153,15 @@ pub enum Extraction {
         /// A1-style range, e.g. "A4:H200". None = used range.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         range: Option<String>,
+        /// The 1-based ordinal of the stacked block `range` was narrowed to,
+        /// written by `fit_region` alongside `range` itself. `RowWindow`
+        /// cannot travel with an Excel extraction the way it does with
+        /// `Delimited` (a sheet has no row-window field at all — `range`
+        /// already says which rows), so the ordinal a `source_name` column
+        /// needs is carried separately, and only when `range` came from
+        /// splitting a sheet at blank rows.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region_ordinal: Option<u32>,
     },
     /// Fixed-width dumps. Offsets are **character** positions per line after
     /// decoding, half-open [start, end) — the columns you would count in a
@@ -200,6 +209,11 @@ pub enum Extraction {
 pub struct RowWindow {
     pub start: u64,
     pub end: u64,
+    /// The block's 1-based index among the file's (or sheet's) stacked
+    /// blocks, in file order. Required, not defaulted: 0 would read as a
+    /// real ordinal rather than an absent one, and `source_name`'s
+    /// `from = "region"` needs a true count to report.
+    pub ordinal: u32,
 }
 
 impl Extraction {
@@ -431,6 +445,9 @@ pub enum SourcePart {
     Sheet,
     /// The whole path as written.
     Path,
+    /// The 1-based ordinal of the stacked block this table was read from.
+    /// Only an extraction narrowed to one region of a file or sheet has one.
+    Region,
 }
 
 /// How `split_column` cuts a value.
@@ -1623,7 +1640,7 @@ mod tests {
     fn a_row_window_must_be_forward() {
         let mut s = minimal_spec();
         if let Extraction::Delimited { region, .. } = &mut s.extraction {
-            *region = Some(RowWindow { start: 5, end: 5 });
+            *region = Some(RowWindow { start: 5, end: 5, ordinal: 1 });
         }
         let errs = s.validate().unwrap_err();
         assert!(errs.iter().any(|e| e.contains("region") && e.contains("start")), "{errs:?}");

@@ -627,12 +627,13 @@ pub fn fit_region(
             let first_col = col_letter(start.1);
             let last_col = col_letter(start.1 + width.saturating_sub(1) as u32);
             match &mut d.extraction {
-                Extraction::Excel { range, .. } => {
+                Extraction::Excel { range, region_ordinal, .. } => {
                     *range = Some(format!(
                         "{first_col}{}:{last_col}{}",
                         start.0 + window.start as u32 + 1,
                         start.0 + window.end as u32
                     ));
+                    *region_ordinal = Some(window.ordinal);
                 }
                 other => {
                     return Err(FitError::Unreadable(anyhow::anyhow!(

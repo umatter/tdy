@@ -920,7 +920,7 @@ fn quarter_spec(sheet: &str) -> ParseSpec {
         pointer: None,
     };
     ParseSpec {
-        extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None },
+        extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None, region_ordinal: None },
         transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         columns: vec![
             col("month", "Datum", DType::Date { format: "%d.%m.%Y".into() }),
@@ -1170,7 +1170,7 @@ fn validate_and_check_take_a_sheet_member_reference() {
 /// members, not sheet members, and not say "NO SIDECAR".
 #[test]
 fn check_names_region_members_of_a_plain_file() {
-    fn region_spec(start: u64, end: u64) -> ParseSpec {
+    fn region_spec(start: u64, end: u64, ordinal: u32) -> ParseSpec {
         ParseSpec {
             extraction: Extraction::Delimited {
                 delimiter: ',',
@@ -1179,7 +1179,7 @@ fn check_names_region_members_of_a_plain_file() {
                 encoding: None,
                 comment: None,
                 ragged: Default::default(),
-                region: Some(RowWindow { start, end }),
+                region: Some(RowWindow { start, end, ordinal }),
             },
             transforms: vec![],
             columns: vec![ColumnSpec {
@@ -1205,8 +1205,8 @@ fn check_names_region_members_of_a_plain_file() {
         prompt_version: None,
         sampled_bytes: None,
     };
-    tdy::sidecar::save_member(&f, None, Some(1), &region_spec(0, 2), prov()).unwrap();
-    tdy::sidecar::save_member(&f, None, Some(2), &region_spec(3, 5), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(1), &region_spec(0, 2, 1), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(2), &region_spec(3, 5, 2), prov()).unwrap();
 
     let out = tdy(&["check", t.to_str().unwrap(), "--against", f.to_str().unwrap()]);
     let text = String::from_utf8_lossy(&out.stdout);
@@ -1274,7 +1274,7 @@ fn acceptance_is_per_sheet_member() {
     let mut amount = col("amount", "Betrag", DType::Decimal { precision: 14, scale: 2 });
     amount.parse.decimal_shift = Some(-2);
     let spec = ParseSpec {
-        extraction: Extraction::Excel { sheet_name: Some("Q1".into()), sheet_index: None, range: None },
+        extraction: Extraction::Excel { sheet_name: Some("Q1".into()), sheet_index: None, range: None, region_ordinal: None },
         transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
         columns: vec![col("month", "Datum", DType::Date { format: "%d.%m.%Y".into() }), col("region", "Region", DType::Utf8), amount],
         confidence: Some(1.0),

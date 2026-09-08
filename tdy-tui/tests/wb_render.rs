@@ -1893,7 +1893,7 @@ fn the_browser_shows_a_workbooks_sheet_specs() {
     .unwrap();
     for sheet in ["Q1", "Q2"] {
         let spec = ParseSpec {
-            extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None },
+            extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None, region_ordinal: None },
             transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
             columns: vec![ColumnSpec { name: "region".into(), source: Some("Region".into()), dtype: DType::Utf8, nullable: false, parse: ValueParsing::default(), pointer: None }],
             confidence: Some(1.0),

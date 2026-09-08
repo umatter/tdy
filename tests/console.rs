@@ -937,7 +937,7 @@ async fn ls_reports_a_workbooks_sheet_specs() {
 /// still say something other than "not sniffed".
 #[tokio::test]
 async fn ls_reports_a_files_region_specs() {
-    fn region_spec(start: u64, end: u64) -> tdy::spec::ParseSpec {
+    fn region_spec(start: u64, end: u64, ordinal: u32) -> tdy::spec::ParseSpec {
         tdy::spec::ParseSpec {
             extraction: tdy::spec::Extraction::Delimited {
                 delimiter: ',',
@@ -946,7 +946,7 @@ async fn ls_reports_a_files_region_specs() {
                 encoding: None,
                 comment: None,
                 ragged: Default::default(),
-                region: Some(tdy::spec::RowWindow { start, end }),
+                region: Some(tdy::spec::RowWindow { start, end, ordinal }),
             },
             transforms: vec![],
             columns: vec![tdy::spec::ColumnSpec {
@@ -970,8 +970,8 @@ async fn ls_reports_a_files_region_specs() {
         prompt_version: None,
         sampled_bytes: None,
     };
-    tdy::sidecar::save_member(&f, None, Some(1), &region_spec(0, 2), prov()).unwrap();
-    tdy::sidecar::save_member(&f, None, Some(2), &region_spec(3, 5), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(1), &region_spec(0, 2, 1), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(2), &region_spec(3, 5, 2), prov()).unwrap();
 
     let mut s = session(d.path()).await;
     let o = s.run(".ls", None).await;
@@ -995,6 +995,7 @@ async fn ls_reports_a_workbooks_sheet_specs_split_into_regions() {
                 sheet_name: Some("Q1".into()),
                 sheet_index: None,
                 range: Some(range.into()),
+                region_ordinal: None,
             },
             transforms: vec![tdy::spec::Transform::PromoteHeader { rows: 1, join: " ".into() }],
             columns: vec![tdy::spec::ColumnSpec {

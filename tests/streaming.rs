@@ -565,7 +565,7 @@ fn unstreamable_shapes_are_declined_rather_than_guessed() {
 
     // Excel is materialised by its reader whatever we do.
     let excel = ParseSpec {
-        extraction: Extraction::Excel { sheet_name: None, sheet_index: None, range: None },
+        extraction: Extraction::Excel { sheet_name: None, sheet_index: None, range: None, region_ordinal: None },
         transforms: vec![],
         columns: vec![],
         confidence: Some(1.0),
@@ -917,7 +917,7 @@ fn a_row_window_selects_a_block_on_both_executors() {
     );
     s.extraction = Extraction::Delimited {
         delimiter: ';', quote: Some('"'), escape: None, encoding: None, comment: None,
-        ragged: RaggedPolicy::PadNulls, region: Some(RowWindow { start: 4, end: 8 }),
+        ragged: RaggedPolicy::PadNulls, region: Some(RowWindow { start: 4, end: 8, ordinal: 1 }),
     };
     let a = render(&engine::execute_batches(&s, &p, Limits::default()).unwrap());
     assert!(a.contains("Nord") && a.contains("510.00") && !a.contains("190.00"), "{a}");
@@ -925,7 +925,7 @@ fn a_row_window_selects_a_block_on_both_executors() {
     assert_paths_agree(&s, &p, "row window");
 
     let mut past = s.clone();
-    if let Extraction::Delimited { region, .. } = &mut past.extraction { *region = Some(RowWindow { start: 40, end: 50 }); }
+    if let Extraction::Delimited { region, .. } = &mut past.extraction { *region = Some(RowWindow { start: 40, end: 50, ordinal: 1 }); }
     let e = format!("{:#}", engine::execute_batches(&past, &p, Limits::default()).unwrap_err());
     assert!(e.contains("past the end") && e.contains("8 rows"), "{e}");
 }
@@ -955,7 +955,7 @@ fn a_region_past_a_capped_sample_is_truncated_not_past_the_end() {
     let mut s = spec(vec![], vec![col("col_1", DType::Int64)]);
     s.extraction = Extraction::Delimited {
         delimiter: ',', quote: Some('"'), escape: None, encoding: None, comment: None,
-        ragged: RaggedPolicy::PadNulls, region: Some(RowWindow { start: 150_000, end: 150_005 }),
+        ragged: RaggedPolicy::PadNulls, region: Some(RowWindow { start: 150_000, end: 150_005, ordinal: 1 }),
     };
 
     // A real, in-bounds window: the uncapped executor (both paths) reads it.
@@ -975,7 +975,7 @@ fn a_region_past_a_capped_sample_is_truncated_not_past_the_end() {
     // the file's whole length is known and the refusal is not spurious.
     let mut past = s.clone();
     if let Extraction::Delimited { region, .. } = &mut past.extraction {
-        *region = Some(RowWindow { start: 300_000, end: 300_005 });
+        *region = Some(RowWindow { start: 300_000, end: 300_005, ordinal: 1 });
     }
     let e = format!("{:#}", engine::execute_batches(&past, &p, Limits::default()).unwrap_err());
     assert!(e.contains("past the end") && e.contains("200001 rows"), "{e}");

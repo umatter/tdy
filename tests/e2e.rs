@@ -34,6 +34,7 @@ fn umsatz_spec() -> ParseSpec {
             sheet_name: Some("Umsatz".into()),
             sheet_index: None,
             range: None,
+            region_ordinal: None,
         },
         transforms: vec![
             Transform::SkipRows { head: 3, tail: 1 },

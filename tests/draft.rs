@@ -125,3 +125,17 @@ fn a_pile_of_unrelated_files_is_called_out_as_several_datasets() {
     let sql = draft_of(&["2025-01.csv", "2025-02.csv"]);
     assert!(!sql.contains("do not look like ONE dataset"), "{sql}");
 }
+
+/// A file holding two stacked tables (a detail block, then a summary block)
+/// is drafted block by block, not as one file: each block is sniffed on its
+/// own, so the summary block's `total` column shows up as its own drafted
+/// column, attributed to `#2` — never silently folded into (or dropped by)
+/// a single whole-file sniff that would see only the first block's shape.
+#[test]
+fn a_file_with_stacked_blocks_drafts_each_blocks_columns_and_names_the_block() {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/regions_summary.csv");
+    let ddl = tdy::draft::draft_target(&[p], Limits::default()).unwrap();
+    assert!(ddl.contains("total"), "the summary block's column is drafted: {ddl}");
+    assert!(ddl.contains("#2"), "and attributed to its block: {ddl}");
+    assert!(Target::parse(&ddl).is_ok(), "{ddl}");
+}

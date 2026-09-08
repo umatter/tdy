@@ -593,7 +593,7 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
         let p = d.path().join("report.csv");
         std::fs::write(&p, "a;b\n1;2\n\na;b\n3;4\n").unwrap();
         let mut spec = sheet_spec("unused");   // any valid spec; make it delimited with a window
-        spec.extraction = Extraction::Delimited { delimiter: ';', quote: None, escape: None, encoding: None, comment: None, ragged: Default::default(), region: Some(RowWindow { start: 3, end: 5 }) };
+        spec.extraction = Extraction::Delimited { delimiter: ';', quote: None, escape: None, encoding: None, comment: None, ragged: Default::default(), region: Some(RowWindow { start: 3, end: 5, ordinal: 2 }) };
         let prov = || ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
         let sc = save_member(&p, None, Some(2), &spec, prov()).unwrap();
         assert!(std::fs::read_to_string(&sc).unwrap().contains("region = 2"));
@@ -636,7 +636,7 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
         std::fs::write(&p, b"not read as a workbook here; only the bytes are hashed").unwrap();
         let mut spec = sheet_spec("Q1");
         spec.extraction =
-            Extraction::Excel { sheet_name: Some("Q1".into()), sheet_index: None, range: Some("A1:B1".into()) };
+            Extraction::Excel { sheet_name: Some("Q1".into()), sheet_index: None, range: Some("A1:B1".into()), region_ordinal: None };
         let prov = || ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
         save_member(&p, Some("Q1"), Some(1), &spec, prov()).unwrap();
         save_member(&p, Some("Q1"), Some(2), &spec, prov()).unwrap();
@@ -645,7 +645,7 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
 
     fn sheet_spec(sheet: &str) -> ParseSpec {
         ParseSpec {
-            extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None },
+            extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None, region_ordinal: None },
             transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
             columns: vec![ColumnSpec {
                 name: "region".into(),
