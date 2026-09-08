@@ -373,11 +373,11 @@ pub fn expand_units(
         // one shaped like the blocks that were kept waits on a person —
         // "the split was possible" is not "nothing was lost".
         let dropped: Vec<String> = regions.dropped.iter().map(dropped_note).collect();
-        let shaped: Vec<&crate::engine::DroppedRun> = regions.table_shaped().collect();
+        let shaped: Vec<crate::engine::DroppedRun> = regions.table_shaped().copied().collect();
         let shaped_reason = (!shaped.is_empty()).then(|| {
             format!(
                 "{} — accept only if those lines are not part of this dataset",
-                shaped.iter().map(|d| dropped_note(d)).collect::<Vec<_>>().join("; ")
+                shaped.iter().map(dropped_note).collect::<Vec<_>>().join("; ")
             )
         });
         let n = regions.windows.len();

@@ -184,7 +184,10 @@ pub fn region_sidecars(file: &Path, sheet: Option<&str>) -> Vec<u32> {
         .filter_map(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
             let rest = n.strip_prefix(&prefix)?.strip_suffix(".tdy.toml")?;
-            is_ordinal(rest).then(|| rest.parse().ok())?
+            if !is_ordinal(rest) {
+                return None;
+            }
+            rest.parse().ok()
         })
         .collect();
     out.sort_unstable();
