@@ -98,6 +98,9 @@ pub enum EntryStatus {
     /// A workbook expanded into sheet members: no plain sidecar, N sheet
     /// sidecars beside it, all fresh.
     Sheets(usize),
+    /// A file split into stacked regions: no plain sidecar, N region
+    /// sidecars beside it, all fresh.
+    Regions(usize),
 }
 
 /// A table of results, as text — what `.sniff`'s preview, a `.fit` dry run
@@ -1047,16 +1050,26 @@ fn file_status(path: &Path) -> EntryStatus {
         // specs beside it under `<file>#<sheet>.tdy.toml`, and listing it as
         // unsniffed while they sit there is a wrong answer. Every one must
         // be fresh; the file's hash covers them all, so one stale is all
-        // stale.
+        // stale. A file split into stacked regions is the same situation
+        // one level down, under `<file>#<N>.tdy.toml` — `sheet_sidecars`
+        // never returns those (a region ordinal is not a sheet name), so
+        // the two cases cannot be confused for each other.
         Ok(SidecarStatus::Absent) => {
             let sheets = crate::sidecar::sheet_sidecars(path);
-            if sheets.is_empty() {
+            if !sheets.is_empty() {
+                let all_fresh = sheets
+                    .iter()
+                    .all(|s| matches!(crate::sidecar::load_member(path, Some(s), None), Ok(SidecarStatus::Fresh(_))));
+                return if all_fresh { EntryStatus::Sheets(sheets.len()) } else { EntryStatus::Stale };
+            }
+            let regions = crate::sidecar::region_sidecars(path, None);
+            if regions.is_empty() {
                 return EntryStatus::None;
             }
-            let all_fresh = sheets
+            let all_fresh = regions
                 .iter()
-                .all(|s| matches!(crate::sidecar::load_member(path, Some(s), None), Ok(SidecarStatus::Fresh(_))));
-            if all_fresh { EntryStatus::Sheets(sheets.len()) } else { EntryStatus::Stale }
+                .all(|r| matches!(crate::sidecar::load_member(path, None, Some(*r)), Ok(SidecarStatus::Fresh(_))));
+            if all_fresh { EntryStatus::Regions(regions.len()) } else { EntryStatus::Stale }
         }
         Err(_) => EntryStatus::Stale, // unreadable sidecar: not something a query would use
     }
@@ -1100,6 +1113,7 @@ pub fn render_listing(entries: &[Entry]) -> String {
             EntryStatus::Locked => "target, locked".into(),
             EntryStatus::Drift(n) => format!("target, drift ({n})"),
             EntryStatus::Sheets(n) => format!("sheet specs ({n})"),
+            EntryStatus::Regions(n) => format!("region specs ({n})"),
         };
         let _ = writeln!(s, "{:<width$}  {status}", e.name, width = width);
     }

@@ -256,8 +256,8 @@ impl Drift {
                 format!("{p} is listed twice in the lock — run `tdy fit` to rebuild it")
             }
             Drift::MixedGranularity(p) => format!(
-                "{p} is listed both as a whole file and by sheet, so its rows would be read \
-                 twice — run `tdy fit` to rebuild it"
+                "{p} is listed both whole and in parts (by sheet or by region), so its rows \
+                 would be read twice — run `tdy fit` to rebuild it"
             ),
             Drift::SpecEdited(p) => format!(
                 "{p}'s spec was edited after it was accepted — the acceptance was given to \
@@ -650,6 +650,13 @@ mod tests {
         };
         let dm = drift(&mixed_lock, &target, &t).unwrap();
         assert!(matches!(&dm[..], [Drift::MixedGranularity(n)] if n == "book.xlsx"), "{dm:?}");
+        // The message must not claim "by sheet" for a whole-file/region mix,
+        // which never involved a sheet at all.
+        assert!(
+            dm[0].message().contains("whole") && dm[0].message().contains("region"),
+            "{}",
+            dm[0].message()
+        );
 
         // Touch the workbook: every sheet member's proof is void, said once.
         let mut bytes_on_disk = std::fs::read(&book).unwrap();

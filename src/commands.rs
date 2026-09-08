@@ -156,11 +156,17 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
             // catch.
             Ok(SidecarStatus::Stale(s)) => (s.spec, true),
             Ok(SidecarStatus::Absent) => {
-                // A workbook expanded into sheet members has no plain
-                // sidecar, and its members are right there in the same
-                // directory: "NO SIDECAR" would be a wrong answer about a
-                // file that is fully planned.
+                // A workbook expanded into sheet members, or a file split
+                // into stacked regions, has no plain sidecar, and its
+                // members are right there in the same directory: "NO
+                // SIDECAR" would be a wrong answer about a file that is
+                // fully planned.
                 let sheets = if sheet.is_none() { crate::sidecar::sheet_sidecars(f) } else { Vec::new() };
+                let regions = if sheet.is_none() {
+                    crate::sidecar::region_sidecars(f, None)
+                } else {
+                    Vec::new()
+                };
                 if !sheets.is_empty() {
                     writeln!(
                         text,
@@ -171,6 +177,19 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
                         target_path.display(),
                         f.display(),
                         sheets[0],
+                        target_path.display()
+                    )?;
+                } else if !regions.is_empty() {
+                    let names: Vec<String> =
+                        regions.iter().map(|r| format!("{}#{r}", f.display())).collect();
+                    writeln!(
+                        text,
+                        "\n{}: has region members {} — check one as `tdy check {} --against {}`, \
+                         or the whole dataset with `tdy check {}`",
+                        f.display(),
+                        names.join(", "),
+                        target_path.display(),
+                        names[0],
                         target_path.display()
                     )?;
                 } else {

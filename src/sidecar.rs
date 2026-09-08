@@ -84,6 +84,11 @@ pub fn resolve_ref(text: &Path) -> Result<(PathBuf, Option<String>, Option<u32>)
 /// A workbook expanded into sheet members has no plain sidecar, and
 /// reporting "no sidecar" about it while its members sit in the same
 /// directory is a wrong answer.
+///
+/// A tail that parses fully as a positive integer is a region of the plain
+/// file (`report.csv#2.tdy.toml`), not a sheet named `"2"` — the same
+/// exclusion [`region_sidecars`] applies in reverse to tell a sheet name
+/// from a region ordinal.
 pub fn sheet_sidecars(file: &Path) -> Vec<String> {
     let Some(name) = file.file_name().map(|n| n.to_string_lossy().into_owned()) else {
         return Vec::new();
@@ -100,7 +105,10 @@ pub fn sheet_sidecars(file: &Path) -> Vec<String> {
         .filter_map(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
             let rest = n.strip_prefix(&prefix)?.strip_suffix(".tdy.toml")?;
-            (!rest.is_empty()).then(|| rest.to_string())
+            if rest.is_empty() || rest.parse::<u32>().is_ok() {
+                return None;
+            }
+            Some(rest.to_string())
         })
         .collect();
     out.sort();
@@ -582,6 +590,23 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
         std::fs::write(&sc, text).unwrap();
         let e = format!("{:#}", load_member(&p, None, Some(2)).unwrap_err());
         assert!(e.contains("region") && e.contains('2') && e.contains('1'), "{e}");
+    }
+
+    /// `report.csv#2.tdy.toml` is a region of the plain file, not a sheet
+    /// called `"2"` — `sheet_sidecars` must not claim it, or a freshly
+    /// fitted region file would be checked against a sheet that does not
+    /// exist and reported stale.
+    #[test]
+    fn sheet_sidecars_ignores_a_region_only_sidecar() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().join("report.csv");
+        std::fs::write(&p, "a;b\n1;2\n").unwrap();
+        let mut spec = sheet_spec("unused");
+        spec.extraction = Extraction::Delimited { delimiter: ';', quote: None, escape: None, encoding: None, comment: None, ragged: Default::default(), region: None };
+        let prov = || ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
+        save_member(&p, None, Some(2), &spec, prov()).unwrap();
+        assert!(sheet_sidecars(&p).is_empty(), "a region ordinal is not a sheet name");
+        assert_eq!(region_sidecars(&p, None), vec![2]);
     }
 
     fn sheet_spec(sheet: &str) -> ParseSpec {

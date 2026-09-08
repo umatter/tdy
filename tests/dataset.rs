@@ -906,7 +906,9 @@ fn provenance_columns_are_absent_unless_declared() {
 }
 
 use tdy::lockfile::{Lock, Member, LOCK_VERSION};
-use tdy::spec::{ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
+use tdy::spec::{
+    ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, RowWindow, Transform, ValueParsing,
+};
 
 fn quarter_spec(sheet: &str) -> ParseSpec {
     let col = |name: &str, source: &str, dtype: DType| ColumnSpec {
@@ -1160,6 +1162,60 @@ fn validate_and_check_take_a_sheet_member_reference() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("sheet members") && text.contains("2025.xlsx#Q1"), "{text}");
     assert!(!text.contains("NO SIDECAR"), "{text}");
+}
+
+/// A file split into stacked regions has no plain sidecar either — one
+/// sidecar per region, `report.csv#1.tdy.toml` and `report.csv#2.tdy.toml`
+/// — and `check --against` the plain file must name them as region
+/// members, not sheet members, and not say "NO SIDECAR".
+#[test]
+fn check_names_region_members_of_a_plain_file() {
+    fn region_spec(start: u64, end: u64) -> ParseSpec {
+        ParseSpec {
+            extraction: Extraction::Delimited {
+                delimiter: ',',
+                quote: None,
+                escape: None,
+                encoding: None,
+                comment: None,
+                ragged: Default::default(),
+                region: Some(RowWindow { start, end }),
+            },
+            transforms: vec![],
+            columns: vec![ColumnSpec {
+                name: "a".into(),
+                source: None,
+                dtype: DType::Utf8,
+                nullable: true,
+                parse: ValueParsing::default(),
+                pointer: None,
+            }],
+            confidence: Some(1.0),
+            notes: vec![],
+        }
+    }
+    let dir = TempDir::new().unwrap();
+    let f = dir.path().join("report.csv");
+    std::fs::write(&f, "a\n1\n\na\n2\n").unwrap();
+    let t = dir.path().join("t.tdy.sql");
+    std::fs::write(&t, "CREATE TABLE t (a TEXT) WITH (files = '*.csv');").unwrap();
+    let prov = || tdy::sidecar::ProvenanceInfo {
+        method: InferenceMethod::Manual,
+        model: None,
+        prompt_version: None,
+        sampled_bytes: None,
+    };
+    tdy::sidecar::save_member(&f, None, Some(1), &region_spec(0, 2), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(2), &region_spec(3, 5), prov()).unwrap();
+
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", f.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("region members") && text.contains("report.csv#1") && text.contains("report.csv#2"),
+        "{text}"
+    );
+    assert!(!text.contains("NO SIDECAR"), "{text}");
+    assert!(!text.contains("sheet members"), "{text}");
 }
 
 /// The expansion note says what *this* fit discovered. A reused sidecar

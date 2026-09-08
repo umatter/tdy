@@ -930,6 +930,57 @@ async fn ls_reports_a_workbooks_sheet_specs() {
     assert_eq!(entries.iter().find(|e| e.name == "2025.xlsx").unwrap().status, EntryStatus::Stale);
 }
 
+/// A file split into stacked regions has no plain sidecar either — one
+/// sidecar per region, `report.csv#1.tdy.toml` and `report.csv#2.tdy.toml`
+/// — and `sheet_sidecars` must not mistake a region ordinal for a sheet
+/// name (a region-only file has no sheets at all), so listing it must
+/// still say something other than "not sniffed".
+#[tokio::test]
+async fn ls_reports_a_files_region_specs() {
+    fn region_spec(start: u64, end: u64) -> tdy::spec::ParseSpec {
+        tdy::spec::ParseSpec {
+            extraction: tdy::spec::Extraction::Delimited {
+                delimiter: ',',
+                quote: None,
+                escape: None,
+                encoding: None,
+                comment: None,
+                ragged: Default::default(),
+                region: Some(tdy::spec::RowWindow { start, end }),
+            },
+            transforms: vec![],
+            columns: vec![tdy::spec::ColumnSpec {
+                name: "a".into(),
+                source: None,
+                dtype: tdy::spec::DType::Utf8,
+                nullable: true,
+                parse: tdy::spec::ValueParsing::default(),
+                pointer: None,
+            }],
+            confidence: Some(1.0),
+            notes: vec![],
+        }
+    }
+    let d = tempfile::TempDir::new().unwrap();
+    let f = d.path().join("report.csv");
+    std::fs::write(&f, "a\n1\n\na\n2\n").unwrap();
+    let prov = || tdy::sidecar::ProvenanceInfo {
+        method: tdy::spec::InferenceMethod::Manual,
+        model: None,
+        prompt_version: None,
+        sampled_bytes: None,
+    };
+    tdy::sidecar::save_member(&f, None, Some(1), &region_spec(0, 2), prov()).unwrap();
+    tdy::sidecar::save_member(&f, None, Some(2), &region_spec(3, 5), prov()).unwrap();
+
+    let mut s = session(d.path()).await;
+    let o = s.run(".ls", None).await;
+    let Payload::Listing(entries) = o.payload else { panic!("{:?}", o.payload) };
+    let report = entries.iter().find(|e| e.name == "report.csv").expect("the file is listed");
+    assert_eq!(report.status, EntryStatus::Regions(2), "{:?}", report.status);
+    assert!(o.text.contains("region specs (2)"), "{}", o.text);
+}
+
 /// A magnitude reason is a fact about the pile, recorded in the lock rather
 /// than in the member's spec; `.accept`'s step one must find it there.
 #[tokio::test]
