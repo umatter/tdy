@@ -524,3 +524,31 @@ fn an_ods_repeated_cell_run_keeps_its_column_alignment() {
     let sums: Vec<f64> = names.iter().map(|n| total(&b, n)).collect();
     assert_eq!(sums, vec![3.0, 4.0, 6.0, 8.0, 15.0], "columns slid: {sums:?}");
 }
+
+/// Each compressed twin of `compressed_plain.csv` reads to the same table
+/// as the plain file — the same sum, through the binary — and its sidecar
+/// names the format it was decompressed from.
+#[test]
+fn compressed_twins_read_to_the_plain_files_sum() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+    for name in ["compressed_plain.csv", "compressed_plain.csv.gz", "compressed_plain.csv.bz2", "compressed_plain.csv.xz"] {
+        let p = dir.path().join(name);
+        std::fs::copy(src.join(name), &p).unwrap();
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+            .args(["query", &format!("SELECT sum(betrag) AS total, count(*) AS n FROM messy('{}')", p.display())])
+            .env("TDY_BACKEND", "none")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{name}: {text}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(text.contains("4460.00") && text.contains("| 4 "), "{name}: {text}");
+        let sc = std::fs::read_to_string(dir.path().join(format!("{name}.tdy.toml"))).unwrap();
+        if name.ends_with(".csv") {
+            assert!(!sc.contains("compressed ="), "{name}: {sc}");
+        } else {
+            let kind = match name.rsplit('.').next().unwrap() { "gz" => "gzip", "bz2" => "bzip2", "xz" => "xz", _ => unreachable!() };
+            assert!(sc.contains(&format!("compressed = \"{kind}\"")), "{name}: {sc}");
+        }
+    }
+}

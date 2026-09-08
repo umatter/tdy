@@ -209,6 +209,7 @@ pub fn save_member(file: &Path, sheet: Option<&str>, spec: &ParseSpec, prov: Pro
             blake3: hash,
             bytes,
             sheet: sheet.map(str::to_string),
+            compressed: fileio::compression_kind(file)?.map(|c| c.name().to_string()),
         },
         provenance: Provenance {
             method: prov.method,

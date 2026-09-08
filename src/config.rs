@@ -163,6 +163,11 @@ pub struct Limits {
     /// so this exists only to stop a run that would take unreasonably long.
     /// `max_file_bytes` is the bound that usually bites first.
     pub max_streamed_cells: u64,
+    /// A compressed input is materialised to a decompressed copy before it
+    /// is read; refuse one that would grow past this. Defaults to
+    /// `max_file_bytes`, since that is what a read of the copy is bounded
+    /// by anyway.
+    pub max_decompressed_bytes: u64,
 }
 
 impl Default for Limits {
@@ -189,6 +194,7 @@ impl Default for Limits {
             // streaming executor no longer has — which refused a 1.25 GB file
             // that in fact reads in 88 MB.
             max_streamed_cells: 2_000_000_000,
+            max_decompressed_bytes: 4 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -250,6 +256,7 @@ struct FileLimits {
     max_file_bytes: Option<u64>,
     max_cells: Option<u64>,
     max_streamed_cells: Option<u64>,
+    max_decompressed_bytes: Option<u64>,
 }
 
 /// CLI-level overrides collected by clap.
@@ -354,6 +361,9 @@ pub fn resolve(
         }
         if let Some(v) = fc.limits.max_file_bytes {
             cfg.limits.max_file_bytes = v;
+        }
+        if let Some(v) = fc.limits.max_decompressed_bytes {
+            cfg.limits.max_decompressed_bytes = v;
         }
         if let Some(v) = fc.limits.max_streamed_cells {
             cfg.limits.max_streamed_cells = v;
@@ -532,6 +542,9 @@ timeout_seconds = 120
 max_file_bytes = 4294967296   # 4 GiB
 max_cells = 50000000
 max_streamed_cells = 2000000000
+# a compressed input (gzip, zstd, bzip2, xz) is decompressed to a temp copy first;
+# refuse one that would grow past this many bytes (default: max_file_bytes)
+max_decompressed_bytes = 4294967296
 "#;
 
 #[cfg(test)]
@@ -767,5 +780,13 @@ mod tests {
         assert_eq!(c.backend, Backend::Local);
         assert_eq!(c.http_timeout, Duration::from_secs(120));
         assert_eq!(c.limits.max_file_bytes, 4 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn max_decompressed_bytes_is_a_limits_key_defaulting_to_max_file_bytes() {
+        let d = Limits::default();
+        assert_eq!(d.max_decompressed_bytes, d.max_file_bytes);
+        let fc: FileConfig = toml::from_str("[limits]\nmax_decompressed_bytes = 123\n").unwrap();
+        assert_eq!(fc.limits.max_decompressed_bytes, Some(123));
     }
 }

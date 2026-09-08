@@ -18,7 +18,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::config::Limits;
-use calamine::{open_workbook_auto, Data, Reader};
+use calamine::{Data, Reader};
 
 use crate::fileio;
 
@@ -55,6 +55,13 @@ pub struct FileSample {
 pub const CONTINUES_MARKER: &str = "\n[... file continues ...]\n";
 
 pub fn guess_format(path: &Path) -> FormatGuess {
+    // `2025-01.csv.gz` is a csv; the compression extension is not the format.
+    let name = path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let stripped = [".gz", ".gzip", ".zst", ".zstd", ".bz2", ".bzip2", ".xz", ".lzma"]
+        .iter()
+        .find_map(|ext| name.strip_suffix(ext))
+        .map(std::path::PathBuf::from);
+    let path = stripped.as_deref().unwrap_or(path);
     match path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -253,7 +260,7 @@ pub fn build(path: &Path, max_bytes: usize, limits: Limits) -> Result<FileSample
     // `read_head_tail` refuses a compressed file before any of these bytes
     // are decoded as text — read as text, it is one column of mojibake,
     // produced confidently.
-    let ht = fileio::read_head_tail(path, head_budget, tail_budget)?;
+    let ht = fileio::read_head_tail(path, head_budget, tail_budget, limits.max_decompressed_bytes)?;
 
     let head_ascii = ht.head.iter().all(|b| b.is_ascii());
     let tail_ascii = ht.tail.as_ref().map(|t| t.iter().all(|b| b.is_ascii())).unwrap_or(true);
@@ -329,9 +336,7 @@ fn build_excel_sample(
 ) -> Result<FileSample> {
     // Rendering a sample means opening the workbook, and for .ods that alone
     // allocates the whole grid. Bound it first. See src/xlguard.rs.
-    crate::xlguard::preflight(path, &limits)?;
-    let mut wb = open_workbook_auto(path)
-        .with_context(|| format!("cannot open workbook {}", path.display()))?;
+    let mut wb = crate::engine::open_workbook(path, &limits)?;
     let sheets: Vec<String> = wb.sheet_names().to_vec();
     let mut body = String::new();
     let mut partial = false;

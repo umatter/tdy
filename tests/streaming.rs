@@ -241,7 +241,10 @@ const GZ: &[u8] = &[
 /// never sniffed: `encoding = "utf-8"` is what sends the streaming executor
 /// down its raw-bytes opener, which never touches the engine's decoder.
 fn utf8_spec() -> ParseSpec {
-    let mut s = spec(vec![], vec![col("region", DType::Utf8), col("betrag", DType::Int64)]);
+    let mut s = spec(
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("region", DType::Utf8), col("betrag", DType::Int64)],
+    );
     s.extraction = Extraction::Delimited {
         delimiter: ',',
         quote: Some('"'),
@@ -253,28 +256,26 @@ fn utf8_spec() -> ParseSpec {
     s
 }
 
-/// The sniffer refuses a compressed file; so must both executors, because a
-/// hand-written sidecar never passes through the sniffer. The streaming
-/// path has its own opener, and a guard that lives only in the engine's
-/// decoder leaves that opener reading gzip as one column of mojibake.
+/// Both executors read a compressed file as its contents — the streaming
+/// path's own opener materialises it exactly as the engine's readers do —
+/// and agree, even when a hand-written sidecar says `utf-8`.
 #[test]
-fn both_executors_refuse_a_compressed_file_even_when_the_sidecar_says_utf8() {
+fn both_executors_read_a_compressed_file_and_agree() {
     let dir = TempDir::new().unwrap();
     let p = dir.path().join("x.csv");
     std::fs::write(&p, GZ).unwrap();
     let spec = utf8_spec();
-
-    let a = format!("{:#}", engine::execute_batches(&spec, &p, Limits::default()).unwrap_err());
-    assert!(a.contains("gzip-compressed"), "engine: {a}");
-    let b = format!("{:#}", stream::execute_batches(&spec, &p, Limits::default()).unwrap_err());
-    assert!(b.contains("gzip-compressed"), "stream: {b}");
+    let a = render(&engine::execute_batches(&spec, &p, Limits::default()).unwrap());
+    let b = render(&stream::execute_batches(&spec, &p, Limits::default()).unwrap());
+    assert_eq!(a, b);
+    assert!(a.contains("ZH") && a.contains("10"), "{a}");
     assert_paths_agree(&spec, &p, "gzip bytes named .csv");
 }
 
-/// The same, end to end: a frozen query over a stamped sidecar, on the
-/// executor a real query uses and on the fallback.
+/// The same, end to end: a frozen query over a stamped sidecar, on both
+/// executors, returns the one row the archive holds.
 #[test]
-fn a_frozen_query_over_a_compressed_file_is_refused_on_both_executors() {
+fn a_frozen_query_over_a_compressed_file_reads_it_on_both_executors() {
     let dir = TempDir::new().unwrap();
     let p = dir.path().join("x.csv");
     std::fs::write(&p, GZ).unwrap();
@@ -290,12 +291,11 @@ fn a_frozen_query_over_a_compressed_file_is_refused_on_both_executors() {
     )
     .unwrap();
     let sql = format!("select count(*) from messy('{}')", p.display());
-
     for env in [&[][..], &[("TDY_NO_STREAM", "1")][..]] {
         let out = tdy_env(&["query", "--frozen", &sql], env);
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(!out.status.success(), "env {env:?}: exited 0:\n{}", String::from_utf8_lossy(&out.stdout));
-        assert!(err.contains("gzip-compressed"), "env {env:?}: {err}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "env {env:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(text.contains("| 1 "), "env {env:?}: {text}");
     }
 }
 

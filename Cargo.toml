@@ -38,6 +38,13 @@ calamine = { version = "0.36", features = ["dates"] }
 # allocates a grid from them; versions match calamine's own so the tree does
 # not build two copies. See src/xlguard.rs.
 zip = { version = "8", default-features = false, features = ["deflate"] }
+# Compressed inputs (docs/design/2026-09-06-compressed-inputs.md): every one of
+# these was already in the tree through zip/calamine, so reading the four
+# formats costs no new compilation. lz4 and zip-as-archive stay refused.
+flate2 = "1"
+bzip2 = "0.5"
+xz2 = "0.1"
+zstd = "0.13"
 quick-xml = "0.41"
 regex = "1"
 chrono = "0.4"
