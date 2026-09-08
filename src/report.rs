@@ -316,6 +316,49 @@ pub struct Unit {
     /// What the *split* itself asks a person to rule on, before the spec's
     /// own review reasons are added.
     pub review: Option<String>,
+    /// The runs the split discarded, structurally rather than as prose — a
+    /// member that ends up reusing a *whole-file* spec has to say the same
+    /// facts the other way round, since that spec reads those lines.
+    pub dropped: Vec<crate::engine::DroppedRun>,
+    /// Those of `dropped` shaped like the blocks that were kept: `review`'s
+    /// own subject.
+    pub shaped: Vec<crate::engine::DroppedRun>,
+}
+
+impl Unit {
+    /// The notes for a member whose spec reads the whole file although the
+    /// split gave this unit a window: the runs are still named, but as lines
+    /// this spec *does* read rather than as lines nothing reads.
+    fn whole_file_notes(&self) -> Vec<String> {
+        let mut ns: Vec<String> =
+            self.notes.iter().filter(|n| !is_dropped_note(n)).cloned().collect();
+        ns.extend(self.dropped.iter().map(|d| {
+            format!(
+                "the split found a run of {} line(s) at lines {}–{} outside the proper \
+                 block; this spec reads the whole file",
+                d.end - d.start,
+                d.start + 1,
+                d.end
+            )
+        }));
+        ns
+    }
+
+    /// And the question that spec is asked instead. The gate does not move:
+    /// a whole-file read over a run shaped like the block is a judgement,
+    /// just the opposite one from "were those lines data?".
+    fn whole_file_reason(&self) -> Option<String> {
+        (!self.shaped.is_empty()).then(|| {
+            format!(
+                "this spec reads the whole file including {} — accept only if that is intended",
+                self.shaped
+                    .iter()
+                    .map(|d| format!("a table-shaped run at lines {}–{}", d.start + 1, d.end))
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            )
+        })
+    }
 }
 
 /// The members a pile's files resolve to, in lock order: a workbook whose
@@ -382,7 +425,14 @@ pub fn expand_units(
         });
         let n = regions.windows.len();
         match n {
-            0 => units.push(Unit { member, notes, window: None, review: None }),
+            0 => units.push(Unit {
+                member,
+                notes,
+                window: None,
+                review: None,
+                dropped: Vec::new(),
+                shaped: Vec::new(),
+            }),
             1 => {
                 let w = regions.windows[0];
                 let mut notes = notes;
@@ -392,7 +442,14 @@ pub fn expand_units(
                     w.end
                 ));
                 notes.extend(dropped);
-                units.push(Unit { member, notes, window: Some(w), review: shaped_reason });
+                units.push(Unit {
+                    member,
+                    notes,
+                    window: Some(w),
+                    review: shaped_reason,
+                    dropped: regions.dropped.clone(),
+                    shaped: shaped.clone(),
+                });
             }
             _ => {
                 for w in regions.windows {
@@ -409,7 +466,14 @@ pub fn expand_units(
                     );
                     notes.push(split);
                     notes.extend(dropped.iter().cloned());
-                    units.push(Unit { member, notes, window: Some(w), review });
+                    units.push(Unit {
+                        member,
+                        notes,
+                        window: Some(w),
+                        review,
+                        dropped: regions.dropped.clone(),
+                        shaped: shaped.clone(),
+                    });
                 }
             }
         }
@@ -461,7 +525,9 @@ fn is_refusal_note(n: &str) -> bool {
 /// sidecar detail; these are the ones about lines nothing read and about an
 /// edit that was discarded, which a person reading the pile has to see.
 fn shown_notes(m: &MemberReport) -> impl Iterator<Item = &String> {
-    m.notes.iter().filter(|n| is_dropped_note(n) || is_refusal_note(n))
+    m.notes.iter().filter(|n| {
+        is_dropped_note(n) || is_refusal_note(n) || n.starts_with("the split found a run of ")
+    })
 }
 
 /// A multi-line message as one line — a sidecar's refusal can list several
@@ -675,7 +741,26 @@ pub async fn fit_pile(
                 spec.notes.retain(|n| !(n.starts_with("table ") && n.ends_with("split at blank rows")));
                 spec.notes.retain(|n| !n.starts_with("one proper block in this file"));
                 spec.notes.retain(|n| !is_dropped_note(n));
-                spec.notes.extend(unit_notes.iter().cloned());
+                spec.notes.retain(|n| !n.starts_with("the split found a run of "));
+                // The split's notes and its review reason are true of a spec
+                // that reads one block. A plain member may legitimately reuse
+                // a hand-written whole-file spec instead — and then those
+                // lines *are* read, so the same facts have to be said the
+                // other way round and the person asked the other question.
+                // The gate does not move: a whole-file read over a run shaped
+                // like the block is still a judgement.
+                let whole_file = u.window.is_some()
+                    && match &spec.extraction {
+                        Extraction::Delimited { region, .. } => region.is_none(),
+                        Extraction::Excel { region_ordinal, .. } => region_ordinal.is_none(),
+                        _ => true,
+                    };
+                let (unit_notes, unit_review) = if whole_file {
+                    (u.whole_file_notes(), u.whole_file_reason())
+                } else {
+                    (u.notes.clone(), u.review.clone())
+                };
+                spec.notes.extend(unit_notes);
                 let via = match sc.provenance.method {
                     InferenceMethod::Manual => "manual",
                     InferenceMethod::Llm => "llm",
@@ -797,7 +882,7 @@ pub async fn fit_pile(
                     }
                     (!rs.is_empty()).then(|| rs.join("; "))
                 };
-                let review = merge_reason(review, u.review.clone());
+                let review = merge_reason(review, unit_review);
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()

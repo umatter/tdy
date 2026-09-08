@@ -580,3 +580,94 @@ fn a_refused_sidecar_says_so_and_is_re_planned() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("1500.00"), "block 2 is block 2 again: {text}");
 }
+
+/// A member that reuses the *windowed* spec `tdy fit` wrote for it reads
+/// one block, so the split's own wording is true of it: those lines are not
+/// read. Reusing the sidecar must not change that text.
+#[test]
+fn a_windowed_reuse_keeps_the_split_s_own_wording() {
+    let (dir, t) = three_pile();
+    std::fs::copy(fixture("regions_short_block.csv"), dir.path().join("report.csv")).unwrap();
+    assert!(tdy(&["fit", t.to_str().unwrap()]).status.success());
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("(existing spec)"), "the second fit reuses it: {text}");
+    assert!(text.contains("a run of 2 line(s) at lines 1–2 was not read"), "{text}");
+    assert!(text.contains("accept only if those lines are not part of this dataset"), "{text}");
+}
+
+/// The same file with a hand-written *whole-file* spec. The split still
+/// found the run, but this spec reads it — so the note that says nothing
+/// read those lines, and the review question that asks whether they were
+/// data, are both false of the spec in force. The facts are the same; the
+/// question a person is asked is the other one, and the gate stays: a
+/// whole-file read over a table-shaped extra block is exactly what someone
+/// should have to look at.
+#[test]
+fn a_whole_file_spec_is_asked_the_other_question() {
+    use tdy::spec::{ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, RaggedPolicy, Transform, ValueParsing};
+    let (dir, t) = three_pile();
+    let f = dir.path().join("report.csv");
+    std::fs::copy(fixture("regions_short_block.csv"), &f).unwrap();
+    let col = |name: &str, source: &str, dtype: DType| ColumnSpec {
+        name: name.into(), source: Some(source.into()), dtype, nullable: false,
+        parse: ValueParsing::default(), pointer: None,
+    };
+    let spec = ParseSpec {
+        extraction: Extraction::Delimited {
+            delimiter: ';', quote: Some('"'), escape: None, encoding: None, comment: None,
+            ragged: RaggedPolicy::PadNulls, region: None,
+        },
+        transforms: vec![
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            // Both runs carry the same header, and the file is read whole:
+            // the repeat (and the blank line between them) is not data.
+            Transform::DropRowsMatching { pattern: "^(Datum)?$".into(), column: Some("Datum".into()) },
+        ],
+        columns: vec![
+            col("month", "Datum", DType::Date { format: "%d.%m.%Y".into() }),
+            col("region", "Region", DType::Utf8),
+            col("amount", "Betrag", DType::Decimal { precision: 14, scale: 2 }),
+        ],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    tdy::sidecar::save_member(&f, None, None, &spec, tdy::sidecar::ProvenanceInfo {
+        method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None,
+    })
+    .unwrap();
+
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("(hand-written spec)"), "{text}");
+    assert!(!text.contains("was not read"), "this spec reads them: {text}");
+    assert!(
+        text.contains(
+            "the split found a run of 2 line(s) at lines 1–2 outside the proper block; \
+             this spec reads the whole file"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "this spec reads the whole file including a table-shaped run at lines 1–2 \
+             — accept only if that is intended"
+        ),
+        "{text}"
+    );
+
+    let sql = format!("SELECT sum(amount) AS total FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    assert!(!out.status.success(), "unaccepted: {}", String::from_utf8_lossy(&out.stdout));
+
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "report.csv"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    // 100.00 from the short run plus 490 + 500 + 510 from the kept block:
+    // the whole file, which is what this spec reads.
+    assert!(text.contains("1600.00"), "{text}");
+}
