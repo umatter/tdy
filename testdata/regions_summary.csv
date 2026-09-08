@@ -1,0 +1,9 @@
+Datum;Region;Betrag
+05.01.2025;Ost;190.00
+12.01.2025;West;200.00
+19.01.2025;Nord;210.00
+
+Region;Total
+Ost;190.00
+West;200.00
+Nord;210.00

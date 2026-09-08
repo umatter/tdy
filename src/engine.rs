@@ -2032,6 +2032,87 @@ pub fn sheet_grid(
     Ok(out)
 }
 
+/// The stacked blocks of a text file (or of one sheet of a workbook), split
+/// at runs of blank rows, in file order.
+///
+/// A block needs at least 3 rows to count as a region — a one- or two-line
+/// title/date banner above a table is not itself a stacked table, which is
+/// exactly the case `regions_titled.csv` exercises. A single block spanning
+/// the whole file (or sheet) is not a region either: there is nothing to
+/// choose between, so this returns an empty `Vec` the same way it would for
+/// a file with no blank line in it at all — `compressed_plain.csv` is that
+/// control fixture.
+///
+/// For a text file (`sheet: None`) this reads the whole file
+/// (`read_text`) and splits on raw *lines*: a line is blank when it is
+/// empty after trimming, and its index is the raw line number — the same
+/// counting `RowWindow` documents for `region` on `src/spec.rs`. A quoted
+/// newline embedded inside a delimited record therefore counts as a line
+/// break here even though it is not a record boundary to a CSV reader; a
+/// file that stacks tables *and* carries multi-line quoted fields is out of
+/// scope, per the design (it names "stacked tables", not one arbitrarily
+/// long record).
+///
+/// For a workbook (`sheet: Some(name)`) this reads the named sheet's used
+/// range instead (`open_workbook` + `checked_worksheet_range`) and splits
+/// its rows: a row is blank when every cell in it renders as empty text
+/// (`sample::render_cell`). The windows returned are row indices of that
+/// used range, in the same half-open form.
+pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Vec<RowWindow>> {
+    let blanks: Vec<bool> = match sheet {
+        Some(name) => {
+            let mut wb = open_workbook(path, &limits)?;
+            let range = checked_worksheet_range(&mut wb, name, &limits)?;
+            range
+                .rows()
+                .map(|row| row.iter().all(|c| render_cell(c).trim().is_empty()))
+                .collect()
+        }
+        None => {
+            let text = read_text(path, None, &ExtractOpts::full(limits))?;
+            let mut lines: Vec<&str> = text.split('\n').collect();
+            // A trailing newline produces one empty trailing split that is
+            // not a line the file actually has.
+            if lines.last() == Some(&"") {
+                lines.pop();
+            }
+            lines.iter().map(|l| l.trim().is_empty()).collect()
+        }
+    };
+    Ok(blocks_from(&blanks))
+}
+
+/// Maximal runs of `false` (non-blank) in `blanks`, kept only when at least
+/// 3 long, as half-open `RowWindow`s over the row index — unless exactly
+/// one run exists and it spans the whole slice, in which case there is
+/// nothing to split and the answer is "no regions" (an empty `Vec`).
+fn blocks_from(blanks: &[bool]) -> Vec<RowWindow> {
+    let mut runs: Vec<RowWindow> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, blank) in blanks.iter().enumerate() {
+        match (*blank, start) {
+            (false, None) => start = Some(i),
+            (true, Some(s)) => {
+                if i - s >= 3 {
+                    runs.push(RowWindow { start: s as u64, end: i as u64 });
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        let end = blanks.len();
+        if end - s >= 3 {
+            runs.push(RowWindow { start: s as u64, end: end as u64 });
+        }
+    }
+    if runs.len() == 1 && runs[0].start == 0 && runs[0].end == blanks.len() as u64 {
+        return Vec::new();
+    }
+    runs
+}
+
 /// The same pipeline, but producing at most `max_rows` output rows.
 ///
 /// The cap is on *output*, not on extraction: a spec that skips a four-line
