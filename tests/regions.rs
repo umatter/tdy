@@ -11,13 +11,24 @@ fn tdy(args: &[&str]) -> std::process::Output {
 #[test]
 fn stacked_blocks_are_found_at_blank_rows_in_file_order() {
     let w = tdy::engine::regions_of(&fixture("regions_three.csv"), None, Limits::default()).unwrap();
-    assert_eq!(w, vec![RowWindow { start: 0, end: 4, ordinal: 1 }, RowWindow { start: 5, end: 9, ordinal: 2 }, RowWindow { start: 10, end: 14, ordinal: 3 }]);
+    assert_eq!(w.windows, [RowWindow { start: 0, end: 4, ordinal: 1 }, RowWindow { start: 5, end: 9, ordinal: 2 }, RowWindow { start: 10, end: 14, ordinal: 3 }]);
+    assert!(w.dropped.is_empty(), "nothing was discarded: {w:?}");
     let w = tdy::engine::regions_of(&fixture("regions_three.xlsx"), Some("Data"), Limits::default()).unwrap();
-    assert_eq!(w.len(), 3);
-    assert!(tdy::engine::regions_of(&fixture("compressed_plain.csv"), None, Limits::default()).unwrap().is_empty(), "one block is no region");
-    // A title block above one table: the split finds one proper block, not two.
+    assert_eq!(w.windows.len(), 3);
+    assert!(tdy::engine::regions_of(&fixture("compressed_plain.csv"), None, Limits::default()).unwrap().windows.is_empty(), "one block is no region");
+    // A title block above one table: the split finds one proper block, not two,
+    // and says the banner is two lines nothing reads.
     let w = tdy::engine::regions_of(&fixture("regions_titled.csv"), None, Limits::default()).unwrap();
-    assert_eq!(w, vec![RowWindow { start: 3, end: 7, ordinal: 1 }]);
+    assert_eq!(w.windows, [RowWindow { start: 3, end: 7, ordinal: 1 }]);
+    assert_eq!(w.dropped, [tdy::engine::DroppedRun { start: 0, end: 2, width: 1 }]);
+    assert_eq!(w.block_width, 3);
+    assert_eq!(w.table_shaped().count(), 0, "a 1-field banner is not a table");
+    // The same file with a 3-field run below the minimum: the run is dropped
+    // and it IS table-shaped, so a person has to rule on it.
+    let w = tdy::engine::regions_of(&fixture("regions_short_block.csv"), None, Limits::default()).unwrap();
+    assert_eq!(w.windows, [RowWindow { start: 3, end: 7, ordinal: 1 }]);
+    assert_eq!(w.dropped, [tdy::engine::DroppedRun { start: 0, end: 2, width: 3 }]);
+    assert_eq!(w.table_shaped().count(), 1);
 }
 
 /// "One block spanning the whole file" means the file has exactly one
@@ -31,7 +42,7 @@ fn leading_or_trailing_blank_lines_are_padding_not_a_region() {
         let p = dir.path().join(name);
         std::fs::write(&p, content).unwrap();
         let w = tdy::engine::regions_of(&p, None, Limits::default()).unwrap();
-        assert!(w.is_empty(), "{name}: expected no regions, got {w:?}");
+        assert!(w.windows.is_empty(), "{name}: expected no regions, got {w:?}");
     }
 }
 
@@ -312,5 +323,127 @@ fn regions_of_streams_a_large_file() {
     }
     drop(f);
     let w = tdy::engine::regions_of(&p, None, Limits::default()).unwrap();
-    assert!(w.is_empty(), "one block, no blank line anywhere, is no region: {w:?}");
+    assert!(w.windows.is_empty(), "one block, no blank line anywhere, is no region: {w:?}");
+}
+
+/// A run the split discarded is data nothing reads. `regions_short_block.csv`
+/// holds 1600.00 across two runs; the 2-line one is below the 3-row minimum,
+/// so the window covers only the 1500.00 block. Reading that window and
+/// reporting `fits` would answer 1500.00 for a file that holds 1600.00 —
+/// quieter than the loud refusal the same file gets with no window at all.
+/// So: the dropped run is named in the member's note and printed by the CLI,
+/// and — because its first line is 3 fields wide exactly like the kept
+/// block's — it waits on a person.
+#[test]
+fn a_dropped_run_that_looks_like_a_table_is_named_and_waits_on_a_person() {
+    let (dir, t) = three_pile();
+    std::fs::copy(fixture("regions_short_block.csv"), dir.path().join("report.csv")).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("REVIEW"), "a discarded table-shaped run waits on a person: {text}");
+    assert!(text.contains("lines 1–2"), "the note names the lines nothing read: {text}");
+    assert!(text.contains("not read"), "{text}");
+
+    let sql = format!("SELECT sum(amount) AS total FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    assert!(!out.status.success(), "unaccepted: {}", String::from_utf8_lossy(&out.stdout));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("report.csv"), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "report.csv"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("1500.00") && !text.contains("1600.00"), "the kept block's sum only: {text}");
+}
+
+/// A title banner is not table-shaped: one field where the block's header
+/// has three. `regions_titled.csv` stays a plain, unreviewed member, and
+/// the banner is still named as lines nothing read.
+#[test]
+fn a_dropped_run_that_is_not_table_shaped_asks_nothing() {
+    let (dir, t) = three_pile();
+    std::fs::copy(fixture("regions_titled.csv"), dir.path().join("report.csv")).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("REVIEW"), "a 1-field banner is not a table: {text}");
+    assert!(text.contains("lines 1–2") && text.contains("not read"), "{text}");
+    let _ = dir;
+}
+
+/// Fit the three-block pile and accept every member, so the lock is written
+/// and the dataset queries. Returns the directory and the target.
+fn three_pile_accepted() -> (tempfile::TempDir, PathBuf) {
+    let (dir, t) = three_pile();
+    for n in 1..=3 {
+        let out = tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("report.csv#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    (dir, t)
+}
+
+/// Rewrite one region sidecar's window in place, leaving everything else —
+/// including `source.region` — exactly as `tdy fit` wrote it.
+fn edit_window(dir: &Path, member: &str, start: u64, end: u64, ordinal: u32) {
+    let p = dir.join(format!("{member}.tdy.toml"));
+    let text = std::fs::read_to_string(&p).unwrap();
+    let (before, rest) = text.split_once("[spec.extraction.region]").expect("a region window");
+    let tail = rest.splitn(4, '\n').nth(4).unwrap_or("");
+    let rest_after = rest
+        .match_indices('\n')
+        .nth(3)
+        .map(|(i, _)| &rest[i + 1..])
+        .unwrap_or(tail);
+    std::fs::write(
+        &p,
+        format!("{before}[spec.extraction.region]\nstart = {start}\nend = {end}\nordinal = {ordinal}\n{rest_after}"),
+    )
+    .unwrap();
+}
+
+/// C2, part one: the ordinal a region sidecar's own window carries has to
+/// agree with the region it is the sidecar *for*. `report.csv#2.tdy.toml`
+/// whose window says ordinal 1 is a spec for some other block filed under
+/// this member's name, and reading it would total block 1 twice.
+#[test]
+fn a_region_sidecar_whose_window_names_another_ordinal_is_refused() {
+    let (dir, t) = three_pile_accepted();
+    edit_window(dir.path(), "report.csv#2", 0, 4, 1);
+    let f = dir.path().join("report.csv");
+    let err = tdy::sidecar::load_member(&f, None, Some(2)).expect_err("the ordinals disagree");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("report.csv#2"), "{msg}");
+    assert!(msg.contains("ordinal"), "{msg}");
+
+    let sql = format!("SELECT sum(amount) AS total FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!text.contains("2100.00"), "block 1 must never be read twice: {text}");
+    assert!(!out.status.success(), "{text}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("report.csv#2"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// C2, part two: a hand-edited window that still names its own ordinal
+/// passes every check the sidecar can make on its own — only the split
+/// knows the block really starts at line 5. `tdy fit` must not reuse a spec
+/// that reads a different block from the one this member is, or three
+/// members read two blocks and the pile totals 2100.00 where the file
+/// holds 3000.00.
+#[test]
+fn a_region_sidecar_whose_window_is_not_the_blocks_is_a_contradiction() {
+    let (dir, t) = three_pile_accepted();
+    edit_window(dir.path(), "report.csv#2", 0, 4, 2);
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("report.csv#2") && text.contains("CONTRADICTS"), "{text}");
+    assert!(text.contains("lines 6–9"), "the block's own lines are named, 1-based: {text}");
+
+    let sql = format!("SELECT sum(amount) AS total FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!text.contains("2100.00"), "block 1 must never be read twice: {text}");
+    assert!(!out.status.success(), "{text}");
 }

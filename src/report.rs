@@ -312,6 +312,20 @@ fn proposals_for(path: &Path, target: &Target, limits: crate::config::Limits) ->
 /// `file#sheet#N`) apply here, after expansion — the only place they can,
 /// since before it the members do not exist yet.
 ///
+/// One member the pile expanded to, before it is fitted: who it is, what
+/// the expansion knows about it, and the block window it reads.
+#[derive(Debug, Clone)]
+pub struct Unit {
+    pub member: MemberRef,
+    /// Facts about the expansion, copied into the member's spec notes.
+    pub notes: Vec<String>,
+    /// The block this member is, when its file or sheet was split.
+    pub window: Option<RowWindow>,
+    /// What the *split* itself asks a person to rule on, before the spec's
+    /// own review reasons are added.
+    pub review: Option<String>,
+}
+
 /// Discovery runs on every fit and is never read back from the previous
 /// lock: membership comes from the fit and is what the lock records.
 pub fn expand_units(
@@ -319,7 +333,7 @@ pub fn expand_units(
     target: &Target,
     dir: &Path,
     limits: crate::config::Limits,
-) -> Result<Vec<(MemberRef, Vec<String>, Option<RowWindow>)>> {
+) -> Result<Vec<Unit>> {
     let mut sheet_units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
     for rel in rels {
         let p = dir.join(rel);
@@ -342,32 +356,60 @@ pub fn expand_units(
     // named for `regions_of` to read the right thing, even though the
     // member itself stays plain (`book.xlsx#2`, never `book.xlsx#Data#2` —
     // only a sheet that was itself expanded into a member gets `#Sheet#N`).
-    let mut units: Vec<(MemberRef, Vec<String>, Option<RowWindow>)> = Vec::new();
-    for (unit, notes) in sheet_units {
-        let p = dir.join(&unit.path);
-        let windows = match crate::fit::region_read_hint(&p, unit.sheet.as_deref(), limits) {
+    let mut units: Vec<Unit> = Vec::new();
+    for (member, notes) in sheet_units {
+        let p = dir.join(&member.path);
+        let regions = match crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits) {
             Some(sheet_hint) => {
                 crate::engine::regions_of(&p, sheet_hint.as_deref(), limits).unwrap_or_default()
             }
             // A workbook with several sheets whose member is not tied to
             // one of them: nothing here can say which sheet is meant, so no
             // region discovery runs for it.
-            None => Vec::new(),
+            None => Default::default(),
         };
-        match windows.len() {
-            0 => units.push((unit, notes, None)),
+        // Runs the split threw away: with a window applied, no member reads
+        // those lines. Every member of this file says which they were, and
+        // one shaped like the blocks that were kept waits on a person —
+        // "the split was possible" is not "nothing was lost".
+        let dropped: Vec<String> = regions.dropped.iter().map(dropped_note).collect();
+        let shaped: Vec<&crate::engine::DroppedRun> = regions.table_shaped().collect();
+        let shaped_reason = (!shaped.is_empty()).then(|| {
+            format!(
+                "{} — accept only if those lines are not part of this dataset",
+                shaped.iter().map(|d| dropped_note(d)).collect::<Vec<_>>().join("; ")
+            )
+        });
+        let n = regions.windows.len();
+        match n {
+            0 => units.push(Unit { member, notes, window: None, review: None }),
             1 => {
+                let w = regions.windows[0];
                 let mut notes = notes;
-                notes.push("one proper block in this file, split at blank rows".to_string());
-                units.push((unit, notes, Some(windows[0])));
+                notes.push(format!(
+                    "one proper block in this file, split at blank rows (lines {}–{})",
+                    w.start + 1,
+                    w.end
+                ));
+                notes.extend(dropped);
+                units.push(Unit { member, notes, window: Some(w), review: shaped_reason });
             }
-            n => {
-                for (i, w) in windows.into_iter().enumerate() {
-                    let mut member = unit.clone();
-                    member.region = Some((i + 1) as u32);
+            _ => {
+                for w in regions.windows {
+                    let mut member = member.clone();
+                    member.region = Some(w.ordinal);
                     let mut notes = notes.clone();
-                    notes.push(format!("table {} of {n} in this file, split at blank rows", i + 1));
-                    units.push((member, notes, Some(w)));
+                    let split =
+                        format!("table {} of {n} in this file, split at blank rows", w.ordinal);
+                    let review = merge_reason(
+                        Some(format!(
+                            "{split} — accept only if it is the same kind of table as the others"
+                        )),
+                        shaped_reason.clone(),
+                    );
+                    notes.push(split);
+                    notes.extend(dropped.iter().cloned());
+                    units.push(Unit { member, notes, window: Some(w), review });
                 }
             }
         }
@@ -378,17 +420,44 @@ pub fn expand_units(
     // in the dataset and nothing said so — which is an error, not a no-op.
     for x in target.exclude.iter().filter(|x| x.contains('#')) {
         let before = units.len();
-        units.retain(|(m, _, _)| *x != m.name());
+        units.retain(|u| *x != u.member.name());
         if units.len() == before {
             anyhow::bail!(
                 "exclude {x:?} removes no member of `{}`. Members are named relative to the \
                  target: {}",
                 target.name,
-                units.iter().take(6).map(|(u, _, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
+                units.iter().take(6).map(|u| format!("{:?}", u.member.name())).collect::<Vec<_>>().join(", ")
             );
         }
     }
     Ok(units)
+}
+
+/// How a discarded run reads in a note and in a review reason. The prefix
+/// is fixed so `fit_pile` can strip a reused sidecar's copy of it — the
+/// dropped runs are a fact about *this* fit's split — and so
+/// `render_pile_text` can find it.
+fn dropped_note(d: &crate::engine::DroppedRun) -> String {
+    format!(
+        "a run of {} line(s) at lines {}–{} was not read",
+        d.end - d.start,
+        d.start + 1,
+        d.end
+    )
+}
+
+/// Does this note name lines nothing read? [`dropped_note`]'s own shape.
+fn is_dropped_note(n: &str) -> bool {
+    n.starts_with("a run of ") && n.ends_with("was not read")
+}
+
+/// A window as a person counts lines: 1-based and inclusive, or "the whole
+/// file" when there is none.
+fn lines_of(w: Option<RowWindow>) -> String {
+    match w {
+        Some(w) => format!("lines {}–{}", w.start + 1, w.end),
+        None => "the whole file".to_string(),
+    }
 }
 
 /// What a sheet member's spec records about the expansion it came from.
@@ -405,18 +474,6 @@ fn expansion_note(d: &crate::fit::SheetDiscovery) -> String {
 /// Rows read per member for the magnitude check: a median over this many
 /// is settled long before the file ends, and the read is bounded.
 const MAGNITUDE_ROWS: usize = 2000;
-
-/// The review sentence for a region member: the "table N of M" note
-/// `expand_units` wrote for it, with the reason a person needs added —
-/// `None` for a plain unit (`unit.region` is `None`), which never asks for
-/// review on the strength of the split alone.
-fn region_review_reason(unit: &MemberRef, unit_notes: &[String]) -> Option<String> {
-    unit.region?;
-    unit_notes
-        .iter()
-        .find(|n| n.starts_with("table ") && n.ends_with("split at blank rows"))
-        .map(|n| format!("{n} — accept only if it is the same kind of table as the others"))
-}
 
 /// Append a second review reason to the first, the way the magnitude pass
 /// merges its own reason into a member's `review`.
@@ -519,13 +576,13 @@ pub async fn fit_pile(
         .map(|a| {
             let a = a.strip_prefix(&dir).unwrap_or(a);
             let text = a.to_string_lossy().replace('\\', "/");
-            match MemberRef::resolve(&text, |m| units.iter().any(|(u, _, _)| u == m)) {
+            match MemberRef::resolve(&text, |m| units.iter().any(|u| &u.member == m)) {
                 Ok(Some(m)) => Ok(m),
                 Ok(None) => Err(anyhow::anyhow!(
                     "--accept {text:?} is not a member of `{}`. Members are named relative to the \
                      target: {}",
                     target.name,
-                    units.iter().take(6).map(|(u, _, _)| format!("{:?}", u.name())).collect::<Vec<_>>().join(", ")
+                    units.iter().take(6).map(|u| format!("{:?}", u.member.name())).collect::<Vec<_>>().join(", ")
                 )),
                 Err(several) => Err(anyhow::anyhow!(
                     "--accept {text:?} could mean {} — name the file and the sheet unambiguously",
@@ -544,7 +601,8 @@ pub async fn fit_pile(
     let mut needs_review = 0usize;
 
     let total = units.len();
-    for (index, (unit, unit_notes, window)) in units.iter().enumerate() {
+    for (index, u) in units.iter().enumerate() {
+        let (unit, unit_notes, window) = (&u.member, &u.notes, &u.window);
         let rel = &unit.path;
         let sheet = unit.sheet.as_deref();
         let region = unit.region;
@@ -583,13 +641,58 @@ pub async fn fit_pile(
                 // count from its own siblings.
                 spec.notes.retain(|n| !(n.starts_with("of ") && n.contains(" sheets, ")));
                 spec.notes.retain(|n| !(n.starts_with("table ") && n.ends_with("split at blank rows")));
-                spec.notes.retain(|n| n != "one proper block in this file, split at blank rows");
+                spec.notes.retain(|n| !n.starts_with("one proper block in this file"));
+                spec.notes.retain(|n| !is_dropped_note(n));
                 spec.notes.extend(unit_notes.iter().cloned());
                 let via = match sc.provenance.method {
                     InferenceMethod::Manual => "manual",
                     InferenceMethod::Llm => "llm",
                     InferenceMethod::Heuristic => "existing",
                 };
+                // The sidecar names an ordinal (`load_member` proved that);
+                // only the split knows which lines that block actually is.
+                // A hand-edited window that still names its own ordinal
+                // passes every check a sidecar can make on itself, and
+                // reusing it makes two members read one block and total a
+                // plausible wrong number. Costs no I/O: the true window is
+                // already in hand.
+                if let Extraction::Delimited { region: declared, .. } = &spec.extraction {
+                    if declared.is_some() && declared != window {
+                        failed += 1;
+                        reports.push(MemberReport {
+                            path: rel.clone(),
+                            sheet: unit.sheet.clone(),
+                            region,
+                            window: *declared,
+                            status: MemberStatus::Contradicts,
+                            via: Some(via.into()),
+                            sources: Vec::new(),
+                            review: None,
+                            accepted: false,
+                            notes: Vec::new(),
+                            problems: vec![Problem {
+                                kind: "contradicts".into(),
+                                column: None,
+                                message: format!(
+                                    "the sidecar reads {}, but the blank-row split puts this \
+                                     member's block at {}. A region member's spec must read its \
+                                     own block: correct the window, or delete the sidecar and \
+                                     re-run `tdy fit`.",
+                                    lines_of(*declared),
+                                    lines_of(*window),
+                                ),
+                                want: None,
+                                tried: Vec::new(),
+                                header: Vec::new(),
+                                choices: Vec::new(),
+                                field: None,
+                                long_form: None,
+                            }],
+                            proposals: Vec::new(),
+                        });
+                        break 'member;
+                    }
+                }
                 if let Err(m) = crate::conform::conforms(&spec, &target) {
                     failed += 1;
                     reports.push(MemberReport {
@@ -662,7 +765,7 @@ pub async fn fit_pile(
                     }
                     (!rs.is_empty()).then(|| rs.join("; "))
                 };
-                let review = merge_reason(review, region_review_reason(unit, unit_notes));
+                let review = merge_reason(review, u.review.clone());
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()
@@ -735,7 +838,7 @@ pub async fn fit_pile(
             Ok(planned) => {
                 let (mut fitted, method, model) = (planned.fitted, planned.method, planned.model);
                 fitted.spec.notes.extend(unit_notes.iter().cloned());
-                fitted.review = merge_reason(fitted.review, region_review_reason(unit, unit_notes));
+                fitted.review = merge_reason(fitted.review, u.review.clone());
                 if !opts.dry_run {
                     crate::sidecar::save_member(
                         &p,
@@ -936,7 +1039,11 @@ pub fn render_pile_text(r: &PileReport) -> String {
     };
     // A pile with sheet members counts members; a plain pile keeps saying
     // "file(s)", which is what its readers and tests have always seen.
-    let unit = if r.members.iter().any(|m| m.sheet.is_some()) { "member(s)" } else { "file(s)" };
+    let unit = if r.members.iter().any(|m| m.sheet.is_some() || m.region.is_some()) {
+        "member(s)"
+    } else {
+        "file(s)"
+    };
     line(format!(
         "{}: {} {unit} match, {} declared column(s)\n",
         r.target,
@@ -964,6 +1071,12 @@ pub fn render_pile_text(r: &PileReport) -> String {
                     (false, _) => "fits    ",
                 };
                 line(format!("  {:<24} {word}{label}  {}", m.name(), sources.join("  ")));
+                // Lines the split discarded are not sidecar trivia: with a
+                // window applied nothing reads them, so a member that fits
+                // says so out loud, accepted or not.
+                for n in m.notes.iter().filter(|n| is_dropped_note(n)) {
+                    line(format!("      note: {n}"));
+                }
                 if let (Some(rv), false) = (&m.review, m.accepted) {
                     line(format!("      REVIEW: {rv}"));
                     line(
@@ -1063,9 +1176,9 @@ mod tests {
         let (d, target) = pile("");
         let units =
             expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default()).unwrap();
-        let names: Vec<String> = units.iter().map(|(m, _, _)| m.name()).collect();
+        let names: Vec<String> = units.iter().map(|u| u.member.name()).collect();
         assert_eq!(names, vec!["2025.xlsx#Q1", "2025.xlsx#Q2"]);
-        assert!(units[0].1[0].contains("of 2 sheets, 2 produce"), "{:?}", units[0].1);
+        assert!(units[0].notes[0].contains("of 2 sheets, 2 produce"), "{:?}", units[0].notes);
     }
 
     #[test]
@@ -1073,7 +1186,7 @@ mod tests {
         let (d, target) = pile(", exclude = '2025.xlsx#Q2'");
         let units =
             expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default()).unwrap();
-        assert_eq!(units.iter().map(|(m, _, _)| m.name()).collect::<Vec<_>>(), vec!["2025.xlsx#Q1"]);
+        assert_eq!(units.iter().map(|u| u.member.name()).collect::<Vec<_>>(), ["2025.xlsx#Q1"]);
 
         let (d, target) = pile(", exclude = '2025.xlsx#Q9'");
         let err = expand_units(&["2025.xlsx".to_string()], &target, d.path(), Default::default())

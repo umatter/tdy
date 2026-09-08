@@ -64,9 +64,21 @@ FIXTURES  (all in testdata/, named regions_*)
    This is the case that motivates that: reading it as if the sheet's data
    began at A1 would read sheet rows 1-4 (blank) instead of 5-8.
 
+6. regions_short_block.csv
+   A two-line run (the Datum;Region;Betrag header plus one row, Ost
+   100.00), a blank line, then a proper four-line block (block 2 of #1,
+   sum 1500.00). The short run is below the 3-row minimum, so the split
+   keeps one window, {3,7} — and *discards* lines 0-2, which are 3 fields
+   wide exactly like the block that was kept. Reading only the window
+   answers 1500.00 where the file holds 1600.00, so the discarded run is
+   named in the member's note and, because it is shaped like a table,
+   waits on a person. Ground truth: one window {3,7}; one dropped run
+   {0,2} of width 3; the file's own total 1600.00.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
-regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx.
+regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
+regions_short_block.csv -> [{3,7}] plus a dropped table-shaped run {0,2}.
 """
 import os
 import re
@@ -223,6 +235,17 @@ def build_regions_titled_csv():
     )
 
 
+def build_regions_short_block_csv():
+    short = [HEADER, "05.01.2025;Ost;100.00"]
+    lines = short + [""] + csv_block(BLOCK2)
+    write_csv(
+        "regions_short_block.csv",
+        lines,
+        "a 2-line run (below the minimum, 3 fields wide) above block 2; "
+        "window {3,7}, dropped run {0,2}, file total 1600.00",
+    )
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -230,9 +253,11 @@ def main():
     build_regions_three_offset_xlsx()
     build_regions_summary_csv()
     build_regions_titled_csv()
+    build_regions_short_block_csv()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
-          "regions_three_offset.xlsx -> same sums, used range starts at C5")
+          "regions_three_offset.xlsx -> same sums, used range starts at C5; "
+          "regions_short_block.csv -> [{3,7}] with a dropped run {0,2}")
 
 
 if __name__ == "__main__":

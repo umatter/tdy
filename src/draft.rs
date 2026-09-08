@@ -81,7 +81,7 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
         let windows = if crate::sample::guess_format(f) == FormatGuess::Excel {
             Vec::new()
         } else {
-            crate::engine::regions_of(f, None, limits).unwrap_or_default()
+            crate::engine::regions_of(f, None, limits).unwrap_or_default().windows
         };
         if windows.len() >= 2 {
             split_files.push(format!(

@@ -232,18 +232,26 @@ pub fn load_member(file: &Path, sheet: Option<&str>, region: Option<u32>) -> Res
             );
         }
     }
-    // A region member's sidecar is trusted for exactly one region; the
-    // window it reads is the spec's own business (`Extraction::Delimited`'s
-    // `region`), but which ordinal this sidecar *is* has to agree with what
-    // was asked, the same reason the sheet check exists above.
+    // A region member's sidecar is trusted for exactly one region, and both
+    // places that name it are hand-editable: the fingerprint's `region` and
+    // the ordinal the spec's own window (or `range`) carries. If either
+    // disagrees with the region being loaded, `dataset()` would read some
+    // other block under this member's label — two members totalling one
+    // block twice, which is the plausible wrong number this refuses.
     if let Some(r) = region {
-        if sidecar.source.region != Some(r) {
+        let framed = match &sidecar.spec.extraction {
+            crate::spec::Extraction::Delimited { region, .. } => region.map(|w| w.ordinal),
+            crate::spec::Extraction::Excel { region_ordinal, .. } => *region_ordinal,
+            _ => None,
+        };
+        if sidecar.source.region != Some(r) || framed != Some(r) {
             bail!(
-                "sidecar {} is the spec for region {r}, but it says source.region = {}. \
-                 A region member's sidecar must be about its own region: correct it, or \
-                 re-run `tdy fit`.",
+                "sidecar {} is the spec for region {r}, but it says source.region = {} and \
+                 reads the block with ordinal {}. A region member's sidecar must be about \
+                 its own region: correct it, or re-run `tdy fit`.",
                 sc_path.display(),
-                sidecar.source.region.map(|n| n.to_string()).unwrap_or_else(|| "(none)".into())
+                numbered(sidecar.source.region),
+                numbered(framed)
             );
         }
     }
@@ -253,6 +261,11 @@ pub fn load_member(file: &Path, sheet: Option<&str>, region: Option<u32>) -> Res
     } else {
         Ok(SidecarStatus::Stale(Box::new(sidecar)))
     }
+}
+
+/// A region ordinal as it reads in a message, or "(none)".
+fn numbered(n: Option<u32>) -> String {
+    n.map(|n| n.to_string()).unwrap_or_else(|| "(none)".into())
 }
 
 /// A sheet name as it reads in a message: quoted, or "(none)".

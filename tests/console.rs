@@ -989,13 +989,16 @@ async fn ls_reports_a_files_region_specs() {
 /// dimension and `sheet_sidecars`' collapse of `"Q1#2"` back to `"Q1"`.
 #[tokio::test]
 async fn ls_reports_a_workbooks_sheet_specs_split_into_regions() {
-    fn region_spec(range: &str) -> tdy::spec::ParseSpec {
+    // A region sidecar has to name its own ordinal — `source.region` and
+    // the ordinal the spec's own frame carries must agree, or the sidecar
+    // is a spec for some other block filed under this member's name.
+    fn region_spec(range: &str, ordinal: u32) -> tdy::spec::ParseSpec {
         tdy::spec::ParseSpec {
             extraction: tdy::spec::Extraction::Excel {
                 sheet_name: Some("Q1".into()),
                 sheet_index: None,
                 range: Some(range.into()),
-                region_ordinal: None,
+                region_ordinal: Some(ordinal),
             },
             transforms: vec![tdy::spec::Transform::PromoteHeader { rows: 1, join: " ".into() }],
             columns: vec![tdy::spec::ColumnSpec {
@@ -1019,8 +1022,8 @@ async fn ls_reports_a_workbooks_sheet_specs_split_into_regions() {
         prompt_version: None,
         sampled_bytes: None,
     };
-    tdy::sidecar::save_member(&f, Some("Q1"), Some(1), &region_spec("A1:A2"), prov()).unwrap();
-    tdy::sidecar::save_member(&f, Some("Q1"), Some(2), &region_spec("A3:A4"), prov()).unwrap();
+    tdy::sidecar::save_member(&f, Some("Q1"), Some(1), &region_spec("A1:A2", 1), prov()).unwrap();
+    tdy::sidecar::save_member(&f, Some("Q1"), Some(2), &region_spec("A3:A4", 2), prov()).unwrap();
 
     let mut s = session(d.path()).await;
     let o = s.run(".ls", None).await;

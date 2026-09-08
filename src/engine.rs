@@ -2046,6 +2046,49 @@ pub fn sheet_grid(
     Ok(out)
 }
 
+/// One run of non-blank rows the split refused as a block: shorter than the
+/// 3-row minimum, and therefore inside no member's window. Nothing reads
+/// these lines once a window is applied, so they are reported — a run
+/// dropped in silence turns a loud refusal into a quiet partial read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DroppedRun {
+    /// 0-based, half-open, in the same index space as [`RowWindow`].
+    pub start: u64,
+    pub end: u64,
+    /// Fields on its first row, counted the way the kept blocks' own first
+    /// rows were counted (one shared delimiter for a text file, non-empty
+    /// cells for a sheet). Equal counts is what makes a dropped run look
+    /// like a table rather than a banner.
+    pub width: usize,
+}
+
+/// What [`regions_of`] found: the blocks it kept, and the runs it did not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Regions {
+    /// The blocks, in file order, 1-based ordinals. Empty = no regions.
+    pub windows: Vec<RowWindow>,
+    /// Runs below the 3-row minimum, in file order. Always empty when
+    /// `windows` is: with no window there is nothing a member fails to
+    /// read, because the file is read whole.
+    pub dropped: Vec<DroppedRun>,
+    /// The first kept block's first-row width — what a `dropped` run's own
+    /// width is compared against.
+    pub block_width: usize,
+}
+
+impl Regions {
+    /// The dropped runs shaped like the blocks that were kept: the same
+    /// field count on their first row. A two-line banner over a three-field
+    /// table is one field wide and is not one of these; a `Total;;1500`
+    /// footer is three fields wide and is, which is correct — the 3-row
+    /// minimum says a total line is not a *table*, and a person rules on
+    /// whether those rows were data.
+    pub fn table_shaped(&self) -> impl Iterator<Item = &DroppedRun> {
+        let w = self.block_width;
+        self.dropped.iter().filter(move |d| w > 0 && d.width == w)
+    }
+}
+
 /// The stacked blocks of a text file (or of one sheet of a workbook), split
 /// at runs of blank rows, in file order.
 ///
@@ -2060,22 +2103,18 @@ pub fn sheet_grid(
 /// second region, so it does not make an otherwise-single table look like
 /// two blocks either.
 ///
-/// For a text file (`sheet: None`) this reads the whole file
-/// (`read_text`) and splits on raw *lines*: a line is blank when it is
-/// empty after trimming, and its index is the raw line number — the same
-/// counting `RowWindow` documents for `region` on `src/spec.rs`. A quoted
-/// newline embedded inside a delimited record therefore counts as a line
-/// break here even though it is not a record boundary to a CSV reader; a
-/// file that stacks tables *and* carries multi-line quoted fields is out of
-/// scope, per the design (it names "stacked tables", not one arbitrarily
-/// long record).
+/// For a text file (`sheet: None`) this streams the file and splits on raw
+/// *lines*: a line is blank when it is empty after trimming, and its index
+/// is the raw physical line number — the same counting `RowWindow`
+/// documents for `region` on `src/spec.rs`, and the same counting both
+/// executors do, a record's quoted newlines included.
 ///
 /// For a workbook (`sheet: Some(name)`) this reads the named sheet's used
 /// range instead (`open_workbook` + `checked_worksheet_range`) and splits
 /// its rows: a row is blank when every cell in it renders as empty text
 /// (`sample::render_cell`). The windows returned are row indices of that
 /// used range, in the same half-open form.
-pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Vec<RowWindow>> {
+pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Regions> {
     match sheet {
         Some(name) => {
             // A sheet is materialised by calamine regardless, so there is
@@ -2086,7 +2125,14 @@ pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Ve
                 .rows()
                 .map(|row| row.iter().all(|c| render_cell(c).trim().is_empty()))
                 .collect();
-            Ok(blocks_from(&blanks))
+            // A sheet row's width is its count of non-empty cells: the
+            // grid is rectangular, so its own arity says nothing about
+            // whether a row is a table's header or a one-line banner.
+            let widths: Vec<usize> = range
+                .rows()
+                .map(|row| row.iter().filter(|c| !render_cell(c).trim().is_empty()).count())
+                .collect();
+            Ok(blocks_from(&blanks, |row| widths.get(row as usize).copied().unwrap_or(0)))
         }
         // A text file is read line by line instead: `expand_units` calls
         // this on every plain member on every fit (including the
@@ -2112,12 +2158,16 @@ pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Ve
 /// exactly what trimming a `\r` and ordinary spaces/tabs means) — a
 /// non-UTF-8 byte elsewhere in the line makes it non-blank, which is the
 /// only thing that question needs to get right.
-fn regions_of_lines(path: &Path, limits: Limits) -> Result<Vec<RowWindow>> {
+fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     let real = fileio::materialize(path, limits.max_decompressed_bytes)?;
     let file = std::fs::File::open(real.as_ref())
         .with_context(|| format!("cannot open {}", path.display()))?;
     let mut reader = std::io::BufReader::new(file);
     let mut runs: Vec<(u64, u64)> = Vec::new();
+    // Each run's own first line, kept so a run's width can be counted once
+    // the delimiter is known — which is only after the split has said which
+    // runs are blocks. O(runs), not O(file).
+    let mut heads: Vec<String> = Vec::new();
     let mut run_start: Option<u64> = None;
     let mut index: u64 = 0;
     let mut buf: Vec<u8> = Vec::new();
@@ -2132,9 +2182,15 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Vec<RowWindow>> {
         if line.last() == Some(&b'\n') {
             line = &line[..line.len() - 1];
         }
+        if line.last() == Some(&b'\r') {
+            line = &line[..line.len() - 1];
+        }
         let blank = line.iter().all(|b| b.is_ascii_whitespace());
         match (blank, run_start) {
-            (false, None) => run_start = Some(index),
+            (false, None) => {
+                run_start = Some(index);
+                heads.push(String::from_utf8_lossy(line).into_owned());
+            }
             (true, Some(s)) => {
                 runs.push((s, index));
                 run_start = None;
@@ -2146,7 +2202,55 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Vec<RowWindow>> {
     if let Some(s) = run_start {
         runs.push((s, index));
     }
-    Ok(windows_from_runs(runs))
+    // The delimiter is the one the blocks that survived the minimum are best
+    // read with — never one guessed from the dropped runs themselves, or a
+    // banner would get to choose how it is counted.
+    let kept: Vec<&str> = runs
+        .iter()
+        .zip(&heads)
+        .filter(|((s, e), _)| e - s >= 3)
+        .map(|(_, h)| h.as_str())
+        .collect();
+    let delim = pick_block_delimiter(&kept);
+    let measured: Vec<(u64, u64, usize)> = runs
+        .iter()
+        .zip(&heads)
+        .map(|(&(s, e), h)| (s, e, field_count(h, delim)))
+        .collect();
+    Ok(windows_from_runs(measured))
+}
+
+/// The delimiter a set of block headers is best read with: whichever
+/// candidate gives the most fields on most of them. Only the *relative*
+/// answer matters — the same delimiter counts the kept blocks and the
+/// dropped runs, so a comparison of the two is meaningful whatever it
+/// picks; guessing per run is what would let a one-line banner claim a
+/// block's shape.
+fn pick_block_delimiter(heads: &[&str]) -> char {
+    let mut best = (0usize, ',');
+    for cand in [',', ';', '\t', '|'] {
+        let mut counts: Vec<usize> = heads.iter().map(|h| field_count(h, cand)).collect();
+        counts.sort_unstable();
+        let modal = counts.get(counts.len() / 2).copied().unwrap_or(0);
+        if modal > best.0 {
+            best = (modal, cand);
+        }
+    }
+    best.1
+}
+
+/// Fields on one line under one delimiter, quoting honoured (a `;` inside
+/// `"Ost;Nord"` is not a boundary).
+fn field_count(line: &str, delim: char) -> usize {
+    if !delim.is_ascii() {
+        return 1;
+    }
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .delimiter(delim as u8)
+        .from_reader(line.as_bytes());
+    rdr.records().next().and_then(|r| r.ok()).map(|r| r.len()).unwrap_or(1)
 }
 
 /// Maximal runs of `false` (non-blank) in `blanks`, as half-open
@@ -2170,33 +2274,55 @@ fn raw_runs(blanks: &[bool]) -> Vec<(usize, usize)> {
     runs
 }
 
-/// The runs from [`raw_runs`], kept only when at least 3 rows long, as
-/// half-open `RowWindow`s over the row index — unless exactly one run
-/// exists at all, in which case there is nothing to split and the answer is
-/// "no regions" (an empty `Vec`), whatever the run's own length or
-/// position. "One block spanning the whole file" means exactly one
-/// non-blank run exists, not that the run happens to start at row 0 and end
-/// at the last row: a leading or trailing blank line is padding, not a
-/// second region, and must not turn a single table into one spurious
-/// window by making its one run fall short of the file's own start or end.
-fn blocks_from(blanks: &[bool]) -> Vec<RowWindow> {
-    let runs = raw_runs(blanks).into_iter().map(|(s, e)| (s as u64, e as u64)).collect();
+/// The runs from [`raw_runs`], measured by `width_of` (the first row's
+/// field count) and handed to [`windows_from_runs`].
+fn blocks_from(blanks: &[bool], width_of: impl Fn(u64) -> usize) -> Regions {
+    let runs = raw_runs(blanks)
+        .into_iter()
+        .map(|(s, e)| (s as u64, e as u64, width_of(s as u64)))
+        .collect();
     windows_from_runs(runs)
 }
 
-/// [`blocks_from`]'s filtering rule, shared with [`regions_of_lines`] (which
-/// finds its runs by streaming rather than by materialising a `blanks`
-/// vector first) so the two paths cannot drift apart on what counts as a
-/// region.
-fn windows_from_runs(runs: Vec<(u64, u64)>) -> Vec<RowWindow> {
+/// The filtering rule, shared by the text path (which finds its runs by
+/// streaming rather than by materialising a `blanks` vector first) and the
+/// sheet path, so the two cannot drift apart on what counts as a region —
+/// nor on what was thrown away to get there.
+///
+/// A run is kept only when at least 3 rows long — unless exactly one run
+/// exists at all, in which case there is nothing to split and the answer is
+/// "no regions", whatever the run's own length or position. "One block
+/// spanning the whole file" means exactly one non-blank run exists, not
+/// that the run happens to start at row 0 and end at the last row: a
+/// leading or trailing blank line is padding, not a second region, and must
+/// not turn a single table into one spurious window by making its one run
+/// fall short of the file's own start or end.
+///
+/// Every run below the minimum comes back as a [`DroppedRun`]. Those lines
+/// are inside no window, so with a window applied nothing reads them — and
+/// a member that quietly answers for part of a file is the wrong value this
+/// tool refuses. When no window is kept there is nothing dropped either:
+/// the file is then read whole, so every line is read.
+fn windows_from_runs(runs: Vec<(u64, u64, usize)>) -> Regions {
     if runs.len() == 1 {
-        return Vec::new();
+        return Regions::default();
     }
-    runs.into_iter()
-        .filter(|(s, e)| e - s >= 3)
-        .enumerate()
-        .map(|(i, (s, e))| RowWindow { start: s, end: e, ordinal: (i + 1) as u32 })
-        .collect()
+    let (kept, short): (Vec<_>, Vec<_>) = runs.into_iter().partition(|(s, e, _)| e - s >= 3);
+    if kept.is_empty() {
+        return Regions::default();
+    }
+    Regions {
+        block_width: kept[0].2,
+        windows: kept
+            .into_iter()
+            .enumerate()
+            .map(|(i, (s, e, _))| RowWindow { start: s, end: e, ordinal: (i + 1) as u32 })
+            .collect(),
+        dropped: short
+            .into_iter()
+            .map(|(start, end, width)| DroppedRun { start, end, width })
+            .collect(),
+    }
 }
 
 /// The same pipeline, but producing at most `max_rows` output rows.

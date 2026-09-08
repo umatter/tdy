@@ -466,7 +466,13 @@ carries only `region_ordinal: Option<u32>` beside the `range` `fit::fit_region`
 writes. Detection is `engine::regions_of(path, sheet, limits) -> Vec<RowWindow>`:
 it splits at runs of blank lines or rows, keeps blocks of at least three rows,
 and returns nothing when the file has exactly one run at all — a table with
-blank padding above or below it is not split. It streams the text
+blank padding above or below it is not split. It returns what it *dropped*
+alongside what it kept (`Regions { windows, dropped, block_width }`): with a
+window applied nothing reads a run below the minimum, so every member of the
+file names those lines in a note the CLI prints, and a dropped run whose
+first row is as wide as the kept blocks' (`Regions::table_shaped`) is a
+review reason — the `>= 3` rule says a `Total;;1500` line is not a table, and
+a person rules on whether it was data. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
 (`tests/regions.rs::regions_of_streams_a_large_file`, `#[ignore]`, run by hand
@@ -477,8 +483,15 @@ own member, each carrying `report::region_review_reason`'s text — "table `i`
 of `n` in this file, split at blank rows — accept only if it is the same kind
 of table as the others" — and `dataset()` refuses it until
 `--accept report.csv#2` (or `.accept` in the console); exactly one proper
-block means one plain member with the window and a note, **no review**,
-because the elimination proved it, as it does for a sheet. `fit::fit_region`
+block means one plain member with the window and a note, **no review** —
+but only when nothing table-shaped was discarded, because the elimination
+proves the block is the only *reading*, never that the lines outside it were
+not data. A region sidecar is trusted for exactly one block and both places
+that say which are hand-editable, so `load_member` requires `source.region`
+and the ordinal the spec's own window carries to agree, and `fit_pile`
+refuses to reuse a spec whose window is not the block the split found
+(`CONTRADICTS`, no I/O — the true window is already in hand); without those
+two, an edited window made two members total one block twice. `fit::fit_region`
 was got wrong twice: a text block must drop any `SkipRows` transform the
 whole-file sniff proposed, since a title block belongs to the file and would
 delete rows the block does not have; a sheet block's A1 `range` has to be
