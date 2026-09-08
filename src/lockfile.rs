@@ -36,6 +36,11 @@ pub struct Member {
     /// ambiguous (`crate::member::MemberRef`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheet: Option<String>,
+    /// One of several tables stacked in the file or sheet, counted from 1;
+    /// absent for a member covering the whole file or sheet. See
+    /// `crate::member::MemberRef::region`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<u32>,
     pub blake3: String,
     pub bytes: u64,
     /// Fingerprint of the *spec*, not the data.
@@ -66,7 +71,7 @@ pub struct Member {
 impl Member {
     /// The form a person reads and types.
     pub fn name(&self) -> String {
-        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone(), region: None }.name()
+        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone(), region: self.region }.name()
     }
 }
 
@@ -186,8 +191,10 @@ impl Lock {
         Ok(p)
     }
 
-    pub fn member(&self, path: &str, sheet: Option<&str>) -> Option<&Member> {
-        self.members.iter().find(|m| m.path == path && m.sheet.as_deref() == sheet)
+    pub fn member(&self, path: &str, sheet: Option<&str>, region: Option<u32>) -> Option<&Member> {
+        self.members
+            .iter()
+            .find(|m| m.path == path && m.sheet.as_deref() == sheet && m.region == region)
     }
 }
 
@@ -218,14 +225,15 @@ pub enum Drift {
 /// dataset's own load, and inventing a digest here would turn that into a
 /// confusing drift message instead.
 pub fn spec_digest(data_file: &Path) -> String {
-    spec_digest_for(data_file, None)
+    spec_digest_for(data_file, None, None)
 }
 
 /// Fingerprint of a member's spec, as stored in its sidecar — a workbook
-/// member's sidecar is per sheet (`sidecar::sidecar_path_for`), so the sheet
-/// must be named to find the right one.
-pub fn spec_digest_for(data_file: &Path, sheet: Option<&str>) -> String {
-    let p = crate::sidecar::sidecar_path_for(data_file, sheet);
+/// member's sidecar is per sheet, and a stacked member's is per region
+/// (`sidecar::sidecar_path_for`), so both must be named to find the right
+/// one.
+pub fn spec_digest_for(data_file: &Path, sheet: Option<&str>, region: Option<u32>) -> String {
+    let p = crate::sidecar::sidecar_path_for(data_file, sheet, region);
     match std::fs::read(&p) {
         Ok(bytes) => format!("b3:{}", blake3::hash(&bytes).to_hex()),
         Err(_) => String::new(),
@@ -277,12 +285,12 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
     let on_disk = resolve(target, target_file)?;
     let locked_files: BTreeSet<&str> = lock.members.iter().map(|m| m.path.as_str()).collect();
 
-    // Two sheets of one workbook are two members; the same (path, sheet)
-    // twice would be read twice.
+    // Two sheets of one workbook, or two regions of one file, are distinct
+    // members; the same (path, sheet, region) twice would be read twice.
     {
-        let mut seen: BTreeSet<(&str, Option<&str>)> = BTreeSet::new();
+        let mut seen: BTreeSet<(&str, Option<&str>, Option<u32>)> = BTreeSet::new();
         for m in &lock.members {
-            if !seen.insert((m.path.as_str(), m.sheet.as_deref())) {
+            if !seen.insert((m.path.as_str(), m.sheet.as_deref(), m.region)) {
                 out.push(Drift::Duplicated(m.name()));
             }
         }
@@ -319,8 +327,27 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
         // A whole-file member covers every sheet the file has, so listing it
         // beside a sheet member of the same file reads those rows twice and
         // sums to a plausible wrong number. `fit` cannot produce this — a
-        // file is expanded or it is not — but a lock is a text file.
-        if members.len() > 1 && members.iter().any(|m| m.sheet.is_none()) {
+        // file is expanded or it is not — but a lock is a text file. The
+        // same is true one level down: within one (path, sheet) — including
+        // the file's own "no sheet" group — a member covering the whole of
+        // it beside one or more members covering only a region of it reads
+        // rows twice again, grouped by (path, sheet) because a sheet's
+        // regions and another sheet's regions must never be confused.
+        let has_whole_file = members.iter().any(|m| m.sheet.is_none() && m.region.is_none());
+        let has_sheet_members = members.iter().any(|m| m.sheet.is_some());
+        let has_region_mix = {
+            let mut by_sheet: Vec<(Option<&str>, Vec<&Member>)> = Vec::new();
+            for m in &members {
+                match by_sheet.iter_mut().find(|(s, _)| *s == m.sheet.as_deref()) {
+                    Some((_, ms)) => ms.push(m),
+                    None => by_sheet.push((m.sheet.as_deref(), vec![m])),
+                }
+            }
+            by_sheet.iter().any(|(_, ms)| {
+                ms.iter().any(|m| m.region.is_none()) && ms.iter().any(|m| m.region.is_some())
+            })
+        };
+        if (has_whole_file && has_sheet_members) || has_region_mix {
             out.push(Drift::MixedGranularity(path.to_string()));
         }
         let p = dir.join(path);
@@ -345,7 +372,7 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
         for m in members {
             if m.accepted
                 && !m.spec_digest.is_empty()
-                && spec_digest_for(&p, m.sheet.as_deref()) != m.spec_digest
+                && spec_digest_for(&p, m.sheet.as_deref(), m.region) != m.spec_digest
             {
                 out.push(Drift::SpecEdited(m.name()));
             }
@@ -506,6 +533,7 @@ mod tests {
         Member {
             path: path.into(),
             sheet: sheet.map(str::to_string),
+            region: None,
             blake3: "b3:x".into(),
             bytes: 1,
             spec_digest: String::new(),
@@ -531,8 +559,8 @@ mod tests {
         assert_eq!(back.members[0].sheet.as_deref(), Some("Q1"));
         assert_eq!(back.members[0].name(), "a.xlsx#Q1");
         assert_eq!(back.members[1].name(), "b.csv");
-        assert!(back.member("a.xlsx", Some("Q1")).is_some());
-        assert!(back.member("a.xlsx", None).is_none(), "the plain member of that file does not exist");
+        assert!(back.member("a.xlsx", Some("Q1"), None).is_some());
+        assert!(back.member("a.xlsx", None, None).is_none(), "the plain member of that file does not exist");
     }
 
     /// A file listed both whole and by sheet would be read twice — once
@@ -602,12 +630,46 @@ mod tests {
         assert!(matches!(&d1[..], [Drift::Duplicated(n)] if n == "book.xlsx#Q1"), "{d1:?}");
         lock.members.pop();
 
+        // Two regions of one file are two members too — no drift.
+        let fresh_region = |region: u32| Member { blake3: hash.clone(), bytes, region: Some(region), ..m("book.xlsx", None) };
+        let region_lock = Lock {
+            lock_version: LOCK_VERSION,
+            target: "t".into(),
+            target_hash: target_hash(&target),
+            tool_version: "0".into(),
+            created_at: "now".into(),
+            members: vec![fresh_region(1), fresh_region(2)],
+        };
+        assert!(drift(&region_lock, &target, &t).unwrap().is_empty(), "two regions of one file are two members");
+
+        // A whole-file member plus a region member of the same file reads
+        // its rows twice, exactly as a whole-file-plus-sheet mix would.
+        let mixed_lock = Lock {
+            members: vec![Member { blake3: hash.clone(), bytes, ..m("book.xlsx", None) }, fresh_region(1)],
+            ..region_lock
+        };
+        let dm = drift(&mixed_lock, &target, &t).unwrap();
+        assert!(matches!(&dm[..], [Drift::MixedGranularity(n)] if n == "book.xlsx"), "{dm:?}");
+
         // Touch the workbook: every sheet member's proof is void, said once.
         let mut bytes_on_disk = std::fs::read(&book).unwrap();
         bytes_on_disk.push(0);
         std::fs::write(&book, bytes_on_disk).unwrap();
         let d2 = drift(&lock, &target, &t).unwrap();
         assert_eq!(d2, vec![Drift::Changed("book.xlsx".into())], "{d2:?}");
+    }
+
+    #[test]
+    fn a_region_member_round_trips_and_mixed_granularity_covers_regions() {
+        let mut r2 = m("report.csv", None);
+        r2.region = Some(2);
+        let lock = Lock { lock_version: LOCK_VERSION, target: "t".into(), target_hash: "b3:t".into(), tool_version: "0".into(), created_at: "now".into(), members: vec![r2.clone(), m("b.csv", None)] };
+        let text = toml::to_string_pretty(&lock).unwrap();
+        assert_eq!(text.matches("region = 2").count(), 1, "{text}");
+        let back: Lock = toml::from_str(&text).unwrap();
+        assert_eq!(back.members[0].name(), "report.csv#2");
+        assert!(back.member("report.csv", None, Some(2)).is_some());
+        assert!(back.member("report.csv", None, None).is_none());
     }
 
     #[test]

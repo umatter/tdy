@@ -792,7 +792,7 @@ impl Session {
                 let dir = crate::lockfile::target_dir(&t);
                 let lock = crate::lockfile::Lock::load(&t)?;
                 let exists = |m: &crate::member::MemberRef| {
-                    if lock.as_ref().is_some_and(|l| l.member(&m.path, m.sheet.as_deref()).is_some()) {
+                    if lock.as_ref().is_some_and(|l| l.member(&m.path, m.sheet.as_deref(), m.region).is_some()) {
                         return true;
                     }
                     // Both halves matter: `2025.xlsx#Q1.tdy.toml` is a sidecar
@@ -800,7 +800,7 @@ impl Session {
                     // file literally called `2025.xlsx#Q1`, and only the first
                     // has a data file beside it.
                     let f = dir.join(&m.path);
-                    f.is_file() && crate::sidecar::sidecar_path_for(&f, m.sheet.as_deref()).exists()
+                    f.is_file() && crate::sidecar::sidecar_path_for(&f, m.sheet.as_deref(), m.region).exists()
                 };
                 let mref = match crate::member::MemberRef::resolve(&member, exists) {
                     Ok(Some(m)) => m,
@@ -819,7 +819,7 @@ impl Session {
                 let member_path = crate::fileio::confine(&dir.join(&mref.path), &self.root)
                     .with_context(|| member.clone())?;
                 // Step one: evidence only, nothing written.
-                let sc = match crate::sidecar::load_member(&member_path, mref.sheet.as_deref())? {
+                let sc = match crate::sidecar::load_member(&member_path, mref.sheet.as_deref(), mref.region)? {
                     crate::sidecar::SidecarStatus::Fresh(sc) => sc,
                     _ => bail!("{member} has no fresh sidecar; run `.fit {target}` first"),
                 };
@@ -828,7 +828,7 @@ impl Session {
                 // such as a member out of scale with its siblings). Both
                 // are what a person is asked to accept.
                 let mut reasons = crate::fit::review_reasons(&sc.spec);
-                if let Some(r) = lock.as_ref().and_then(|l| l.member(&mref.path, mref.sheet.as_deref())).and_then(|m| m.review.clone()) {
+                if let Some(r) = lock.as_ref().and_then(|l| l.member(&mref.path, mref.sheet.as_deref(), mref.region)).and_then(|m| m.review.clone()) {
                     for part in r.split("; ") {
                         if !reasons.iter().any(|x| x == part) {
                             reasons.push(part.to_string());
@@ -1055,7 +1055,7 @@ fn file_status(path: &Path) -> EntryStatus {
             }
             let all_fresh = sheets
                 .iter()
-                .all(|s| matches!(crate::sidecar::load_member(path, Some(s)), Ok(SidecarStatus::Fresh(_))));
+                .all(|s| matches!(crate::sidecar::load_member(path, Some(s), None), Ok(SidecarStatus::Fresh(_))));
             if all_fresh { EntryStatus::Sheets(sheets.len()) } else { EntryStatus::Stale }
         }
         Err(_) => EntryStatus::Stale, // unreadable sidecar: not something a query would use

@@ -149,7 +149,7 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
         // never into a path, so a lock's `sheet` cannot walk out of the
         // confined directory whatever it says: the name always begins with
         // the member file's own, already-confined name.
-        let spec = match crate::sidecar::load_member(&path, m.sheet.as_deref())? {
+        let spec = match crate::sidecar::load_member(&path, m.sheet.as_deref(), m.region)? {
             crate::sidecar::SidecarStatus::Fresh(sc) => sc.spec,
             crate::sidecar::SidecarStatus::Stale(_) => anyhow::bail!(
                 "{} has changed since it was fitted — run `tdy fit {}`",

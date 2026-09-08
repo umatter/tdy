@@ -50,6 +50,11 @@ pub struct SourceFingerprint {
     /// (`<file>#<sheet>.tdy.toml`). Absent for a plain sidecar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheet: Option<String>,
+    /// The region this spec is about, for a region member's sidecar
+    /// (`<file>[#<sheet>]#<N>.tdy.toml`). Absent for a plain or sheet
+    /// sidecar covering the whole file or sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<u32>,
     /// The compression the file was read through (`gzip`, `zstd`, `bzip2`,
     /// `xz`), when it was. `blake3` and `bytes` above are of the compressed
     /// file — the bytes the user has and the ones that arrive again next

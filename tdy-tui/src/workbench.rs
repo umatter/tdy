@@ -1459,7 +1459,7 @@ impl Workbench {
         let mut out = vec![target.clone()];
         for m in &report.members {
             let file = member_preview_path(target, &m.path);
-            out.push(tdy::sidecar::sidecar_path_for(&file, m.sheet.as_deref()));
+            out.push(tdy::sidecar::sidecar_path_for(&file, m.sheet.as_deref(), None));
         }
         out
     }

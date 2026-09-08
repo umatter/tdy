@@ -358,7 +358,7 @@ fn carry_over(
     accepted_now: &[MemberRef],
 ) -> bool {
     let carried = previous
-        .and_then(|l| l.member(&unit.path, unit.sheet.as_deref()))
+        .and_then(|l| l.member(&unit.path, unit.sheet.as_deref(), unit.region))
         .filter(|m| m.blake3 == blake3 && m.review == *review)
         .map(|m| m.accepted)
         .unwrap_or(false);
@@ -466,6 +466,7 @@ pub async fn fit_pile(
     for (index, (unit, unit_notes)) in units.iter().enumerate() {
         let rel = &unit.path;
         let sheet = unit.sheet.as_deref();
+        let region = unit.region;
         let name = unit.name();
         let p = dir.join(rel);
         crate::progress::emit(
@@ -489,7 +490,7 @@ pub async fn fit_pile(
         // nondeterministic model quietly swap the frame out from under a
         // review, and it would re-spend money answering a settled question.
         // Either way it is re-proved: conformance and a dry run, every time.
-        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = crate::sidecar::load_member(&p, sheet) {
+        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = crate::sidecar::load_member(&p, sheet, region) {
             let manual = sc.provenance.method == InferenceMethod::Manual;
             let conforming = crate::conform::conforms(&sc.spec, &target).is_ok();
             if manual || conforming {
@@ -577,7 +578,7 @@ pub async fn fit_pile(
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()
-                    .and_then(|l| l.member(rel, sheet))
+                    .and_then(|l| l.member(rel, sheet, region))
                     .filter(|m| m.blake3 == blake3 && m.review == review)
                     .map(|m| m.accepted)
                     .unwrap_or(false);
@@ -612,9 +613,10 @@ pub async fn fit_pile(
                 lock_members.push(Member {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
+                    region,
                     blake3,
                     bytes,
-                    spec_digest: lockfile::spec_digest_for(&p, sheet),
+                    spec_digest: lockfile::spec_digest_for(&p, sheet, region),
                     review,
                     accepted: is_accepted,
                 });
@@ -637,6 +639,7 @@ pub async fn fit_pile(
                     crate::sidecar::save_member(
                         &p,
                         sheet,
+                        region,
                         &fitted.spec,
                         crate::sidecar::ProvenanceInfo {
                             method,
@@ -649,7 +652,7 @@ pub async fn fit_pile(
                 let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
                 let carried = previous
                     .as_ref()
-                    .and_then(|l| l.member(rel, sheet))
+                    .and_then(|l| l.member(rel, sheet, region))
                     .filter(|m| m.blake3 == blake3 && m.review == fitted.review)
                     .map(|m| m.accepted)
                     .unwrap_or(false);
@@ -691,9 +694,10 @@ pub async fn fit_pile(
                 lock_members.push(Member {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
+                    region,
                     blake3,
                     bytes,
-                    spec_digest: lockfile::spec_digest_for(&p, sheet),
+                    spec_digest: lockfile::spec_digest_for(&p, sheet, region),
                     review: fitted.review.clone(),
                     accepted: is_accepted,
                 });
@@ -761,7 +765,7 @@ pub async fn fit_pile(
             let is_accepted = carry_over(previous.as_ref(), &unit, &blake3, &review, &accepted_now);
             let lock_member = lock_members
                 .iter_mut()
-                .find(|m| m.path == unit.path && m.sheet == unit.sheet)
+                .find(|m| m.path == unit.path && m.sheet == unit.sheet && m.region == unit.region)
                 .expect("a fitted member has a lock entry");
             lock_member.review = review.clone();
             lock_member.accepted = is_accepted;

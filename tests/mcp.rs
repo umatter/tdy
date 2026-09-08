@@ -356,6 +356,7 @@ fn a_lock_member_outside_the_root_is_refused_at_query_time() {
         members: vec![tdy::lockfile::Member {
             path: "../loot/x.csv".into(),
             sheet: None,
+            region: None,
             blake3,
             bytes,
             spec_digest: String::new(),

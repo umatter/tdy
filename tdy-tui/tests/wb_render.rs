@@ -1898,7 +1898,7 @@ fn the_browser_shows_a_workbooks_sheet_specs() {
             confidence: Some(1.0),
             notes: vec![],
         };
-        tdy::sidecar::save_member(&book, Some(sheet), &spec, tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None }).unwrap();
+        tdy::sidecar::save_member(&book, Some(sheet), None, &spec, tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None }).unwrap();
     }
     let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     let text = screen(&mut w, 100, 20).join("\n");

@@ -24,12 +24,13 @@ use crate::spec::{
     InferenceMethod, ParseSpec, Provenance, Sidecar, SourceFingerprint, SPEC_FORMAT_VERSION,
 };
 
-/// `<file>.tdy.toml`, or `<file>#<sheet>.tdy.toml` for one sheet of a
-/// workbook: the selector is part of the sidecar's *name*, so the browser's
-/// companion folding needs nothing, and the single-file tools (`validate`,
-/// `--stamp`, `check --against`, `.edit`) take a `file#sheet` reference
-/// and find it through [`resolve_ref`].
-pub fn sidecar_path_for(file: &Path, sheet: Option<&str>) -> PathBuf {
+/// `<file>.tdy.toml`, `<file>#<sheet>.tdy.toml` for one sheet of a
+/// workbook, or `<file>[#<sheet>]#<N>.tdy.toml` for one region within it:
+/// the selector is part of the sidecar's *name*, so the browser's companion
+/// folding needs nothing, and the single-file tools (`validate`, `--stamp`,
+/// `check --against`, `.edit`) take a `file#sheet#N` reference and find it
+/// through [`resolve_ref`].
+pub fn sidecar_path_for(file: &Path, sheet: Option<&str>, region: Option<u32>) -> PathBuf {
     let mut name = file
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -38,34 +39,40 @@ pub fn sidecar_path_for(file: &Path, sheet: Option<&str>) -> PathBuf {
         name.push('#');
         name.push_str(s);
     }
+    if let Some(r) = region {
+        name.push('#');
+        name.push_str(&r.to_string());
+    }
     name.push_str(".tdy.toml");
     file.with_file_name(name)
 }
 
 pub fn sidecar_path(file: &Path) -> PathBuf {
-    sidecar_path_for(file, None)
+    sidecar_path_for(file, None, None)
 }
 
-/// Split a typed reference — `file`, or `file#sheet` — into the data file
-/// and the sheet it names, by asking the filesystem rather than by a rule
-/// (a `#` is legal in a file name and in a sheet name alike).
+/// Split a typed reference — `file`, `file#sheet`, or `file[#sheet]#N` —
+/// into the data file, the sheet, and the region it names, by asking the
+/// filesystem rather than by a rule (a `#` is legal in a file name and in a
+/// sheet name alike).
 ///
 /// The plain path wins when it is a file; otherwise the split whose data
-/// file exists *and* has that sheet's sidecar beside it — the pair only the
-/// right reading has, since `2025.xlsx#Q1.tdy.toml` is equally the sidecar
-/// of a file literally called `2025.xlsx#Q1`. Text that names nothing comes
-/// back unchanged, so the caller reports about the name that was typed.
-pub fn resolve_ref(text: &Path) -> Result<(PathBuf, Option<String>)> {
+/// file exists *and* has that candidate's sidecar beside it — the pair only
+/// the right reading has, since `2025.xlsx#Q1.tdy.toml` is equally the
+/// sidecar of a file literally called `2025.xlsx#Q1`. Text that names
+/// nothing comes back unchanged, so the caller reports about the name that
+/// was typed.
+pub fn resolve_ref(text: &Path) -> Result<(PathBuf, Option<String>, Option<u32>)> {
     if text.is_file() {
-        return Ok((text.to_path_buf(), None));
+        return Ok((text.to_path_buf(), None, None));
     }
     let s = text.to_string_lossy().into_owned();
     match crate::member::MemberRef::resolve(&s, |m| {
         let f = Path::new(&m.path);
-        f.is_file() && sidecar_path_for(f, m.sheet.as_deref()).exists()
+        f.is_file() && sidecar_path_for(f, m.sheet.as_deref(), m.region).exists()
     }) {
-        Ok(Some(m)) => Ok((PathBuf::from(m.path), m.sheet)),
-        Ok(None) => Ok((text.to_path_buf(), None)),
+        Ok(Some(m)) => Ok((PathBuf::from(m.path), m.sheet, m.region)),
+        Ok(None) => Ok((text.to_path_buf(), None, None)),
         Err(several) => bail!(
             "{s} could mean {} — name the file and the sheet unambiguously",
             crate::member::MemberRef::names(&several)
@@ -100,6 +107,38 @@ pub fn sheet_sidecars(file: &Path) -> Vec<String> {
     out
 }
 
+/// The region ordinals of `file` (or of one of its sheets, when `sheet` is
+/// given) that have a sidecar beside it, ascending. A file split into
+/// several stacked tables has one sidecar per region
+/// (`<file>[#<sheet>]#<N>.tdy.toml`) and no plain one, mirroring
+/// [`sheet_sidecars`] for the region dimension.
+pub fn region_sidecars(file: &Path, sheet: Option<&str>) -> Vec<u32> {
+    let Some(name) = file.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return Vec::new();
+    };
+    let dir = match file.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let prefix = match sheet {
+        Some(s) => format!("{name}#{s}#"),
+        None => format!("{name}#"),
+    };
+    let mut out: Vec<u32> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            let rest = n.strip_prefix(&prefix)?.strip_suffix(".tdy.toml")?;
+            let ord: u32 = rest.parse().ok()?;
+            (ord >= 1).then_some(ord)
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
 /// blake3 of the file's contents plus its length, streamed.
 pub fn hash_file(file: &Path) -> Result<(String, u64)> {
     fileio::hash_file(file).with_context(|| format!("cannot fingerprint {}", file.display()))
@@ -121,8 +160,8 @@ impl SidecarStatus {
     }
 }
 
-pub fn load_member(file: &Path, sheet: Option<&str>) -> Result<SidecarStatus> {
-    let sc_path = sidecar_path_for(file, sheet);
+pub fn load_member(file: &Path, sheet: Option<&str>, region: Option<u32>) -> Result<SidecarStatus> {
+    let sc_path = sidecar_path_for(file, sheet, region);
     if !sc_path.exists() {
         return Ok(SidecarStatus::Absent);
     }
@@ -170,6 +209,21 @@ pub fn load_member(file: &Path, sheet: Option<&str>) -> Result<SidecarStatus> {
             );
         }
     }
+    // A region member's sidecar is trusted for exactly one region; the
+    // window it reads is the spec's own business (`Extraction::Delimited`'s
+    // `region`), but which ordinal this sidecar *is* has to agree with what
+    // was asked, the same reason the sheet check exists above.
+    if let Some(r) = region {
+        if sidecar.source.region != Some(r) {
+            bail!(
+                "sidecar {} is the spec for region {r}, but it says source.region = {}. \
+                 A region member's sidecar must be about its own region: correct it, or \
+                 re-run `tdy fit`.",
+                sc_path.display(),
+                sidecar.source.region.map(|n| n.to_string()).unwrap_or_else(|| "(none)".into())
+            );
+        }
+    }
     let (hash, _) = hash_file(file)?;
     if hash == sidecar.source.blake3 {
         Ok(SidecarStatus::Fresh(Box::new(sidecar)))
@@ -187,7 +241,7 @@ fn named(sheet: Option<&str>) -> String {
 }
 
 pub fn load(file: &Path) -> Result<SidecarStatus> {
-    load_member(file, None)
+    load_member(file, None, None)
 }
 
 pub struct ProvenanceInfo {
@@ -197,7 +251,13 @@ pub struct ProvenanceInfo {
     pub sampled_bytes: Option<u64>,
 }
 
-pub fn save_member(file: &Path, sheet: Option<&str>, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathBuf> {
+pub fn save_member(
+    file: &Path,
+    sheet: Option<&str>,
+    region: Option<u32>,
+    spec: &ParseSpec,
+    prov: ProvenanceInfo,
+) -> Result<PathBuf> {
     let (hash, bytes) = hash_file(file)?;
     let sidecar = Sidecar {
         spec_version: SPEC_FORMAT_VERSION,
@@ -209,6 +269,7 @@ pub fn save_member(file: &Path, sheet: Option<&str>, spec: &ParseSpec, prov: Pro
             blake3: hash,
             bytes,
             sheet: sheet.map(str::to_string),
+            region,
             compressed: fileio::compression_kind(file)?.map(|c| c.name().to_string()),
         },
         provenance: Provenance {
@@ -221,14 +282,14 @@ pub fn save_member(file: &Path, sheet: Option<&str>, spec: &ParseSpec, prov: Pro
         },
         spec: spec.clone(),
     };
-    let sc_path = sidecar_path_for(file, sheet);
+    let sc_path = sidecar_path_for(file, sheet, region);
     let text = toml::to_string_pretty(&sidecar).context("serializing sidecar")?;
     fileio::atomic_write(&sc_path, &text)?;
     Ok(sc_path)
 }
 
 pub fn save(file: &Path, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathBuf> {
-    save_member(file, None, spec, prov)
+    save_member(file, None, None, spec, prov)
 }
 
 /// Re-fingerprint an existing sidecar against the current file, keeping the
@@ -239,13 +300,19 @@ pub fn save(file: &Path, spec: &ParseSpec, prov: ProvenanceInfo) -> Result<PathB
 /// way to say "yes, this spec is for this file" without re-running inference
 /// and losing the edit.
 pub fn stamp(file: &Path, method: InferenceMethod) -> Result<PathBuf> {
-    stamp_member(file, None, method)
+    stamp_member(file, None, None, method)
 }
 
-/// [`stamp`] for one member: a sheet member's sidecar is a different file
-/// beside the same workbook, and it is stamped exactly the same way.
-pub fn stamp_member(file: &Path, sheet: Option<&str>, method: InferenceMethod) -> Result<PathBuf> {
-    let sc_path = sidecar_path_for(file, sheet);
+/// [`stamp`] for one member: a sheet or region member's sidecar is a
+/// different file beside the same data, and it is stamped exactly the same
+/// way.
+pub fn stamp_member(
+    file: &Path,
+    sheet: Option<&str>,
+    region: Option<u32>,
+    method: InferenceMethod,
+) -> Result<PathBuf> {
+    let sc_path = sidecar_path_for(file, sheet, region);
     if !sc_path.exists() {
         bail!(
             "no sidecar at {} to stamp; run `tdy sniff {}` to create one",
@@ -431,9 +498,9 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
     #[test]
     fn a_sheet_sidecar_sits_beside_its_workbook_under_the_sheets_name() {
         let f = Path::new("/data/2025.xlsx");
-        assert_eq!(sidecar_path_for(f, None), PathBuf::from("/data/2025.xlsx.tdy.toml"));
-        assert_eq!(sidecar_path_for(f, Some("Q1")), PathBuf::from("/data/2025.xlsx#Q1.tdy.toml"));
-        assert_eq!(sidecar_path(f), sidecar_path_for(f, None));
+        assert_eq!(sidecar_path_for(f, None, None), PathBuf::from("/data/2025.xlsx.tdy.toml"));
+        assert_eq!(sidecar_path_for(f, Some("Q1"), None), PathBuf::from("/data/2025.xlsx#Q1.tdy.toml"));
+        assert_eq!(sidecar_path(f), sidecar_path_for(f, None, None));
     }
 
     #[test]
@@ -446,21 +513,21 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
         )
         .unwrap();
         let prov = || ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
-        let p = save_member(&book, Some("Q1"), &sheet_spec("Q1"), prov()).unwrap();
+        let p = save_member(&book, Some("Q1"), None, &sheet_spec("Q1"), prov()).unwrap();
         assert!(p.ends_with("book.xlsx#Q1.tdy.toml"), "{}", p.display());
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.contains("sheet = \"Q1\""), "the fingerprint names the sheet:\n{text}");
 
-        match load_member(&book, Some("Q1")).unwrap() {
+        match load_member(&book, Some("Q1"), None).unwrap() {
             SidecarStatus::Fresh(sc) => assert_eq!(sc.source.sheet.as_deref(), Some("Q1")),
             other => panic!("expected Fresh, got {other:?}"),
         }
         // The plain sidecar is a different file, and absent.
         assert!(matches!(load(&book).unwrap(), SidecarStatus::Absent));
         // A second sheet's sidecar is another file again.
-        save_member(&book, Some("Q2"), &sheet_spec("Q2"), prov()).unwrap();
-        assert!(matches!(load_member(&book, Some("Q2")).unwrap(), SidecarStatus::Fresh(_)));
-        assert!(matches!(load_member(&book, Some("Q1")).unwrap(), SidecarStatus::Fresh(_)));
+        save_member(&book, Some("Q2"), None, &sheet_spec("Q2"), prov()).unwrap();
+        assert!(matches!(load_member(&book, Some("Q2"), None).unwrap(), SidecarStatus::Fresh(_)));
+        assert!(matches!(load_member(&book, Some("Q1"), None).unwrap(), SidecarStatus::Fresh(_)));
     }
 
     /// A sheet member's sidecar is trusted for exactly one sheet. A hand
@@ -478,17 +545,43 @@ dtype = { type = "decimal", precision = 0, scale = 0 }
         let p = save_member(
             &book,
             Some("Q2"),
+            None,
             &sheet_spec("Q2"),
             ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None },
         )
         .unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
         std::fs::write(&p, text.replace("sheet_name = \"Q2\"", "sheet_name = \"Q1\"")).unwrap();
-        let err = match load_member(&book, Some("Q2")) {
+        let err = match load_member(&book, Some("Q2"), None) {
             Err(e) => format!("{e:#}"),
             Ok(_) => panic!("a sidecar that reads another sheet must not load"),
         };
         assert!(err.contains("Q1") && err.contains("Q2"), "{err}");
+    }
+
+    #[test]
+    fn a_region_sidecar_sits_under_its_ordinal_and_states_it() {
+        let f = Path::new("/d/report.csv");
+        assert_eq!(sidecar_path_for(f, None, Some(2)), PathBuf::from("/d/report.csv#2.tdy.toml"));
+        assert_eq!(sidecar_path_for(Path::new("/d/book.xlsx"), Some("Q1"), Some(2)), PathBuf::from("/d/book.xlsx#Q1#2.tdy.toml"));
+        assert_eq!(sidecar_path_for(f, None, None), sidecar_path(f));
+
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().join("report.csv");
+        std::fs::write(&p, "a;b\n1;2\n\na;b\n3;4\n").unwrap();
+        let mut spec = sheet_spec("unused");   // any valid spec; make it delimited with a window
+        spec.extraction = Extraction::Delimited { delimiter: ';', quote: None, escape: None, encoding: None, comment: None, ragged: Default::default(), region: Some(RowWindow { start: 3, end: 5 }) };
+        let prov = || ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
+        let sc = save_member(&p, None, Some(2), &spec, prov()).unwrap();
+        assert!(std::fs::read_to_string(&sc).unwrap().contains("region = 2"));
+        assert!(matches!(load_member(&p, None, Some(2)).unwrap(), SidecarStatus::Fresh(_)));
+        assert!(matches!(load_member(&p, None, None).unwrap(), SidecarStatus::Absent));
+        assert_eq!(region_sidecars(&p, None), vec![2]);
+        // A region sidecar that says it is region 1 is not region 2's.
+        let text = std::fs::read_to_string(&sc).unwrap().replace("region = 2", "region = 1");
+        std::fs::write(&sc, text).unwrap();
+        let e = format!("{:#}", load_member(&p, None, Some(2)).unwrap_err());
+        assert!(e.contains("region") && e.contains('2') && e.contains('1'), "{e}");
     }
 
     fn sheet_spec(sheet: &str) -> ParseSpec {

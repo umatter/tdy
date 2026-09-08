@@ -953,15 +953,16 @@ fn a_hand_written_lock_over_two_sheets_reads_both_and_names_them() {
     let target = tdy::target::Target::load(&t).unwrap();
     let prov = || tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None };
     for sheet in ["Q1", "Q2"] {
-        tdy::sidecar::save_member(&book, Some(sheet), &quarter_spec(sheet), prov()).unwrap();
+        tdy::sidecar::save_member(&book, Some(sheet), None, &quarter_spec(sheet), prov()).unwrap();
     }
     let (blake3, bytes) = tdy::sidecar::hash_file(&book).unwrap();
     let member = |sheet: &str| Member {
         path: "2025.xlsx".into(),
         sheet: Some(sheet.into()),
+        region: None,
         blake3: blake3.clone(),
         bytes,
-        spec_digest: tdy::lockfile::spec_digest_for(&book, Some(sheet)),
+        spec_digest: tdy::lockfile::spec_digest_for(&book, Some(sheet), None),
         review: None,
         accepted: false,
     };
@@ -1224,7 +1225,7 @@ fn acceptance_is_per_sheet_member() {
         notes: vec![],
     };
     let book = dir.path().join("2025.xlsx");
-    tdy::sidecar::save_member(&book, Some("Q1"), &spec, tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None }).unwrap();
+    tdy::sidecar::save_member(&book, Some("Q1"), None, &spec, tdy::sidecar::ProvenanceInfo { method: InferenceMethod::Manual, model: None, prompt_version: None, sampled_bytes: None }).unwrap();
 
     let out = tdy(&["fit", t.to_str().unwrap()]);
     let text = String::from_utf8_lossy(&out.stdout);
