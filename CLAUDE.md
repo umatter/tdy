@@ -458,7 +458,11 @@ and by region is the same mistake as whole and by sheet.
 Mechanically a region is a **row window**, not a name that carries its own
 rows: `Extraction::Delimited` gains `region: Option<RowWindow>`
 (`{ start, end, ordinal }`, 0-based half-open raw physical line numbers of the
-file, applied by `extract_delimited` and mirrored by `stream.rs`'s `raw_index`
+file — physical, so a record carrying a quoted newline occupies as many
+indices as it spans lines, which is what `regions_of` counted; both
+`extract_delimited` and `stream.rs`'s `advance_raw_index` advance by
+`1 + embedded`, and subtracting the embedded newlines instead (the first cut)
+shifted every later block's window up by one and ate its header — applied
 before anything else — `skip_rows`, `promote_header` and every transform act
 inside the block, exactly as they act on a whole file). A sheet has no
 row-window field at all — `range` already says which rows — so a sheet region

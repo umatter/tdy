@@ -532,9 +532,10 @@ impl Source {
                 match rdr.read_byte_record(rec) {
                     Ok(true) => {
                         if let Some((start, end)) = *window {
-                            advance_raw_index(rdr, rec, lines_before.unwrap(), raw_index);
+                            let embedded =
+                                advance_raw_index(rdr, rec, lines_before.unwrap(), raw_index);
                             let idx = *raw_index;
-                            *raw_index += 1;
+                            *raw_index += 1 + embedded;
                             if idx < start {
                                 continue;
                             }
@@ -598,9 +599,10 @@ impl Source {
                 match rdr.read_byte_record(rec) {
                     Ok(true) => {
                         if let Some((start, end)) = *window {
-                            advance_raw_index(rdr, rec, lines_before.unwrap(), raw_index);
+                            let embedded =
+                                advance_raw_index(rdr, rec, lines_before.unwrap(), raw_index);
                             let idx = *raw_index;
-                            *raw_index += 1;
+                            *raw_index += 1 + embedded;
                             if idx < start {
                                 continue;
                             }
@@ -698,23 +700,29 @@ impl Source {
     }
 }
 
-/// Recovers the raw rows a blank line silently discards. `read_byte_record`
-/// swallows an empty line without ever yielding it, so the record that
-/// follows one shows a bigger jump in the CSV core's physical line count
-/// than its own content explains. That gap — minus any newlines the
-/// record's own quoted fields carry, which advance the line count without
-/// being a row boundary — is that many blank rows, each its own raw index;
-/// mirrors `engine::extract_delimited`'s identical recovery so both
-/// executors number the same rows.
+/// Recovers the raw rows a blank line silently discards, and reports the
+/// record's own physical extent. `read_byte_record` swallows an empty line
+/// without ever yielding it, so the record that follows one shows a bigger
+/// jump in the CSV core's physical line count than its own content
+/// explains. That gap — minus any newlines the record's own quoted fields
+/// carry, which advance the line count without being a row boundary — is
+/// that many blank rows, each its own raw index, and is added here.
+///
+/// The returned count is the record's *embedded* newlines: the caller adds
+/// `1 + embedded` afterwards, because the index space is physical lines
+/// (what `regions_of` counted when it named a block) and a record spanning
+/// three of them occupies three. Mirrors `engine::extract_delimited`'s
+/// identical arithmetic so both executors number the same rows.
 fn advance_raw_index(
     rdr: &csv::Reader<Box<dyn BufRead + Send>>,
     rec: &csv::ByteRecord,
     lines_before: u64,
     raw_index: &mut u64,
-) {
+) -> u64 {
     let advanced = rdr.position().line() - lines_before;
     let embedded: u64 = rec.iter().map(|f| f.iter().filter(|&&b| b == b'\n').count() as u64).sum();
     *raw_index += advanced.saturating_sub(1 + embedded);
+    embedded
 }
 
 /// The delimited reader, configured identically to the materialising path.

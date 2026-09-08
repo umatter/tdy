@@ -202,9 +202,11 @@ pub enum Extraction {
 ///
 /// A record's index is the line its first byte is on. A blank line
 /// consumes an index of its own even though the CSV reader never yields it
-/// as a record — it is still a line the file has. A quoted newline inside
-/// a record is not a boundary: it does not advance the index of the
-/// *next* record beyond that record's own extent.
+/// as a record — it is still a line the file has, and so is every line a
+/// record's own quoted newlines spread it across: a record spanning three
+/// physical lines occupies three indices, so the record after it starts
+/// three later. That is what `engine::regions_of` counts when it names a
+/// block, and both executors count it identically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RowWindow {
     pub start: u64,

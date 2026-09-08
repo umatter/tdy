@@ -980,3 +980,51 @@ fn a_region_past_a_capped_sample_is_truncated_not_past_the_end() {
     let e = format!("{:#}", engine::execute_batches(&past, &p, Limits::default()).unwrap_err());
     assert!(e.contains("past the end") && e.contains("200001 rows"), "{e}");
 }
+
+/// A window counts *physical* lines — a record's own quoted newlines
+/// included — because that is what `regions_of` counted when it named the
+/// block. Both executors used to subtract embedded newlines from the index,
+/// so a quoted `"Ost\nNord"` in block 1 shifted block 2's window up by one
+/// and swallowed its header (or, with the shift the other way, a
+/// neighbour's rows).
+#[test]
+fn a_quoted_newline_does_not_shift_the_next_blocks_window() {
+    let dir = TempDir::new().unwrap();
+    // Physical lines: 0 header, 1-2 one record with an embedded newline,
+    // 3 a plain record, 4 blank, 5 header, 6-8 rows. `regions_of` splits at
+    // line 4, so block 2 is {5, 9}.
+    let body = "Datum;Region;Betrag\n28.01.2025;\"Ost\nNord\";190.00\n28.02.2025;West;200.00\n\nDatum;Region;Betrag\n28.04.2025;Ost;490.00\n28.05.2025;West;500.00\n28.06.2025;Nord;510.00\n";
+    let p = write(&dir, "quoted.csv", body);
+    let w = tdy::engine::regions_of(&p, None, Limits::default()).unwrap();
+    assert_eq!(
+        w.windows,
+        [RowWindow { start: 0, end: 4, ordinal: 1 }, RowWindow { start: 5, end: 9, ordinal: 2 }],
+        "the split counts physical lines"
+    );
+
+    let mut s = spec(
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("Region", DType::Utf8), col("Betrag", DType::Decimal { precision: 14, scale: 2 })],
+    );
+    for (w, want, absent) in [
+        (RowWindow { start: 5, end: 9, ordinal: 2 }, "510.00", "190.00"),
+        (RowWindow { start: 0, end: 4, ordinal: 1 }, "190.00", "510.00"),
+    ] {
+        s.extraction = Extraction::Delimited {
+            delimiter: ';', quote: Some('"'), escape: None, encoding: None, comment: None,
+            ragged: RaggedPolicy::PadNulls, region: Some(w),
+        };
+        let a = render(&engine::execute_batches(&s, &p, Limits::default()).unwrap());
+        assert!(a.contains(want) && !a.contains(absent), "block {}: {a}", w.ordinal);
+        assert_paths_agree(&s, &p, "a quoted newline before the window");
+    }
+    // Block 2's own sum, on both executors: 490 + 500 + 510.
+    s.extraction = Extraction::Delimited {
+        delimiter: ';', quote: Some('"'), escape: None, encoding: None, comment: None,
+        ragged: RaggedPolicy::PadNulls,
+        region: Some(RowWindow { start: 5, end: 9, ordinal: 2 }),
+    };
+    let a = render(&engine::execute_batches(&s, &p, Limits::default()).unwrap());
+    assert!(a.contains("490.00") && a.contains("500.00") && a.contains("510.00"), "{a}");
+    assert_eq!(a.matches("2025").count(), 0, "block 2's header was promoted, not read as data: {a}");
+}

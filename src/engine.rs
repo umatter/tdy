@@ -616,7 +616,14 @@ fn extract_delimited(
                         record.iter().map(|f| f.matches('\n').count() as u64).sum();
                     raw_index += advanced.saturating_sub(1 + embedded);
                     let idx = raw_index;
-                    raw_index += 1;
+                    // The index space is *physical* lines, which is what
+                    // `regions_of` counted when it named the block, so a
+                    // record spanning several lines advances by all of
+                    // them. Subtracting `embedded` here as well (which the
+                    // first cut did) made a quoted newline in one block
+                    // shift every later block's window up by one and eat
+                    // its header.
+                    raw_index += 1 + embedded;
                     if idx < w.start {
                         continue;
                     }
