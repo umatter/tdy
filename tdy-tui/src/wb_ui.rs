@@ -1320,7 +1320,7 @@ fn raw_text_lines(raw: &RawHead, marks: &Highlights, window: Option<RowWindow>) 
     for (i, l) in raw.lines.iter().enumerate() {
         let line = if i == 0 { marks.line(l) } else { Line::raw(l.clone()) };
         lines.push(match window {
-            Some(w) => style_for_window(line, (i as u64) >= w.start && (i as u64) < w.end),
+            Some(w) => style_for_window(line, (w.start..w.end).contains(&(i as u64))),
             None => line,
         });
     }
