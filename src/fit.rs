@@ -721,6 +721,16 @@ pub(crate) fn region_read_hint(path: &Path, sheet: Option<&str>, limits: Limits)
     if let Some(s) = sheet {
         return Some(Some(s.to_string()));
     }
+    // The declared format, not what calamine can be made to parse, decides
+    // whether this file is opened as a workbook: a text file's own bytes are
+    // never a legitimate reason to ask calamine anything, and relying on the
+    // workbook opener to fail fast on a non-Excel file is a *cost* assumption
+    // dressed up as a correctness one — `sample::guess_format` reads only the
+    // extension, no I/O, and is the same predicate `draft` uses for exactly
+    // this decision.
+    if crate::sample::guess_format(path) != crate::sample::FormatGuess::Excel {
+        return Some(None);
+    }
     match engine::excel_sheet_shapes(path, limits) {
         Ok(shapes) if shapes.len() == 1 => Some(Some(shapes[0].name.clone())),
         Ok(_) => None,
@@ -1810,5 +1820,23 @@ mod tests {
         ] {
             assert_eq!(col_letter(idx), want, "column index {idx}");
         }
+    }
+
+    /// `region_read_hint` must decide by the file's declared format, never by
+    /// asking calamine whether it happens to parse as a workbook. These bytes
+    /// ARE a real single-sheet workbook (sheet "Data") — the old
+    /// implementation, which opened every file through the workbook opener
+    /// regardless of extension, would have found that sheet and answered
+    /// `Some(Some("Data"))`. Named `fake.csv`, it must be read as a text
+    /// file: no text-file extension should ever reach calamine.
+    #[test]
+    fn region_read_hint_trusts_the_format_guess_not_calamine() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join("regions_three.xlsx");
+        let fake = dir.path().join("fake.csv");
+        std::fs::copy(&src, &fake).unwrap();
+        assert_eq!(region_read_hint(&fake, None, Limits::default()), Some(None));
+        // The real extension is unaffected.
+        assert_eq!(region_read_hint(&src, None, Limits::default()), Some(Some("Data".to_string())));
     }
 }
