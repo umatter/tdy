@@ -66,7 +66,7 @@ pub struct Member {
 impl Member {
     /// The form a person reads and types.
     pub fn name(&self) -> String {
-        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone() }.name()
+        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone(), region: None }.name()
     }
 }
 

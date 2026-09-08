@@ -13,40 +13,52 @@ pub struct MemberRef {
     /// `None` is the whole file — every other format, and a workbook only
     /// one of whose sheets produces the declared table.
     pub sheet: Option<String>,
+    /// One of several tables stacked in the file or sheet, counted from 1
+    /// in file order. `None` is the whole file or sheet.
+    pub region: Option<u32>,
 }
 
 impl MemberRef {
     pub fn file(path: impl Into<String>) -> MemberRef {
-        MemberRef { path: path.into(), sheet: None }
+        MemberRef { path: path.into(), sheet: None, region: None }
     }
 
     pub fn sheet(path: impl Into<String>, sheet: impl Into<String>) -> MemberRef {
-        MemberRef { path: path.into(), sheet: Some(sheet.into()) }
+        MemberRef { path: path.into(), sheet: Some(sheet.into()), region: None }
     }
 
-    /// The form a person reads and types: `path`, or `path#sheet`.
+    pub fn region(path: impl Into<String>, sheet: Option<String>, region: u32) -> MemberRef {
+        MemberRef { path: path.into(), sheet, region: Some(region) }
+    }
+
+    /// The form a person reads and types: `path`, or `path#sheet`, or `path#region`, or `path#sheet#region`.
     pub fn name(&self) -> String {
-        match &self.sheet {
-            Some(s) => format!("{}#{s}", self.path),
-            None => self.path.clone(),
-        }
+        let mut s = self.path.clone();
+        if let Some(sh) = &self.sheet { s.push('#'); s.push_str(sh); }
+        if let Some(r) = self.region { s.push('#'); s.push_str(&r.to_string()); }
+        s
     }
 
     /// Resolve a typed reference against the members that exist. Every
     /// split at a `#` is a candidate — the whole text as a plain member,
-    /// then each `path#sheet` split from the right — and the first that
+    /// then each `path#sheet` split from the right, and also region candidates
+    /// if the rightmost segment is a positive integer — and the first that
     /// `exists` is the answer; `Ok(None)` names no member, and `Err` carries
     /// every member the text could mean when there is more than one.
     pub fn resolve(text: &str, exists: impl Fn(&MemberRef) -> bool) -> Result<Option<MemberRef>, Vec<MemberRef>> {
         let mut found: Vec<MemberRef> = Vec::new();
-        let plain = MemberRef::file(text);
-        if exists(&plain) {
-            found.push(plain);
-        }
+        let mut consider = |m: MemberRef| { if exists(&m) && !found.contains(&m) { found.push(m); } };
+        consider(MemberRef::file(text));
         for (i, _) in text.rmatch_indices('#') {
-            let candidate = MemberRef::sheet(&text[..i], &text[i + 1..]);
-            if exists(&candidate) {
-                found.push(candidate);
+            let (head, tail) = (&text[..i], &text[i + 1..]);
+            consider(MemberRef::sheet(head, tail));
+            if let Ok(n) = tail.parse::<u32>() {
+                if n >= 1 {
+                    consider(MemberRef::region(head, None, n));
+                    for (j, _) in head.rmatch_indices('#') {
+                        consider(MemberRef::region(&head[..j], Some(head[j + 1..].to_string()), n));
+                    }
+                }
             }
         }
         match found.len() {
@@ -100,5 +112,33 @@ mod tests {
         let exists = |m: &MemberRef| members.contains(m);
         let err = MemberRef::resolve("a#b.xlsx#c", exists).expect_err("ambiguous");
         assert_eq!(err, members);
+    }
+
+    #[test]
+    fn a_region_member_names_its_ordinal_after_the_sheet() {
+        assert_eq!(MemberRef::region("report.csv", None, 2).name(), "report.csv#2");
+        assert_eq!(MemberRef::region("book.xlsx", Some("Q1".into()), 2).name(), "book.xlsx#Q1#2");
+    }
+
+    /// The rightmost segment is a region only when it is a positive integer
+    /// AND such a member exists; a sheet literally called `2` beside two
+    /// regions is an ambiguity, named as the sheet case already is.
+    #[test]
+    fn a_typed_region_reference_resolves_against_what_exists() {
+        let members = [
+            MemberRef::region("report.csv", None, 2),
+            MemberRef::region("book.xlsx", Some("Q1".into()), 3),
+            MemberRef::sheet("plain.xlsx", "2"),
+        ];
+        let exists = |m: &MemberRef| members.contains(m);
+        assert_eq!(MemberRef::resolve("report.csv#2", exists), Ok(Some(members[0].clone())));
+        assert_eq!(MemberRef::resolve("book.xlsx#Q1#3", exists), Ok(Some(members[1].clone())));
+        assert_eq!(MemberRef::resolve("plain.xlsx#2", exists), Ok(Some(members[2].clone())), "a sheet called 2");
+        assert_eq!(MemberRef::resolve("report.csv#0", exists), Ok(None), "regions count from 1");
+        assert_eq!(MemberRef::resolve("report.csv#9", exists), Ok(None));
+
+        let both = [MemberRef::sheet("x.xlsx", "2"), MemberRef::region("x.xlsx", None, 2)];
+        let exists = |m: &MemberRef| both.contains(m);
+        assert_eq!(MemberRef::resolve("x.xlsx#2", exists).expect_err("two readings"), both.to_vec());
     }
 }

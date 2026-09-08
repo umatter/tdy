@@ -90,7 +90,7 @@ pub struct MemberReport {
 
 impl MemberReport {
     pub fn name(&self) -> String {
-        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone() }.name()
+        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone(), region: None }.name()
     }
 }
 
@@ -752,7 +752,7 @@ pub async fn fit_pile(
         for o in crate::magnitude::outliers(&medians, crate::magnitude::THRESHOLD) {
             let (ri, _, p) = &fitted_specs[o.member];
             let report = &mut reports[*ri];
-            let unit = MemberRef { path: report.path.clone(), sheet: report.sheet.clone() };
+            let unit = MemberRef { path: report.path.clone(), sheet: report.sheet.clone(), region: None };
             let review = match &report.review {
                 Some(r) => Some(format!("{r}; {}", o.reason())),
                 None => Some(o.reason()),
