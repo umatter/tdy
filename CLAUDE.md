@@ -496,7 +496,18 @@ that say which are hand-editable, so `load_member` requires `source.region`
 and the ordinal the spec's own window carries to agree, and `fit_pile`
 refuses to reuse a spec whose window is not the block the split found
 (`CONTRADICTS`, no I/O — the true window is already in hand); without those
-two, an edited window made two members total one block twice. `fit::fit_region`
+two, an edited window made two members total one block twice. A sidecar the
+loader *refuses* is still re-planned, never a hard failure, but the refusal is
+now a note on the member (`sidecar refused: …; re-planned`) — discarding a
+person's edit in silence left the member reading exactly as before with
+nothing to say why. Two members with one name (a file literally called
+`report.csv#2` beside a split `report.csv`) share one sidecar path and cannot
+be two specs, so `expand_units` refuses the whole pile before anything is
+fitted rather than letting the collision surface at `--accept`. And when a
+plain member reuses a hand-written *whole-file* spec, the split's dropped-run
+note and review reason are reworded rather than attached — that spec reads
+those lines, so the question becomes whether reading the whole file is
+intended, and the gate stays. `fit::fit_region`
 was got wrong twice: a text block must drop any `SkipRows` transform the
 whole-file sniff proposed, since a title block belongs to the file and would
 delete rows the block does not have; a sheet block's A1 `range` has to be
