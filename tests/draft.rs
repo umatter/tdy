@@ -131,11 +131,25 @@ fn a_pile_of_unrelated_files_is_called_out_as_several_datasets() {
 /// own, so the summary block's `total` column shows up as its own drafted
 /// column, attributed to `#2` — never silently folded into (or dropped by)
 /// a single whole-file sniff that would see only the first block's shape.
+///
+/// One input file is one physical file: the header must say so (`from 1
+/// file(s)`, not "2" for its two blocks), and a single file's own stacked
+/// blocks must never trip the "these files do not look like ONE dataset"
+/// heterogeneity note — that note is for genuinely different files sharing a
+/// directory, not for one file's own internal structure. `total`'s `#2`
+/// attribution has to come from its own per-column comment, not as a
+/// side-effect of a spurious grouping note naming `regions_summary.csv#2`
+/// as if it were a real, separately-draftable path.
 #[test]
 fn a_file_with_stacked_blocks_drafts_each_blocks_columns_and_names_the_block() {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/regions_summary.csv");
     let ddl = tdy::draft::draft_target(&[p], Limits::default()).unwrap();
-    assert!(ddl.contains("total"), "the summary block's column is drafted: {ddl}");
-    assert!(ddl.contains("#2"), "and attributed to its block: {ddl}");
+    assert!(ddl.contains("from 1 file(s)"), "one physical file was given: {ddl}");
+    assert!(
+        !ddl.contains("do not look like ONE dataset"),
+        "one file's own stacked blocks are not a heterogeneous pile: {ddl}",
+    );
+    let total_line = ddl.lines().find(|l| l.trim_start().starts_with("total")).unwrap_or_else(|| panic!("no `total` column line: {ddl}"));
+    assert!(total_line.contains("#2"), "`total` is attributed to its block by its own comment: {total_line}");
     assert!(Target::parse(&ddl).is_ok(), "{ddl}");
 }

@@ -30,8 +30,19 @@ struct DraftColumn {
     /// The merged type, plus a caveat when merging had to widen.
     dtype: DType,
     caveat: Option<String>,
-    /// Which files carry it.
+    /// Which *physical files* carry it — a column seen in any block of a
+    /// split file counts as present in that file, per the presence note's
+    /// own rule ("a column present in block 2 of file A is present in
+    /// file A"). Deduplicated, so a column seen in two of a file's blocks
+    /// still counts once.
     files: Vec<String>,
+    /// `(physical file, this block's ordinal, that file's total block
+    /// count)` for every block-level sighting — never populated for a
+    /// whole-file sighting. This is what lets a per-column comment say
+    /// `regions_summary.csv#2` when the column is confined to one block of
+    /// a split file, which `files` above (physical-file presence only)
+    /// cannot express by itself.
+    block_sightings: Vec<(String, u32, usize)>,
 }
 
 pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
@@ -41,12 +52,20 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
 
     let mut columns: Vec<DraftColumn> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
-    // Per file (or per block, for a split file), its sanitized column
-    // names — the raw material for noticing that a pile is not one dataset.
+    // One entry per *physical* file that yielded at least one column —
+    // never one per block, so one file's own stacked blocks can never look
+    // like several files disagreeing about a vocabulary. This is what
+    // `group_by_vocabulary` sees.
     let mut file_sets: Vec<(String, BTreeSet<String>)> = Vec::new();
     let mut day_first = false;
     let mut month_first = false;
+    // Blocks or whole files successfully sniffed — used only to decide
+    // whether anything sniffable was found at all; the physical-file counts
+    // used for the header and for column presence live in `files_ok` below.
     let mut sniffed = 0usize;
+    // Distinct physical files that yielded at least one column — the
+    // denominator the header and every "in N of M file(s)" note use.
+    let mut files_ok: BTreeSet<String> = BTreeSet::new();
     // One line per file that turned out to hold several stacked tables.
     let mut split_files: Vec<String> = Vec::new();
 
@@ -69,20 +88,35 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
                 "{label} holds {} stacked tables; each is drafted as {label}#i",
                 windows.len()
             ));
+            // One entry in `file_sets` for the whole file — the union of
+            // its blocks' columns — not one per block: `group_by_vocabulary`
+            // asks whether files disagree with each other, and a file's own
+            // blocks disagreeing with each other is a different question
+            // (which is what the `only in <file>#<n>` column comments below
+            // answer instead).
+            let mut file_columns: BTreeSet<String> = BTreeSet::new();
             for w in &windows {
-                let block_label = format!("{label}#{}", w.ordinal);
                 match sniff_block(f, *w, limits) {
-                    Ok(spec) => record_columns(
-                        &mut columns,
-                        &mut file_sets,
-                        &mut day_first,
-                        &mut month_first,
-                        &mut sniffed,
-                        block_label,
-                        &spec,
-                    ),
-                    Err(e) => failures.push((block_label, format!("{e:#}"))),
+                    Ok(spec) => {
+                        file_columns.extend(spec.columns.iter().map(|c| c.name.clone()));
+                        record_columns(
+                            &mut columns,
+                            &mut day_first,
+                            &mut month_first,
+                            &mut sniffed,
+                            &mut files_ok,
+                            ColumnSighting {
+                                physical_file: &label,
+                                block: Some((w.ordinal, windows.len())),
+                            },
+                            &spec,
+                        );
+                    }
+                    Err(e) => failures.push((format!("{label}#{}", w.ordinal), format!("{e:#}"))),
                 }
+            }
+            if !file_columns.is_empty() {
+                file_sets.push((label.clone(), file_columns));
             }
             continue;
         }
@@ -95,7 +129,16 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
                 continue;
             }
         };
-        record_columns(&mut columns, &mut file_sets, &mut day_first, &mut month_first, &mut sniffed, label, &spec);
+        file_sets.push((label.clone(), spec.columns.iter().map(|c| c.name.clone()).collect()));
+        record_columns(
+            &mut columns,
+            &mut day_first,
+            &mut month_first,
+            &mut sniffed,
+            &mut files_ok,
+            ColumnSighting { physical_file: &label, block: None },
+            &spec,
+        );
     }
 
     if sniffed == 0 {
@@ -105,13 +148,14 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
         }
         anyhow::bail!("{msg}");
     }
+    let files_seen = files_ok.len();
 
     let name = table_name(files);
     let globs = file_globs(files);
 
     let mut out = String::new();
     out.push_str(&format!(
-        "-- Drafted by `tdy draft` from {sniffed} file(s). A DRAFT, not an answer:\n\
+        "-- Drafted by `tdy draft` from {files_seen} file(s). A DRAFT, not an answer:\n\
          -- everything below is what the sniffer measured; only you know which columns\n\
          -- mean the same thing and which files do not belong. Edit, save as\n\
          -- <name>.tdy.sql beside the data, then:  tdy fit <name>.tdy.sql\n\
@@ -175,8 +219,24 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
             out.push(',');
         }
         let mut notes: Vec<String> = Vec::new();
-        if c.files.len() < sniffed {
-            notes.push(format!("in {} of {sniffed} file(s)", c.files.len()));
+        if c.files.len() < files_seen {
+            notes.push(format!("in {} of {files_seen} file(s)", c.files.len()));
+        }
+        // A column confined to some but not all of one file's own stacked
+        // blocks: physical-file presence alone says nothing about this (the
+        // file as a whole still has the column), so name the block(s)
+        // directly — `regions_summary.csv#2` — which is where a human
+        // learns which block a column came from.
+        let mut by_file: std::collections::BTreeMap<&str, (usize, Vec<u32>)> = std::collections::BTreeMap::new();
+        for (file, ordinal, total) in &c.block_sightings {
+            by_file.entry(file.as_str()).or_insert((*total, Vec::new())).1.push(*ordinal);
+        }
+        for (file, (total, mut ordinals)) in by_file {
+            if ordinals.len() < total {
+                ordinals.sort_unstable();
+                let labels: Vec<String> = ordinals.iter().map(|o| format!("{file}#{o}")).collect();
+                notes.push(format!("only in {}", labels.join(", ")));
+            }
         }
         if let Some(cv) = &c.caveat {
             notes.push(cv.clone());
@@ -201,21 +261,33 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
     Ok(out)
 }
 
-/// Fold one sniffed spec's columns into the merged `columns`/`file_sets`
-/// tallies, under `label` (a whole file, or `"{file}#{ordinal}"` for one
-/// stacked block of it). Shared by the whole-file path and the split-file
-/// path so the two cannot tally differently.
+/// Where one sniffed spec's columns came from: always a physical file
+/// (`physical_file`), and — only when this sighting is one block of a
+/// split file, never for a whole-file sighting — that block's own ordinal
+/// and its file's total block count.
+struct ColumnSighting<'a> {
+    physical_file: &'a str,
+    block: Option<(u32, usize)>,
+}
+
+/// Fold one sniffed spec's columns into the merged `columns` tally, under
+/// `sighting` (a whole file, or one block of a split file). Shared by the
+/// whole-file path and the split-file path so the two cannot tally
+/// differently. `files_ok` collects the distinct physical files this run
+/// has seen at least one column from — the denominator every presence note
+/// (and the header) uses, since a column present in block 2 of file A is
+/// present in file A, not in "half" of it.
 fn record_columns(
     columns: &mut Vec<DraftColumn>,
-    file_sets: &mut Vec<(String, BTreeSet<String>)>,
     day_first: &mut bool,
     month_first: &mut bool,
     sniffed: &mut usize,
-    label: String,
+    files_ok: &mut BTreeSet<String>,
+    sighting: ColumnSighting,
     spec: &crate::spec::ParseSpec,
 ) {
     *sniffed += 1;
-    file_sets.push((label.clone(), spec.columns.iter().map(|c| c.name.clone()).collect()));
+    files_ok.insert(sighting.physical_file.to_string());
     for c in &spec.columns {
         match &c.dtype {
             DType::Date { format } | DType::Timestamp { format, .. } => {
@@ -234,10 +306,13 @@ fn record_columns(
                 if !d.origins.contains(&origin) {
                     d.origins.push(origin);
                 }
-                if !d.files.contains(&label) {
-                    d.files.push(label.clone());
+                if !d.files.iter().any(|f| f == sighting.physical_file) {
+                    d.files.push(sighting.physical_file.to_string());
                 }
-                let (merged, caveat) = merge(&d.dtype, &c.dtype, &label);
+                if let Some((ordinal, total)) = sighting.block {
+                    d.block_sightings.push((sighting.physical_file.to_string(), ordinal, total));
+                }
+                let (merged, caveat) = merge(&d.dtype, &c.dtype, sighting.physical_file);
                 d.dtype = merged;
                 if d.caveat.is_none() {
                     d.caveat = caveat;
@@ -248,7 +323,11 @@ fn record_columns(
                 origins: vec![origin],
                 dtype: c.dtype.clone(),
                 caveat: None,
-                files: vec![label.clone()],
+                files: vec![sighting.physical_file.to_string()],
+                block_sightings: match sighting.block {
+                    Some((ordinal, total)) => vec![(sighting.physical_file.to_string(), ordinal, total)],
+                    None => Vec::new(),
+                },
             }),
         }
     }
@@ -271,8 +350,11 @@ fn sniff_block(path: &Path, window: RowWindow, limits: Limits) -> Result<crate::
         .context("creating a scratch file for the block")?;
     std::io::Write::write_all(&mut tmp, &bytes)
         .with_context(|| format!("writing block {} of {} to a scratch file", window.ordinal, path.display()))?;
-    let sample = crate::sample::build(tmp.path(), 16 * 1024, limits)?;
-    crate::sniff::sniff(tmp.path(), &sample, limits).map(|r| r.spec)
+    let sample = crate::sample::build(tmp.path(), 16 * 1024, limits)
+        .with_context(|| format!("sampling block {} of {}", window.ordinal, path.display()))?;
+    crate::sniff::sniff(tmp.path(), &sample, limits)
+        .map(|r| r.spec)
+        .with_context(|| format!("sniffing block {} of {}", window.ordinal, path.display()))
 }
 
 /// The raw bytes of one stacked block, by physical line number — the same
