@@ -168,6 +168,7 @@ fn main() -> Result<()> {
     let Mode::Workbench { root, initial } = mode;
     let result = rt.block_on(run_workbench(&mut terminal, root, initial, torn_down));
     ratatui::restore();
+    tdy::fileio::clear_cache();
     result
 }
 
