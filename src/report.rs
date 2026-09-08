@@ -494,7 +494,39 @@ pub fn expand_units(
             );
         }
     }
+
+    // Two members with one name have one sidecar path, and whichever is
+    // fitted second overwrites the other's spec. It is a fact about the
+    // pile rather than about either member, so the pile is refused whole,
+    // here — before anything is fitted, written, or locked.
+    let mut names: Vec<(String, usize)> =
+        units.iter().enumerate().map(|(i, u)| (u.member.name(), i)).collect();
+    names.sort();
+    if let Some(w) = names.windows(2).find(|w| w[0].0 == w[1].0) {
+        let name = &w[0].0;
+        anyhow::bail!(
+            "two members of `{}` are both named {name:?}: {} and {}. A `#` in a file name \
+             collides with the way sheet and region members are named, and one sidecar path \
+             ({name}.tdy.toml) cannot be two specs. The remedy is to rename the file whose own \
+             name contains `#`, or to narrow `files` so it is not a member; `exclude = \
+             '{name}'` would remove both, since it names both.",
+            target.name,
+            describe_member(&units[w[0].1].member),
+            describe_member(&units[w[1].1].member),
+        );
+    }
     Ok(units)
+}
+
+/// One member as a phrase, for a message that has to tell apart two members
+/// that share a name.
+fn describe_member(m: &MemberRef) -> String {
+    match (&m.sheet, m.region) {
+        (Some(s), Some(r)) => format!("block {r} of sheet {s:?} of `{}`", m.path),
+        (Some(s), None) => format!("sheet {s:?} of `{}`", m.path),
+        (None, Some(r)) => format!("block {r} of `{}`", m.path),
+        (None, None) => format!("the file `{}`", m.path),
+    }
 }
 
 /// How a discarded run reads in a note and in a review reason. The prefix

@@ -293,7 +293,22 @@ async fn fit_dataset(
             root: None,
         },
     )
-    .await?;
+    .await;
+    // A pile-level refusal — two members with one name, an `exclude` that
+    // names nothing, a declaration reaching outside the root — is an answer
+    // too, and `--json` promises one object on stdout either way.
+    let r = match r {
+        Ok(r) => r,
+        Err(e) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({"error": format!("{e:#}")}))?
+                );
+            }
+            return Err(e);
+        }
+    };
     if json {
         println!("{}", serde_json::to_string_pretty(&r)?);
     } else {

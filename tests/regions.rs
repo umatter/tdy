@@ -671,3 +671,44 @@ fn a_whole_file_spec_is_asked_the_other_question() {
     // the whole file, which is what this spec reads.
     assert!(text.contains("1600.00"), "{text}");
 }
+
+/// `#` is how a member says which sheet or which block it is, and a file is
+/// free to have one in its name. A file literally called `report.csv#2`
+/// beside a `report.csv` the blank-row split reads as three tables gives two
+/// members one name — and therefore one sidecar path, `report.csv#2.tdy.toml`,
+/// which cannot be two specs. Until now that failed loud only at `--accept`,
+/// after both had been fitted and one had overwritten the other's sidecar.
+/// It is a fact about the pile, so the pile is refused whole: no member is
+/// fitted, no sidecar is written, no lock exists.
+#[test]
+fn two_members_with_one_name_refuse_the_whole_pile() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_three.csv"), dir.path().join("report.csv")).unwrap();
+    std::fs::write(
+        dir.path().join("report.csv#2"),
+        "Datum;Region;Betrag\n05.03.2025;Ost;10.00\n12.03.2025;West;20.00\n",
+    )
+    .unwrap();
+    let t = dir.path().join("q.tdy.sql");
+    std::fs::write(&t, "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files = '*', date_order = 'dmy');").unwrap();
+
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("report.csv#2"), "{text}");
+    // Both readings are named, not just the name they share.
+    assert!(text.contains("the file") && text.contains("block 2"), "{text}");
+    assert!(text.contains("rename"), "the remedy: {text}");
+    assert!(!dir.path().join("q.tdy.lock").exists(), "no lock: {text}");
+    assert!(!dir.path().join("report.csv#2.tdy.toml").exists(), "no sidecar: {text}");
+
+    // A machine caller gets the same refusal as an object, not only as a
+    // line on stderr.
+    let out = tdy(&["--json", "fit", t.to_str().unwrap()]);
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    assert!(
+        v["error"].as_str().unwrap_or_default().contains("report.csv#2"),
+        "{v}"
+    );
+}
