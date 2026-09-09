@@ -402,6 +402,11 @@ pub fn resolve(target: &Target, target_file: &Path) -> Result<Vec<String>> {
     resolve_excluded(target, target_file).map(|(rels, _)| rels)
 }
 
+/// What the glob pass removed: each `(exclude entry, relative path)` pair,
+/// so the member-reference pass can tell an entry that already removed a
+/// file from one that names nothing.
+pub type ExcludeRemovals = Vec<(String, String)>;
+
 /// The same, plus which `exclude` entry removed which file.
 ///
 /// `exclude` is applied twice — here as a glob over file names, and again in
@@ -414,7 +419,7 @@ pub fn resolve(target: &Target, target_file: &Path) -> Result<Vec<String>> {
 pub fn resolve_excluded(
     target: &Target,
     target_file: &Path,
-) -> Result<(Vec<String>, Vec<(String, String)>)> {
+) -> Result<(Vec<String>, ExcludeRemovals)> {
     let dir = target_dir(target_file);
     let mut out: BTreeSet<String> = BTreeSet::new();
 
