@@ -1,6 +1,6 @@
 # Declaring the dataset you want
 
-**Status:** design, agreed in principle, not yet implemented.
+**Status:** design, agreed in principle; slices 1–5 have landed (CLAUDE.md records each and where it differs). Open question 1 (§12) is the only one unsettled.
 **Date:** 2026-08-30
 
 This document records where tdy is going and why. It came out of a design review
