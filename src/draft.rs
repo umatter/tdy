@@ -15,11 +15,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::config::Limits;
 use crate::sample::FormatGuess;
-use crate::spec::{DType, RowWindow};
+use crate::spec::DType;
 
 /// One declared-column-to-be, merged across the pile.
 struct DraftColumn {
@@ -96,7 +96,7 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
             // answer instead).
             let mut file_columns: BTreeSet<String> = BTreeSet::new();
             for w in &windows {
-                match sniff_block(f, *w, limits) {
+                match crate::sniff::sniff_text_block(f, *w, limits, crate::sniff::SniffOpts::default()) {
                     Ok(spec) => {
                         file_columns.extend(spec.columns.iter().map(|c| c.name.clone()));
                         record_columns(
@@ -331,67 +331,6 @@ fn record_columns(
             }),
         }
     }
-}
-
-/// Sniff one stacked block of `path` as if it were its own file: copy the
-/// block's own raw lines out to a scratch file with the same extension (so
-/// format guessing — which reads the extension, not the bytes — sees a
-/// `.csv` for a `.csv`), then run the ordinary sniffer over that. This is
-/// the whole reason a block gets the sniffer's full machinery — title rows,
-/// separator/date inference, type widening — rather than a cut-down pass of
-/// its own that could disagree with what a plain file gets.
-///
-/// The scratch file lives in `fileio`'s own process-lifetime cache
-/// (`$TMPDIR/tdy-<pid>/scratch/`), removed here and, whatever happens, by
-/// `fileio::clear_cache()` at exit — so the one production path that needs
-/// a temporary file costs the published crate no dependency.
-fn sniff_block(path: &Path, window: RowWindow, limits: Limits) -> Result<crate::spec::ParseSpec> {
-    let bytes = block_bytes(path, window, limits)
-        .with_context(|| format!("reading block {} of {}", window.ordinal, path.display()))?;
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("csv");
-    let tmp = crate::fileio::scratch_file(&format!("block.{ext}"))
-        .context("creating a scratch file for the block")?;
-    std::fs::write(&tmp, &bytes).with_context(|| {
-        format!("writing block {} of {} to a scratch file", window.ordinal, path.display())
-    })?;
-    let sniffed = (|| {
-        let sample = crate::sample::build(&tmp, 16 * 1024, limits)
-            .with_context(|| format!("sampling block {} of {}", window.ordinal, path.display()))?;
-        crate::sniff::sniff(&tmp, &sample, limits)
-            .map(|r| r.spec)
-            .with_context(|| format!("sniffing block {} of {}", window.ordinal, path.display()))
-    })();
-    let _ = std::fs::remove_file(&tmp);
-    sniffed
-}
-
-/// The raw bytes of one stacked block, by physical line number — the same
-/// indexing `regions_of` counted `window` against, so a window it returned
-/// names exactly these lines and no others.
-fn block_bytes(path: &Path, window: RowWindow, limits: Limits) -> Result<Vec<u8>> {
-    let real = crate::fileio::materialize(path, limits.max_decompressed_bytes)?;
-    let file = std::fs::File::open(real.as_ref())
-        .with_context(|| format!("cannot open {}", path.display()))?;
-    let mut reader = std::io::BufReader::new(file);
-    let mut out = Vec::new();
-    let mut index: u64 = 0;
-    let mut buf: Vec<u8> = Vec::new();
-    loop {
-        if index >= window.end {
-            break;
-        }
-        buf.clear();
-        let n = std::io::BufRead::read_until(&mut reader, b'\n', &mut buf)
-            .with_context(|| format!("reading {}", path.display()))?;
-        if n == 0 {
-            break;
-        }
-        if index >= window.start {
-            out.extend_from_slice(&buf);
-        }
-        index += 1;
-    }
-    Ok(out)
 }
 
 /// Files clustered by column-name overlap (Jaccard >= 0.5, greedy, in input

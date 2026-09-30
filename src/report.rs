@@ -396,8 +396,13 @@ pub fn expand_units(
     for (member, notes) in sheet_units {
         let p = dir.join(&member.path);
         let regions = match crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits) {
+            // The split proposes blocks; only those that pass the gates
+            // against the target are members (the design's table is keyed
+            // on exactly that). The rest are runs nothing reads.
             Some(sheet_hint) => {
-                crate::engine::regions_of(&p, sheet_hint.as_deref(), limits).unwrap_or_default()
+                let found =
+                    crate::engine::regions_of(&p, sheet_hint.as_deref(), limits).unwrap_or_default();
+                crate::fit::gate_regions(&p, sheet_hint.as_deref(), &found, target, limits)
             }
             // A workbook with several sheets whose member is not tied to
             // one of them: nothing here can say which sheet is meant, so no

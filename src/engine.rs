@@ -451,9 +451,14 @@ pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Resu
             *region,
             opts,
         ),
-        Extraction::Excel { sheet_name, sheet_index, range, .. } => {
-            extract_excel(path, sheet_name.as_deref(), *sheet_index, range.as_deref(), opts)
-        }
+        Extraction::Excel { sheet_name, sheet_index, range, region_ordinal } => extract_excel(
+            path,
+            sheet_name.as_deref(),
+            *sheet_index,
+            range.as_deref(),
+            region_ordinal.is_some(),
+            opts,
+        ),
         Extraction::FixedWidth { encoding, fields } => {
             extract_fixed_width(path, encoding.as_deref(), fields, opts)
         }
@@ -703,6 +708,7 @@ fn extract_excel(
     sheet_name: Option<&str>,
     sheet_index: Option<u32>,
     a1_range: Option<&str>,
+    region: bool,
     opts: &ExtractOpts,
 ) -> Result<RawTable> {
     // Bound the container before anything reads it: for .ods, opening the
@@ -767,7 +773,15 @@ fn extract_excel(
             truncated = true;
             break;
         }
-        rows.push(row.iter().map(render_cell).collect());
+        let cells: Vec<String> = row.iter().map(render_cell).collect();
+        // A region's window holds a blank row only where a header cut off
+        // by one was adopted (`windows_from_runs`): skipped, as the text
+        // executor's CSV reader skips a blank line, so the header sits on
+        // its data and the two formats read a block the same way.
+        if region && cells.iter().all(|c| c.trim().is_empty()) {
+            continue;
+        }
+        rows.push(cells);
     }
     // Trailing all-empty rows are an artefact of the used range, not data.
     while rows.last().map(|r| r.iter().all(|c| c.trim().is_empty())).unwrap_or(false) {
@@ -2081,6 +2095,9 @@ pub struct Regions {
     /// The first kept block's first-row width — what a `dropped` run's own
     /// width is compared against.
     pub block_width: usize,
+    /// Each window's own first-row width, beside `windows`: what a block
+    /// that [`Regions::gated`] turns into a dropped run is measured by.
+    pub window_widths: Vec<usize>,
 }
 
 impl Regions {
@@ -2093,6 +2110,50 @@ impl Regions {
     pub fn table_shaped(&self) -> impl Iterator<Item = &DroppedRun> {
         let w = self.block_width;
         self.dropped.iter().filter(move |d| w > 0 && d.width == w)
+    }
+
+    /// Keep only the blocks that passed the gates (`passed[i]` for
+    /// `windows[i]`). The split's blocks are candidates, not members: a
+    /// title banner is a run of three rows or more and fits nothing, and
+    /// making it a member is how a sheet with one table under a banner came
+    /// back as three members, two of them gaps. A block that fails is one
+    /// more run nothing reads, so it joins `dropped`; "table-shaped" is then
+    /// measured against the blocks that passed; and the survivors are
+    /// renumbered, because `#2` names the second *table*, not the second
+    /// run of rows. None passing is no regions at all — the file is read
+    /// whole and gets the ordinary answer, so nothing is dropped either.
+    pub fn gated(&self, passed: &[bool]) -> Regions {
+        let kept: Vec<(RowWindow, usize)> = self
+            .windows
+            .iter()
+            .zip(&self.window_widths)
+            .zip(passed)
+            .filter(|(_, ok)| **ok)
+            .map(|((w, width), _)| (*w, *width))
+            .collect();
+        if kept.is_empty() {
+            return Regions::default();
+        }
+        let mut dropped = self.dropped.clone();
+        dropped.extend(
+            self.windows
+                .iter()
+                .zip(&self.window_widths)
+                .zip(passed)
+                .filter(|(_, ok)| !**ok)
+                .map(|((w, width), _)| DroppedRun { start: w.start, end: w.end, width: *width }),
+        );
+        dropped.sort_by_key(|d| d.start);
+        Regions {
+            block_width: kept[0].1,
+            window_widths: kept.iter().map(|(_, width)| *width).collect(),
+            windows: kept
+                .iter()
+                .enumerate()
+                .map(|(i, (w, _))| RowWindow { ordinal: (i + 1) as u32, ..*w })
+                .collect(),
+            dropped,
+        }
     }
 }
 
@@ -2228,19 +2289,25 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
 }
 
 /// The delimiter a set of block headers is best read with: whichever
-/// candidate gives the most fields on most of them. Only the *relative*
-/// answer matters — the same delimiter counts the kept blocks and the
-/// dropped runs, so a comparison of the two is meaningful whatever it
-/// picks; guessing per run is what would let a one-line banner claim a
-/// block's shape.
+/// candidate gives the widest head, ties going to the one that gives the
+/// most fields on most of them. Only the *relative* answer matters — the
+/// same delimiter counts the kept blocks and the dropped runs, so a
+/// comparison of the two is meaningful whatever it picks; guessing per run
+/// is what would let a one-line banner claim a block's shape.
+///
+/// The widest head leads, not the median: a banner and a footnote block
+/// are runs of three rows too, one field wide under every delimiter, and
+/// two of them outvoted the one table between them — every width then
+/// came out 1, and a one-field banner measured "as wide as the table".
 fn pick_block_delimiter(heads: &[&str]) -> char {
-    let mut best = (0usize, ',');
+    let mut best = ((0usize, 0usize), ',');
     for cand in [',', ';', '\t', '|'] {
         let mut counts: Vec<usize> = heads.iter().map(|h| field_count(h, cand)).collect();
         counts.sort_unstable();
         let modal = counts.get(counts.len() / 2).copied().unwrap_or(0);
-        if modal > best.0 {
-            best = (modal, cand);
+        let widest = counts.last().copied().unwrap_or(0);
+        if (widest, modal) > best.0 {
+            best = ((widest, modal), cand);
         }
     }
     best.1
@@ -2310,7 +2377,18 @@ fn blocks_from(blanks: &[bool], width_of: impl Fn(u64) -> usize) -> Regions {
 /// a member that quietly answers for part of a file is the wrong value this
 /// tool refuses. When no window is kept there is nothing dropped either:
 /// the file is then read whole, so every line is read.
+///
+/// A one-row run directly above a block, as wide as the block's own first
+/// row, with only blank lines between them, is that block's *header*, cut
+/// off by a blank row — header, blank, data is an ordinary spreadsheet
+/// layout. It is adopted: the block's window starts at the header's line
+/// and the blank lines between are inside it (both executors skip a blank
+/// row inside a window). Dropping it instead left the block to bind its
+/// columns positionally as `col_N`, a table read without the names it
+/// states. Adoption runs before the one-run rule, so a file that is only a
+/// header, a blank line and its data is one table read whole.
 fn windows_from_runs(runs: Vec<(u64, u64, usize)>) -> Regions {
+    let runs = adopt_severed_headers(runs);
     if runs.len() == 1 {
         return Regions::default();
     }
@@ -2320,6 +2398,7 @@ fn windows_from_runs(runs: Vec<(u64, u64, usize)>) -> Regions {
     }
     Regions {
         block_width: kept[0].2,
+        window_widths: kept.iter().map(|(_, _, w)| *w).collect(),
         windows: kept
             .into_iter()
             .enumerate()
@@ -2330,6 +2409,29 @@ fn windows_from_runs(runs: Vec<(u64, u64, usize)>) -> Regions {
             .map(|(start, end, width)| DroppedRun { start, end, width })
             .collect(),
     }
+}
+
+/// [`windows_from_runs`]' header rule: a run of exactly one row, followed
+/// by a block (3 rows or more) whose first row has the same width, merges
+/// into that block. Runs are separated by blank lines by construction, so
+/// "directly above, only blank lines between" is "the next run".
+fn adopt_severed_headers(runs: Vec<(u64, u64, usize)>) -> Vec<(u64, u64, usize)> {
+    let mut out: Vec<(u64, u64, usize)> = Vec::with_capacity(runs.len());
+    let mut i = 0;
+    while i < runs.len() {
+        let (s, e, w) = runs[i];
+        match runs.get(i + 1) {
+            Some(&(_, ne, nw)) if e - s == 1 && w > 0 && nw == w && ne - runs[i + 1].0 >= 3 => {
+                out.push((s, ne, w));
+                i += 2;
+            }
+            _ => {
+                out.push((s, e, w));
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 /// The same pipeline, but producing at most `max_rows` output rows.

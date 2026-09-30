@@ -75,10 +75,34 @@ FIXTURES  (all in testdata/, named regions_*)
    waits on a person. Ground truth: one window {3,7}; one dropped run
    {0,2} of width 3; the file's own total 1600.00.
 
+7. regions_banner.csv
+   The layout of a government statistics export (the corpus's
+   `ttb_brewery_state_*.xlsx`, as text): a 6-line banner of one field
+   each, a blank line, the header `State;2008;2009;2010`, a blank line
+   *between the header and its data*, five data rows, a blank line, and
+   three one-field footnotes. The split sees four runs: banner (6 lines),
+   header (1 line), data (5 lines), footnotes (3 lines). Two rulings are
+   pinned by it: a block that fails the gates (banner, footnotes) is not a
+   member but a run nothing read; and a one-row run as wide as the block
+   directly below it, with only blank lines between, is that block's
+   header and is adopted into its window — otherwise the data binds
+   positionally as `col_N`. Ground truth: one window {7,14} (header, blank,
+   data); sums 2008 = 1500, 2009 = 1550, 2010 = 1600 (4650 in all).
+
+8. regions_banner.xlsx
+   The same layout on two sheets of identical shape ("Premise",
+   "Bottles"), the banner and footnote cells in column D, the table in
+   A-D. Both sheets pass the gates, so sheet discovery expands the
+   workbook into two sheet members, each one table under a banner. Ground
+   truth: "Premise" as #7; "Bottles" doubles every value, sums 3000 /
+   3100 / 3200 (9300 in all).
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
-regions_short_block.csv -> [{3,7}] plus a dropped table-shaped run {0,2}.
+regions_short_block.csv -> [{3,7}] plus a dropped table-shaped run {0,2};
+regions_banner.csv -> one member, window {7,14}, sums 1500/1550/1600;
+regions_banner.xlsx -> two sheet members, sums 1500/1550/1600 and 3000/3100/3200.
 """
 import os
 import re
@@ -246,6 +270,78 @@ def build_regions_short_block_csv():
     )
 
 
+BANNER = [
+    "Beer production by state",
+    "Barrels, all premises",
+    "Source: TTB statistical release",
+    "Prepared 31.03.2020",
+    "Unit: barrels",
+    "Preliminary figures",
+]
+BANNER_HEADER = ["State", "2008", "2009", "2010"]
+BANNER_ROWS = [
+    ("Alabama", 100, 110, 120),
+    ("Alaska", 200, 210, 220),
+    ("Arizona", 300, 310, 320),
+    ("Arkansas", 400, 410, 420),
+    ("California", 500, 510, 520),
+]
+FOOTNOTES = [
+    "1 Includes contract brewers.",
+    "2 Figures are rounded.",
+    "3 See the release notes for revisions.",
+]
+
+
+def build_regions_banner_csv():
+    lines = (
+        BANNER
+        + [""]
+        + [";".join(BANNER_HEADER)]
+        + [""]
+        + [f"{s};{a};{b};{c}" for s, a, b, c in BANNER_ROWS]
+        + [""]
+        + FOOTNOTES
+    )
+    write_csv(
+        "regions_banner.csv",
+        lines,
+        "6-line banner, header, blank, 5 rows, footnotes; window {7,14}, "
+        "sums 1500/1550/1600",
+    )
+
+
+def build_regions_banner_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    for i, (title, factor) in enumerate((("Premise", 1), ("Bottles", 2))):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = title
+        row = 1
+        for text in BANNER:
+            ws.cell(row=row, column=4, value=text)
+            row += 1
+        row += 1  # blank
+        for j, h in enumerate(BANNER_HEADER):
+            ws.cell(row=row, column=1 + j, value=h)
+        row += 2  # header, then a blank row before the data
+        for s_, a, b, c in BANNER_ROWS:
+            for j, v in enumerate((s_, a * factor, b * factor, c * factor)):
+                ws.cell(row=row, column=1 + j, value=v)
+            row += 1
+        row += 1  # blank
+        for text in FOOTNOTES:
+            ws.cell(row=row, column=4, value=text)
+            row += 1
+    save_workbook(
+        wb,
+        "regions_banner.xlsx",
+        "two sheets, each banner / header / blank / 5 rows / footnotes; "
+        "sums 1500/1550/1600 and 3000/3100/3200",
+    )
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -254,6 +350,8 @@ def main():
     build_regions_summary_csv()
     build_regions_titled_csv()
     build_regions_short_block_csv()
+    build_regions_banner_csv()
+    build_regions_banner_xlsx()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "

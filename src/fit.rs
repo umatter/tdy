@@ -571,7 +571,22 @@ pub fn discover_sheets(
         let passes = sniff::frame_excel_sheet(path, &sh.name, limits)
             .ok()
             .map(|d| fit_framed(path, target, limits, d, Rigour::Gates).is_ok())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            // A sheet that is one table under a banner fits only through its
+            // block: the whole sheet's frame binds `col_N`, the block's binds
+            // the header. It is still that sheet's table, so the sheet
+            // passes, and `expand_units` finds the block again — but only
+            // when the block is proved by elimination (exactly one passes,
+            // nothing table-shaped discarded). Sheet expansion asks nobody,
+            // so it must not rest on a split that itself waits on a person:
+            // admitting a sheet whenever *some* block passed let a footnote
+            // block bind a positional target and made a member of it.
+            || engine::regions_of(path, Some(&sh.name), limits)
+                .map(|r| {
+                    let g = gate_regions(path, Some(&sh.name), &r, target, limits);
+                    g.windows.len() == 1 && g.table_shaped().next().is_none()
+                })
+                .unwrap_or(false);
         if passes {
             fitting.push(sh.name.clone())
         } else {
@@ -590,16 +605,8 @@ pub fn fit_sheet(path: &Path, sheet: &str, target: &Target, limits: Limits) -> R
 }
 
 /// Fit one region — one of several tables stacked in a file or a sheet —
-/// fully, reusing the same frame `fit`/`fit_sheet` would find for the whole
-/// file or sheet and narrowing it to the block's own rows.
-///
-/// For text (`sheet: None`), the sniffer's whole-file draft is reused with
-/// its `region` window set to the block; any `SkipRows` transform is
-/// dropped first — a title block above the first table is a fact about the
-/// *file*, not about a block that never contains it, and re-applying it here
-/// would drop rows the block does not have. For a sheet, `frame_excel_sheet`'s
-/// draft is reused with `range` narrowed to the block's own rows, over the
-/// sheet's used-range column span.
+/// fully, in the frame [`region_frame`] finds for the block's own rows:
+/// the frame the gates judged when [`gate_regions`] let the block through.
 pub fn fit_region(
     path: &Path,
     sheet: Option<&str>,
@@ -607,11 +614,30 @@ pub fn fit_region(
     target: &Target,
     limits: Limits,
 ) -> Result<Fitted, FitError> {
-    let draft = match sheet {
+    let draft = region_frame(path, sheet, window, target, limits)?;
+    fit_framed(path, target, limits, draft, Rigour::Full)
+}
+
+/// The frame one block is read with, found from the block's own rows.
+///
+/// For text (`sheet: None`) the block is sniffed as its own file
+/// (`sniff::sniff_text_block`) and the result carries the window: every
+/// transform it proposes is already relative to the block, which is how a
+/// window's transforms act. For a sheet, the block's rows become an A1
+/// `range` over the used range's column span and are framed as a sheet of
+/// their own (`sniff::frame_excel_block`). Reusing the whole file's or
+/// sheet's frame instead — the first cut — let a banner above the table
+/// choose the separator (a comma in a title) and count itself into a
+/// `skip_rows` that, inside the block, skipped the header and the data.
+fn region_frame(
+    path: &Path,
+    sheet: Option<&str>,
+    window: crate::spec::RowWindow,
+    target: &Target,
+    limits: Limits,
+) -> Result<ParseSpec, FitError> {
+    match sheet {
         Some(s) => {
-            let mut d = sniff::frame_excel_sheet(path, s, limits)
-                .with_context(|| format!("framing sheet {s:?} of {}", path.display()))
-                .map_err(FitError::Unreadable)?;
             // `regions_of` counts rows *of the used range*, not of the
             // sheet: a window of {0,4} means the used range's own first 4
             // rows, wherever on the sheet that range actually starts. Add
@@ -626,46 +652,62 @@ pub fn fit_region(
             };
             let first_col = col_letter(start.1);
             let last_col = col_letter(start.1 + width.saturating_sub(1) as u32);
-            match &mut d.extraction {
-                Extraction::Excel { range, region_ordinal, .. } => {
-                    *range = Some(format!(
-                        "{first_col}{}:{last_col}{}",
-                        start.0 + window.start as u32 + 1,
-                        start.0 + window.end as u32
-                    ));
-                    *region_ordinal = Some(window.ordinal);
-                }
-                other => {
-                    return Err(FitError::Unreadable(anyhow::anyhow!(
-                        "sheet {s:?} of {} framed as {}, not excel",
-                        path.display(),
-                        other.format_name()
-                    )))
-                }
-            }
-            d
+            let range = format!(
+                "{first_col}{}:{last_col}{}",
+                start.0 + window.start as u32 + 1,
+                start.0 + window.end as u32
+            );
+            sniff::frame_excel_block(path, s, range, window.ordinal, limits)
+                .with_context(|| format!("framing block {} of sheet {s:?} of {}", window.ordinal, path.display()))
+                .map_err(FitError::Unreadable)
         }
         None => {
-            let mut d = sniff_draft(path, target, limits)?;
+            let opts = sniff::SniffOpts { verify: target.verify == Verify::Full };
+            let mut d = sniff::sniff_text_block(path, window, limits, opts).map_err(FitError::Unreadable)?;
             match &mut d.extraction {
                 Extraction::Delimited { region, .. } => *region = Some(window),
                 other => {
                     return Err(FitError::Unreadable(anyhow::anyhow!(
-                        "{} framed as {}; region splitting is only implemented for delimited \
-                         text and excel sheets",
+                        "block {} of {} framed as {}; region splitting is only implemented for \
+                         delimited text and excel sheets",
+                        window.ordinal,
                         path.display(),
                         other.format_name()
                     )))
                 }
             }
-            // A title block belongs to the whole file, not this block: a
-            // whole-file `skip_rows` re-applied here would drop rows the
-            // block does not have.
-            d.transforms.retain(|t| !matches!(t, Transform::SkipRows { .. }));
-            d
+            Ok(d)
         }
-    };
-    fit_framed(path, target, limits, draft, Rigour::Full)
+    }
+}
+
+/// The blocks of `regions` that pass the cheap gates against `target`
+/// (`Rigour::Gates`, as [`discover_sheets`] asks of a sheet), in the frame
+/// [`fit_region`] will later fit: only those are members. The design's
+/// table is keyed on "blocks that pass the gates"; every other run of three
+/// rows — a title banner, a footnote block, a recap — is a run nothing
+/// reads, named on the members that remain, and a person's question only
+/// when it is shaped like the table ([`engine::Regions::gated`]).
+pub fn gate_regions(
+    path: &Path,
+    sheet: Option<&str>,
+    regions: &engine::Regions,
+    target: &Target,
+    limits: Limits,
+) -> engine::Regions {
+    if regions.windows.is_empty() {
+        return regions.clone();
+    }
+    let passed: Vec<bool> = regions
+        .windows
+        .iter()
+        .map(|w| {
+            region_frame(path, sheet, *w, target, limits)
+                .and_then(|d| fit_framed(path, target, limits, d, Rigour::Gates))
+                .is_ok()
+        })
+        .collect();
+    regions.gated(&passed)
 }
 
 /// A 0-based column index as A1 letters ("A", "Z", "AA", ...).
@@ -687,9 +729,12 @@ fn col_letter(mut idx: u32) -> String {
 /// than about the columns. Only called on a refusal, so an ordinary fit
 /// pays nothing for it; `None` for a file with no split and for anything
 /// that cannot be read.
-pub fn stacked_note(path: &Path, target_file: &Path, limits: Limits) -> Option<String> {
+pub fn stacked_note(path: &Path, target: &Target, target_file: &Path, limits: Limits) -> Option<String> {
     let sheet = region_read_hint(path, None, limits)?;
-    let n = engine::regions_of(path, sheet.as_deref(), limits).ok()?.windows.len();
+    let regions = engine::regions_of(path, sheet.as_deref(), limits).ok()?;
+    // Only blocks that pass the gates are tables the pile would make
+    // members of; a banner and a footnote block are not "stacked tables".
+    let n = gate_regions(path, sheet.as_deref(), &regions, target, limits).windows.len();
     (n >= 2).then(|| {
         format!(
             "{} holds {n} stacked tables, split at blank rows, and `tdy fit TARGET FILE` \

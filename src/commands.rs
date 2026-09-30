@@ -343,7 +343,7 @@ pub async fn fit_one_text(
             // A stacked file's gaps are about a header read as data, which
             // reads as a type problem and is not one. Say what the file is,
             // and which command splits it.
-            if let Some(n) = crate::fit::stacked_note(file, target_path, limits) {
+            if let Some(n) = crate::fit::stacked_note(file, &target, target_path, limits) {
                 writeln!(text, "\n  {n}")?;
             }
             if propose {
