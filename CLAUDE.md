@@ -439,6 +439,10 @@ console's `.accept` reads both places. Medians, not totals, so a partial month i
 (`scripts/sweep_workbooks.py`, 2026-09-07): of 34 multi-sheet xlsx/xlsm workbooks, 18 stay a
 plain member and 16 expand into sheet members — the sixteen the draft slice had refused as
 `AmbiguousFrame` — with no refusal, error or timeout. Re-run it after touching discovery.
+Re-swept 2026-09-30 after region gating: 18 plain, 15 expanded, 1 refused — the same as the
+last commit before regions (0b919d0); the one refusal and the one lost expansion arrived with
+the declared-rounding merge (0f81fd3: a drafted `DECIMAL(38,15)` the fit then refuses for its
+extra digits), not with regions.
 
 **Regions are in (2026-09-08).** `docs/design/2026-09-08-regions.md`. A member
 is now `(path, sheet, region)` — `MemberRef` in `src/member.rs` gains a third
@@ -472,12 +476,21 @@ writes. Detection is `engine::regions_of(path, sheet, limits) -> Vec<RowWindow>`
 it splits at runs of blank lines or rows, keeps blocks of at least three rows,
 and returns nothing when the file has exactly one run at all — a table with
 blank padding above or below it is not split. It returns what it *dropped*
-alongside what it kept (`Regions { windows, dropped, block_width }`): with a
+alongside what it kept (`Regions { windows, dropped, block_width, window_widths }`): with a
 window applied nothing reads a run below the minimum, so every member of the
 file names those lines in a note the CLI prints, and a dropped run whose
 first row is as wide as the kept blocks' (`Regions::table_shaped`) is a
 review reason — the `>= 3` rule says a `Total;;1500` line is not a table, and
-a person rules on whether it was data. It streams the text
+a person rules on whether it was data. Those blocks are *candidates*: `fit::gate_regions`
+tries each against the target with the cheap gates, in the frame `fit_region` will fit, and
+only the blocks that pass are members — got wrong first, when every run of three rows became
+one, so a title banner was a member that fit nothing and the workbook sweep refused 15 of 16
+workbooks; a failing block now joins the dropped runs (table-shaped measured against the
+blocks that passed, survivors renumbered), and none passing is the file read whole with no
+region notes. A one-row run as wide as the block directly below it, blank lines between, is
+that block's header cut off by a blank row and is adopted into its window
+(`engine::adopt_severed_headers`; both executors skip the blank row inside it) — dropped, the
+block bound its columns as `col_N`. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
 (`tests/regions.rs::regions_of_streams_a_large_file`, `#[ignore]`, run by hand
@@ -518,14 +531,18 @@ member pass walking the directory again. And when a
 plain member reuses a hand-written *whole-file* spec, the split's dropped-run
 note and review reason are reworded rather than attached — that spec reads
 those lines, so the question becomes whether reading the whole file is
-intended, and the gate stays. `fit::fit_region`
-was got wrong twice: a text block must drop any `SkipRows` transform the
-whole-file sniff proposed, since a title block belongs to the file and would
-delete rows the block does not have; a sheet block's A1 `range` has to be
+intended, and the gate stays. `fit::region_frame`
+frames a block from the block's own rows — a text block sniffed as its own file
+(`sniff::sniff_text_block`), a sheet block as a sheet of its own
+(`sniff::frame_excel_block`) — because the whole file's frame let a banner
+choose the separator and count itself into a `skip_rows` that, inside the
+block, deleted rows the block does have; a sheet block's A1 `range` has to be
 offset by the used range's own start (`col_letter`), since `regions_of` counts
 rows of the used range, not of the sheet, and the naive address read a sheet
-whose data starts at C5 against blank margin instead. `tdy draft` gains the
-same split (`draft::sniff_block`, via a scratch file), drafting each block's
+whose data starts at C5 against blank margin instead. A sheet passes
+`discover_sheets` through its blocks too, but only when exactly one passes and
+nothing table-shaped was discarded: sheet expansion asks nobody. `tdy draft` gains the
+same split (`sniff::sniff_text_block`, via a scratch file), drafting each block's
 columns separately and naming which block each column came from; presence and
 heterogeneity notes count physical files, not blocks — got wrong first, when
 the grouping note fired across one file's own blocks as though they were
