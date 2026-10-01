@@ -821,6 +821,8 @@ Things that only become clear from reading several modules:
   `strict:false` because the schema uses `$ref`), and an Anthropic forced tool call.
   Transport failures retry the same prompt; *spec* problems go back to the model as text.
   Bump `PROMPT_VERSION` when changing the prompt — it is recorded in sidecar provenance.
+  A schema change (a new transform or `ValueParsing` field) counts as a prompt change,
+  since the schema is pasted into the prompt.
 - **Bounded I/O lives in `fileio`**: head/tail sampling by seek, streaming blake3, atomic
   sidecar writes (temp + rename).
 - **Two providers, chosen by size.** Under `LAZY_ABOVE_BYTES` (64 MB, `TDY_LAZY_ABOVE_BYTES`)

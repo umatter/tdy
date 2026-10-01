@@ -30,7 +30,7 @@ use crate::sample::FileSample;
 use crate::sniff::SniffResult;
 use crate::spec::ParseSpec;
 
-pub const PROMPT_VERSION: &str = "infer-v3";
+pub const PROMPT_VERSION: &str = "infer-v4";
 
 /// Feedback text sent back to the model is capped: parse errors quote the
 /// offending value, and those come from the whole probed head of the file
