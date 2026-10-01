@@ -488,15 +488,30 @@ fn sniff_delimited(
     //
     // A title line padded to the table's width (`Report 2025;;`, as Excel's
     // "Save as CSV" writes one) has the modal arity, so arity alone reads it
-    // as the header. A leading row whose only filled field is the first is a
-    // title line exactly as a one-field row is. Leading rows only: the scan
-    // stops at the first row that is neither, so a body row with one filled
-    // cell under a real header is data and is never looked at here.
-    let leading = table
+    // as the header. A leading run of rows whose only filled field is the
+    // first is a title run — but only when the row after it is then promoted
+    // as the header and has two or more filled fields. A single column with a
+    // trailing `;`, a headerless file whose first record has empty fields,
+    // and an `id;;;` header are all "first cell only" too, and the first cut
+    // of this rule cut their rows; failing the condition, the arity-only
+    // count stands exactly as before, and a run reaching the end of the
+    // probe is never a title.
+    let arity_leading = counts.iter().take_while(|c| **c != modal_arity).count();
+    let padded_leading = table
         .rows
         .iter()
         .take_while(|r| r.len() != modal_arity || is_padded_title(r))
         .count();
+    let leading = match table.rows.get(padded_leading) {
+        Some(next)
+            if padded_leading > arity_leading
+                && next.iter().filter(|c| !c.trim().is_empty()).count() >= 2
+                && matches!(header_verdict(&table.rows[padded_leading..]), HeaderVerdict::Present) =>
+        {
+            padded_leading
+        }
+        _ => arity_leading,
+    };
     let skip_head = leading.min(counts.len().saturating_sub(2)) as u32;
     if skip_head > 0 {
         doubts.add(0.05, format!("skipped {skip_head} leading non-tabular row(s)"));

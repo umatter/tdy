@@ -2361,3 +2361,41 @@ fn a_first_data_row_with_one_filled_cell_is_not_a_title() {
     let rows = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
     assert_eq!(rows.num_rows(), 4, "Bern stays a row");
 }
+
+/// The padded-title rule is narrow: a run of first-cell-only rows is a title
+/// only when the row after it is then promoted as a header with two or more
+/// filled fields. Each of these is an ordinary file the first cut of the rule
+/// cut rows from; each reads as it did before the rule.
+#[test]
+fn first_cell_only_rows_are_not_titles_unless_a_header_follows() {
+    let dir = TempDir::new().unwrap();
+    let no_skip = |spec: &ParseSpec| {
+        !spec.transforms.iter().any(|t| matches!(t, Transform::SkipRows { head, .. } if *head > 0))
+    };
+    // A single column with a trailing `;`: every row is "first cell only".
+    let f = write(&dir, "list.csv", "name;\nAlice;\nBob;\nCarol;\nDave;\nEve;\n");
+    let spec = sniffed(&f).spec;
+    assert!(no_skip(&spec), "{:?}", spec.transforms);
+    let rows = tdy::engine::execute(&spec, &f, Limits::default()).unwrap().num_rows();
+    assert_eq!(rows, 6, "name and Alice..Eve are all kept");
+
+    // A headerless file whose first record has empty fields.
+    let f = write(&dir, "headless.csv", "Bern;;\nZuerich;5;6\nGenf;7;8\nBasel;9;10\n");
+    let spec = sniffed(&f).spec;
+    assert!(no_skip(&spec), "{:?}", spec.transforms);
+    assert_eq!(tdy::engine::execute(&spec, &f, Limits::default()).unwrap().num_rows(), 4, "Bern is kept");
+
+    // The same with a quoted first cell holding the delimiter.
+    let f = write(&dir, "quoted.csv", "\"a;b\";;\n\"c;d\";1;2\n\"e;f\";3;4\n\"g;h\";5;6\n");
+    let spec = sniffed(&f).spec;
+    assert!(no_skip(&spec), "{:?}", spec.transforms);
+    assert_eq!(tdy::engine::execute(&spec, &f, Limits::default()).unwrap().num_rows(), 4);
+
+    // A first row whose only filled cell is `id`: not promoted (it names one
+    // column of four), so it stays a row as before, never skipped unread.
+    let f = write(&dir, "idhdr.csv", "id;;;\n1;a;b;c\n2;d;e;f\n3;g;h;i\n");
+    let spec = sniffed(&f).spec;
+    assert!(no_skip(&spec), "{:?}", spec.transforms);
+    let b = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(b.num_rows(), 4, "the `id` row is kept");
+}
