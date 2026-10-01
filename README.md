@@ -735,7 +735,9 @@ still asks nothing.
 
 A member is named by its path relative to the target — `exports/2025-07.csv`,
 not `2025-07.csv` — and that is the name `--accept` takes; an absolute path to
-the same file names it too.
+the same file names it too. A lock written by an older tdy from an absolute
+`files` glob names its members by absolute path: a query reports that as drift,
+and the next fit asks for those members' acceptances again.
 
 Membership lives in the lock, and `dataset()` never expands a glob. That is
 the difference between a reproducible dataset and a directory listing: if the

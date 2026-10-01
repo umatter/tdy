@@ -2005,3 +2005,99 @@ fn a_zip_named_csv_is_refused_not_read_as_a_one_column_table() {
     assert!(e.contains("zip-compressed"), "the format must be named: {e}");
     assert!(!f.with_extension("zip.tdy.toml").exists(), "and no sidecar may be left behind");
 }
+
+// ---------------------------------------------------------------------------
+// A sheet's blank body rows and the row counts a spec states
+// ---------------------------------------------------------------------------
+
+/// Two sheets, written in the test: `S` has a body transform between its
+/// header and a `skip_rows` tail that counts a blank row; `T` has a title
+/// row, then a blank row inside the body under `fill_down`.
+fn blank_row_book(dir: &TempDir) -> Option<PathBuf> {
+    let script = dir.path().join("mk.py");
+    fs::write(
+        &script,
+        r#"
+from openpyxl import Workbook
+import sys, os
+wb = Workbook(); ws = wb.active; ws.title = "S"
+for r in [["Region", "Amount"], ["Ost", 100], ["Note: prelim", None], ["West", 300], ["Nord", 400], [None, None], ["Total", 800]]:
+    ws.append(r)
+t = wb.create_sheet("T")
+for r in [["Report 2025", None], ["Region", "Amount"], ["Ost", 100], [None, None], ["West", 300]]:
+    t.append(r)
+wb.save(os.path.join(sys.argv[1], "book.xlsx"))
+"#,
+    )
+    .unwrap();
+    let ok = Command::new("python3").arg(&script).arg(dir.path()).status().map(|s| s.success()).unwrap_or(false);
+    ok.then(|| dir.path().join("book.xlsx"))
+}
+
+fn sheet_spec(sheet: &str, transforms: Vec<Transform>) -> ParseSpec {
+    let col = |name: &str, source: &str, dtype: DType| ColumnSpec {
+        name: name.into(),
+        source: Some(source.into()),
+        dtype,
+        nullable: true,
+        parse: ValueParsing::default(),
+        pointer: None,
+    };
+    ParseSpec {
+        extraction: Extraction::Excel { sheet_name: Some(sheet.into()), sheet_index: None, range: None, region_ordinal: None },
+        transforms,
+        columns: vec![col("region", "Region", DType::Utf8), col("amount", "Amount", DType::Int64)],
+        confidence: None,
+        notes: vec![],
+    }
+}
+
+/// A `skip_rows` after a body transform counts the rows it was written
+/// against — blank rows included. The blank-row skip once ran at the end
+/// of the *leading* framing run, before this tail: it then removed Total
+/// and Nord instead of the blank row and Total, and served Ost and West
+/// alone without an error. The skip now sits past the last framing
+/// transform, wherever it is.
+#[test]
+fn a_skip_rows_tail_after_a_body_transform_counts_the_blank_row() {
+    let dir = TempDir::new().unwrap();
+    let Some(p) = blank_row_book(&dir) else {
+        eprintln!("skipping: python3/openpyxl unavailable");
+        return;
+    };
+    let spec = sheet_spec(
+        "S",
+        vec![
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::DropRowsMatching { pattern: "^Note".into(), column: Some("Region".into()) },
+            Transform::SkipRows { head: 0, tail: 2 },
+        ],
+    );
+    spec.validate().unwrap();
+    let b = provider::spec_to_batch(&spec, &p).unwrap();
+    assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("West".into()), Some("Nord".into())]);
+    assert_eq!(col_i64(&b, 1), vec![Some(100), Some(300), Some(400)], "Total's 800 is not served");
+}
+
+/// The sniffer's own order, `skip_rows` then `promote_header` then a body
+/// transform: the blank body row is skipped before `fill_down`, which would
+/// otherwise have made it a second Ost.
+#[test]
+fn a_blank_body_row_is_not_filled_down_into_a_record() {
+    let dir = TempDir::new().unwrap();
+    let Some(p) = blank_row_book(&dir) else {
+        eprintln!("skipping: python3/openpyxl unavailable");
+        return;
+    };
+    let spec = sheet_spec(
+        "T",
+        vec![
+            Transform::SkipRows { head: 1, tail: 0 },
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::FillDown { columns: vec!["Region".into()], direction: Default::default() },
+        ],
+    );
+    let b = provider::spec_to_batch(&spec, &p).unwrap();
+    assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("West".into())]);
+    assert_eq!(col_i64(&b, 1), vec![Some(100), Some(300)]);
+}

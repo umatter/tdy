@@ -1086,21 +1086,27 @@ fn is_blank_row(cells: &[String]) -> bool {
 
 /// A spec's transforms over its extracted table, as every executor path
 /// runs them: in spec order, with a sheet's blank body rows skipped where
-/// the framing ends — after the leading `transpose`/`skip_rows`/
-/// `promote_header`, before anything that reads the body. Kept, a blank
-/// row became an all-NULL record that `count(*)` counted, or a copy of the
-/// row above it under `fill_down`; a text file's blank lines never reach a
-/// table at all, and a region read skips the one inside its window at
-/// extraction. A blank row has nothing for `fill_down` to carry into the
-/// rows below it, and `drop_rows_matching` judges each row alone, so
-/// skipping it first changes no other row.
+/// the framing ends — just past the *last* `transpose`/`skip_rows`/
+/// `promote_header` in the list, wherever it sits (position 0 when there is
+/// none). Every row count a spec states is then taken against the rows it
+/// was written against, blank rows included: a `skip_rows` tail placed
+/// after a `drop_rows_matching` still removes the blank row it counted,
+/// where a skip at the end of the leading run had removed a data row in its
+/// place. A body transform that sits before that last framing transform
+/// still sees blank rows, as every transform did before the skip existed.
+/// Kept, a blank row became an all-NULL record that `count(*)` counted, or
+/// a copy of the row above it under `fill_down`; a text file's blank lines
+/// never reach a table at all, and a region read skips the one inside its
+/// window at extraction. A blank row has nothing for `fill_down` to carry
+/// into the rows below it, and `drop_rows_matching` judges each row alone,
+/// so skipping it before either changes no other row.
 pub fn apply_spec_transforms(table: &mut RawTable, transforms: &[Transform]) -> Result<()> {
     let framing = transforms
         .iter()
-        .take_while(|t| {
+        .rposition(|t| {
             matches!(t, Transform::Transpose | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
         })
-        .count();
+        .map_or(0, |i| i + 1);
     apply_transforms(table, &transforms[..framing])?;
     if table.blank_rows_are_gaps {
         table.rows.retain(|r| !is_blank_row(r));

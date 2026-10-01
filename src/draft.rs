@@ -420,7 +420,7 @@ fn record_columns(
                 if let Some((ordinal, total)) = sighting.block {
                     d.block_sightings.push((sighting.physical_file.to_string(), ordinal, total));
                 }
-                if noisy_scale(&c.dtype).is_some() && !d.noisy_files.iter().any(|f| f == sighting.physical_file) {
+                if noisy_scale(&c.dtype).is_some() && !d.noisy_files.iter().any(|f| f.as_str() == sighting.physical_file) {
                     d.noisy_files.push(sighting.physical_file.to_string());
                 }
                 let (merged, caveat) = merge(&d.dtype, &c.dtype, sighting.physical_file);

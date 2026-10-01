@@ -669,8 +669,8 @@ wb.save(os.path.join(d, "sheets.xlsx"))
 /// read skips it, as a CSV reader skips a blank line and a region read skips
 /// the one inside its window. Kept, it was an all-NULL row `count(*)`
 /// counted — and here, with `fill_down`, a row that copied the state above
-/// it. The skip happens where the framing ends (after the leading
-/// `skip_rows`/`promote_header`), so a title block's `skip_rows` keeps
+/// it. The skip happens where the framing ends (past the last
+/// `skip_rows`/`promote_header` in the spec), so a title block's `skip_rows` keeps
 /// counting the blank row inside it (row 3 here, as in `umsatz.xlsx`, whose
 /// hand spec in `tests/e2e.rs` counts its own). A blank row has nothing for
 /// `fill_down` to carry into the rows below it, and `drop_rows_matching`

@@ -125,6 +125,9 @@ rewrites an absolute or `./` glob directory that lies inside the target's direct
 (`member::relative_to_target`) before resolving it. An absolute glob used to make the lock's
 members absolute paths, and `--accept` could then name them by neither spelling. `tdy draft`
 writes an absolute path's glob relative to the current directory (the MCP server's: its root).
+A lock written before this, holding absolute member paths, is drift once: `dataset()` refuses
+it, naming each member as not in the lock, and the next fit re-plans the members under their
+relative names and asks for their acceptances again.
 
 The union is one partition read in lock order: conformance already proved every member has an
 identical schema, so it is a concatenation with nothing to coerce (an ordinary `UNION ALL`
@@ -729,11 +732,14 @@ Things that only become clear from reading several modules:
   projection + typed cast last. Rectangularization is lazy so `skip_rows` can remove title
   rows before the ragged policy applies. `promote_header` fills right only on rows *above*
   the last header row. A sheet's blank body rows are skipped where the framing ends
-  (`engine::apply_spec_transforms`, after the leading `transpose`/`skip_rows`/`promote_header`,
-  before `fill_down` or anything else reading the body) — kept, they were all-NULL records
-  `count(*)` counted, 12 for the ten states of `regions_statetable.xlsx` — and not at
-  extraction, since a title block's `skip_rows` in every existing sidecar counts the blank
-  rows inside it (`umsatz.xlsx`'s hand spec does).
+  (`engine::apply_spec_transforms`, just past the *last* `transpose`/`skip_rows`/`promote_header`
+  in the spec, wherever it sits) — kept, they were all-NULL records `count(*)` counted, 12 for
+  the ten states of `regions_statetable.xlsx`. Not at extraction, and not at the end of the
+  leading run either: every row count a spec states (a title block's `skip_rows`, a tail placed
+  after a `drop_rows_matching`) was written against rows that included the blanks, and the
+  first cut, which skipped them after the leading run, made such a tail eat a data row in
+  silence (`tests/regression.rs::a_skip_rows_tail_after_a_body_transform_counts_the_blank_row`).
+  A body transform before that last framing transform still sees blank rows, as on main.
 - **Deliberate omissions:** no drop/rename transforms (the `columns` list is the only
   projection), no locale tables (literal `replace` pairs in the sidecar), no named timezones
   (fixed offsets only — DST cannot be guessed from a value).
