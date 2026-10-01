@@ -2078,8 +2078,8 @@ pub struct DroppedRun {
     pub end: u64,
     /// Fields on its first row, counted the way the kept blocks' own first
     /// rows were counted (one shared delimiter for a text file, non-empty
-    /// cells for a sheet). Equal counts is what makes a dropped run look
-    /// like a table rather than a banner.
+    /// cells for a sheet). Equal to [`Regions::block_width`] is one of the
+    /// two rules that make it data-like ([`Regions::table_shaped`]).
     pub width: usize,
     /// The most non-empty fields on any one of its rows (non-empty cells
     /// for a sheet, non-empty fields under the blocks' delimiter for text).
@@ -2097,7 +2097,8 @@ pub struct Regions {
     /// read, because the file is read whole.
     pub dropped: Vec<DroppedRun>,
     /// The first kept block's first-row width — what a `dropped` run's own
-    /// width is compared against.
+    /// first-row width is compared against, the same-width half of
+    /// [`Regions::table_shaped`].
     pub block_width: usize,
     /// Each window's own first-row width, beside `windows`: what a block
     /// that [`Regions::gated`] turns into a dropped run is measured by.
@@ -2107,20 +2108,23 @@ pub struct Regions {
 }
 
 impl Regions {
-    /// The dropped runs that look like data rather than a banner: any row
-    /// of the run holds two or more non-empty fields. A title banner and a
-    /// footnote block have one cell per row and are not these; a
-    /// `Total;;1500` footer, a two-column recap under a three-column table
-    /// and a wide "US population" row under a one-cell title all are — the
+    /// The dropped runs that look like data rather than a banner, by either
+    /// of two rules: any row of the run holds two or more non-empty fields,
+    /// or its first row is as wide as the first kept block's. A title
+    /// banner and a footnote block over a wider table have one cell per row
+    /// and are neither; a `Total;;1500` footer, a two-column recap under a
+    /// three-column table, a wide "US population" row under a one-cell
+    /// title, and the continuation of a one-column table all are — the
     /// 3-row minimum and the gates say they are not *the table*, and a
     /// person rules on whether those rows were data.
     ///
-    /// The first cut compared a run's first-row width with the kept
-    /// block's, which missed both of the last two: a recap is a different
-    /// width by construction, and a block whose first row is a one-cell
-    /// title measures 1 wide, so nothing wide ever matched it.
+    /// Each rule alone misses something. Same width alone missed a recap (a
+    /// different width by construction) and a wide row under a block that
+    /// opens with a one-cell title; two-fields alone missed a one-column
+    /// table's own rows, which are one field wide exactly as a banner is.
     pub fn table_shaped(&self) -> impl Iterator<Item = &DroppedRun> {
-        self.dropped.iter().filter(|d| d.widest >= 2)
+        let w = self.block_width;
+        self.dropped.iter().filter(move |d| d.widest >= 2 || (w > 0 && d.width == w))
     }
 
     /// Keep only the blocks that passed the gates (`passed[i]` for
@@ -2313,49 +2317,56 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
 const BLOCK_DELIMITERS: [char; 4] = [',', ';', '\t', '|'];
 
 /// Non-empty fields on one raw line under each of [`BLOCK_DELIMITERS`], in
-/// one pass. A delimiter inside double quotes is not a boundary; a field is
-/// non-empty when it holds anything but whitespace and quote marks. Cheap
-/// by design — it runs on every line of the file — and only ever asked
-/// "one field or several?", which quoting subtleties do not change.
+/// one pass. A field is non-empty when it holds anything but whitespace and
+/// its own quote marks. Quoting is tracked per candidate, the way a CSV
+/// reader does it: a `"` opens a quoted field only as the field's first
+/// byte (a `"` mid-field — `Rohr 12"` — is a character, and treating it as
+/// an opening quote swallowed the rest of the row into one field), `""`
+/// inside quotes is an escaped quote, and a delimiter inside quotes is
+/// content. Cheap by design — one `match` per byte — because it runs on
+/// every line of the file.
 fn nonempty_fields(line: &[u8]) -> [usize; 4] {
-    let mut counts = [0usize; 4];
+    // Per candidate: 0 = at a field's start, 1 = in an unquoted field,
+    // 2 = inside quotes, 3 = just after a quote inside quotes.
+    let mut state = [0u8; 4];
     let mut filled = [false; 4];
-    let mut quoted = false;
+    let mut counts = [0usize; 4];
     for &b in line {
         let at = match b {
-            b'"' => {
-                quoted = !quoted;
-                continue;
-            }
             b',' => 0,
             b';' => 1,
             b'\t' => 2,
             b'|' => 3,
-            _ => {
-                if !b.is_ascii_whitespace() {
-                    filled = [true; 4];
-                }
-                continue;
-            }
+            b'"' => 4,
+            _ => 5,
         };
-        if quoted {
-            // A delimiter inside quotes is content for every candidate,
-            // except a tab, which is whitespace.
-            if b != b'\t' {
-                filled = [true; 4];
-            }
-            continue;
-        }
-        if filled[at] {
-            counts[at] += 1;
-        }
-        filled[at] = false;
-        // Any other candidate's delimiter is content for this one (a tab
-        // is whitespace, so it fills nothing).
-        if b != b'\t' {
-            for (i, f) in filled.iter_mut().enumerate() {
-                if i != at {
-                    *f = true;
+        for i in 0..4 {
+            let st = &mut state[i];
+            if at == i && *st != 2 {
+                // A boundary for this candidate.
+                if filled[i] {
+                    counts[i] += 1;
+                }
+                filled[i] = false;
+                *st = 0;
+            } else if at == 4 {
+                match *st {
+                    0 => *st = 2,
+                    2 => *st = 3,
+                    3 => {
+                        *st = 2;
+                        filled[i] = true;
+                    }
+                    _ => filled[i] = true,
+                }
+            } else if b.is_ascii_whitespace() {
+                if *st != 2 {
+                    *st = 1;
+                }
+            } else {
+                filled[i] = true;
+                if *st != 2 {
+                    *st = 1;
                 }
             }
         }
@@ -2740,5 +2751,8 @@ mod field_count_tests {
         assert_eq!(nf(b"a\tb\t\tc"), [1, 1, 3, 1]);
         assert_eq!(nf(b"   "), [0, 0, 0, 0]);
         assert_eq!(nf(b";;;"), [1, 0, 1, 1]);
+        // A quote mid-field is a character; one at a field's start opens.
+        assert_eq!(nf(b"Rohr 12\";5;60.00"), [1, 3, 1, 1]);
+        assert_eq!(nf(b"\"a\"\"b;c\";d"), [1, 2, 1, 1]);
     }
 }

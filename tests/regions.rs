@@ -982,12 +982,14 @@ fn a_wide_row_under_a_one_cell_title_is_table_shaped() {
         window_widest: vec![73],
     };
     assert_eq!(r.table_shaped().count(), 1);
-    // A banner line stays unreviewed whatever the table's width.
-    let r = tdy::engine::Regions {
-        dropped: vec![tdy::engine::DroppedRun { start: 111, end: 112, width: 1, widest: 1 }],
-        ..r
-    };
+    // A one-cell line over a wider table stays unreviewed; over a block
+    // that is itself one cell wide on its first row it is as wide as the
+    // table, which is the other rule.
+    let one = vec![tdy::engine::DroppedRun { start: 111, end: 112, width: 1, widest: 1 }];
+    let r = tdy::engine::Regions { dropped: one.clone(), block_width: 4, ..r };
     assert_eq!(r.table_shaped().count(), 0);
+    let r = tdy::engine::Regions { dropped: one, block_width: 1, ..r };
+    assert_eq!(r.table_shaped().count(), 1);
     // The same layout as text, through the split itself: the separator is
     // the table's, found from its widest row, not from the one-cell title.
     let dir = tempfile::TempDir::new().unwrap();
@@ -1072,4 +1074,51 @@ fn a_headerless_footnote_block_cannot_stand_in_for_the_sheet() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let q = query(&t, "SELECT count(*) AS n, sum(y2008) AS a, sum(y2009) AS b, sum(y2010) AS c FROM DS");
     for want in ["| 5 ", "1500", "1550", "1600"] { assert!(q.contains(want), "{want}: {q}"); }
+}
+
+/// A pile of one `report.csv` with `content`, under `ddl`.
+fn pile(content: &str, ddl: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("report.csv"), content).unwrap();
+    let t = dir.path().join("q.tdy.sql");
+    std::fs::write(&t, ddl).unwrap();
+    (dir, t)
+}
+
+/// Fit; the one member waits on a person with `reason`; `dataset()` refuses
+/// it; after `--accept report.csv` the sum of `col` is `want`.
+fn waits_then_reads(t: &Path, reason: &str, col: &str, want: &str) {
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("report.csv#"), "{text}");
+    assert!(text.contains(reason), "{reason}: {text}");
+    let sql = format!("SELECT sum({col}) AS total FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    assert!(!out.status.success(), "unaccepted: {}", String::from_utf8_lossy(&out.stdout));
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "report.csv"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let q = query(t, &format!("SELECT sum({col}) AS total FROM DS"));
+    assert!(q.contains(&format!("| {want} |")), "{want}: {q}");
+}
+
+/// A one-column table's continuation is one field per row — exactly what a
+/// banner is — but it is as wide as the table, so it is data-like: the
+/// original same-width rule, OR'd with "any row holds two fields".
+#[test]
+fn a_one_column_tables_continuation_waits_on_a_person() {
+    let ddl = "CREATE TABLE q (amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) WITH (files='*.csv');";
+    let (_d, t) = pile("Betrag\n100.00\n200.00\n300.00\n400.00\n\n500.00\n600.00\n700.00\n", ddl);
+    waits_then_reads(&t, "REVIEW: a run of 3 line(s) at lines 7–9 was not read", "amount", "1000.00");
+    let (_d, t) = pile("Betrag\n100.00\n200.00\n300.00\n400.00\n\n500.00\n600.00\n", ddl);
+    waits_then_reads(&t, "REVIEW: a run of 2 line(s) at lines 7–8 was not read", "amount", "1000.00");
+}
+
+/// A `"` in the middle of a field (12-inch pipe) is a character, not a
+/// quote: the row has three fields and is data-like.
+#[test]
+fn a_mid_field_quote_does_not_hide_a_data_row() {
+    let ddl = "CREATE TABLE q (item TEXT NOT NULL OPTIONS(matches='Item'), qty BIGINT NOT NULL OPTIONS(matches='Qty'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Amount')) WITH (files='*.csv');";
+    let (_d, t) = pile("Item;Qty;Amount\nRohr 10mm;1;10.00\nRohr 20mm;2;20.00\nRohr 30mm;3;30.00\n\nRohr 12\";5;60.00\n", ddl);
+    waits_then_reads(&t, "REVIEW: a run of 1 line(s) at lines 6–6 was not read", "amount", "60.00");
 }
