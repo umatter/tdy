@@ -1436,7 +1436,7 @@ fn probe(path: &Path, draft: &ParseSpec, limits: Limits) -> Result<Probe> {
     let opts = ExtractOpts::capped(limits, sniff::PROBE_ROWS);
     let mut table = engine::extract(&draft.extraction, path, &opts)
         .with_context(|| format!("extracting {}", path.display()))?;
-    engine::apply_transforms(&mut table, &draft.transforms)?;
+    engine::apply_spec_transforms(&mut table, &draft.transforms)?;
     table.ensure_header()?;
     let header = table.header.clone().unwrap_or_default();
     let origin = table.header_origin.clone().unwrap_or_else(|| header.clone());

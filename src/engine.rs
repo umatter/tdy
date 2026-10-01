@@ -224,6 +224,12 @@ pub struct RawTable {
     /// extraction, and passing it separately would be a second thing that
     /// could disagree with the rows.
     pub source: SourceRef,
+    /// True for a sheet read: a blank row in its body is a gap between
+    /// records, not one, and [`apply_spec_transforms`] skips it where the
+    /// framing ends. Not at extraction, because a title block's `skip_rows`
+    /// counts the blank rows inside it — every sidecar written so far does
+    /// — and skipping them there would shift that count onto the header.
+    blank_rows_are_gaps: bool,
 }
 
 /// The file (and sheet) a `RawTable` was read from.
@@ -246,6 +252,7 @@ impl RawTable {
             truncated,
             col_offset: 0,
             source: SourceRef::default(),
+            blank_rows_are_gaps: false,
         }
     }
 
@@ -258,6 +265,7 @@ impl RawTable {
             truncated,
             col_offset: 0,
             source: SourceRef::default(),
+            blank_rows_are_gaps: false,
         }
     }
 
@@ -791,7 +799,7 @@ pub(crate) fn excel_table_from(
         // by one was adopted (`windows_from_runs`): skipped, as the text
         // executor's CSV reader skips a blank line, so the header sits on
         // its data and the two formats read a block the same way.
-        if region && cells.iter().all(|c| c.trim().is_empty()) {
+        if region && is_blank_row(&cells) {
             continue;
         }
         rows.push(cells);
@@ -800,7 +808,11 @@ pub(crate) fn excel_table_from(
     while rows.last().map(|r| r.iter().all(|c| c.trim().is_empty())).unwrap_or(false) {
         rows.pop();
     }
-    Ok(RawTable { col_offset, ..RawTable::new(rows, RaggedPolicy::PadNulls, truncated) })
+    Ok(RawTable {
+        col_offset,
+        blank_rows_are_gaps: true,
+        ..RawTable::new(rows, RaggedPolicy::PadNulls, truncated)
+    })
 }
 
 fn extract_fixed_width(
@@ -1065,6 +1077,35 @@ pub(crate) fn promote_header_recording(
     let origin = header.clone();
     dedupe_names(&mut header);
     (header, origin)
+}
+
+/// A row whose every cell is empty or whitespace.
+fn is_blank_row(cells: &[String]) -> bool {
+    cells.iter().all(|c| c.trim().is_empty())
+}
+
+/// A spec's transforms over its extracted table, as every executor path
+/// runs them: in spec order, with a sheet's blank body rows skipped where
+/// the framing ends — after the leading `transpose`/`skip_rows`/
+/// `promote_header`, before anything that reads the body. Kept, a blank
+/// row became an all-NULL record that `count(*)` counted, or a copy of the
+/// row above it under `fill_down`; a text file's blank lines never reach a
+/// table at all, and a region read skips the one inside its window at
+/// extraction. A blank row has nothing for `fill_down` to carry into the
+/// rows below it, and `drop_rows_matching` judges each row alone, so
+/// skipping it first changes no other row.
+pub fn apply_spec_transforms(table: &mut RawTable, transforms: &[Transform]) -> Result<()> {
+    let framing = transforms
+        .iter()
+        .take_while(|t| {
+            matches!(t, Transform::Transpose | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
+        })
+        .count();
+    apply_transforms(table, &transforms[..framing])?;
+    if table.blank_rows_are_gaps {
+        table.rows.retain(|r| !is_blank_row(r));
+    }
+    apply_transforms(table, &transforms[framing..])
 }
 
 pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Result<()> {
@@ -1977,7 +2018,7 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
     let opts = ExtractOpts::full(limits);
     let mut table = extract(&spec.extraction, path, &opts)
         .with_context(|| format!("extracting {}", path.display()))?;
-    apply_transforms(&mut table, &spec.transforms)?;
+    apply_spec_transforms(&mut table, &spec.transforms)?;
     to_record_batches(spec, &mut table)
 }
 
@@ -2588,7 +2629,7 @@ pub fn preview(
     let opts = ExtractOpts::capped(limits, extract_rows);
     let mut table = extract(&spec.extraction, path, &opts)
         .with_context(|| format!("extracting {}", path.display()))?;
-    apply_transforms(&mut table, &spec.transforms)?;
+    apply_spec_transforms(&mut table, &spec.transforms)?;
     table.rows.truncate(max_rows);
     to_record_batch(spec, &mut table)
 }
@@ -2596,7 +2637,7 @@ pub fn preview(
 fn run(spec: &ParseSpec, path: &Path, opts: &ExtractOpts) -> Result<RecordBatch> {
     let mut table = extract(&spec.extraction, path, opts)
         .with_context(|| format!("extracting {}", path.display()))?;
-    apply_transforms(&mut table, &spec.transforms)?;
+    apply_spec_transforms(&mut table, &spec.transforms)?;
     to_record_batch(spec, &mut table)
 }
 

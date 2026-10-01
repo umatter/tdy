@@ -533,8 +533,9 @@ gate exists for.
 verb dedicated to exactly this).
 
 **`partial`** — leading/trailing blanks are absorbed by framing; interior blank
-*rows* survive as all-empty rows, and an all-blank *column* becomes a real column
-of nulls (usually named `col_7`). A `remove_empty` operator would be a small,
+*rows* are skipped (a text reader skips blank lines; a sheet's are skipped where
+its framing ends, since 2026-10-01), but an all-blank *column* becomes a real
+column of nulls (usually named `col_7`). A `remove_empty` operator would be a small,
 uncontroversial addition; today the cure is projection (omit the column) and a
 `WHERE` clause.
 

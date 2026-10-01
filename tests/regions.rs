@@ -1354,9 +1354,12 @@ fn a_block_whose_promoted_header_is_data_does_not_question_the_whole_read() {
     assert!(text.contains("state<-\"State\""), "bound by name: {text}");
     assert!(!text.contains("REVIEW"), "{text}");
     assert!(text.contains("note: the split found a block at lines 7–14 whose header reads like data"), "{text}");
-    // `count(state)`, not `count(*)`: a whole-sheet read keeps a sheet's
-    // interior blank rows as all-NULL rows (pre-existing, recorded as a
-    // follow-up); the ten data rows and their sum are what this pins.
-    let q = query(&dir.path().join("d.tdy.sql"), "SELECT count(state) AS n, sum(all_workers_in_the_labor_force) AS w FROM DS");
-    assert!(q.contains("| 10 | 32816265 |"), "{q}");
+    // `count(*)` and `count(state)` alike: a whole-sheet read skips the
+    // sheet's interior blank rows, as a region read and a text read do,
+    // rather than keeping them as all-NULL rows that `count(*)` counts.
+    let q = query(
+        &dir.path().join("d.tdy.sql"),
+        "SELECT count(*) AS n, count(state) AS s, sum(all_workers_in_the_labor_force) AS w FROM DS",
+    );
+    assert!(q.contains("| 10 | 10 | 32816265 |"), "{q}");
 }

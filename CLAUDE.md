@@ -713,7 +713,12 @@ Things that only become clear from reading several modules:
 - **Engine pipeline order matters:** extract (all strings) → transforms in spec order →
   projection + typed cast last. Rectangularization is lazy so `skip_rows` can remove title
   rows before the ragged policy applies. `promote_header` fills right only on rows *above*
-  the last header row.
+  the last header row. A sheet's blank body rows are skipped where the framing ends
+  (`engine::apply_spec_transforms`, after the leading `transpose`/`skip_rows`/`promote_header`,
+  before `fill_down` or anything else reading the body) — kept, they were all-NULL records
+  `count(*)` counted, 12 for the ten states of `regions_statetable.xlsx` — and not at
+  extraction, since a title block's `skip_rows` in every existing sidecar counts the blank
+  rows inside it (`umsatz.xlsx`'s hand spec does).
 - **Deliberate omissions:** no drop/rename transforms (the `columns` list is the only
   projection), no locale tables (literal `replace` pairs in the sidecar), no named timezones
   (fixed offsets only — DST cannot be guessed from a value).

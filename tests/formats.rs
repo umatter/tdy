@@ -665,6 +665,42 @@ wb.save(os.path.join(d, "sheets.xlsx"))
     assert_eq!(ints(&spec_to_batch(&ranged, &p).unwrap(), 0), vec![Some(1), Some(2)]);
 }
 
+/// A blank row inside a sheet's body is a gap, not a record: the whole-sheet
+/// read skips it, as a CSV reader skips a blank line and a region read skips
+/// the one inside its window. Kept, it was an all-NULL row `count(*)`
+/// counted — and here, with `fill_down`, a row that copied the state above
+/// it. The skip happens where the framing ends (after the leading
+/// `skip_rows`/`promote_header`), so a title block's `skip_rows` keeps
+/// counting the blank row inside it (row 3 here, as in `umsatz.xlsx`, whose
+/// hand spec in `tests/e2e.rs` counts its own). A blank row has nothing for
+/// `fill_down` to carry into the rows below it, and `drop_rows_matching`
+/// judges each row alone, so skipping it before either changes no other
+/// row. Excel materialises, so there is no streaming twin to compare.
+#[test]
+fn a_whole_sheet_read_skips_blank_body_rows_before_fill_down_and_drop() {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/regions_statetable.xlsx");
+    let s = spec(
+        Extraction::Excel { sheet_name: Some("Hispanic".into()), sheet_index: None, range: None, region_ordinal: None },
+        vec![
+            Transform::SkipRows { head: 3, tail: 0 },
+            Transform::PromoteHeader { rows: 1, join: " ".into() },
+            Transform::FillDown { columns: vec!["State".into()], direction: Default::default() },
+            Transform::DropRowsMatching { pattern: "^United States$".into(), column: Some("State".into()) },
+        ],
+        vec![
+            col_from("state", "State", DType::Utf8),
+            col_from("workers", "All workers in the labor force", DType::Int64),
+        ],
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(
+        strings(&b, 0),
+        vec!["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Puerto Rico"]
+    );
+    assert_eq!(ints(&b, 1).iter().flatten().sum::<i64>(), 32816265 - 28391970);
+    assert!(ints(&b, 1).iter().all(Option::is_some), "no all-NULL row: {:?}", ints(&b, 1));
+}
+
 #[test]
 fn excel_missing_sheet_names_the_available_ones() {
     let dir = TempDir::new().unwrap();
