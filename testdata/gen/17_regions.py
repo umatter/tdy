@@ -163,10 +163,10 @@ FIXTURES  (all in testdata/, named regions_*)
    Three stacked tables, each a 3-row run of two title lines and the header
    (`State;All workers;Actors`), a blank line, and a headerless 3-row body —
    with every title line padded to the table's width (`Table 1. …;;`), as
-   Excel writes a sheet out as CSV. The text sniffer does not skip a padded
-   title line, so the adopted frame's header never ends on the run's last
-   row, nothing is adopted, and the file is a loud whole-file GAP. Pinned as
-   a known gap, not a reading. Ground truth: 300 / 600 / 900 workers.
+   Excel writes a sheet out as CSV. The text sniffer skips a padded title
+   line as it skips a one-field one, so each run is adopted and the file
+   gives three region members, as the same layout on a sheet does. Ground
+   truth: 300 / 600 / 900 workers, 6 actors each.
 
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
@@ -180,7 +180,7 @@ regions_banner_notes.xlsx -> one plain member, 1500/1550/1600;
 regions_statetable.xlsx -> one plain member read whole, 10 rows, 32816265;
 regions_two_statetables.{xlsx,csv} -> two members, 3012640/965 and 3032000/1024;
 regions_{footnoted,three}_sheets.xlsx -> drafted whole, both sheets fit;
-regions_padded_titles.csv -> a whole-file GAP (padded title lines, known gap).
+regions_padded_titles.csv -> three members, 300/600/900 workers, 6 actors each.
 """
 import os
 import re
@@ -655,7 +655,7 @@ def build_regions_padded_titles_csv():
     write_csv(
         "regions_padded_titles.csv",
         lines,
-        "three tables under padded title lines + header; a loud whole-file GAP (known gap)",
+        "three tables under padded title lines + header; three members, 300/600/900",
     )
 
 

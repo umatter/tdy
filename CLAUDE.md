@@ -550,9 +550,10 @@ also over a promoted header that reads like data, and then the member waits on a
 that row is data, not this table's header`), never a note alone: `Sales report;Q1 2025`
 over `State;2024` is that shape, and a note let its unedited draft serve `State | 2024`
 as a row (2624, not 600). `draft` never adopts over a promoted header
-(`fit::Adoption::Draft`). A known gap: the text sniffer does not skip title lines padded to
-the table's width (`Table 1. …;;`), so in a CSV such a run is never adopted and the file is
-a loud whole-file GAP (`regions_padded_titles.csv`), where the sheet gives members. ADP-31's run above the states ends in the "United States" total, so it is
+(`fit::Adoption::Draft`). The text sniffer skips a leading line whose only filled field is
+the first (`Table 1. …;;`, a title padded to the table's width as Excel writes CSV) exactly
+as it skips a one-field one, so `regions_padded_titles.csv` gives the three members its
+sheet layout does. ADP-31's run above the states ends in the "United States" total, so it is
 not adopted and that sheet is still read whole. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture

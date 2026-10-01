@@ -1652,29 +1652,38 @@ fn a_year_headed_body_under_a_title_and_header_run_is_drafted_whole() {
     );
 }
 
-/// A known gap, pinned as loud: title lines padded to the table's width
-/// (`Table 1. …;;`, as Excel writes a sheet as CSV). The text sniffer does
-/// not skip a padded title line, so the adopted frame's header never ends
-/// on the run's last row, nothing is adopted, and the file — three tables
-/// a sheet would give as three members — is refused whole, naming what it
-/// has. Never a partial or a wrong reading.
+/// Title lines padded to the table's width (`Table 1. …;;`, as Excel writes
+/// a sheet as CSV) are title lines in text exactly as on the sheet: each
+/// block's run of two titles and a header is adopted, all three tables bind
+/// by name, and each is a region member waiting on a person — the three
+/// members a sheet laid out this way gives. It was a loud whole-file GAP
+/// while the text sniffer skipped only one-field title lines.
 #[test]
-fn padded_title_lines_in_text_are_a_loud_gap() {
+fn padded_title_lines_in_text_are_skipped_like_a_sheet_s() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::copy(fixture("regions_padded_titles.csv"), dir.path().join("report.csv")).unwrap();
     let t = dir.path().join("w.tdy.sql");
     std::fs::write(
         &t,
         "CREATE TABLE w (state TEXT NOT NULL OPTIONS(matches='State'), all_workers BIGINT NOT NULL OPTIONS(matches='All workers'), \
-         actors BIGINT NOT NULL OPTIONS(matches='Actors')) WITH (files = 'report.csv');",
+         actors BIGINT NOT NULL OPTIONS(matches='Actors')) WITH (files = 'report.csv', provenance = 'true');",
     )
     .unwrap();
     let out = tdy(&["fit", t.to_str().unwrap()]);
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(!out.status.success(), "{text}");
-    assert!(text.contains("report.csv               GAP"), "{text}");
-    assert!(text.contains("`state` (TEXT): no column of this file binds"), "{text}");
-    assert!(text.contains("the file has [\"col_1\", \"col_2\", \"col_3\"]"), "{text}");
-    assert!(!text.contains("report.csv#"), "{text}");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("no lock written"));
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    for n in 1..=3 {
+        assert!(text.contains(&format!("REVIEW: table {n} of 3 in this file, split at blank rows")), "{text}");
+    }
+    assert!(!text.contains("report.csv#4"), "the title runs are not members: {text}");
+    assert_eq!(text.matches("state<-\"State\"").count(), 3, "bound by name: {text}");
+    assert!(!text.contains("is read as data"), "{text}");
+    for n in 1..=3 {
+        let out = tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("report.csv#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let q = query(&t, "SELECT _member, count(*) AS n, sum(all_workers) AS w, sum(actors) AS a FROM DS GROUP BY 1 ORDER BY 1");
+    for (n, w) in [(1, 300), (2, 600), (3, 900)] {
+        assert!(q.contains(&format!("| report.csv#{n} | 3 | {w} | 6 ")), "{q}");
+    }
 }

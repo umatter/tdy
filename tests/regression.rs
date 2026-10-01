@@ -2319,3 +2319,47 @@ fn a_percent_note_with_an_undecided_separator_quotes_no_number() {
          is meant"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 2026-10-01: a title line padded to the table's width (`Report 2025;;`, as
+// Excel's "Save as CSV" writes one) has the modal arity, so the arity rule
+// alone read it as the header. A leading line whose only filled field is the
+// first is a title line exactly as a one-field line is.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn padded_title_lines_are_skipped_like_one_field_ones() {
+    let dir = TempDir::new().unwrap();
+    let f = write(
+        &dir,
+        "padded.csv",
+        "Report 2025;;\nSource: FSO;;\nState;2008;2009\nBern;1;2\nZug;3;4\nUri;5;6\nGenf;7;8\n",
+    );
+    let spec = sniffed(&f).spec;
+    assert!(
+        matches!(
+            spec.transforms[..],
+            [Transform::SkipRows { head: 2, tail: 0 }, Transform::PromoteHeader { rows: 1, .. }, ..]
+        ),
+        "{:?}",
+        spec.transforms
+    );
+    let names: Vec<&str> = spec.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["state", "c_2008", "c_2009"], "the header, sanitized: {names:?}");
+}
+
+/// Leading lines only: a data row with one filled cell under a real header is
+/// data, and the header stays on line 1.
+#[test]
+fn a_first_data_row_with_one_filled_cell_is_not_a_title() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "sparse.csv", "Kanton;Betrag;Menge\nBern;;\nZug;3;4\nUri;5;6\nGenf;7;8\n");
+    let spec = sniffed(&f).spec;
+    assert!(
+        matches!(spec.transforms[..], [Transform::PromoteHeader { rows: 1, .. }]),
+        "{:?}",
+        spec.transforms
+    );
+    let rows = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(rows.num_rows(), 4, "Bern stays a row");
+}

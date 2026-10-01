@@ -485,7 +485,18 @@ fn sniff_delimited(
     // Leading rows of the wrong width are title junk — but in a file where
     // *every* row has a different width, "leading" is all of them, and
     // skipping them would leave nothing to promote a header from.
-    let leading = counts.iter().take_while(|c| **c != modal_arity).count();
+    //
+    // A title line padded to the table's width (`Report 2025;;`, as Excel's
+    // "Save as CSV" writes one) has the modal arity, so arity alone reads it
+    // as the header. A leading row whose only filled field is the first is a
+    // title line exactly as a one-field row is. Leading rows only: the scan
+    // stops at the first row that is neither, so a body row with one filled
+    // cell under a real header is data and is never looked at here.
+    let leading = table
+        .rows
+        .iter()
+        .take_while(|r| r.len() != modal_arity || is_padded_title(r))
+        .count();
     let skip_head = leading.min(counts.len().saturating_sub(2)) as u32;
     if skip_head > 0 {
         doubts.add(0.05, format!("skipped {skip_head} leading non-tabular row(s)"));
@@ -557,6 +568,13 @@ fn sniff_delimited(
     note_trailing_blocks(&table, &mut doubts);
 
     finish(extraction, transforms, table, 0.95, doubts, &std::collections::HashSet::new())
+}
+
+/// A row of several fields whose only non-empty one is the first.
+fn is_padded_title(row: &[String]) -> bool {
+    row.len() > 1
+        && row.first().is_some_and(|c| !c.trim().is_empty())
+        && row[1..].iter().all(|c| c.trim().is_empty())
 }
 
 fn sniff_lines(
