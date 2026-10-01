@@ -729,29 +729,53 @@ fn gate_regions(
     limits: Limits,
 ) -> GatedRegions {
     if regions.windows.is_empty() {
-        return GatedRegions { regions: regions.clone(), headed_unfit: Vec::new() };
+        return GatedRegions { regions: regions.clone(), ..Default::default() };
     }
     let (framed, frames) = frame_blocks(path, sheet, regions, verify_opts(target), limits);
     let mut headed_unfit = Vec::new();
+    let mut header_like_data = Vec::new();
     let passed: Vec<bool> = frames
         .into_iter()
         .zip(&framed.windows)
         .map(|(f, w)| {
             let headed = f.filter(promotes_header);
-            let is_headed = headed.is_some();
+            let plausible = headed.as_ref().map(header_is_plausible);
             let ok = headed
                 .and_then(|d| fit_framed(path, target, limits, d, Rigour::Gates).ok())
                 // A block that binds none of the declared columns is not the
                 // table: with every column declared absent-allowed it "fit"
                 // by filling each with NULL, a member of rows of nothing.
                 .is_some_and(|f| f.spec.columns.iter().any(|c| c.source.is_some()));
-            if is_headed && !ok {
-                headed_unfit.push(*w);
+            if !ok {
+                match plausible {
+                    Some(true) => headed_unfit.push(*w),
+                    Some(false) => header_like_data.push(*w),
+                    None => {}
+                }
             }
             ok
         })
         .collect();
-    GatedRegions { regions: framed.gated(&passed), headed_unfit }
+    GatedRegions { regions: framed.gated(&passed), headed_unfit, header_like_data }
+}
+
+/// Whether a block's promoted header is plausible as a header: none of its
+/// cells parses as a number over a column whose body the frame typed
+/// numeric. `Alabama | 88165 | 0 | n/a | n/a` over numbers is a data row the
+/// sniffer read as labels; `Name;City` over text is a header. So is
+/// `STATE;2008;2009` over numbers, honestly — by this test it reads as
+/// data. Used ONLY to decide whether a whole-file read is asked about; it
+/// never changes which blocks are candidates (that is the sniffer's
+/// promotion, [`promotes_header`]).
+pub(crate) fn header_is_plausible(frame: &ParseSpec) -> bool {
+    let number = |s: &str| {
+        let t: String = s.trim().chars().filter(|c| !matches!(c, '\'' | ' ' | '_')).collect();
+        !t.is_empty() && t.replace(',', ".").parse::<f64>().is_ok()
+    };
+    !frame.columns.iter().any(|c| {
+        matches!(c.dtype, DType::Int64 | DType::Float64 | DType::Decimal { .. })
+            && c.source.as_deref().is_some_and(number)
+    })
 }
 
 /// What gating a file's or sheet's split found.
@@ -759,10 +783,14 @@ fn gate_regions(
 pub struct GatedRegions {
     /// The blocks that passed, as members, with everything else dropped.
     pub regions: engine::Regions,
-    /// Blocks with a header of their own that did not pass. When no block
-    /// passes, the file is read whole; if the split saw a headed table there
-    /// that is a judgement, not a proof (`report::expand_units` asks it).
+    /// Blocks with a plausible header of their own that did not pass. When
+    /// no block passes, the file is read whole; if the split saw a headed
+    /// table there that is a judgement, not a proof (`report::expand_units`
+    /// asks it of a by-name target).
     pub headed_unfit: Vec<crate::spec::RowWindow>,
+    /// Blocks the sniffer gave a header that reads like data
+    /// ([`header_is_plausible`]) and that did not pass: noted, not asked.
+    pub header_like_data: Vec<crate::spec::RowWindow>,
 }
 
 /// [`gate_regions`] over a sheet already open.
@@ -1951,6 +1979,52 @@ fn first_ok(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame whose header is `header` over body columns typed `types`.
+    fn framed(header: &[&str], types: &[DType]) -> ParseSpec {
+        ParseSpec {
+            extraction: Extraction::Delimited {
+                delimiter: ';',
+                quote: Some('"'),
+                escape: None,
+                encoding: None,
+                comment: None,
+                ragged: crate::spec::RaggedPolicy::PadNulls,
+                region: None,
+            },
+            transforms: vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+            columns: header
+                .iter()
+                .zip(types)
+                .map(|(h, t)| ColumnSpec {
+                    name: h.to_lowercase(),
+                    source: Some((*h).to_string()),
+                    dtype: t.clone(),
+                    nullable: true,
+                    parse: ValueParsing::default(),
+                    pointer: None,
+                })
+                .collect(),
+            confidence: None,
+            notes: vec![],
+        }
+    }
+
+    /// A promoted header is plausible unless one of its cells is a number
+    /// heading a numeric column: then it is a data row the sniffer read as
+    /// labels. Used only to decide whether a whole-file read is asked about.
+    #[test]
+    fn a_number_over_a_numeric_column_is_not_a_plausible_header() {
+        use DType::*;
+        let alabama = framed(&["Alabama", "88165", "0", "n/a", "n/a"], &[Utf8, Int64, Int64, Float64, Float64]);
+        assert!(!header_is_plausible(&alabama));
+        let name_city = framed(&["Name", "City"], &[Utf8, Utf8]);
+        assert!(header_is_plausible(&name_city));
+        let years = framed(&["STATE", "2008", "2009"], &[Utf8, Int64, Int64]);
+        assert!(!header_is_plausible(&years), "a year header over numbers reads as data by this test");
+        let years_text = framed(&["STATE", "2008"], &[Utf8, Utf8]);
+        assert!(header_is_plausible(&years_text), "a number over text is a label");
+    }
 
     /// A sheet region's `range` is built from the used range's own column
     /// index, so the base-26 carry has to be right at the boundaries: 25 is

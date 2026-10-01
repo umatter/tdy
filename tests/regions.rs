@@ -1321,12 +1321,42 @@ fn a_headed_block_that_does_not_fit_makes_the_whole_file_read_a_question() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(!text.contains("report.csv#"), "{text}");
+    // `Name;City` over text is a plausible header, so the question is asked.
     assert!(
         text.contains("REVIEW: the split found a table with its own header at lines 3–6 that does not fit the declared table; this file is read whole — accept only if that is intended"),
         "{text}"
     );
+    assert!(!text.contains("reads like data"), "{text}");
     let out = tdy(&["query", &format!("SELECT count(*) AS n FROM dataset('{}')", t.display())]);
     assert!(!out.status.success(), "unaccepted");
     assert!(tdy(&["fit", t.to_str().unwrap(), "--accept", "report.csv"]).status.success());
     assert!(query(&t, "SELECT count(*) AS n FROM DS").contains("| 4 |"));
+}
+
+/// The corpus's ADP-31 state tables: title rows, the header on row 4, a
+/// total row, a blank row, then the states. The state block has no header
+/// of its own, but the block sniffer promotes `Alabama | 88165 | 0 | n/a |
+/// n/a` as one; that is a number over a numeric column, i.e. data, so the
+/// sheet read whole against its by-name draft asks nothing — it only notes
+/// the block. (The cost, recorded in the docs: a by-name target that misses
+/// a year-headed block gets the note, not a review.)
+#[test]
+fn a_block_whose_promoted_header_is_data_does_not_question_the_whole_read() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_statetable.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.path().join("d.tdy.sql"), &out.stdout).unwrap();
+    let out = tdy_in(dir.path(), &["fit", "d.tdy.sql"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("book.xlsx#"), "one whole-sheet member: {text}");
+    assert!(text.contains("state<-\"State\""), "bound by name: {text}");
+    assert!(!text.contains("REVIEW"), "{text}");
+    assert!(text.contains("note: the split found a block at lines 7–14 whose header reads like data"), "{text}");
+    // `count(state)`, not `count(*)`: a whole-sheet read keeps a sheet's
+    // interior blank rows as all-NULL rows (pre-existing, recorded as a
+    // follow-up); the ten data rows and their sum are what this pins.
+    let q = query(&dir.path().join("d.tdy.sql"), "SELECT count(state) AS n, sum(all_workers_in_the_labor_force) AS w FROM DS");
+    assert!(q.contains("| 10 | 32816265 |"), "{q}");
 }

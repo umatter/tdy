@@ -125,6 +125,18 @@ FIXTURES  (all in testdata/, named regions_*)
    member is plain, and its region split must still read "Data" — not give
    up because the workbook has two sheets. Ground truth: 1500/1550/1600.
 
+12. regions_statetable.xlsx
+   The corpus's ADP-31 StateTables sheet, reduced (one sheet, "Hispanic"):
+   two title rows, a blank row, the header on row 4 (State / All workers /
+   Number of actors / Share / Location quotient), a "United States" total
+   row, a blank row, eight state rows (some cells `n/a`), a blank row, and
+   a "Puerto Rico" row. The split's state block has no header of its own,
+   but the block sniffer promotes its first row (`Alabama | 88165 | 0 |
+   n/a | n/a`) as one; that "header" is a number over a numeric column, so
+   it is data, and the sheet read whole against the by-name draft asks no
+   question. Ground truth: the whole sheet reads 10 rows; all-workers sum
+   28391970 + 3215390 (states) + 1208905 = 32816265.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
@@ -133,7 +145,8 @@ regions_banner.csv -> one member, window {7,14}, sums 1500/1550/1600;
 regions_banner.xlsx -> two sheet members, sums 1500/1550/1600 and 3000/3100/3200;
 regions_footnoted.xlsx -> read whole positionally, or one by-name member, 1500/1550/1600;
 regions_renumber.{csv,xlsx} -> 2400.00 (Betrag), 2406.00 (Betrag, Menge);
-regions_banner_notes.xlsx -> one plain member, 1500/1550/1600.
+regions_banner_notes.xlsx -> one plain member, 1500/1550/1600;
+regions_statetable.xlsx -> one plain member read whole, 10 rows, 32816265.
 """
 import os
 import re
@@ -473,6 +486,42 @@ def build_regions_banner_notes_xlsx():
     )
 
 
+STATE_ROWS = [
+    ("Alabama", 88165, 0, "n/a", "n/a"),
+    ("Alaska", 26875, 0, "n/a", "n/a"),
+    ("Arizona", 1033370, 45, 4.35e-05, 0.17),
+    ("Arkansas", 64230, 10, 0.000156, 0.62),
+    ("California", 1800000, 900, 0.0005, 1.99),
+    ("Colorado", 101250, 15, 0.000148, 0.59),
+    ("Connecticut", 50500, 5, 9.9e-05, 0.39),
+    ("Delaware", 51000, 0, "n/a", "n/a"),
+]
+
+
+def build_regions_statetable_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hispanic"
+    ws.append(["Number of actors in the U.S. labor force, for all the states and Puerto Rico: 2015-2019"])
+    ws.append(["Hispanic"])
+    ws.append([])
+    ws.append(["State", "All workers in the labor force", "Number of actors in the labor force",
+               "Actors as a share of labor force", "Location quotient"])
+    ws.append(["United States", 28391970, 7115, 0.00025, 1])
+    ws.append([])
+    for r in STATE_ROWS:
+        ws.append(list(r))
+    ws.append([])
+    ws.append(["Puerto Rico", 1208905, 175, 0.000145, "n/a"])
+    save_workbook(
+        wb,
+        "regions_statetable.xlsx",
+        "ADP-31 StateTables shape: title, header row 4, total, a headerless state block",
+    )
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -486,6 +535,7 @@ def main():
     build_regions_footnoted_xlsx()
     build_regions_renumber()
     build_regions_banner_notes_xlsx()
+    build_regions_statetable_xlsx()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "

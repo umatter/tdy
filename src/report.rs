@@ -413,7 +413,7 @@ pub fn expand_units(
             None => crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits),
         };
         let region_sheet = hint.clone().flatten();
-        let crate::fit::GatedRegions { regions, headed_unfit } = match hint {
+        let crate::fit::GatedRegions { regions, headed_unfit, header_like_data } = match hint {
             // The split proposes blocks; only those that pass the gates
             // against the target are members (the design's table is keyed
             // on exactly that). The rest are runs nothing reads.
@@ -439,7 +439,25 @@ pub fn expand_units(
         match n {
             0 => units.push(Unit {
                 member,
-                notes,
+                // A by-name target missing a block whose "header" reads like
+                // data is not asked — that header is a data row — but the
+                // block is still named, so the reading is not silent. The
+                // cost: a year-headed block (`STATE;2008;…` over numbers)
+                // reads as data by that test and gets only this note.
+                notes: {
+                    let mut ns = notes;
+                    if target.names_a_column() {
+                        ns.extend(header_like_data.iter().map(|w| {
+                            format!(
+                                "{LIKE_DATA_PREFIX}{}–{} whose header reads like data (a number over a \
+                                 numeric column); this file is read whole",
+                                w.start + 1,
+                                w.end
+                            )
+                        }));
+                    }
+                    ns
+                },
                 window: None,
                 // No block passed, so the file is read whole. If the split saw
                 // a table with its own header there, reading past it is a
@@ -628,6 +646,9 @@ fn is_read_anyway_note(n: &str) -> bool {
     n.starts_with("the split found a run of ")
 }
 
+/// How the note for a block whose promoted header reads like data begins.
+const LIKE_DATA_PREFIX: &str = "the split found a block at lines ";
+
 /// Does this note name lines nothing read? [`dropped_note`]'s own shape.
 fn is_dropped_note(n: &str) -> bool {
     n.starts_with("a run of ") && n.ends_with("was not read")
@@ -646,7 +667,9 @@ fn is_refusal_note(n: &str) -> bool {
 fn shown_notes(m: &MemberReport) -> impl Iterator<Item = &String> {
     m.notes
         .iter()
-        .filter(|n| is_dropped_note(n) || is_read_anyway_note(n) || is_refusal_note(n))
+        .filter(|n| {
+            is_dropped_note(n) || is_read_anyway_note(n) || is_refusal_note(n) || n.starts_with(LIKE_DATA_PREFIX)
+        })
 }
 
 /// A multi-line message as one line — a sidecar's refusal can list several
@@ -907,6 +930,7 @@ pub async fn fit_pile(
                 spec.notes.retain(|n| !(n.starts_with("table ") && n.ends_with("split at blank rows")));
                 spec.notes.retain(|n| !n.starts_with("one proper block in this file"));
                 spec.notes.retain(|n| !is_dropped_note(n));
+                spec.notes.retain(|n| !n.starts_with(LIKE_DATA_PREFIX));
                 spec.notes.retain(|n| !is_read_anyway_note(n));
                 // The split's notes and its review reason are true of a spec
                 // that reads one block. A plain member may legitimately reuse

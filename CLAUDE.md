@@ -507,8 +507,15 @@ that does not fit …`), since a by-name target missing a headed table is eviden
 the whole-file reading is wrong. A purely positional target binds by position by
 construction, so the same failure is no such evidence — and asking on every such
 sheet (15→33 reviews in the corpus sweep, first cut) is a question always answered
-yes, which trains people to answer without reading. All-headerless or all-banner
-files stay unreviewed. A one-row run as wide as the block directly below
+yes, which trains people to answer without reading. And only when the missed
+block's promoted header is plausible (`fit::header_is_plausible`: no cell parses as a
+number over a numeric column) — the block sniffer promoted `Alabama | 88165 | 0 | n/a`
+in the corpus's ADP-31 state tables, a data row, and asked a false question on 13
+sheets; such a block gets a note (`the split found a block at lines … whose header
+reads like data`) instead. The test decides only whether to ask, never which blocks
+are candidates. Its cost: a by-name target that misses a year-headed block
+(`STATE;2008;…` over numbers) gets the note, not a review. All-headerless or
+all-banner files stay unreviewed. A one-row run as wide as the block directly below
 it, blank lines between, is that block's header cut off by a blank row — but only
 for a block whose own frame promoted no header (`Regions::severed_header`,
 adopted by `fit::frame_blocks`, which `draft` shares; both executors skip the
