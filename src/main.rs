@@ -136,7 +136,7 @@ enum Command {
     },
     /// Serve tdy's tools over the Model Context Protocol (stdio).
     ///
-    /// For AI agents: the same sniff/draft/fit/check/query/validate surface,
+    /// For AI agents: the same sniff/profile/draft/fit/check/query/validate surface,
     /// with structured results. Every path is confined to --root. Acceptance
     /// of review-gated members is DISABLED unless --allow-accept is given,
     /// because a review reason is a judgement tdy reserves for a human.
