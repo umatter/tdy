@@ -2063,7 +2063,8 @@ async fn p_on_member(d: &tempfile::TempDir, idx: usize) -> (String, tdy::profile
     let mut s = tdy::console::Session::new(d.path(), no_llm()).unwrap();
     let fit = s.run(".fit q.tdy.sql --dry-run --propose", None).await;
     let Payload::Fitted(report) = fit.payload else { panic!("{}", fit.text) };
-    let snapshot: Vec<(String, Option<(u64, u64)>, MemberStatus)> =
+    type BlockRow = (String, Option<(u64, u64)>, MemberStatus);
+    let snapshot: Vec<BlockRow> =
         report.members.iter().map(|m| (m.name(), m.rows, m.status)).collect();
     assert!(report.dry_run);
     let mut w = wb(d);
