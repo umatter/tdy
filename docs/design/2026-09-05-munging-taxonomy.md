@@ -1055,9 +1055,10 @@ stored as 0.45).
 the data, so the sniffer leaves the column as text with its confidence unchanged
 and now says so: a column whose every sampled value is a number (by
 `numfmt::infer`) followed by `%` gets the note *column `anteil` looks like
-percentages (e.g. `"45%"`): `strip = "%"` reads 45; with `decimal_shift = -2` it
-reads 0.45 — the file does not say which is meant*, built from the column's own
-first value (`sniff::percent_note`). The fix is a one-line edit once you know
+percentages (e.g. `"45%"`): `strip = "%"` reads 45; with `strip` and
+`decimal_shift = -2` it reads 0.45 — the file does not say which is meant*, built
+from the column's own first value (`sniff::percent_note`). Where the separator is
+itself undecided (`1,250%`), the note quotes no number and says to declare it. The fix is a one-line edit once you know
 which you want. The verdict was `partial` only for want of that note.
 
 ### E7 · Scale factors declared out-of-band
@@ -1144,12 +1145,14 @@ is `int64`, and nothing suggests it might be 2023-03-15. Detectable heuristicall
 `datum`/`date`) but only as a *note*, never as a silent conversion.
 
 The note is in since 2026-10-01 (`sniff::serial_date_note`): an integer column
-whose name contains `date`, `datum`, `day`, `tag`, `zeit`, `time`, `fecha` or
-`jour` and whose every sampled value lies in 25,000..=60,000 (1968-06-11 to
+with a name token that is or ends with `date`, `datum`, `day`, `tag`, `zeit`,
+`time`, `fecha` or `jour` (`buchungsdatum`, `order_date`; not `stage`, and never
+beside an `id`, `count`, `ms`, `s`, `sec`, `nr` or `n` token) and whose every
+sampled value lies in 25,000..=60,000 (1968-06-11 to
 2064-04-08) stays an integer and is told *column `datum` holds integers like
 45000; as spreadsheet serial days that is 2023-03-15 — if these are dates, no
-declaration reads them yet, so convert in the query: CAST(CAST(datum - 25569 AS
-INT) AS DATE)*. The floor makes the 1899-12-30 origin exact (serial 60 is the
+declaration reads them yet, so convert in the query: CAST(CAST("datum" - 25569
+AS INT) AS DATE)* — the name quoted, since `current_date` unquoted is today. The floor makes the 1899-12-30 origin exact (serial 60 is the
 phantom 1900-02-29). It stays `partial` for the half that is still missing: a
 *declarable* serial reading — `epoch` counts from 1970 — so the conversion lives
 in a query rather than in the sidecar, where a target declaring `DATE` could

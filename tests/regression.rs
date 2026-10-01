@@ -2167,7 +2167,8 @@ fn a_percent_column_stays_text_and_names_both_readings() {
     assert_eq!(
         note,
         "column `anteil` looks like percentages (e.g. `\"45%\"`): `strip = \"%\"` reads 45; \
-         with `decimal_shift = -2` it reads 0.45 — the file does not say which is meant"
+         with `strip` and `decimal_shift = -2` it reads 0.45 — the file does not say which is \
+         meant"
     );
 }
 
@@ -2202,7 +2203,7 @@ fn a_spreadsheet_serial_date_column_is_noted_not_converted() {
         notes[0],
         "column `datum` holds integers like 45000; as spreadsheet serial days that is \
          2023-03-15 — if these are dates, no declaration reads them yet, so convert in \
-         the query: CAST(CAST(datum - 25569 AS INT) AS DATE)"
+         the query: CAST(CAST(\"datum\" - 25569 AS INT) AS DATE)"
     );
 }
 
@@ -2221,9 +2222,13 @@ fn a_serial_date_note_needs_the_name_and_the_band() {
 #[tokio::test]
 async fn the_serial_date_notes_query_runs_and_agrees() {
     let dir = TempDir::new().unwrap();
-    let p = write(&dir, "s.csv", "datum\n45000\n");
+    // `current_date` is a SQL keyword: unquoted, the note's query would read
+    // today's date instead of the column. The note quotes the name.
+    let p = write(&dir, "s.csv", "current_date\n45000\n");
+    let note = sniffed(&p).spec.notes.into_iter().find(|n| n.contains("serial")).unwrap();
+    assert!(note.contains("CAST(CAST(\"current_date\" - 25569 AS INT) AS DATE)"), "{note}");
     let sql = format!(
-        "SELECT CAST(CAST(datum - 25569 AS INT) AS DATE) AS d FROM messy('{}')",
+        "SELECT CAST(CAST(\"current_date\" - 25569 AS INT) AS DATE) AS d FROM messy('{}')",
         p.display()
     );
     let b = query(&sql).await;
@@ -2255,5 +2260,62 @@ fn an_all_empty_column_is_noted_and_still_emitted() {
             == "column 7 (`col_7`) is empty in every sampled row; omit it from `columns` to drop it"),
         "{:?}",
         r.spec.notes
+    );
+    // Several: one note naming them all.
+    let p = write(&dir, "g.csv", "a,b,c,,\n1,,2,,\n3,,4,,\n");
+    let r = sniffed(&p);
+    let empty: Vec<&String> = r.spec.notes.iter().filter(|n| n.contains("empty in every")).collect();
+    assert_eq!(
+        empty,
+        vec!["columns 2 (`b`), 4 (`col_4`) and 5 (`col_5`) are empty in every sampled row; \
+              omit them from `columns` to drop them"],
+        "{:?}",
+        r.spec.notes
+    );
+    // Every column: said once, not once per column.
+    let p = write(&dir, "h.csv", "a,b\n,\n,\n");
+    let r = sniffed(&p);
+    let empty: Vec<&String> = r.spec.notes.iter().filter(|n| n.contains("empty in every")).collect();
+    assert_eq!(empty, vec!["every column is empty in every sampled row"], "{:?}", r.spec.notes);
+}
+
+/// A date-like name is a `_`-separated token that is, or ends with, a date
+/// word — and a token saying the column counts or identifies something
+/// (`id`, `count`, `ms`, `s`, `sec`, `nr`, `n`) vetoes it.
+#[test]
+fn the_serial_date_note_reads_name_tokens_not_substrings() {
+    let dir = TempDir::new().unwrap();
+    let noted = |name: &str| {
+        let p = write(&dir, &format!("{name}.csv"), &format!("{name}\n45000\n45001\n"));
+        sniffed(&p).spec.notes.iter().any(|n| n.contains("serial"))
+    };
+    for name in ["update_count", "timeout_ms", "stage", "birthday_id", "runtime_s"] {
+        assert!(!noted(name), "{name} is not a date");
+    }
+    for name in ["datum", "buchungsdatum", "stichtag", "order_date"] {
+        assert!(noted(name), "{name} reads like a date");
+    }
+}
+
+/// `1,250%` is 1250 or 1.25 before it is a percentage at all: the note says
+/// the separator is undecided rather than quoting a number for either.
+#[test]
+fn a_percent_note_with_an_undecided_separator_quotes_no_number() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "pct.csv", "region,anteil\nZH,\"1,250%\"\nBE,\"2,500%\"\n");
+    let r = sniffed(&p);
+    let note = r
+        .spec
+        .notes
+        .iter()
+        .find(|n| n.contains("percentages"))
+        .unwrap_or_else(|| panic!("{:?}", r.spec.notes));
+    assert_eq!(
+        note,
+        "column `anteil` looks like percentages (e.g. `\"1,250%\"`), but `,` could be a \
+         thousands separator or a decimal point here: declare `decimal_separator` or \
+         `thousands_separator`, and then `strip = \"%\"` reads the number as written and \
+         `strip` with `decimal_shift = -2` reads it as a fraction — the file does not say which \
+         is meant"
     );
 }
