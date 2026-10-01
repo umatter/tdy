@@ -736,8 +736,11 @@ fn gate_regions(
         .into_iter()
         .map(|f| {
             f.filter(promotes_header)
-                .map(|d| fit_framed(path, target, limits, d, Rigour::Gates).is_ok())
-                .unwrap_or(false)
+                .and_then(|d| fit_framed(path, target, limits, d, Rigour::Gates).ok())
+                // A block that binds none of the declared columns is not the
+                // table: with every column declared absent-allowed it "fit"
+                // by filling each with NULL, a member of rows of nothing.
+                .is_some_and(|f| f.spec.columns.iter().any(|c| c.source.is_some()))
         })
         .collect();
     framed.gated(&passed)

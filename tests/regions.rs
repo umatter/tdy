@@ -147,7 +147,7 @@ fn a_summary_block_is_not_merged_and_waits_on_a_person() {
     let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "report.csv"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let q = query(&t, "SELECT count(*) AS n, sum(amount) AS total FROM DS");
-    assert!(q.contains("| 3 ") && q.contains("600.00"), "block 1 alone: {q}");
+    assert!(q.contains("| 3 | 600.00 |"), "block 1 alone: {q}");
 }
 
 /// A title block above one table is one plain member with a note and no review.
@@ -871,9 +871,7 @@ fn a_banner_and_footnotes_are_not_members_and_the_severed_header_is_adopted() {
     let sc = std::fs::read_to_string(dir.path().join("report.csv.tdy.toml")).unwrap();
     assert!(sc.contains("source = \"State\""), "bound by name: {sc}");
     let q = query(&t, "SELECT count(*) AS n, sum(c_2008) AS a, sum(c_2009) AS b, sum(c_2010) AS c FROM DS");
-    for want in ["| 5 ", "1500", "1550", "1600"] {
-        assert!(q.contains(want), "{want}: {q}");
-    }
+    assert!(q.contains("| 5 | 1500 | 1550 | 1600 |"), "{q}");
 }
 
 /// The same layout on two sheets: sheet discovery expands the workbook, and
@@ -891,11 +889,8 @@ fn a_banner_on_each_sheet_leaves_two_plain_sheet_members() {
     assert!(!text.contains("#Premise#") && !text.contains("#Bottles#"), "no region members: {text}");
     assert!(!text.contains("REVIEW"), "{text}");
     let q = query(&t, "SELECT _member, count(*) AS n, sum(y2008) AS a, sum(y2009) AS b, sum(y2010) AS c FROM DS GROUP BY 1 ORDER BY 1");
-    let lines: Vec<&str> = q.lines().collect();
-    let row = |m: &str| lines.iter().find(|l| l.contains(m)).unwrap_or_else(|| panic!("{m}: {q}")).to_string();
-    let (b, p) = (row("#Bottles"), row("#Premise"));
-    for want in ["| 5 ", "3000", "3100", "3200"] { assert!(b.contains(want), "{want}: {q}"); }
-    for want in ["| 5 ", "1500", "1550", "1600"] { assert!(p.contains(want), "{want}: {q}"); }
+    assert!(q.contains("| book.xlsx#Bottles | 5 | 3000 | 3100 | 3200 |"), "{q}");
+    assert!(q.contains("| book.xlsx#Premise | 5 | 1500 | 1550 | 1600 |"), "{q}");
 }
 
 /// When no block passes the gates the split has nothing to say: the file is
@@ -927,11 +922,11 @@ fn a_table_shaped_block_that_fails_the_gates_still_waits_on_a_person() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(!text.contains("report.csv#"), "the failing block is not a member: {text}");
-    assert!(text.contains("lines 6–8 was not read"), "{text}");
+    assert!(text.contains("REVIEW: a run of 3 line(s) at lines 6–8 was not read"), "{text}");
     assert!(text.contains("REVIEW"), "a table-shaped discarded block waits on a person: {text}");
     let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "report.csv"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(query(&t, "SELECT sum(amount) AS total FROM DS").contains("600.00"));
+    assert!(query(&t, "SELECT sum(amount) AS total FROM DS").contains("| 600.00 |"));
 }
 
 /// The split's own answer for the banner layout: the one-line header the
@@ -1088,7 +1083,7 @@ fn a_headerless_footnote_block_cannot_stand_in_for_the_sheet() {
     let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "book.xlsx"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let q = query(&t, "SELECT count(*) AS n, sum(y2008) AS a, sum(y2009) AS b, sum(y2010) AS c FROM DS");
-    for want in ["| 5 ", "1500", "1550", "1600"] { assert!(q.contains(want), "{want}: {q}"); }
+    assert!(q.contains("| 5 | 1500 | 1550 | 1600 |"), "{q}");
 }
 
 /// A pile of one `report.csv` with `content`, under `ddl`.
@@ -1231,5 +1226,30 @@ fn the_one_fitting_sheet_of_a_workbook_is_split_and_fits() {
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(!text.contains("book.xlsx#") && !text.contains("REVIEW"), "{text}");
     let q = query(&t, "SELECT count(*) AS n, sum(y2008) AS a, sum(y2009) AS b, sum(y2010) AS c FROM DS");
-    for want in ["| 5 ", "| 1500 ", "| 1550 ", "| 1600 "] { assert!(q.contains(want), "{want}: {q}"); }
+    assert!(q.contains("| 5 | 1500 | 1550 | 1600 |"), "{q}");
+}
+
+/// A block that binds none of the declared columns is not the table, even
+/// when every column is declared absent-allowed: it "fit" by filling every
+/// column with NULL, and became a member contributing rows of nothing.
+#[test]
+fn a_block_that_binds_no_declared_column_does_not_pass() {
+    let ddl = "CREATE TABLE q (state TEXT OPTIONS(matches='State', if_missing='null'), amount DECIMAL(14,2) OPTIONS(matches='Amount', if_missing='null')) WITH (files='*.csv', provenance='true');";
+    let (_d, t) = pile("State;Amount\nBern;100.00\nZug;200.00\nUri;300.00\n\nNote;Source\nrevised;FSO\nestimated;FSO\n", ddl);
+    waits_then_reads(&t, "REVIEW: a run of 3 line(s) at lines 6–8 was not read", "amount", "600.00");
+    let q = query(&t, "SELECT count(*) AS n FROM DS");
+    assert!(q.contains("| 3 "), "{q}");
+}
+
+/// A one-column file with a blank line in it has no banner to skip: every
+/// block is one field wide, so the draft says that and drafts the file whole.
+#[test]
+fn a_stacked_one_column_file_is_drafted_whole() {
+    let (dir, _t) = pile("Betrag\n100.00\n200.00\n300.00\n400.00\n\n500.00\n600.00\n700.00\n", "");
+    let out = tdy(&["draft", dir.path().join("report.csv").to_str().unwrap()]);
+    let draft = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{draft}");
+    assert!(draft.contains("report.csv: all blocks one field wide; drafted whole"), "{draft}");
+    assert!(!draft.contains("skipped"), "{draft}");
+    assert!(draft.contains("matches = 'Betrag'"), "{draft}");
 }
