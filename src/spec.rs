@@ -743,6 +743,16 @@ pub const DEFAULT_YEAR_PIVOT: u8 = 70;
 /// tier today; the sniffer and `fit` choose no `%y` format, but `sniff::finish`
 /// runs it too so one added to `DATE_FORMATS` would not arrive silently.
 pub fn two_digit_year_note(c: &ColumnSpec) -> Option<String> {
+    let (from, to) = two_digit_year_window(c)?;
+    Some(format!(
+        "column `{}`: two-digit years are read as {from}–{to}; set `year_pivot` to change",
+        c.name
+    ))
+}
+
+/// The first and last year a `%y` column's two-digit years can land in,
+/// under the pivot in force. `None` for a column that reads no `%y`.
+pub fn two_digit_year_window(c: &ColumnSpec) -> Option<(i32, i32)> {
     let format = match &c.dtype {
         DType::Date { format } | DType::Timestamp { format, .. } => format,
         _ => return None,
@@ -751,12 +761,7 @@ pub fn two_digit_year_note(c: &ColumnSpec) -> Option<String> {
         return None;
     }
     let pivot = i32::from(c.parse.year_pivot.unwrap_or(DEFAULT_YEAR_PIVOT));
-    Some(format!(
-        "column `{}`: two-digit years are read as {}–{}; set `year_pivot` to change",
-        c.name,
-        1900 + pivot,
-        1999 + pivot
-    ))
+    Some((1900 + pivot, 1999 + pivot))
 }
 
 /// "A4:H200" -> ((3, 0), (199, 7)), 0-based inclusive.
