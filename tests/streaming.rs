@@ -1066,3 +1066,43 @@ fn a_window_on_blank_lines_inside_the_file_is_empty_on_both_executors() {
         );
     }
 }
+
+/// The width a delimited table is rectangularised to is measured over the
+/// rows `skip_rows` keeps, as `engine` measures it after the skip. A title
+/// line wider than the table, skipped, used to widen the streamed table by
+/// phantom columns (`col_3`, `col_4`) the engine never had — a query naming
+/// one read nulls on one executor and failed on the other.
+#[test]
+fn a_skipped_title_wider_than_the_table_adds_no_columns() {
+    let dir = TempDir::new().unwrap();
+    let p = write(
+        &dir,
+        "title.csv",
+        "Bericht Q1, Zuerich, final, v2\n\nDatum,Betrag\n2025-01-01,10\n2025-01-02,11\n2025-01-03,12\n",
+    );
+    let skip_then_header = vec![
+        Transform::SkipRows { head: 1, tail: 0 },
+        Transform::PromoteHeader { rows: 1, join: " ".into() },
+    ];
+    let named = spec(skip_then_header.clone(), vec![col("Datum", DType::Utf8), col("Betrag", DType::Int64)]);
+    assert_paths_agree(&named, &p, "title.csv, the table's own columns");
+    let phantom = spec(skip_then_header.clone(), vec![col("Datum", DType::Utf8), col("col_3", DType::Utf8)]);
+    assert_paths_agree(&phantom, &p, "title.csv, a column only a wide title would make");
+
+    // A footer as wide, cut by the tail, is not measured either.
+    let p = write(&dir, "footer.csv", "Datum,Betrag\n2025-01-01,10\n2025-01-02,11\nSumme, alle, Regionen, 21\n");
+    let tail = spec(
+        vec![Transform::SkipRows { head: 0, tail: 1 }, Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("Datum", DType::Utf8), col("col_4", DType::Utf8)],
+    );
+    assert_paths_agree(&tail, &p, "footer.csv, a column only a wide footer would make");
+
+    // And `ragged = "error"` judges the rows that are left, on both paths.
+    let mut strict = named;
+    if let Extraction::Delimited { ragged, .. } = &mut strict.extraction {
+        *ragged = RaggedPolicy::Error;
+    }
+    let p = dir.path().join("title.csv");
+    assert_paths_agree(&strict, &p, "title.csv under ragged = error");
+    assert!(stream::execute_batches(&strict, &p, Limits::default()).is_ok(), "the skipped title is not a ragged row");
+}

@@ -756,11 +756,28 @@ struct Shape {
     uneven: bool,
 }
 
-fn measure(source: &mut Source, limits: &Limits, path: &Path) -> Result<Shape> {
+/// What the counting pass learns, measured as `engine` measures it: the row
+/// count over every row, but the widths only over the rows `skip_rows`
+/// keeps — the first `skip_head` are dropped and the last `tail` never
+/// counted — because the engine rectangularises after the skip. Measuring
+/// a skipped title line wider than the table widened the streamed table by
+/// columns the engine never had.
+///
+/// The tail is held as at most `tail` pending widths (a width is counted
+/// once it is more than `tail` rows from the end seen so far), never as a
+/// per-row vector.
+fn measure(
+    source: &mut Source,
+    limits: &Limits,
+    path: &Path,
+    skip_head: usize,
+    tail: usize,
+) -> Result<Shape> {
     let mut widths: HashMap<usize, usize> = HashMap::new();
     let mut rows = 0usize;
     let mut max_width = 0usize;
     let mut cells: u64 = 0;
+    let mut pending: std::collections::VecDeque<usize> = std::collections::VecDeque::with_capacity(tail.min(1024));
     loop {
         let Some(w) = source
             .next_width()
@@ -769,8 +786,6 @@ fn measure(source: &mut Source, limits: &Limits, path: &Path) -> Result<Shape> {
             break;
         };
         rows += 1;
-        max_width = max_width.max(w);
-        *widths.entry(w).or_insert(0) += 1;
         cells += w as u64;
         if cells > limits.max_streamed_cells {
             bail!(
@@ -781,6 +796,15 @@ fn measure(source: &mut Source, limits: &Limits, path: &Path) -> Result<Shape> {
                 rows
             );
         }
+        if rows <= skip_head {
+            continue;
+        }
+        pending.push_back(w);
+        if pending.len() > tail {
+            let w = pending.pop_front().expect("longer than tail, so not empty");
+            max_width = max_width.max(w);
+            *widths.entry(w).or_insert(0) += 1;
+        }
     }
     // Ties break toward the wider row, exactly as engine::modal_width does,
     // so the two paths agree on a file with no majority arity.
@@ -789,7 +813,9 @@ fn measure(source: &mut Source, limits: &Limits, path: &Path) -> Result<Shape> {
     Ok(Shape { rows, max_width, modal_width, uneven: widths.len() > 1 })
 }
 
-/// The 0-based index and width of the first row that is not `modal` wide.
+/// The index and width of the first row that is not `modal` wide, among
+/// the rows `skip_rows` keeps (`skip_head..end`), the index counted from the
+/// first kept row — as `engine`'s rectangularise counts it.
 ///
 /// Only reached when `ragged = "error"` has already decided the file is
 /// wrong, so a third pass over it costs nothing anyone will notice, and it
@@ -799,12 +825,16 @@ fn first_odd_row(
     extraction: &Extraction,
     opts: &ExtractOpts,
     modal: usize,
+    (skip_head, end): (usize, usize),
 ) -> Option<(usize, usize)> {
     let (mut src, _) = Source::open(path, extraction, opts, None).ok()?;
     let mut i = 0usize;
     while let Ok(Some(w)) = src.next_width() {
-        if w != modal {
-            return Some((i, w));
+        if i >= end {
+            break;
+        }
+        if i >= skip_head && w != modal {
+            return Some((i - skip_head, w));
         }
         i += 1;
     }
@@ -1418,14 +1448,14 @@ fn drive(
         other => (header_of(other)?, None),
     };
 
-    let tail = spec
+    let (skip_head, tail) = spec
         .transforms
         .iter()
         .find_map(|t| match t {
-            Transform::SkipRows { tail, .. } => Some(*tail as usize),
+            Transform::SkipRows { head, tail } => Some((*head as usize, *tail as usize)),
             _ => None,
         })
-        .unwrap_or(0);
+        .unwrap_or((0, 0));
 
     // Pass one exists to learn the width, which only a delimited source
     // lacks, and the row count, which only a `skip_rows` tail needs. A log
@@ -1437,7 +1467,7 @@ fn drive(
         // of the file, which is how a 987 MB CSV reached 2 GB.
         let (mut counting, _) =
             Source::open(path, &spec.extraction, &opts, provided_header.as_deref())?;
-        let shape = measure(&mut counting, &limits, path)?;
+        let shape = measure(&mut counting, &limits, path, skip_head, tail)?;
         // A window whose start the index never reached means the counting
         // pass ran to the true end of file without getting that far — that
         // count is `n` for the error. Only the counting pass has it; the
@@ -1479,7 +1509,10 @@ fn drive(
                 RaggedPolicy::Error => {
                     if let Some((pos, w)) = shape
                         .uneven
-                        .then(|| first_odd_row(path, &spec.extraction, &opts, shape.modal_width))
+                        .then(|| {
+                            let end = shape.rows.saturating_sub(tail).max(skip_head);
+                            first_odd_row(path, &spec.extraction, &opts, shape.modal_width, (skip_head, end))
+                        })
                         .flatten()
                     {
                         bail!(
