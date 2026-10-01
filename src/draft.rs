@@ -78,11 +78,49 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
         // regions". Splitting a *sheet* is `report.rs::expand_units`'s job,
         // which has a sheet name to ask `regions_of` with; a draft never
         // does.
-        let windows = if crate::sample::guess_format(f) == FormatGuess::Excel {
-            Vec::new()
+        let regions = if crate::sample::guess_format(f) == FormatGuess::Excel {
+            Default::default()
         } else {
-            crate::engine::regions_of(f, None, limits).unwrap_or_default().windows
+            crate::engine::regions_of(f, None, limits).unwrap_or_default()
         };
+        // A block none of whose rows holds two fields is a banner or a
+        // footnote block, not a table: drafting it declared a column no
+        // table has, and the unedited draft then fit nothing. It is the
+        // same criterion `Regions::table_shaped` uses to decide what is not
+        // data-like, and the note says which block was skipped and why.
+        let mut windows = Vec::new();
+        for (w, widest) in regions.windows.iter().zip(&regions.window_widest) {
+            if *widest < 2 {
+                split_files.push(format!(
+                    "{label}: block {} (lines {}–{}) skipped: one field per line",
+                    w.ordinal,
+                    w.start + 1,
+                    w.end
+                ));
+            } else {
+                windows.push(*w);
+            }
+        }
+        // One table left among banners: it is the file's table, drafted from
+        // its own rows and not commented as "only in" a block.
+        if let ([w], true) = (windows.as_slice(), regions.windows.len() > 1) {
+            match crate::sniff::sniff_text_block(f, *w, limits, crate::sniff::SniffOpts::default()) {
+                Ok(spec) => {
+                    file_sets.push((label.clone(), spec.columns.iter().map(|c| c.name.clone()).collect()));
+                    record_columns(
+                        &mut columns,
+                        &mut day_first,
+                        &mut month_first,
+                        &mut sniffed,
+                        &mut files_ok,
+                        ColumnSighting { physical_file: &label, block: None },
+                        &spec,
+                    );
+                }
+                Err(e) => failures.push((format!("{label}#{}", w.ordinal), format!("{e:#}"))),
+            }
+            continue;
+        }
         if windows.len() >= 2 {
             split_files.push(format!(
                 "{label} holds {} stacked tables; each is drafted as {label}#i",

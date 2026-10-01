@@ -2081,6 +2081,10 @@ pub struct DroppedRun {
     /// cells for a sheet). Equal counts is what makes a dropped run look
     /// like a table rather than a banner.
     pub width: usize,
+    /// The most non-empty fields on any one of its rows (non-empty cells
+    /// for a sheet, non-empty fields under the blocks' delimiter for text).
+    /// Two or more is data-like — see [`Regions::table_shaped`].
+    pub widest: usize,
 }
 
 /// What [`regions_of`] found: the blocks it kept, and the runs it did not.
@@ -2098,18 +2102,25 @@ pub struct Regions {
     /// Each window's own first-row width, beside `windows`: what a block
     /// that [`Regions::gated`] turns into a dropped run is measured by.
     pub window_widths: Vec<usize>,
+    /// Each window's widest row, in non-empty fields, beside `windows`.
+    pub window_widest: Vec<usize>,
 }
 
 impl Regions {
-    /// The dropped runs shaped like the blocks that were kept: the same
-    /// field count on their first row. A two-line banner over a three-field
-    /// table is one field wide and is not one of these; a `Total;;1500`
-    /// footer is three fields wide and is, which is correct — the 3-row
-    /// minimum says a total line is not a *table*, and a person rules on
-    /// whether those rows were data.
+    /// The dropped runs that look like data rather than a banner: any row
+    /// of the run holds two or more non-empty fields. A title banner and a
+    /// footnote block have one cell per row and are not these; a
+    /// `Total;;1500` footer, a two-column recap under a three-column table
+    /// and a wide "US population" row under a one-cell title all are — the
+    /// 3-row minimum and the gates say they are not *the table*, and a
+    /// person rules on whether those rows were data.
+    ///
+    /// The first cut compared a run's first-row width with the kept
+    /// block's, which missed both of the last two: a recap is a different
+    /// width by construction, and a block whose first row is a one-cell
+    /// title measures 1 wide, so nothing wide ever matched it.
     pub fn table_shaped(&self) -> impl Iterator<Item = &DroppedRun> {
-        let w = self.block_width;
-        self.dropped.iter().filter(move |d| w > 0 && d.width == w)
+        self.dropped.iter().filter(|d| d.widest >= 2)
     }
 
     /// Keep only the blocks that passed the gates (`passed[i]` for
@@ -2123,34 +2134,30 @@ impl Regions {
     /// run of rows. None passing is no regions at all — the file is read
     /// whole and gets the ordinary answer, so nothing is dropped either.
     pub fn gated(&self, passed: &[bool]) -> Regions {
-        let kept: Vec<(RowWindow, usize)> = self
+        let all: Vec<(RowWindow, DroppedRun, bool)> = self
             .windows
             .iter()
-            .zip(&self.window_widths)
+            .zip(self.window_widths.iter().zip(&self.window_widest))
             .zip(passed)
-            .filter(|(_, ok)| **ok)
-            .map(|((w, width), _)| (*w, *width))
+            .map(|((w, (width, widest)), ok)| {
+                (*w, DroppedRun { start: w.start, end: w.end, width: *width, widest: *widest }, *ok)
+            })
             .collect();
+        let kept: Vec<&(RowWindow, DroppedRun, bool)> = all.iter().filter(|x| x.2).collect();
         if kept.is_empty() {
             return Regions::default();
         }
         let mut dropped = self.dropped.clone();
-        dropped.extend(
-            self.windows
-                .iter()
-                .zip(&self.window_widths)
-                .zip(passed)
-                .filter(|(_, ok)| !**ok)
-                .map(|((w, width), _)| DroppedRun { start: w.start, end: w.end, width: *width }),
-        );
+        dropped.extend(all.iter().filter(|x| !x.2).map(|x| x.1));
         dropped.sort_by_key(|d| d.start);
         Regions {
-            block_width: kept[0].1,
-            window_widths: kept.iter().map(|(_, width)| *width).collect(),
+            block_width: kept[0].1.width,
+            window_widths: kept.iter().map(|x| x.1.width).collect(),
+            window_widest: kept.iter().map(|x| x.1.widest).collect(),
             windows: kept
                 .iter()
                 .enumerate()
-                .map(|(i, (w, _))| RowWindow { ordinal: (i + 1) as u32, ..*w })
+                .map(|(i, x)| RowWindow { ordinal: (i + 1) as u32, ..x.0 })
                 .collect(),
             dropped,
         }
@@ -2200,7 +2207,7 @@ pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Re
                 .rows()
                 .map(|row| row.iter().filter(|c| !render_cell(c).trim().is_empty()).count())
                 .collect();
-            Ok(blocks_from(&blanks, |row| widths.get(row as usize).copied().unwrap_or(0)))
+            Ok(blocks_from(&blanks, &widths))
         }
         // A text file is read line by line instead: `expand_units` calls
         // this on every plain member on every fit (including the
@@ -2236,6 +2243,10 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     // the delimiter is known — which is only after the split has said which
     // runs are blocks. O(runs), not O(file).
     let mut heads: Vec<String> = Vec::new();
+    // Per run, the most non-empty fields on any of its rows under each
+    // candidate delimiter — one scan of the line answers all four, and the
+    // delimiter is chosen only once the runs are known. O(runs).
+    let mut widest: Vec<[usize; 4]> = Vec::new();
     let mut run_start: Option<u64> = None;
     let mut index: u64 = 0;
     let mut buf: Vec<u8> = Vec::new();
@@ -2258,12 +2269,21 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
             (false, None) => {
                 run_start = Some(index);
                 heads.push(String::from_utf8_lossy(line).into_owned());
+                widest.push([0; 4]);
             }
             (true, Some(s)) => {
                 runs.push((s, index));
                 run_start = None;
             }
             _ => {}
+        }
+        if !blank {
+            if let Some(w) = widest.last_mut() {
+                let counts = nonempty_fields(line);
+                for (m, c) in w.iter_mut().zip(counts) {
+                    *m = (*m).max(c);
+                }
+            }
         }
         index += 1;
     }
@@ -2273,44 +2293,89 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     // The delimiter is the one the blocks that survived the minimum are best
     // read with — never one guessed from the dropped runs themselves, or a
     // banner would get to choose how it is counted.
-    let kept: Vec<&str> = runs
+    let kept: Vec<(&str, [usize; 4])> = runs
         .iter()
-        .zip(&heads)
+        .zip(heads.iter().zip(&widest))
         .filter(|((s, e), _)| e - s >= 3)
-        .map(|(_, h)| h.as_str())
+        .map(|(_, (h, w))| (h.as_str(), *w))
         .collect();
-    let delim = pick_block_delimiter(&kept);
-    let measured: Vec<(u64, u64, usize)> = runs
+    let (delim, at) = pick_block_delimiter(&kept);
+    let measured: Vec<Run> = runs
         .iter()
-        .zip(&heads)
-        .map(|(&(s, e), h)| (s, e, field_count(h, delim)))
+        .zip(heads.iter().zip(&widest))
+        .map(|(&(start, end), (h, w))| Run { start, end, width: field_count(h, delim), widest: w[at] })
         .collect();
     Ok(windows_from_runs(measured))
 }
 
-/// The delimiter a set of block headers is best read with: whichever
-/// candidate gives the widest head, ties going to the one that gives the
-/// most fields on most of them. Only the *relative* answer matters — the
+/// The candidate delimiters of a stacked text file, in the order
+/// [`nonempty_fields`] reports them.
+const BLOCK_DELIMITERS: [char; 4] = [',', ';', '\t', '|'];
+
+/// Non-empty fields on one raw line under each of [`BLOCK_DELIMITERS`], in
+/// one pass. A delimiter inside double quotes is not a boundary; a field is
+/// non-empty when it holds anything but whitespace and quote marks. Cheap
+/// by design — it runs on every line of the file — and only ever asked
+/// "one field or several?", which quoting subtleties do not change.
+fn nonempty_fields(line: &[u8]) -> [usize; 4] {
+    let mut counts = [0usize; 4];
+    let mut filled = [false; 4];
+    let mut quoted = false;
+    for &b in line {
+        if b == b'"' {
+            quoted = !quoted;
+            continue;
+        }
+        let mut boundary = false;
+        for (i, d) in BLOCK_DELIMITERS.iter().enumerate() {
+            if !quoted && b == *d as u8 {
+                if filled[i] {
+                    counts[i] += 1;
+                }
+                filled[i] = false;
+                boundary = true;
+            }
+        }
+        if !b.is_ascii_whitespace() {
+            for (i, d) in BLOCK_DELIMITERS.iter().enumerate() {
+                if !(boundary && b == *d as u8) {
+                    filled[i] = true;
+                }
+            }
+        }
+    }
+    for (c, f) in counts.iter_mut().zip(filled) {
+        if f {
+            *c += 1;
+        }
+    }
+    counts
+}
+
+/// The delimiter the kept blocks are best read with, and its index in
+/// [`BLOCK_DELIMITERS`]: whichever gives the most non-empty fields on any
+/// row of any kept block, ties going to the one that gives the most fields
+/// on most of their first lines. Only the *relative* answer matters — the
 /// same delimiter counts the kept blocks and the dropped runs, so a
 /// comparison of the two is meaningful whatever it picks; guessing per run
 /// is what would let a one-line banner claim a block's shape.
 ///
-/// The widest head leads, not the median: a banner and a footnote block
-/// are runs of three rows too, one field wide under every delimiter, and
-/// two of them outvoted the one table between them — every width then
-/// came out 1, and a one-field banner measured "as wide as the table".
-fn pick_block_delimiter(heads: &[&str]) -> char {
-    let mut best = ((0usize, 0usize), ',');
-    for cand in [',', ';', '\t', '|'] {
-        let mut counts: Vec<usize> = heads.iter().map(|h| field_count(h, cand)).collect();
+/// The widest row leads, not the median head: a banner and a footnote
+/// block are runs of three rows too, one field wide under every delimiter,
+/// and two of them outvoted the one table between them; and a block whose
+/// first line is a one-cell title says nothing about its separator at all.
+fn pick_block_delimiter(kept: &[(&str, [usize; 4])]) -> (char, usize) {
+    let mut best = ((0usize, 0usize), 0usize);
+    for (i, cand) in BLOCK_DELIMITERS.iter().enumerate() {
+        let widest = kept.iter().map(|(_, w)| w[i]).max().unwrap_or(0);
+        let mut counts: Vec<usize> = kept.iter().map(|(h, _)| field_count(h, *cand)).collect();
         counts.sort_unstable();
         let modal = counts.get(counts.len() / 2).copied().unwrap_or(0);
-        let widest = counts.last().copied().unwrap_or(0);
         if (widest, modal) > best.0 {
-            best = ((widest, modal), cand);
+            best = ((widest, modal), i);
         }
     }
-    best.1
+    (BLOCK_DELIMITERS[best.1], best.1)
 }
 
 /// Fields on one line under one delimiter, quoting honoured (a `;` inside
@@ -2348,14 +2413,29 @@ fn raw_runs(blanks: &[bool]) -> Vec<(usize, usize)> {
     runs
 }
 
-/// The runs from [`raw_runs`], measured by `width_of` (the first row's
-/// field count) and handed to [`windows_from_runs`].
-fn blocks_from(blanks: &[bool], width_of: impl Fn(u64) -> usize) -> Regions {
+/// The runs from [`raw_runs`], measured by `widths` (each row's non-empty
+/// cells): the first row's for `width`, the widest row's for `widest`.
+fn blocks_from(blanks: &[bool], widths: &[usize]) -> Regions {
     let runs = raw_runs(blanks)
         .into_iter()
-        .map(|(s, e)| (s as u64, e as u64, width_of(s as u64)))
+        .map(|(s, e)| Run {
+            start: s as u64,
+            end: e as u64,
+            width: widths.get(s).copied().unwrap_or(0),
+            widest: widths.get(s..e).and_then(|w| w.iter().max().copied()).unwrap_or(0),
+        })
         .collect();
     windows_from_runs(runs)
+}
+
+/// One non-blank run, measured: its first row's field count (`width`) and
+/// the most non-empty fields on any of its rows (`widest`).
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    start: u64,
+    end: u64,
+    width: usize,
+    widest: usize,
 }
 
 /// The filtering rule, shared by the text path (which finds its runs by
@@ -2387,26 +2467,27 @@ fn blocks_from(blanks: &[bool], width_of: impl Fn(u64) -> usize) -> Regions {
 /// columns positionally as `col_N`, a table read without the names it
 /// states. Adoption runs before the one-run rule, so a file that is only a
 /// header, a blank line and its data is one table read whole.
-fn windows_from_runs(runs: Vec<(u64, u64, usize)>) -> Regions {
+fn windows_from_runs(runs: Vec<Run>) -> Regions {
     let runs = adopt_severed_headers(runs);
     if runs.len() == 1 {
         return Regions::default();
     }
-    let (kept, short): (Vec<_>, Vec<_>) = runs.into_iter().partition(|(s, e, _)| e - s >= 3);
+    let (kept, short): (Vec<_>, Vec<_>) = runs.into_iter().partition(|r| r.end - r.start >= 3);
     if kept.is_empty() {
         return Regions::default();
     }
     Regions {
-        block_width: kept[0].2,
-        window_widths: kept.iter().map(|(_, _, w)| *w).collect(),
+        block_width: kept[0].width,
+        window_widths: kept.iter().map(|r| r.width).collect(),
+        window_widest: kept.iter().map(|r| r.widest).collect(),
         windows: kept
             .into_iter()
             .enumerate()
-            .map(|(i, (s, e, _))| RowWindow { start: s, end: e, ordinal: (i + 1) as u32 })
+            .map(|(i, r)| RowWindow { start: r.start, end: r.end, ordinal: (i + 1) as u32 })
             .collect(),
         dropped: short
             .into_iter()
-            .map(|(start, end, width)| DroppedRun { start, end, width })
+            .map(|r| DroppedRun { start: r.start, end: r.end, width: r.width, widest: r.widest })
             .collect(),
     }
 }
@@ -2415,18 +2496,18 @@ fn windows_from_runs(runs: Vec<(u64, u64, usize)>) -> Regions {
 /// by a block (3 rows or more) whose first row has the same width, merges
 /// into that block. Runs are separated by blank lines by construction, so
 /// "directly above, only blank lines between" is "the next run".
-fn adopt_severed_headers(runs: Vec<(u64, u64, usize)>) -> Vec<(u64, u64, usize)> {
-    let mut out: Vec<(u64, u64, usize)> = Vec::with_capacity(runs.len());
+fn adopt_severed_headers(runs: Vec<Run>) -> Vec<Run> {
+    let mut out: Vec<Run> = Vec::with_capacity(runs.len());
     let mut i = 0;
     while i < runs.len() {
-        let (s, e, w) = runs[i];
+        let r = runs[i];
         match runs.get(i + 1) {
-            Some(&(_, ne, nw)) if e - s == 1 && w > 0 && nw == w && ne - runs[i + 1].0 >= 3 => {
-                out.push((s, ne, w));
+            Some(n) if r.end - r.start == 1 && r.width > 0 && n.width == r.width && n.end - n.start >= 3 => {
+                out.push(Run { end: n.end, widest: r.widest.max(n.widest), ..r });
                 i += 2;
             }
             _ => {
-                out.push((s, e, w));
+                out.push(r);
                 i += 1;
             }
         }
