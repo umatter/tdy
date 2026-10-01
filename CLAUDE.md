@@ -181,7 +181,15 @@ note and **no review** — the reviewed `.tdy.sql` is the authorisation, as for 
 exemption is `fit::review_reasons_for(spec, target)`, used wherever a target is in hand
 (`fit`, `fit_pile`'s sidecar reuse, the console's `.accept`): it drops a `%y` reason only when
 the target column declares exactly the pivot the spec reads, so a hand-written `%y` under no
-or another declared window still waits on a person. `draft` declares neither. The sniffer's
+or another declared window still waits on a person. Likewise **any `epoch` in a spec is a
+review reason** ("`datum` reads integers as time (epoch = excel_days), which no value in the
+file states"), dropped only when the target column declares that very unit — so a
+hand-written epoch sidecar that joined a pile silently before 2026-10-02 now waits for one
+`--accept` (or the declaration); a `messy()` query is unaffected, review being a pile
+concept. And a declared `epoch` is **enforced**, not advised: `conform::conforms` reports a
+`Mismatch::Reading` for a member column read with another unit or none, so a hand-written
+sidecar CONTRADICTS and an edited one is refused by every `dataset()` query, naming both
+units. `draft` declares neither. The sniffer's
 serial-date note now names the declaration instead of SQL.
 
 **`tdy draft` scaffolds a target from a pile** (`src/draft.rs`): sniffs every file, groups

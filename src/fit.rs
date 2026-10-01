@@ -254,6 +254,11 @@ pub fn review_reasons(spec: &ParseSpec) -> Vec<String> {
                 c.name
             ));
         }
+        // An epoch says a column of integers is time at all — `45000` is a
+        // count or 2023-03-15 — and no value in the file states which.
+        if let Some(unit) = c.parse.epoch {
+            out.push(epoch_reason(&c.name, unit));
+        }
         if let Some(shift) = c.parse.decimal_shift {
             if shift != 0 {
                 out.push(format!(
@@ -270,6 +275,14 @@ pub fn review_reasons(spec: &ParseSpec) -> Vec<String> {
     out
 }
 
+fn epoch_reason(column: &str, unit: EpochUnit) -> String {
+    let name = serde_json::to_value(unit)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    format!("`{column}` reads integers as time (epoch = {name}), which no value in the file states")
+}
+
 /// [`review_reasons`], less what the target's own declarations authorise.
 ///
 /// A `%y` column read with exactly the century window its target column
@@ -279,6 +292,17 @@ pub fn review_reasons(spec: &ParseSpec) -> Vec<String> {
 /// different one, keeps its reason: the declaration authorises its own
 /// reading, not whatever a hand-written sidecar says.
 pub fn review_reasons_for(spec: &ParseSpec, target: &Target) -> Vec<String> {
+    let declared = |c: &ColumnSpec| target.columns.iter().find(|tc| tc.name == c.name);
+    // An epoch the target column declares, unit for unit, is authorised the
+    // same way: its reason is exactly the one `review_reasons` would give.
+    let epochs: Vec<String> = spec
+        .columns
+        .iter()
+        .filter_map(|c| {
+            let unit = c.parse.epoch?;
+            (declared(c)?.epoch == Some(unit)).then(|| epoch_reason(&c.name, unit))
+        })
+        .collect();
     let authorised: Vec<String> = spec
         .columns
         .iter()
@@ -293,6 +317,7 @@ pub fn review_reasons_for(spec: &ParseSpec, target: &Target) -> Vec<String> {
     review_reasons(spec)
         .into_iter()
         .filter(|r| !authorised.iter().any(|a| r.starts_with(a.as_str())))
+        .filter(|r| !epochs.contains(r))
         .collect()
 }
 

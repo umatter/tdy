@@ -1209,7 +1209,11 @@ Details worth knowing:
   below 61 or past 2958465 (9999-12-31) is refused naming its row (Excel
   counts a 29 February 1900 that never was), and a time of day on a `date` is
   refused rather than dropped. A target declares it per column with
-  `OPTIONS(epoch = '…')`.
+  `OPTIONS(epoch = '…')`. In a pile, any `epoch` in a member's sidecar is a
+  judgement — that a column of integers is time at all — so the member waits
+  for `--accept` unless its target column declares that same unit (a sidecar
+  that joined silently before this now asks once); and where the target does
+  declare one, a sidecar reading the column any other way is refused.
 - **`year_pivot` decides the century of a two-digit year.** Under `%y`, a
   year below the pivot is 20xx and one at or above it 19xx:
   `parse = { year_pivot = 30 }` on `dtype = { type = "date", format =

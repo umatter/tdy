@@ -1366,3 +1366,134 @@ fn a_declared_year_pivot_tries_every_order_and_date_order_decides() {
         assert!(text.contains("parses under more than one format, and they disagree"), "{text}");
     }
 }
+
+fn tdy_cli(args: &[&str]) -> (bool, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tdy")).args(args).output().expect("run tdy");
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), text)
+}
+
+/// A pile of one serial-date file under a target, fitted; returns the dir,
+/// the target path and the member's sidecar path.
+fn epoch_pile(option: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let (d, f, _t) = fit_pair(
+        "Datum;Betrag\n45000;10\n45001;20\n",
+        &format!(
+            "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum'{option}), \
+             betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv')"
+        ),
+    );
+    let t = d.path().join("t.tdy.sql");
+    (d, t, tdy::sidecar::sidecar_path(&f))
+}
+
+/// A target's declared `epoch` is enforced on a member's spec, not advised:
+/// a sidecar reading the column with another unit contradicts the declaration
+/// — at `tdy fit` for a hand-written one, and at every `dataset()` query for
+/// one edited after its fit — naming both units. It used to serve 1970-01-01.
+#[test]
+fn a_declared_epoch_is_enforced_on_a_member_s_sidecar() {
+    let (_d, t, sc) = epoch_pile(", epoch = 'excel_days'");
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let planned = std::fs::read_to_string(&sc).unwrap();
+    assert!(planned.contains("epoch = \"excel_days\""), "{planned}");
+    let edited = planned.replace("epoch = \"excel_days\"", "epoch = \"seconds\"");
+    std::fs::write(&sc, &edited).unwrap();
+
+    // Edited after the fit: every query re-proves the member, and refuses.
+    let sql = format!("SELECT min(datum) FROM dataset('{}')", t.display());
+    let (ok, text) = tdy_cli(&["query", &sql]);
+    assert!(!ok, "an edited epoch was served: {text}");
+    assert!(
+        text.contains("`datum`: the target declares epoch = 'excel_days', the spec reads it with epoch = 'seconds'"),
+        "{text}"
+    );
+
+    // Hand-written: a contradiction the person has to settle.
+    std::fs::write(&sc, edited.replace("method = \"heuristic\"", "method = \"manual\"")).unwrap();
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("CONTRADICTS"), "{text}");
+    assert!(text.contains("the spec reads it with epoch = 'seconds'"), "{text}");
+}
+
+/// Any epoch reading in a sidecar is a judgement — that `45000` is a date at
+/// all — so it waits on a person unless the target column declares the same
+/// unit. One unix unit and the spreadsheet one, each with and without the
+/// declaration.
+#[test]
+fn an_epoch_reading_waits_on_a_person_unless_the_target_declares_it() {
+    use tdy::spec::{DType, EpochUnit};
+    for (unit, name) in [(EpochUnit::Seconds, "seconds"), (EpochUnit::ExcelDays, "excel_days")] {
+        let undeclared = Target::parse(
+            "CREATE TABLE s (datum DATE NOT NULL, betrag BIGINT NOT NULL) WITH (files = '*.csv')",
+        )
+        .unwrap();
+        let declared = Target::parse(&format!(
+            "CREATE TABLE s (datum DATE NOT NULL OPTIONS(epoch = '{name}'), betrag BIGINT NOT NULL) \
+             WITH (files = '*.csv')"
+        ))
+        .unwrap();
+        let other = Target::parse(
+            "CREATE TABLE s (datum DATE NOT NULL OPTIONS(epoch = 'milliseconds'), betrag BIGINT NOT NULL) \
+             WITH (files = '*.csv')",
+        )
+        .unwrap();
+        let mut spec = tdy::spec::ParseSpec {
+            extraction: tdy::spec::Extraction::Delimited {
+                delimiter: ';',
+                quote: Some('"'),
+                escape: None,
+                encoding: None,
+                comment: None,
+                ragged: tdy::spec::RaggedPolicy::PadNulls,
+                region: None,
+            },
+            transforms: vec![],
+            columns: vec![],
+            confidence: None,
+            notes: vec![],
+        };
+        let mut c = tdy::spec::ColumnSpec {
+            name: "datum".into(),
+            source: None,
+            dtype: DType::Date { format: "%s".into() },
+            nullable: false,
+            parse: Default::default(),
+            pointer: None,
+        };
+        c.parse.epoch = Some(unit);
+        spec.columns.push(c);
+        let want = format!("`datum` reads integers as time (epoch = {name}), which no value in the file states");
+        assert_eq!(tdy::fit::review_reasons(&spec), vec![want.clone()]);
+        assert_eq!(tdy::fit::review_reasons_for(&spec, &undeclared), vec![want.clone()]);
+        assert_eq!(tdy::fit::review_reasons_for(&spec, &other), vec![want], "{name}");
+        assert!(tdy::fit::review_reasons_for(&spec, &declared).is_empty(), "{name}");
+    }
+}
+
+/// End to end: a hand-written serial reading under a target that declares no
+/// epoch is not served until a person accepts it.
+#[test]
+fn a_hand_written_epoch_under_no_declaration_waits_for_accept() {
+    let (d, t, sc) = epoch_pile(", epoch = 'excel_days'");
+    assert!(tdy_cli(&["fit", t.to_str().unwrap()]).0);
+    let manual = std::fs::read_to_string(&sc).unwrap().replace("method = \"heuristic\"", "method = \"manual\"");
+    std::fs::write(&sc, manual).unwrap();
+    std::fs::write(
+        &t,
+        "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv')",
+    )
+    .unwrap();
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(text.contains("REVIEW: `datum` reads integers as time (epoch = excel_days)"), "{text}");
+    let sql = format!("SELECT min(datum) AS lo FROM dataset('{}')", t.display());
+    assert!(!tdy_cli(&["query", &sql]).0, "served before acceptance");
+    let member = d.path().join("2025-x.csv");
+    assert!(tdy_cli(&["fit", t.to_str().unwrap(), "--accept", "2025-x.csv"]).0, "{}", member.display());
+    let (ok, text) = tdy_cli(&["query", &sql]);
+    assert!(ok && text.contains("2023-03-15"), "{text}");
+}

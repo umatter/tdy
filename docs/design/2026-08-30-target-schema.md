@@ -291,7 +291,11 @@ it does for four-digit formats — and a planned binding under it carries a note
 and **no review**, because the declaration in the reviewed `.tdy.sql` is the
 authorisation, as it is for `round` and `if_missing = 'null'`. It authorises
 its own reading only: a hand-written sidecar reading `%y` under a column that
-declares no window, or a different one, still waits on a person.
+declares no window, or a different one, still waits on a person, and so does any
+`epoch` reading the column does not declare unit for unit. A declared `epoch` is
+also enforced on every member: conformance refuses a member column read with
+another unit, or none, naming both — a declared reading that is not enforced is
+exactly what a target must not hold.
 
 ## 5. Architecture
 
