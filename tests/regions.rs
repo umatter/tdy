@@ -1057,8 +1057,8 @@ fn headerless_blocks_are_not_candidates_and_the_file_is_read_whole() {
 /// the banner and the two-cell footnote block used to pass by position
 /// alone; neither has a header, so neither is a candidate, no block passes,
 /// and the sheet is read whole through the frame the draft came from — the
-/// pre-regions reading — reviewed, since the split saw a headed table the
-/// positional target cannot bind. Against a by-name target the table is
+/// pre-regions reading, unreviewed for a positional target. Against a
+/// by-name target the table is
 /// the one block that passes, bound by name, and the footnote block is a
 /// data-like run nothing read, so it waits on a person.
 #[test]
@@ -1073,13 +1073,13 @@ fn a_headerless_footnote_block_cannot_stand_in_for_the_sheet() {
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(!text.contains("book.xlsx#"), "{text}");
     assert!(!text.contains("not read") && !text.contains("split at blank rows"), "read whole: {text}");
-    // Read whole past a table that has its own header (the data block, its
-    // severed header adopted) is a person's call, not a silent pre-regions
-    // reading: the drafted positional target cannot bind that header.
-    assert!(
-        text.contains("REVIEW: the split found a table with its own header at lines 8–14 that does not fit the declared table; this file is read whole — accept only if that is intended"),
-        "{text}"
-    );
+    // No review, although the split saw a headed table the target cannot
+    // bind: the drafted target is purely positional (`col_N`), which binds
+    // by position by construction, so the failure is no evidence of a wrong
+    // reading — the whole-sheet frame is the pre-regions reading. The
+    // "this file is read whole" question is for by-name targets only
+    // (`Target::names_a_column`); asked here it would always be answered yes.
+    assert!(!text.contains("REVIEW"), "{text}");
 
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::copy(fixture("regions_footnoted.xlsx"), dir.path().join("book.xlsx")).unwrap();

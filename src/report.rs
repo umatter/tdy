@@ -445,7 +445,11 @@ pub fn expand_units(
                 // a table with its own header there, reading past it is a
                 // judgement — the same file read whole used to answer with
                 // that header as a data row, and say nothing.
-                review: whole_read_reason(&headed_unfit),
+                // Only for a target that binds by name: a purely positional
+                // one (`col_N`) cannot bind any header, so a headed block
+                // failing it says nothing about the whole-file reading, and
+                // the question would always be answered yes.
+                review: if target.names_a_column() { whole_read_reason(&headed_unfit) } else { None },
                 dropped: Vec::new(),
                 shaped: Vec::new(),
                 region_sheet: region_sheet.clone(),

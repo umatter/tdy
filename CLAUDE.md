@@ -500,9 +500,14 @@ passed a positional `col_N` target's gates by position alone and stood in for th
 sheet — the corpus's ttb workbook, which is now read whole as before regions. Nor is
 a block that binds none of the declared columns, which under an all-`if_missing`
 target "fit" as rows of NULLs. When no block passes, the file is read whole — and
-if the split saw a block with its own header there, that member carries a review
-(`the split found a table with its own header at lines a–b that does not fit …`),
-since reading past a headed table is a judgement; all-headerless or all-banner
+if the split saw a block with its own header there and the target binds by name
+(`Target::names_a_column`: a column not named `col_N`, or one with `matches`), that
+member carries a review (`the split found a table with its own header at lines a–b
+that does not fit …`), since a by-name target missing a headed table is evidence
+the whole-file reading is wrong. A purely positional target binds by position by
+construction, so the same failure is no such evidence — and asking on every such
+sheet (15→33 reviews in the corpus sweep, first cut) is a question always answered
+yes, which trains people to answer without reading. All-headerless or all-banner
 files stay unreviewed. A one-row run as wide as the block directly below
 it, blank lines between, is that block's header cut off by a blank row — but only
 for a block whose own frame promoted no header (`Regions::severed_header`,
@@ -573,7 +578,10 @@ same split (`sniff::sniff_text_block`, via a scratch file), skipping a block wit
 field per line (named in a `NOTE`, so the unedited draft of a banner-topped export fits),
 drafting from the block whenever the split separated anything (one block with a dropped
 line above it used to fall through to a whole-file draft that declared the title line's
-values as columns, and the fit then read the real header as a data row, silently)
+values as columns, and the fit then read the real header as a data row, silently). The
+known limit: `draft` does not split workbook *sheets*, so a sheet under a banner still
+drafts positionally (`col_N`) from the whole-sheet sniff; the follow-up is for draft to
+split sheets as it splits text
 and drafting each other block's columns separately and naming which block each column came from; presence and
 heterogeneity notes count physical files, not blocks — got wrong first, when
 the grouping note fired across one file's own blocks as though they were
