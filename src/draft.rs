@@ -113,25 +113,31 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
                 .and_then(|name| crate::sniff::OpenSheet::open(f, &name, limits).ok()),
             _ => None,
         };
-        // A block's label: `file#i` for text, `book.xlsx#Sheet#i` for a
-        // sheet — the member names `fit` would give them.
+        // A block's label is the member name `fit` gives it: `file#i`, and
+        // `book.xlsx#i` for a workbook with one sheet, whose member stays
+        // plain. A sheet of several is named, `book.xlsx#Sheet`; it is split
+        // only when one table is left (below), so no `#Sheet#i` is printed.
+        let several_sheets = matches!(&sample, Ok(s) if s.sheets.len() > 1);
         let prefix = match &sheet {
-            Some(open) => format!("{label}#{}", open.name),
-            None => label.clone(),
+            Some(open) if several_sheets => format!("{label}#{}", open.name),
+            _ => label.clone(),
         };
         let found = match (&sheet, is_excel) {
             (Some(open), _) => crate::engine::regions_of_range(&open.range),
             (None, true) => Default::default(),
             (None, false) => crate::engine::regions_of(f, None, limits).unwrap_or_default(),
         };
-        // A block with no plausible header of its own takes the header run
-        // a blank row cut off above it, exactly as `fit` frames it. The
-        // options are the ones draft sniffs with; adoption cannot differ
-        // from fit's, since `verify` only widens column types and adoption
-        // asks where the frame's header ends — but draft has no target to
-        // gate the adopted frame against, so it takes every adoption.
-        let framed =
-            crate::fit::frame_blocks(f, sheet.as_ref(), &found, crate::sniff::SniffOpts::default(), limits, &|_| true);
+        // A block with no header of its own takes the header run a blank
+        // row cut off above it, as `fit` frames it; never over a header the
+        // block's own frame promoted (`fit::Adoption::Draft`).
+        let framed = crate::fit::frame_blocks(
+            f,
+            sheet.as_ref(),
+            &found,
+            crate::sniff::SniffOpts::default(),
+            limits,
+            crate::fit::Adoption::Draft,
+        );
         let regions = &framed.regions;
         let frame_block = |w: crate::spec::RowWindow| -> Result<crate::spec::ParseSpec> {
             match &sheet {
@@ -149,21 +155,29 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
         // data-like, and the note says which block was skipped and why —
         // unless every block is one field wide, which is a one-column file
         // with blank lines in it, drafted whole. A block with no header of
-        // its own (`FramedBlocks::is_table`) is skipped the same way, as it
+        // its own (`FramedBlocks::draft_kind`) is skipped the same way, as it
         // is no `fit` candidate: a two-cell footnote block drafted `col_N`
         // columns no table has; and when no block is a table the file is
-        // drafted whole, as `fit` then reads it.
+        // drafted whole, as `fit` then reads it. A body whose first row
+        // reads like data under a run of title lines and a header makes the
+        // whole file drafted whole: a draft does not adopt over it, and its
+        // own first row is no header.
         let mut windows = Vec::new();
         let mut banners = Vec::new();
         let mut headless = Vec::new();
+        let mut under_run = None;
         for (i, (w, widest)) in regions.windows.iter().zip(&regions.window_widest).enumerate() {
             let at = |why: &str| format!("{prefix}: block {} (lines {}–{}) skipped: {why}", w.ordinal, w.start + 1, w.end);
             if *widest < 2 {
                 banners.push(at("one field per line"));
-            } else if !framed.is_table(i) {
-                headless.push(at("no header of its own"));
-            } else {
-                windows.push(*w);
+                continue;
+            }
+            match framed.draft_kind(i, sheet.is_some()) {
+                crate::fit::DraftKind::Table => windows.push(*w),
+                crate::fit::DraftKind::Headless => headless.push(at("no header of its own")),
+                crate::fit::DraftKind::UnderHeaderRun => {
+                    under_run.get_or_insert(w.ordinal);
+                }
             }
         }
         // A sheet of a workbook with several is a `fit` member through its
@@ -171,12 +185,19 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
         // left over (`fit::discover_sheets`: sheet expansion asks nobody).
         // Drafted from the blocks otherwise, it fit no sheet at all — so it
         // is drafted whole, as `fit` reads it.
-        let several_sheets = matches!(&sample, Ok(s) if s.sheets.len() > 1);
         let one_clean_block = windows.len() == 1 && {
             let kept: Vec<bool> = regions.windows.iter().map(|w| windows.contains(w)).collect();
             regions.gated(&kept).table_shaped().next().is_none()
         };
-        let whole = if windows.is_empty() && headless.is_empty() && !banners.is_empty() {
+        let under_run = under_run.map(|i| {
+            format!(
+                "block {i}'s first row reads like data; drafted whole — a by-name target can still \
+                 bind it through its header run"
+            )
+        });
+        let whole = if let Some(why) = &under_run {
+            Some(why.as_str())
+        } else if windows.is_empty() && headless.is_empty() && !banners.is_empty() {
             Some("all blocks one field wide; drafted whole")
         } else if windows.is_empty() && !headless.is_empty() {
             Some("no block has a header of its own; drafted whole")

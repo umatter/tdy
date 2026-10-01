@@ -534,17 +534,21 @@ are candidates. Its cost: a by-name target that misses a year-headed block
 (`STATE;2008;…` over numbers) gets the note, not a review. All-headerless or
 all-banner files stay unreviewed. A one-row run as wide as the block directly below
 it, blank lines between, is that block's header cut off by a blank row — but only
-for a block whose own frame promoted no header (`Regions::severed_header`,
+for a block whose own frame promoted no header (`Regions::header_run`,
 adopted by `fit::frame_blocks`, which `draft` shares; both executors skip the
 blank row inside the window). Adopting on width alone made `Meier;Bern` the
 header of a headed `Name;City` table and `Name|City` a data row, silently;
 not adopting at all left a headerless block bound as `col_N`. Since 2026-10-01 the
 adopted run may be title lines and the header in one run, as official statistics lay
 them out (`Regions::header_run`: the run's *last* row as wide as the block, a window
-above or a dropped run), and a block whose promoted header reads like data adopts it
-too, with a note naming the row now read as data — but only when the adopted frame's
-header ends on the run's last row and passes the gates; otherwise the block is framed
-as before. ADP-31's run above the states ends in the "United States" total, so it is
+above or a dropped run) — but only when the adopted frame's header ends on the run's
+last row and passes the gates; otherwise the block is framed as before. `fit` adopts it
+also over a promoted header that reads like data, and then the member waits on a person
+(`row a (…) is read as data under the header adopted from lines x–y — accept only if
+that row is data, not this table's header`), never a note alone: `Sales report;Q1 2025`
+over `State;2024` is that shape, and a note let its unedited draft serve `State | 2024`
+as a row (2624, not 600). `draft` never adopts over a promoted header
+(`fit::Adoption::Draft`). ADP-31's run above the states ends in the "United States" total, so it is
 not adopted and that sheet is still read whole. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
@@ -611,12 +615,15 @@ drafting from the block whenever the split separated anything (one block with a 
 line above it used to fall through to a whole-file draft that declared the title line's
 values as columns, and the fit then read the real header as a data row, silently). A
 workbook is split the same way since 2026-10-01, on the sheet the whole-file sniff reads
-(`sniff::pick_sheet`, `fit::frame_blocks` over an `OpenSheet`), its blocks labelled
-`book.xlsx#Sheet#i`; a sheet under a banner used to draft positionally (`col_N`) from the
-whole-sheet sniff. Draft skips, besides one-field banners, a block that is no `fit`
-candidate (`FramedBlocks::is_table`: no promoted header, or one that reads like data and
-adopted nothing — `regions_footnoted.xlsx`'s two-cell footnotes, ADP-31's states) and,
-when no block is left, drafts the file whole, as `fit` reads it. A sheet of a workbook
+(`sniff::pick_sheet`, `fit::frame_blocks` over an `OpenSheet`), its blocks labelled as
+`fit` names the members (`book.xlsx#i` — a one-sheet workbook's member stays plain); a
+sheet under a banner used to draft positionally (`col_N`) from the whole-sheet sniff.
+Draft skips, besides one-field banners, a block that is no `fit` candidate
+(`FramedBlocks::draft_kind`: no promoted header, or on a sheet one that reads like data —
+`regions_footnoted.xlsx`'s two-cell footnotes, ADP-31's states) and, when no block is
+left, drafts the file whole, as `fit` reads it. A text block whose promoted header reads
+like data is drafted from its own frame, as before (`State;2024` under a title line); one
+under a run of title lines and a header makes the file drafted whole, with a NOTE. A sheet of a workbook
 with several is drafted from its blocks only when one table is left and nothing
 table-shaped (the condition on which `discover_sheets` admits it): split otherwise, the
 draft fit no sheet, and the corpus sweep's ttb, ADP-31 national and occupational-health

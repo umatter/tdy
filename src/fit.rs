@@ -686,21 +686,59 @@ pub(crate) struct FramedBlocks {
     pub over_data: Vec<Option<String>>,
     /// Whether each window adopted a header run above it.
     pub adopted: Vec<bool>,
+    /// For a block whose own frame promoted a header that reads like data,
+    /// with a header run above that `fit` would adopt over it but a draft
+    /// does not ([`Adoption::Draft`]): that run's length in rows.
+    pub declined: Vec<Option<u64>>,
+}
+
+/// Who is framing the blocks, which decides what may be adopted.
+pub(crate) enum Adoption<'a> {
+    /// `fit`: an adopted frame must pass these gates against the target,
+    /// and may replace a promoted header that reads like data — the member
+    /// then waits on a person, since that is a reading, not a proof.
+    Fit(&'a dyn Fn(&ParseSpec) -> bool),
+    /// `draft`: no target to gate with, and never over a promoted header.
+    /// A title line over a year-headed table (`Sales report;Q1 2025` over
+    /// `State;2024`) is mechanically the adopted shape; adopting there
+    /// drafted the title's cells as the columns, and the unedited draft
+    /// then fit — no gate refuses a target drawn from the very frame it
+    /// gates — and served `State | 2024` as a row.
+    Draft,
+}
+
+/// What a draft makes of one block ([`FramedBlocks::draft_kind`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DraftKind {
+    /// A table: draft its columns.
+    Table,
+    /// No header of its own: no `fit` candidate, skipped.
+    Headless,
+    /// Its promoted header reads like data and a header run of title lines
+    /// and a header sits above it, which `fit` adopts against a target
+    /// naming those columns: the file is drafted whole.
+    UnderHeaderRun,
 }
 
 impl FramedBlocks {
-    /// Whether block `i` is a table a draft may declare columns from: its
-    /// frame promoted a header, as a `fit` candidate's must, and that header
-    /// is either adopted from the run above or plausible on its own. A
-    /// promoted header that reads like data (`Alabama | 88165 | …`) over a
-    /// block that adopted nothing is a data row; drafting its cells declared
-    /// columns no file has. `fit` needs no such test — its gates refuse that
-    /// block against any target that names the real columns — but a draft
-    /// has no target to gate with.
-    pub(crate) fn is_table(&self, i: usize) -> bool {
-        self.frames[i]
-            .as_ref()
-            .is_some_and(|f| promotes_header(f) && (self.adopted[i] || header_is_plausible(f)))
+    /// What a draft makes of block `i`. A table needs a promoted header, as
+    /// a `fit` candidate does. One that reads like data is the hard case: on
+    /// a text file it is drafted from the block's own frame, exactly as
+    /// before header runs (`State;2024` under a title line is a header);
+    /// on a sheet it is not a table (`Alabama | 88165 | …`; sheets were
+    /// drafted whole before they were split); and under a header run of
+    /// title lines and a header — the official-statistics body — the file
+    /// is drafted whole, since its blocks are no tables a draft can declare
+    /// from, while a by-name target still binds them through that run.
+    pub(crate) fn draft_kind(&self, i: usize, sheet: bool) -> DraftKind {
+        match self.frames[i].as_ref().filter(|f| promotes_header(f)) {
+            None => DraftKind::Headless,
+            Some(_) if self.adopted[i] => DraftKind::Table,
+            Some(f) if header_is_plausible(f) => DraftKind::Table,
+            Some(_) if self.declined[i].is_some_and(|rows| rows >= 2) => DraftKind::UnderHeaderRun,
+            Some(_) if sheet => DraftKind::Headless,
+            Some(_) => DraftKind::Table,
+        }
     }
 }
 
@@ -718,27 +756,29 @@ impl FramedBlocks {
 /// regardless — the first cut, done on widths alone before any frame
 /// existed — made `Meier;Bern` the header of a `Name;City` table and
 /// `Name|City` a data row, with no note. Replacing a promoted header that
-/// read like data says so in a note: that row is now read as data, which is
-/// the literal reading of the contrived `Kanton;Betrag` / `Region;2024`
-/// layout too, and the design page records it as the cost.
+/// read like data is `fit`'s only ([`Adoption`]) and carries a review
+/// reason naming the row now read as data: that is the literal reading of
+/// the contrived `Kanton;Betrag` / `Region;2024` layout, and the wrong one
+/// of a title line over a year-headed table, and nothing mechanical tells
+/// them apart.
 ///
-/// `passes` is the gate an adopted frame must clear (`fit` passes its cheap
-/// gates against the target; `draft`, which has no target, passes
-/// everything). An adoption that fails it falls back to the rule before
-/// header runs: a one-row run is adopted by a block whose own frame
-/// promoted no header, whenever the adopted frame promotes one.
+/// An adopted frame must pass `fit`'s gates (`draft` has none). An adoption
+/// that fails them falls back to the rule before header runs: a one-row
+/// run is adopted by a block whose own frame promoted no header, whenever
+/// the adopted frame promotes one.
 pub(crate) fn frame_blocks(
     path: &Path,
     sheet: Option<&sniff::OpenSheet>,
     regions: &engine::Regions,
     opts: sniff::SniffOpts,
     limits: Limits,
-    passes: &dyn Fn(&ParseSpec) -> bool,
+    adoption: Adoption,
 ) -> FramedBlocks {
     let mut r = regions.clone();
     let mut frames: Vec<Option<ParseSpec>> = Vec::with_capacity(r.windows.len());
     let mut over_data: Vec<Option<String>> = Vec::with_capacity(r.windows.len());
     let mut took: Vec<bool> = Vec::with_capacity(r.windows.len());
+    let mut declined: Vec<Option<u64>> = Vec::with_capacity(r.windows.len());
     let mut i = 0;
     while i < r.windows.len() {
         let own = region_frame(path, sheet, r.windows[i], opts, limits).ok();
@@ -748,14 +788,22 @@ pub(crate) fn frame_blocks(
                 let (start, rows) = r.header_run_span(i, h);
                 let adopted = crate::spec::RowWindow { start, ..r.windows[i] };
                 let framed = region_frame(path, sheet, adopted, opts, limits).ok();
-                let by_run = framed.as_ref().is_some_and(|f| header_end(f) == Some(rows) && passes(f));
+                let ends_on_run = framed.as_ref().is_some_and(|f| header_end(f) == Some(rows));
+                // An adopted frame is gated a second time by `gate_regions`;
+                // that costs time, not correctness.
+                let by_run = ends_on_run
+                    && match &adoption {
+                        Adoption::Fit(passes) => framed.as_ref().is_some_and(|f| passes(f)),
+                        Adoption::Draft => own_header.is_none(),
+                    };
+                let pending_decline = (ends_on_run && own_header.is_some() && !by_run).then_some(rows);
                 let by_line = own_header.is_none()
                     && matches!(h, engine::HeaderRun::Dropped(_))
                     && rows == 1
                     && framed.as_ref().is_some_and(promotes_header);
                 if let (Some(f), true) = (framed, by_run || by_line) {
                     let note = if by_run {
-                        own_header.and_then(|o| read_as_data_note(r.windows[i].start, o, start, rows))
+                        own_header.and_then(|o| read_as_data_reason(r.windows[i].start, o, start, rows))
                     } else {
                         None
                     };
@@ -763,10 +811,20 @@ pub(crate) fn frame_blocks(
                     frames.truncate(j);
                     over_data.truncate(j);
                     took.truncate(j);
+                    declined.truncate(j);
                     frames.push(Some(f));
                     over_data.push(note);
                     took.push(true);
+                    declined.push(None);
                     i = j + 1;
+                    continue;
+                }
+                if let Some(rows) = pending_decline {
+                    frames.push(own);
+                    over_data.push(None);
+                    took.push(false);
+                    declined.push(Some(rows));
+                    i += 1;
                     continue;
                 }
             }
@@ -774,9 +832,10 @@ pub(crate) fn frame_blocks(
         frames.push(own);
         over_data.push(None);
         took.push(false);
+        declined.push(None);
         i += 1;
     }
-    FramedBlocks { regions: r, frames, over_data, adopted: took }
+    FramedBlocks { regions: r, frames, over_data, adopted: took, declined }
 }
 
 /// Where a frame's header ends, in rows of the table it reads: the rows a
@@ -794,9 +853,10 @@ fn header_end(frame: &ParseSpec) -> Option<u64> {
     None
 }
 
-/// The note a block carries when the header run above it replaced a header
-/// its own frame promoted that read like data: that row is read as data.
-fn read_as_data_note(block_start: u64, own: &ParseSpec, run_start: u64, rows: u64) -> Option<String> {
+/// The review reason a block carries when the header run above it replaced
+/// a header its own frame promoted that read like data: that row is read as
+/// data, which a person confirms.
+fn read_as_data_reason(block_start: u64, own: &ParseSpec, run_start: u64, rows: u64) -> Option<String> {
     let promoted = header_end(own)? - own.transforms.iter().find_map(|t| match t {
         Transform::PromoteHeader { rows, .. } => Some(u64::from(*rows)),
         _ => None,
@@ -804,15 +864,16 @@ fn read_as_data_note(block_start: u64, own: &ParseSpec, run_start: u64, rows: u6
     let cells: Vec<&str> = own.columns.iter().filter_map(|c| c.source.as_deref()).collect();
     let shown = if cells.len() > 2 { format!("{} | …", cells[..2].join(" | ")) } else { cells.join(" | ") };
     Some(format!(
-        "row {} (`{shown}`){ADOPTED_OVER_DATA}{}–{}",
+        "row {} (`{shown}`){ADOPTED_OVER_DATA}{}–{} — accept only if that row is data, not this \
+         table's header",
         block_start + promoted + 1,
         run_start + 1,
         run_start + rows
     ))
 }
 
-/// The middle of [`read_as_data_note`], by which the report recognises it.
-pub const ADOPTED_OVER_DATA: &str = " is read as data under the header adopted from lines ";
+/// The middle of [`read_as_data_reason`]'s text.
+const ADOPTED_OVER_DATA: &str = " is read as data under the header adopted from lines ";
 
 /// The blocks of `regions` that pass the cheap gates against `target`
 /// (`Rigour::Gates`, as [`discover_sheets`] asks of a sheet), in the frame
@@ -841,7 +902,7 @@ fn gate_regions(
             .is_some_and(|f| f.spec.columns.iter().any(|c| c.source.is_some()))
     };
     let FramedBlocks { regions: framed, frames, over_data, .. } =
-        frame_blocks(path, sheet, regions, verify_opts(target), limits, &|f| gates(f.clone()));
+        frame_blocks(path, sheet, regions, verify_opts(target), limits, Adoption::Fit(&|f| gates(f.clone())));
     let mut headed_unfit = Vec::new();
     let mut header_like_data = Vec::new();
     let mut adopted_over_data = Vec::new();
@@ -904,7 +965,8 @@ pub struct GatedRegions {
     pub header_like_data: Vec<crate::spec::RowWindow>,
     /// For a block that passed with a header run adopted in place of a
     /// promoted header that read like data: its window's first line (which
-    /// gating leaves unchanged) and the note saying that row is data.
+    /// gating leaves unchanged) and the review reason saying that row is
+    /// read as data.
     pub adopted_over_data: Vec<(u64, String)>,
 }
 

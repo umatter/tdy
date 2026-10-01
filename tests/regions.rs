@@ -1401,6 +1401,10 @@ fn two_statetables_bind_by_name(fixture_name: &str, as_name: &str) {
     assert!(!text.contains(&format!("{as_name}#3")), "the title runs are not members: {text}");
     assert_eq!(text.matches("state<-\"State\"").count(), 2, "bound by name: {text}");
     assert!(!text.contains("reads like data"), "{text}");
+    // The bodies promote no header of their own (`Alabama | 88165 | 10` is
+    // not taken as one), so the run is adopted by a headerless block and no
+    // row is read as data: the standing "table i of n" reason is the only one.
+    assert!(!text.contains("is read as data"), "{text}");
     let out = tdy(&["query", &format!("SELECT count(*) AS n FROM dataset('{}')", t.display())]);
     assert!(!out.status.success(), "unaccepted");
     for n in 1..=2 {
@@ -1437,21 +1441,47 @@ fn a_two_line_title_and_header_run_is_adopted_into_the_one_block() {
 /// The contrived layout the design page records as the cost of adoption: a
 /// one-row run `Kanton;Betrag`, a blank row, then a block whose promoted
 /// header `Region;2024` reads like data (a number over a numeric column).
-/// Mechanically that is the state-table shape, so the run is adopted and
-/// `Region | 2024` is read as a data row — the literal reading — with a
-/// note naming it, and no review. See docs/design/2026-09-08-regions.md §4.
+/// Against a target naming `Kanton`/`Betrag` the run is adopted and
+/// `Region | 2024` is read as a data row — the literal reading. That is a
+/// judgement, not a proof (a title line over a year-headed table is the
+/// same shape), so the member waits on a person. See
+/// docs/design/2026-09-08-regions.md §4.
 #[test]
-fn an_adopted_header_over_a_header_that_reads_like_data_is_noted() {
-    let (_d, t, text) = draft_then_fit("Kanton;Betrag\n\nRegion;2024\nBern;100\nZug;200\nUri;300\n");
-    assert!(text.contains("kanton<-\"Kanton\""), "{text}");
-    assert!(
-        text.contains("row 3 (`Region | 2024`) is read as data under the header adopted from lines 1–1"),
-        "{text}"
+fn an_adopted_header_over_a_promoted_one_waits_on_a_person() {
+    let ddl = "CREATE TABLE q (kanton TEXT NOT NULL OPTIONS(matches='Kanton'), betrag BIGINT NOT NULL OPTIONS(matches='Betrag')) WITH (files='*.csv');";
+    let (_d, t) = pile("Kanton;Betrag\n\nRegion;2024\nBern;100\nZug;200\nUri;300\n", ddl);
+    waits_then_reads(
+        &t,
+        "REVIEW: row 3 (`Region | 2024`) is read as data under the header adopted from lines 1–1 — accept only if that row is data, not this table's header",
+        "betrag",
+        "2624 ",
     );
-    assert!(!text.contains("REVIEW") && !text.contains("reads like data"), "{text}");
-    let q = query(&t, "SELECT count(*) AS n, sum(betrag) AS b FROM DS");
-    assert!(q.contains("| 4 | 2624 |"), "{q}");
     assert!(query(&t, "SELECT kanton FROM DS ORDER BY betrag DESC LIMIT 1").contains("| Region "));
+}
+
+/// A title line over a year-headed table — the shape the adoption above
+/// cannot tell from it. Draft never adopts over a header the block's own
+/// frame promoted, so the UNEDITED draft declares the block's own columns,
+/// binds them by name, and the title line is a data-like run nothing read,
+/// waiting on a person. Adopting there drafted `sales_report`/`q1_2025`,
+/// fit with only a note and served `State | 2024` as a row: 2624, not 600.
+fn year_headed_under_a_title(content: &str, first: &str, first_src: &str) {
+    let (d, t, text) = draft_then_fit(content);
+    assert!(text.contains(&format!("{first}<-\"{first_src}\"")) && text.contains("c_2024<-\"2024\""), "{text}");
+    assert!(text.contains("REVIEW: a run of 1 line(s) at lines 1–1 was not read"), "{text}");
+    assert!(!text.contains("adopted from lines"), "{text}");
+    let out = tdy(&["query", &format!("SELECT count(*) AS n FROM dataset('{}')", t.display())]);
+    assert!(!out.status.success(), "unaccepted");
+    assert!(tdy_in(d.path(), &["fit", "d.tdy.sql", "--accept", "report.csv"]).status.success());
+    let q = query(&t, "SELECT count(*) AS n, sum(c_2024) AS total FROM DS");
+    assert!(q.contains("| 3 | 600"), "{q}");
+}
+
+#[test]
+fn the_unedited_draft_of_a_year_headed_table_under_a_title_binds_its_own_header() {
+    year_headed_under_a_title("Sales report;Q1 2025\n\nState;2024\nBern;100.00\nZug;200.00\nUri;300.00\n", "state", "State");
+    year_headed_under_a_title("Q1 report;CHF\n\nRegion;2024\nBern;100.00\nZug;200.00\nUri;300.00\n", "region", "Region");
+    year_headed_under_a_title("Kanton;Betrag\n\nRegion;2024\nBern;100\nZug;200\nUri;300\n", "region", "Region");
 }
 
 /// The adoption is gated: a header run whose frame does not pass against the
@@ -1485,8 +1515,8 @@ fn the_draft_of_a_footnoted_sheet_binds_by_name_and_fits() {
     let has = |col: &str, m: &str| draft.lines().any(|l| l.trim_start().starts_with(&format!("{col} ")) && l.contains(&format!("matches = '{m}'")));
     assert!(has("state", "State") && has("c_2008", "2008") && has("c_2010", "2010"), "{draft}");
     assert!(!draft.contains("col_"), "{draft}");
-    assert!(draft.contains("book.xlsx#Data: block 1 (lines 1–6) skipped: one field per line"), "{draft}");
-    assert!(draft.contains("book.xlsx#Data: block 3 (lines 16–18) skipped: no header of its own"), "{draft}");
+    assert!(draft.contains("book.xlsx: block 1 (lines 1–6) skipped: one field per line"), "{draft}");
+    assert!(draft.contains("book.xlsx: block 3 (lines 16–18) skipped: no header of its own"), "{draft}");
     std::fs::write(dir.path().join("d.tdy.sql"), &draft).unwrap();
     let out = tdy_in(dir.path(), &["fit", "d.tdy.sql"]);
     let text = String::from_utf8_lossy(&out.stdout);
@@ -1524,8 +1554,10 @@ fn the_draft_of_a_banner_workbook_declares_one_column_set_and_fits() {
 }
 
 /// Two stacked tables on one sheet, each under its own title-and-header
-/// run: the draft labels each block `book.xlsx#Data#i`, declares the one
-/// shared column set by name, and the unedited draft fits both blocks.
+/// run: the draft labels each block as `fit` names its member — `book.xlsx#i`,
+/// since a one-sheet workbook's member stays plain — declares the one shared
+/// column set by name, and the unedited draft fits both blocks, each
+/// accepted by the label the draft printed.
 #[test]
 fn the_draft_of_stacked_tables_on_a_sheet_labels_each_block() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -1533,7 +1565,7 @@ fn the_draft_of_stacked_tables_on_a_sheet_labels_each_block() {
     let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
     let draft = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "{draft}{}", String::from_utf8_lossy(&out.stderr));
-    assert!(draft.contains("book.xlsx#Data holds 2 stacked tables; each is drafted as book.xlsx#Data#i"), "{draft}");
+    assert!(draft.contains("book.xlsx holds 2 stacked tables; each is drafted as book.xlsx#i"), "{draft}");
     assert!(draft.contains("all_workers BIGINT OPTIONS(matches = 'All workers')"), "{draft}");
     let t = dir.path().join("d.tdy.sql");
     std::fs::write(&t, &draft).unwrap();
@@ -1541,19 +1573,26 @@ fn the_draft_of_stacked_tables_on_a_sheet_labels_each_block() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(text.contains("book.xlsx#1") && text.contains("book.xlsx#2"), "{text}");
+    for n in 1..=2 {
+        let out = tdy_in(dir.path(), &["fit", "d.tdy.sql", "--accept", &format!("book.xlsx#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let q = query(&t, "SELECT count(*) AS n, sum(all_workers) AS w FROM DS");
+    assert!(q.contains("| 10 | 6044640 |"), "{q}");
 }
 
-/// A block whose label differs by block: the per-column comment names the
-/// sheet block as `book.xlsx#Data#i`, exactly as a text block is `file#i`.
+/// A column confined to some blocks: the per-column comment names the sheet
+/// block as `fit` names its member, `book.xlsx#i`, exactly as a text block
+/// is `file#i`.
 #[test]
-fn a_column_confined_to_one_sheet_block_is_labelled_with_the_sheet() {
+fn a_column_confined_to_one_sheet_block_is_labelled_as_its_member() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::copy(fixture("regions_renumber.xlsx"), dir.path().join("book.xlsx")).unwrap();
     let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
     let draft = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "{draft}{}", String::from_utf8_lossy(&out.stderr));
-    assert!(draft.lines().any(|l| l.contains("menge") && l.contains("only in book.xlsx#Data#1")), "{draft}");
-    assert!(draft.lines().any(|l| l.contains("betrag") && l.contains("only in book.xlsx#Data#2, book.xlsx#Data#3")), "{draft}");
+    assert!(draft.lines().any(|l| l.contains("menge") && l.contains("only in book.xlsx#1")), "{draft}");
+    assert!(draft.lines().any(|l| l.contains("betrag") && l.contains("only in book.xlsx#2, book.xlsx#3")), "{draft}");
 }
 
 /// A workbook with several sheets: `fit` makes a sheet a member through its
@@ -1585,4 +1624,30 @@ fn a_footnoted_sheet_of_several_is_drafted_whole() {
 fn a_stacked_sheet_of_several_is_drafted_whole() {
     let draft = several_sheets_draft_whole("regions_three_sheets.xlsx");
     assert!(draft.contains("book.xlsx#Q1: drafted whole"), "{draft}");
+}
+
+/// A body whose own first row was promoted and reads like data, under a run
+/// of a title line and a header: a draft does not adopt over it, so it is no
+/// table a draft can declare from, and the file is drafted whole, saying
+/// why. `fit` still adopts the run against that by-name draft — over a
+/// promoted header, so the member waits on a person, and after `--accept`
+/// `Region | 2024` is a row.
+#[test]
+fn a_year_headed_body_under_a_title_and_header_run_is_drafted_whole() {
+    let (d, t) = pile("Table 1. Sales by canton\nKanton;Betrag\n\nRegion;2024\nBern;100\nZug;200\nUri;300\n", "");
+    let out = tdy_in(d.path(), &["draft", "report.csv"]);
+    let draft = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{draft}");
+    assert!(
+        draft.contains("report.csv: block 1's first row reads like data; drafted whole — a by-name target can still bind it through its header run"),
+        "{draft}"
+    );
+    assert!(draft.contains("matches = 'Kanton'") && draft.contains("matches = 'Betrag'"), "{draft}");
+    std::fs::write(&t, &draft).unwrap();
+    waits_then_reads(
+        &t,
+        "REVIEW: row 4 (`Region | 2024`) is read as data under the header adopted from lines 1–2 — accept only if that row is data, not this table's header",
+        "betrag",
+        "2624 ",
+    );
 }

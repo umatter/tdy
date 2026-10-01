@@ -336,7 +336,7 @@ impl Unit {
     /// this spec *does* read rather than as lines nothing reads.
     fn whole_file_notes(&self) -> Vec<String> {
         let mut ns: Vec<String> =
-            self.notes.iter().filter(|n| !is_dropped_note(n) && !is_over_data_note(n)).cloned().collect();
+            self.notes.iter().filter(|n| !is_dropped_note(n)).cloned().collect();
         ns.extend(self.dropped.iter().map(read_anyway_note));
         ns
     }
@@ -436,9 +436,11 @@ pub fn expand_units(
             )
         });
         // A block that adopted the header run above it in place of a header
-        // that read like data says which row it now reads as data.
-        let over_data = |w: &RowWindow| -> Vec<String> {
-            adopted_over_data.iter().filter(|(s, _)| *s == w.start).map(|(_, n)| n.clone()).collect()
+        // its own frame promoted asks a person whether that row is data: a
+        // title line over a year-headed table is the same shape, and there
+        // the row was the header.
+        let over_data = |w: &RowWindow| -> Option<String> {
+            adopted_over_data.iter().find(|(s, _)| *s == w.start).map(|(_, n)| n.clone())
         };
         let n = regions.windows.len();
         match n {
@@ -485,13 +487,12 @@ pub fn expand_units(
                     w.start + 1,
                     w.end
                 ));
-                notes.extend(over_data(&w));
                 notes.extend(dropped);
                 units.push(Unit {
                     member,
                     notes,
                     window: Some(w),
-                    review: shaped_reason,
+                    review: merge_reason(over_data(&w), shaped_reason),
                     dropped: regions.dropped.clone(),
                     shaped: shaped.clone(),
                     region_sheet: region_sheet.clone(),
@@ -505,13 +506,15 @@ pub fn expand_units(
                     let split =
                         format!("table {} of {n} in this file, split at blank rows", w.ordinal);
                     let review = merge_reason(
-                        Some(format!(
-                            "{split} — accept only if it is the same kind of table as the others"
-                        )),
+                        merge_reason(
+                            Some(format!(
+                                "{split} — accept only if it is the same kind of table as the others"
+                            )),
+                            over_data(&w),
+                        ),
                         shaped_reason.clone(),
                     );
                     notes.push(split);
-                    notes.extend(over_data(&w));
                     notes.extend(dropped.iter().cloned());
                     units.push(Unit {
                         member,
@@ -656,12 +659,6 @@ fn is_read_anyway_note(n: &str) -> bool {
 /// How the note for a block whose promoted header reads like data begins.
 const LIKE_DATA_PREFIX: &str = "the split found a block at lines ";
 
-/// Does this note say a row is read as data under an adopted header?
-/// `fit::read_as_data_note`'s own shape.
-fn is_over_data_note(n: &str) -> bool {
-    n.starts_with("row ") && n.contains(crate::fit::ADOPTED_OVER_DATA)
-}
-
 /// Does this note name lines nothing read? [`dropped_note`]'s own shape.
 fn is_dropped_note(n: &str) -> bool {
     n.starts_with("a run of ") && n.ends_with("was not read")
@@ -685,7 +682,6 @@ fn shown_notes(m: &MemberReport) -> impl Iterator<Item = &String> {
                 || is_read_anyway_note(n)
                 || is_refusal_note(n)
                 || n.starts_with(LIKE_DATA_PREFIX)
-                || is_over_data_note(n)
         })
 }
 
@@ -951,7 +947,6 @@ pub async fn fit_pile(
                 spec.notes.retain(|n| !is_dropped_note(n));
                 spec.notes.retain(|n| !n.starts_with(LIKE_DATA_PREFIX));
                 spec.notes.retain(|n| !is_read_anyway_note(n));
-                spec.notes.retain(|n| !is_over_data_note(n));
                 // The split's notes and its review reason are true of a spec
                 // that reads one block. A plain member may legitimately reuse
                 // a hand-written whole-file spec instead — and then those
