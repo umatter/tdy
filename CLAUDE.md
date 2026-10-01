@@ -616,7 +616,11 @@ workbook is split the same way since 2026-10-01, on the sheet the whole-file sni
 whole-sheet sniff. Draft skips, besides one-field banners, a block that is no `fit`
 candidate (`FramedBlocks::is_table`: no promoted header, or one that reads like data and
 adopted nothing — `regions_footnoted.xlsx`'s two-cell footnotes, ADP-31's states) and,
-when no block is left, drafts the file whole, as `fit` reads it. Every other block's
+when no block is left, drafts the file whole, as `fit` reads it. A sheet of a workbook
+with several is drafted from its blocks only when one table is left and nothing
+table-shaped (the condition on which `discover_sheets` admits it): split otherwise, the
+draft fit no sheet, and the corpus sweep's ttb, ADP-31 national and occupational-health
+workbooks were refused (`regions_{footnoted,three}_sheets.xlsx`). Every other block's
 columns are drafted separately, naming which block each came from; presence and
 heterogeneity notes count physical files, not blocks — got wrong first, when
 the grouping note fired across one file's own blocks as though they were

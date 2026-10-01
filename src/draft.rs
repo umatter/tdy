@@ -166,10 +166,34 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
                 windows.push(*w);
             }
         }
-        match (windows.is_empty(), banners.is_empty(), headless.is_empty()) {
-            (true, false, true) => split_files.push(format!("{prefix}: all blocks one field wide; drafted whole")),
-            (true, _, false) => split_files.push(format!("{prefix}: no block has a header of its own; drafted whole")),
-            _ => {
+        // A sheet of a workbook with several is a `fit` member through its
+        // blocks only when exactly one passes and nothing table-shaped is
+        // left over (`fit::discover_sheets`: sheet expansion asks nobody).
+        // Drafted from the blocks otherwise, it fit no sheet at all — so it
+        // is drafted whole, as `fit` reads it.
+        let several_sheets = matches!(&sample, Ok(s) if s.sheets.len() > 1);
+        let one_clean_block = windows.len() == 1 && {
+            let kept: Vec<bool> = regions.windows.iter().map(|w| windows.contains(w)).collect();
+            regions.gated(&kept).table_shaped().next().is_none()
+        };
+        let whole = if windows.is_empty() && headless.is_empty() && !banners.is_empty() {
+            Some("all blocks one field wide; drafted whole")
+        } else if windows.is_empty() && !headless.is_empty() {
+            Some("no block has a header of its own; drafted whole")
+        } else if several_sheets && !windows.is_empty() && !one_clean_block {
+            Some(
+                "drafted whole: a sheet of a workbook with several is fitted by its blocks only \
+                 when one table is left and nothing table-shaped",
+            )
+        } else {
+            None
+        };
+        match whole {
+            Some(why) => {
+                split_files.push(format!("{prefix}: {why}"));
+                windows.clear();
+            }
+            None => {
                 split_files.extend(banners);
                 split_files.extend(headless);
             }

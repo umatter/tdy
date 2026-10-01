@@ -149,6 +149,16 @@ FIXTURES  (all in testdata/, named regions_*)
    text, ";"-separated. Ground truth: table 1 workers 3012640, actors 965;
    table 2 workers 3032000, actors 1024.
 
+14. regions_footnoted_sheets.xlsx / regions_three_sheets.xlsx
+   The two shapes of the corpus sweep's workbooks with several sheets that
+   `draft` must not split: two sheets each laid out as #9 (a table under a
+   banner over a two-cell footnote block — `ttb_brewery_state_2008-2019`),
+   and two sheets each laid out as #2 (three stacked tables — `occupational
+   _health`). `fit` admits a sheet of such a workbook through its blocks
+   only when exactly one passes and nothing table-shaped is discarded, so a
+   draft from the blocks fits no sheet; each is drafted whole, as before.
+   Ground truth: the second sheet doubles the first's values.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
@@ -159,7 +169,8 @@ regions_footnoted.xlsx -> read whole positionally, or one by-name member, 1500/1
 regions_renumber.{csv,xlsx} -> 2400.00 (Betrag), 2406.00 (Betrag, Menge);
 regions_banner_notes.xlsx -> one plain member, 1500/1550/1600;
 regions_statetable.xlsx -> one plain member read whole, 10 rows, 32816265;
-regions_two_statetables.{xlsx,csv} -> two members, 3012640/965 and 3032000/1024.
+regions_two_statetables.{xlsx,csv} -> two members, 3012640/965 and 3032000/1024;
+regions_{footnoted,three}_sheets.xlsx -> drafted whole, both sheets fit.
 """
 import os
 import re
@@ -585,6 +596,45 @@ def build_regions_two_statetables():
     save_workbook(wb, "regions_two_statetables.xlsx", "regions_two_statetables.csv as sheet \"Data\"")
 
 
+def build_regions_several_sheets():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    for i, (title, factor) in enumerate((("Premise", 1), ("Bottles", 2))):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = title
+        row = 1
+        for text in BANNER:
+            ws.cell(row=row, column=1, value=text)
+            row += 1
+        row += 1
+        for j, h in enumerate(BANNER_HEADER):
+            ws.cell(row=row, column=1 + j, value=h)
+        row += 2
+        for s_, a, b, c in BANNER_ROWS:
+            for j, v in enumerate((s_, a * factor, b * factor, c * factor)):
+                ws.cell(row=row, column=1 + j, value=v)
+            row += 1
+        row += 1
+        for code, text in FORM_NOTES:
+            ws.cell(row=row, column=1, value=code)
+            ws.cell(row=row, column=2, value=text)
+            row += 1
+    save_workbook(wb, "regions_footnoted_sheets.xlsx", "two sheets laid out as regions_footnoted.xlsx")
+
+    wb = Workbook()
+    for i, (title, factor) in enumerate((("Q1", 1), ("Q2", 2))):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = title
+        for k, block in enumerate((BLOCK1, BLOCK2, BLOCK3)):
+            if k > 0:
+                ws.append([])
+            ws.append(["Datum", "Region", "Betrag"])
+            for d, r, b in block:
+                ws.append([d, r, f"{float(b) * factor:.2f}"])
+    save_workbook(wb, "regions_three_sheets.xlsx", "two sheets laid out as regions_three.xlsx")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -600,6 +650,7 @@ def main():
     build_regions_banner_notes_xlsx()
     build_regions_statetable_xlsx()
     build_regions_two_statetables()
+    build_regions_several_sheets()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "

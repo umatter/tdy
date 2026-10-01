@@ -1555,3 +1555,34 @@ fn a_column_confined_to_one_sheet_block_is_labelled_with_the_sheet() {
     assert!(draft.lines().any(|l| l.contains("menge") && l.contains("only in book.xlsx#Data#1")), "{draft}");
     assert!(draft.lines().any(|l| l.contains("betrag") && l.contains("only in book.xlsx#Data#2, book.xlsx#Data#3")), "{draft}");
 }
+
+/// A workbook with several sheets: `fit` makes a sheet a member through its
+/// blocks only when exactly one passes and nothing table-shaped is left
+/// over (sheet expansion asks nobody), so a draft declared from the blocks
+/// of such a sheet fits none of them — the corpus sweep's ttb and
+/// occupational-health workbooks, refused. Draft therefore drafts such a
+/// sheet whole, as before, and says why; the unedited draft fits.
+fn several_sheets_draft_whole(name: &str) -> String {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture(name), dir.path().join("book.xlsx")).unwrap();
+    let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
+    let draft = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{draft}{}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.path().join("d.tdy.sql"), &draft).unwrap();
+    let out = tdy_in(dir.path(), &["fit", "d.tdy.sql"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{draft}{text}{}", String::from_utf8_lossy(&out.stderr));
+    draft
+}
+
+#[test]
+fn a_footnoted_sheet_of_several_is_drafted_whole() {
+    let draft = several_sheets_draft_whole("regions_footnoted_sheets.xlsx");
+    assert!(draft.contains("book.xlsx#Premise: drafted whole"), "{draft}");
+}
+
+#[test]
+fn a_stacked_sheet_of_several_is_drafted_whole() {
+    let draft = several_sheets_draft_whole("regions_three_sheets.xlsx");
+    assert!(draft.contains("book.xlsx#Q1: drafted whole"), "{draft}");
+}
