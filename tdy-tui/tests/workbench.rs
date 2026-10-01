@@ -55,6 +55,8 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         sheet: None,
         region: None,
         window: None,
+        rows: None,
+        rows_sheet: None,
         status,
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
@@ -1970,6 +1972,15 @@ fn p_on_a_member_profiles_that_member() {
     let (mut w, _) = pile_and_enter(&d, vec![m], 0);
     assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile book.xlsx --sheet \"Q 1\"".into()));
 
+    // A sheet block: the sheet's own A1 rows, from the split.
+    let mut m = member("book.xlsx", MemberStatus::Gaps);
+    m.region = Some(2);
+    m.rows = Some((10, 13));
+    m.rows_sheet = Some("Q1".into());
+    let (mut w, _) = pile_and_enter(&d, vec![m], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile book.xlsx --sheet Q1 --rows 10-13".into()));
+
+    // A block whose rows the report does not carry is named as itself.
     let mut m = member("book.xlsx", MemberStatus::Fits);
     m.sheet = Some("Q1".into());
     m.region = Some(2);
@@ -2032,4 +2043,88 @@ fn paging_a_profile_keeps_the_selected_column_visible() {
     w.key(key(KeyCode::PageUp));
     let Context::Profile { selected, .. } = &w.context else { panic!() };
     assert!(*selected >= w.main_scroll && *selected < w.main_scroll + visible);
+}
+
+// --- `p` on a block, end to end -------------------------------------------
+
+const Q_TARGET: &str = "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), \
+     region TEXT NOT NULL OPTIONS(matches='Region'), \
+     amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) \
+     WITH (files = 'report.*', date_order = 'dmy');";
+
+fn no_llm() -> tdy::config::Config {
+    tdy::config::load(&tdy::config::Overrides { backend: Some("none".into()), model: None, base_url: None }).unwrap()
+}
+
+/// Dry-run `.fit` the pile in `d` through a real session, open member
+/// `idx`, press `p`, and run the dispatched line through the same session:
+/// the line, and the profile it produced.
+async fn p_on_member(d: &tempfile::TempDir, idx: usize) -> (String, tdy::profile::Profile) {
+    let mut s = tdy::console::Session::new(d.path(), no_llm()).unwrap();
+    let fit = s.run(".fit q.tdy.sql --dry-run --propose", None).await;
+    let Payload::Fitted(report) = fit.payload else { panic!("{}", fit.text) };
+    let snapshot: Vec<(String, Option<(u64, u64)>, MemberStatus)> =
+        report.members.iter().map(|m| (m.name(), m.rows, m.status)).collect();
+    assert!(report.dry_run);
+    let mut w = wb(d);
+    w.begin(".fit q.tdy.sql --dry-run --propose");
+    w.apply(Outcome { echo: String::new(), text: fit.text, payload: Payload::Fitted(report), ok: fit.ok }, d.path());
+    if let Context::Pile { selected, .. } = &mut w.context {
+        *selected = idx;
+    }
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Enter));
+    let WbAction::Dispatch(line) = w.key(key(KeyCode::Char('p'))) else { panic!("{snapshot:?}") };
+    let o = s.run(&line, None).await;
+    let Payload::Profile(p) = o.payload else { panic!("{line}: {}", o.text) };
+    let left: Vec<String> = std::fs::read_dir(d.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into())
+        .filter(|n: &String| n.ends_with(".tdy.toml") || n.ends_with(".tdy.lock"))
+        .collect();
+    assert!(left.is_empty(), "a dry run and a profile write nothing: {left:?}");
+    let _ = snapshot;
+    (line, p)
+}
+
+/// A text block that the gates admitted and the full fit refused: the
+/// report carries its rows although no spec was written, and `p` profiles
+/// exactly those rows.
+#[tokio::test]
+async fn p_profiles_a_refused_text_block_by_its_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let mut csv = String::from("Datum;Region;Betrag\n05.01.2025;Ost;190.00\n12.01.2025;West;200.00\n19.01.2025;Nord;210.00\n\n");
+    csv.push_str("Datum;Region;Betrag\n");
+    for i in 0..2100 {
+        // Past the gates' 2,000-row probe, one amount that is not one.
+        let amount = if i == 2050 { "kaputt".to_string() } else { format!("{}.00", 400 + i % 7) };
+        csv.push_str(&format!("05.02.2025;Ost;{amount}\n"));
+    }
+    std::fs::write(d.path().join("report.csv"), csv).unwrap();
+    std::fs::write(d.path().join("q.tdy.sql"), Q_TARGET).unwrap();
+    let (line, p) = p_on_member(&d, 1).await;
+    assert_eq!(line, ".profile report.csv --rows 6-2106");
+    assert_eq!(p.rows, 2100);
+    let betrag = p.columns.iter().find(|c| c.name == "Betrag").unwrap();
+    assert_eq!(betrag.max.as_deref(), Some("kaputt"), "the value the fit refused is in the evidence");
+}
+
+/// A sheet block in a dry run has no sidecar; its rows — the sheet's own
+/// A1 rows — come with the report, and `p` profiles that block.
+#[tokio::test]
+async fn p_profiles_a_dry_run_sheet_block_by_its_a1_rows() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/regions_three_offset.xlsx"),
+        d.path().join("report.xlsx"),
+    )
+    .unwrap();
+    std::fs::write(d.path().join("q.tdy.sql"), Q_TARGET).unwrap();
+    let (line, p) = p_on_member(&d, 1).await;
+    assert_eq!(line, ".profile report.xlsx --sheet Data --rows 10-13");
+    assert_eq!(p.rows, 3);
+    let betrag = p.columns.iter().find(|c| c.name == "Betrag").unwrap();
+    assert_eq!((betrag.min.as_deref(), betrag.max.as_deref()), (Some("490.00"), Some("510.00")));
 }

@@ -188,7 +188,7 @@ pub fn resolve(path: &Path, root: Option<&Path>) -> Result<(PathBuf, Option<Stri
     });
     let split = match declared {
         Ok(Some(m)) => Some(m),
-        Err(several) => bail!("{text} could mean {} — name the file and the sheet unambiguously", MemberRef::names(&several)),
+        Err(several) => bail!("{text} could mean {} — name the file and the sheet unambiguously", readings(&several)),
         Ok(None) => match MemberRef::resolve(&text, |m| {
             let f = Path::new(&m.path);
             (m.sheet.is_some() || m.region.is_some())
@@ -197,7 +197,7 @@ pub fn resolve(path: &Path, root: Option<&Path>) -> Result<(PathBuf, Option<Stri
         }) {
             Ok(m) => m,
             Err(several) => {
-                bail!("{text} could mean {} — name the file and the sheet unambiguously", MemberRef::names(&several))
+                bail!("{text} could mean {} — name the file and the sheet unambiguously", readings(&several))
             }
         },
     };
@@ -221,6 +221,21 @@ pub fn resolve(path: &Path, root: Option<&Path>) -> Result<(PathBuf, Option<Stri
             None => bail!("{text} does not exist (not a file, nor a sheet or block of one)"),
         },
     }
+}
+
+/// Several readings of one reference, each said in words: two readings
+/// often share a name (`book.xlsx#2` is sheet "2" and block 2 alike).
+fn readings(several: &[MemberRef]) -> String {
+    several
+        .iter()
+        .map(|m| match (&m.sheet, m.region) {
+            (Some(s), Some(r)) => format!("block {r} of sheet {s:?} of {}", m.path),
+            (None, Some(r)) => format!("block {r} of {}", m.path),
+            (Some(s), None) => format!("sheet {s:?} of {}", m.path),
+            (None, None) => m.path.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(" or ")
 }
 
 /// [`profile_file`] for a member already resolved: the data file, the

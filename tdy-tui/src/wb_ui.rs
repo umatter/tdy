@@ -610,12 +610,13 @@ fn context_title(ctx: &Context) -> String {
         Context::Member { report, member, .. } => report
             .members
             .get(*member)
-            .map(|m| match m.window {
-                // 1-based, inclusive, en dash: `w.start..w.end` is the
-                // 0-based half-open window the spec carries, and a title
-                // in that vocabulary would read as an off-by-one to a
-                // person counting lines in an editor.
-                Some(w) => format!("{} · rows {}–{}", m.name(), w.start + 1, w.end),
+            .map(|m| match m.rows.or(m.window.map(|w| (w.start + 1, w.end))) {
+                // 1-based, inclusive, en dash — the rows the split gave the
+                // block (a sheet's own A1 rows for a sheet block), else the
+                // 0-based half-open window the spec carries, made 1-based:
+                // a title in that vocabulary would read as an off-by-one to
+                // a person counting lines in an editor.
+                Some((a, b)) => format!("{} · rows {a}–{b}", m.name()),
                 None => m.name(),
             })
             .unwrap_or_else(|| "member".to_string()),

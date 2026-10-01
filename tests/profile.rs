@@ -517,3 +517,48 @@ fn the_smaller_sentences() {
 fn shape_of(v: &str) -> String {
     tdy::profile::shape(v)
 }
+
+/// A pile's report says which rows each block member is — set from the
+/// split, in a dry run too — and a whole-file member carries no `rows` key,
+/// so the JSON a script already reads is unchanged.
+#[test]
+fn a_pile_report_names_each_blocks_rows() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::copy(fixture("regions_three.csv"), d.path().join("report.csv")).unwrap();
+    std::fs::copy(fixture("drifting_exports/2025-01.csv"), d.path().join("plain.csv")).unwrap();
+    std::fs::write(
+        d.path().join("q.tdy.sql"),
+        "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), \
+         region TEXT NOT NULL OPTIONS(matches='Region'), \
+         amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) \
+         WITH (files = '*.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["--json", "fit", "q.tdy.sql", "--dry-run"])
+        .current_dir(d.path())
+        .env("TDY_BACKEND", "none")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows: Vec<(String, serde_json::Value)> = v["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            let name = format!("{}{}", m["path"].as_str().unwrap(), m["region"].as_u64().map(|r| format!("#{r}")).unwrap_or_default());
+            (name, m.get("rows").cloned().unwrap_or(serde_json::Value::Null))
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("plain.csv".to_string(), serde_json::Value::Null),
+            ("report.csv#1".to_string(), serde_json::json!([1, 4])),
+            ("report.csv#2".to_string(), serde_json::json!([6, 9])),
+            ("report.csv#3".to_string(), serde_json::json!([11, 14])),
+        ]
+    );
+    let sidecars = std::fs::read_dir(d.path()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tdy.toml")).count();
+    assert_eq!(sidecars, 0, "a dry run writes nothing");
+}

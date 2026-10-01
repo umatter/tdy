@@ -1436,20 +1436,31 @@ impl Workbench {
     }
 
     /// `p` over a Member: the `.profile` line for that member — its sheet,
-    /// and its block's rows (`--rows`, 1-based and inclusive, as the title
-    /// shows them) when the report carries the window. A block whose
-    /// window the report does not carry (a sheet's) is named as the member
-    /// itself, `book.xlsx#Q1#2`, which its sidecar resolves.
+    /// and for a block its rows (`--rows`, 1-based and inclusive, as the
+    /// title shows them: lines of a text file, the sheet's own A1 rows for
+    /// a sheet, with `--sheet`). The rows come from the split, so a block
+    /// that was refused, or fitted in a dry run with no sidecar, still
+    /// profiles as itself.
     fn profile_member(&self) -> WbAction {
         let Context::Member { target, report, member, .. } = &self.context else {
             return WbAction::None;
         };
         let Some(m) = report.members.get(*member) else { return WbAction::None };
         let file = self.rel_spelling(&member_preview_path(target, &m.path));
-        let sheet = m.sheet.as_ref().map(|s| format!(" --sheet {}", quote_rel(s))).unwrap_or_default();
-        let line = match (m.region, m.window) {
-            (_, Some(w)) => format!(".profile {}{sheet} --rows {}-{}", quote_rel(&file), w.start + 1, w.end),
-            (Some(r), None) => {
+        let sheet = m
+            .sheet
+            .as_ref()
+            .or(m.rows_sheet.as_ref())
+            .map(|s| format!(" --sheet {}", quote_rel(s)))
+            .unwrap_or_default();
+        let rows = m.rows.or(m.window.map(|w| (w.start + 1, w.end)));
+        let line = match (rows, m.region) {
+            (Some((a, b)), _) => format!(".profile {}{sheet} --rows {a}-{b}", quote_rel(&file)),
+            // A block whose rows the report does not carry (a workbook that
+            // could not be reopened to count them): its own name, which its
+            // sidecar resolves or which is refused by name — never the
+            // whole sheet under the block's name.
+            (None, Some(r)) => {
                 let name = tdy::member::MemberRef { path: file, sheet: m.sheet.clone(), region: Some(r) }.name();
                 format!(".profile {}", quote_rel(&name))
             }
