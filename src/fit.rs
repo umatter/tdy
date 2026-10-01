@@ -807,7 +807,7 @@ pub(crate) fn frame_blocks(
                 // that costs time, not correctness.
                 let by_run = ends_on_run
                     && match &adoption {
-                        Adoption::Fit(passes) => framed.as_ref().is_some_and(|f| passes(f)),
+                        Adoption::Fit(passes) => framed.as_ref().is_some_and(passes),
                         Adoption::Draft => own_header.is_none(),
                     };
                 let pending_decline = (ends_on_run && own_header.is_some() && !by_run).then_some(rows);
