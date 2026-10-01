@@ -1023,18 +1023,13 @@ fn json_kind(v: &serde_json::Value) -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Turn the first `n` rows of a table into one header, as `promote_header`
-/// means it.
+/// means it, returning it beside the header **before** duplicate names
+/// were disambiguated — see `RawTable::header_origin`.
 ///
-/// Factored out so the streaming executor in `stream` builds headers with
-/// *this* code rather than a copy of it: a header that differed between the
-/// two paths would rename columns, which is the quietest way to return the
-/// wrong data.
-pub(crate) fn promote_header_from(header_rows: Vec<Vec<String>>, join: &str) -> Vec<String> {
-    promote_header_recording(header_rows, join).0
-}
-
-/// As [`promote_header_from`], but also returning the header **before**
-/// duplicate names were disambiguated — see `RawTable::header_origin`.
+/// Shared with the streaming executor in `stream`, so it builds headers
+/// with *this* code rather than a copy of it: a header that differed
+/// between the two paths would rename columns, which is the quietest way to
+/// return the wrong data.
 pub(crate) fn promote_header_recording(
     header_rows: Vec<Vec<String>>,
     join: &str,

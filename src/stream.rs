@@ -58,7 +58,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 
 use crate::config::Limits;
 use crate::engine::{
-    build_column_at, compile, dedupe_names, promote_header_from, ExtractOpts, BATCH_ROWS,
+    build_column_at, compile, dedupe_names, promote_header_recording, ExtractOpts, BATCH_ROWS,
 };
 
 /// Cells per output batch, the bound that actually keeps a batch small.
@@ -1331,6 +1331,77 @@ pub fn execute_with(
     if !can_stream(spec) {
         bail!("internal: stream::execute_with called on an unstreamable spec");
     }
+    let mut schema: Option<Arc<Schema>> = None;
+    let mut batches_emitted = 0usize;
+    let mut chunk: Vec<Vec<String>> = Vec::new();
+    let mut emitted = 0usize;
+    let plan = drive(
+        spec,
+        path,
+        limits,
+        |plan, header, _origin| plan.resolve(spec, header),
+        |plan, r| {
+            // A batch is bounded by *cells*, not rows. 65,536 rows of a
+            // 1,000-column file is 65 million strings — a 134 MB file
+            // measured at 4.2 GB before this, because width was the one
+            // dimension nothing bounded. For anything up to 16 columns this
+            // is still exactly BATCH_ROWS, so the common case is unchanged.
+            let batch_rows = (BATCH_CELLS / plan.width.max(1)).clamp(1, BATCH_ROWS);
+            plan.push(r, &mut chunk);
+            while chunk.len() >= batch_rows {
+                let rest = chunk.split_off(batch_rows);
+                flush(plan, &chunk, emitted, &mut schema, &mut batches_emitted, &mut sink)?;
+                emitted += chunk.len();
+                chunk = rest;
+            }
+            Ok(true)
+        },
+    )?;
+    // `..=` in spirit: an empty table still produces one empty batch, because
+    // a query over a file with a header and no rows must still have a schema.
+    flush(&plan, &chunk, emitted, &mut schema, &mut batches_emitted, &mut sink)?;
+    Ok(())
+}
+
+/// What [`framed_rows`] hands the framed raw table to.
+pub trait FramedSink {
+    /// The header, and the header as the file spelt it (before duplicates
+    /// were disambiguated — `RawTable::header_origin`). Called once, first.
+    fn header(&mut self, header: &[String], origin: &[String]) -> Result<()>;
+    /// One body row; `false` stops the read.
+    fn row(&mut self, row: &[String]) -> Result<bool>;
+}
+
+/// The framed raw table of a streamable `frame`, one row at a time: the
+/// header once, then every body row as the strings extraction produced —
+/// after `skip_rows`, `promote_header` and a region window, before any
+/// row-local transform or cast, padded to the table's width as
+/// `rectangularize` pads it.
+///
+/// The same reader, the same measuring pass and the same header code the
+/// executor runs ([`execute_with`] is this plus `Plan::push` and the
+/// casts), so what a profile counts is what a query reads. Memory is one
+/// row.
+pub fn framed_rows(frame: &ParseSpec, path: &Path, limits: Limits, sink: &mut impl FramedSink) -> Result<()> {
+    if !can_stream(frame) {
+        bail!("internal: stream::framed_rows called on an unstreamable spec");
+    }
+    let sink = std::cell::RefCell::new(sink);
+    drive(frame, path, limits, |_, h, o| sink.borrow_mut().header(h, o), |_, r| sink.borrow_mut().row(&r))?;
+    Ok(())
+}
+
+/// The reading half of the executor: measure, frame the header, then hand
+/// each body row over unchanged. `on_header` sees the plan, the header and
+/// the header as the file spelt it; `on_row` returning `false` ends the
+/// read early. Returns the plan, for the caller's last flush.
+fn drive(
+    spec: &ParseSpec,
+    path: &Path,
+    limits: Limits,
+    on_header: impl FnOnce(&mut Plan, &[String], &[String]) -> Result<()>,
+    mut on_row: impl FnMut(&mut Plan, Vec<String>) -> Result<bool>,
+) -> Result<Plan> {
     let opts = ExtractOpts::full(limits);
     let ragged = match &spec.extraction {
         Extraction::Delimited { ragged, .. } => *ragged,
@@ -1454,7 +1525,10 @@ pub fn execute_with(
             header_rows.len()
         );
     }
-    let header = match provided_header {
+    // The header, and beside it the header as the file spelt it — before
+    // duplicates were disambiguated, exactly as `RawTable::header_origin`
+    // keeps it, so a profile names two `Betrag`s as two `Betrag`s.
+    let (header, origin) = match provided_header {
         Some(mut h) => {
             // Same normalisation RawTable::ensure_header applies to names an
             // extraction supplies: blanks become col_N, duplicates are
@@ -1464,30 +1538,21 @@ pub fn execute_with(
                     *n = format!("col_{}", i + 1);
                 }
             }
+            let origin = h.clone();
             dedupe_names(&mut h);
-            h
+            (h, origin)
         }
-        None if plan.header_rows > 0 => promote_header_from(header_rows, &plan.header_join),
+        None if plan.header_rows > 0 => promote_header_recording(header_rows, &plan.header_join),
         None => {
             let mut h: Vec<String> = (1..=target_width).map(|i| format!("col_{i}")).collect();
+            let origin = h.clone();
             dedupe_names(&mut h);
-            h
+            (h, origin)
         }
     };
-    plan.resolve(spec, &header)?;
+    on_header(&mut plan, &header, &origin)?;
 
     // --- the body ----------------------------------------------------------
-    let mut schema: Option<Arc<Schema>> = None;
-    let mut batches_emitted = 0usize;
-    // A batch is bounded by *cells*, not rows. 65,536 rows of a 1,000-column
-    // file is 65 million strings — a 134 MB file measured at 4.2 GB before
-    // this, because width was the one dimension nothing bounded. For anything
-    // up to 16 columns this is still exactly BATCH_ROWS, so the common case is
-    // unchanged.
-    let batch_rows = (BATCH_CELLS / target_width.max(1)).clamp(1, BATCH_ROWS);
-    let mut chunk: Vec<Vec<String>> = Vec::with_capacity(batch_rows.min(1024));
-    let mut emitted = 0usize;
-
     // A source that needed no measuring pass has not been counted yet, so the
     // limit is enforced here as well. Both places, because whichever ran
     // first must be the one that stops.
@@ -1511,18 +1576,11 @@ pub fn execute_with(
             );
         }
         fit(&mut r, target_width);
-        plan.push(r, &mut chunk);
-        while chunk.len() >= batch_rows {
-            let rest = chunk.split_off(batch_rows);
-            flush(&plan, &chunk, emitted, &mut schema, &mut batches_emitted, &mut sink)?;
-            emitted += chunk.len();
-            chunk = rest;
+        if !on_row(&mut plan, r)? {
+            break;
         }
     }
-    // `..=` in spirit: an empty table still produces one empty batch, because
-    // a query over a file with a header and no rows must still have a schema.
-    flush(&plan, &chunk, emitted, &mut schema, &mut batches_emitted, &mut sink)?;
-    Ok(())
+    Ok(plan)
 }
 
 /// Pad or truncate a row to the table's width, as rectangularize does.
@@ -1564,6 +1622,9 @@ fn flush(
 
 /// The row-local part of the pipeline, plus where the body starts and ends.
 struct Plan {
+    /// The table's width after rectangularising: what a batch's cell bound
+    /// divides by.
+    width: usize,
     skip_head: usize,
     header_rows: usize,
     header_join: String,
@@ -1595,8 +1656,9 @@ struct UnpivotPlan {
 }
 
 impl Plan {
-    fn build(spec: &ParseSpec, _width: usize, total_rows: usize) -> Result<Self> {
+    fn build(spec: &ParseSpec, width: usize, total_rows: usize) -> Result<Self> {
         let mut p = Plan {
+            width,
             skip_head: 0,
             header_rows: 0,
             header_join: " ".into(),

@@ -10,6 +10,7 @@
 //! - [`infer`]    tier-2 LLM inference with grammar-constrained decoding
 //! - [`engine`]   ParseSpec + file -> Arrow RecordBatch
 //! - [`evidence`] what accepting a reviewed member would do, computed over the whole file
+//! - [`profile`]  what each column holds (counts, distinct, shapes) — evidence, never a decision
 //! - [`provider`] DataFusion `messy()` UDTF, query running, output
 //! - [`sqlscan`]  finding `messy('...')` in SQL without mistaking comments for code
 //! - [`fileio`]   bounded reads, streaming hashes, atomic writes
@@ -36,6 +37,7 @@ pub mod lockfile;
 pub mod magnitude;
 pub mod member;
 pub mod numfmt;
+pub mod profile;
 pub mod provider;
 pub mod sample;
 pub mod sidecar;

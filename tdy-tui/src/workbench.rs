@@ -20,6 +20,10 @@ use tdy::report::{MemberStatus, MemberReport, PileReport};
 use crate::browser::Browser;
 use crate::remedy::{self, Edit, Remedy};
 
+/// Rows a Profile's table draws above its first column: the heading line
+/// and the table's own header row. Shared with `wb_ui::draw_profile`.
+pub const PROFILE_HEAD_ROWS: usize = 2;
+
 /// Which pane keys are routed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -96,6 +100,9 @@ pub enum Context {
     /// in `tests/workbench.rs` for the pin: this module's job is only to
     /// not panic and not wrongly clear the context.
     Evidence { target: PathBuf, member: String, rows: Vec<Evidence>, line: String },
+    /// `.profile`'s answer: a table of the columns, `selected` one of them;
+    /// `detail` shows that column's top values and shapes instead.
+    Profile { profile: tdy::profile::Profile, selected: usize, detail: bool },
 }
 
 /// One scrollback cell: the echoed line, then its text.
@@ -410,6 +417,24 @@ impl Workbench {
                             self.leave_member();
                             return WbAction::None;
                         }
+                        Context::Profile { detail, .. } => {
+                            // Detail -> the columns -> closed: one level
+                            // per Esc, as Member -> Pile does. Closing
+                            // lands on Empty, as Evidence does, since the
+                            // context the `p` came from was replaced.
+                            if *detail {
+                                if let Context::Profile { detail, .. } = &mut self.context {
+                                    *detail = false;
+                                }
+                                self.main_scroll = 0;
+                                self.follow_profile_selection();
+                            } else {
+                                self.context = Context::Empty;
+                                self.main_scroll = 0;
+                                self.status = "profile closed".to_string();
+                            }
+                            return WbAction::None;
+                        }
                         Context::Evidence { .. } => {
                             // The Member context this evidence replaced is
                             // gone (Evidence cannot carry a `PileReport`
@@ -643,6 +668,13 @@ impl Workbench {
                     }
                     None => self.status = "fitted, but no target known".to_string(),
                 }
+                None
+            }
+            Payload::Profile(profile) => {
+                self.context = Context::Profile { profile, selected: 0, detail: false };
+                // A profile opens at its first column (see the
+                // `Payload::Query` arm: a context change resets).
+                self.main_scroll = 0;
                 None
             }
             Payload::Evidence { target, member, rows } => {
@@ -1044,6 +1076,11 @@ impl Workbench {
             }
             KeyCode::Char('s') => self.shortcut(".sniff"),
             KeyCode::Char('e') => self.shortcut(".edit"),
+            // A data file only: a directory or a target has no columns.
+            KeyCode::Char('p') => match self.browser.selected_entry() {
+                Some(e) if e.kind == EntryKind::File => self.shortcut(".profile"),
+                _ => WbAction::None,
+            },
             // `f` fits a target — only meaningful on a `*.tdy.sql` entry; a
             // data file's shortcut stays `s`. `--propose` for the same
             // reason `refit_pile` asks for it: the Pile this produces is
@@ -1166,6 +1203,12 @@ impl Workbench {
         if matches!(&self.context, Context::Evidence { .. }) {
             return self.key_evidence(k);
         }
+        if matches!(&self.context, Context::Profile { .. }) {
+            return self.key_profile(k);
+        }
+        if k.code == KeyCode::Char('p') {
+            return self.profile_shown_file();
+        }
         match k.code {
             KeyCode::Up => {
                 self.main_scroll = self.main_scroll.saturating_sub(1);
@@ -1227,6 +1270,10 @@ impl Workbench {
                     + 16
             }
             Context::Query(t) => t.rows.len() + 16,
+            Context::Profile { profile, detail: false, .. } => profile.columns.len() + 16,
+            Context::Profile { profile, selected, detail: true } => {
+                profile.columns.get(*selected).map(|c| c.top.len() + c.shapes.len()).unwrap_or(0) + 16
+            }
             _ => 16,
         }
     }
@@ -1309,8 +1356,89 @@ impl Workbench {
             KeyCode::Char('t') => self.edit_target(),
             KeyCode::Char(c @ '1'..='9') => self.stage_remedy((c as u8 - b'1') as usize),
             KeyCode::Char('a') => self.accept_member(),
+            KeyCode::Char('p') => self.profile_member(),
             _ => WbAction::None,
         }
+    }
+
+    /// Keys over a Profile (Main focus): Up/Down move the selected column
+    /// in the table and scroll the detail; Enter opens the selected
+    /// column's detail. Esc is `key()`'s, ahead of the focus dispatch.
+    fn key_profile(&mut self, k: KeyEvent) -> WbAction {
+        let Context::Profile { profile, selected, detail } = &mut self.context else {
+            return WbAction::None;
+        };
+        let n = profile.columns.len();
+        match (k.code, *detail) {
+            (KeyCode::Up, false) => {
+                *selected = selected.saturating_sub(1);
+                self.follow_profile_selection();
+            }
+            (KeyCode::Down, false) => {
+                *selected = (*selected + 1).min(n.saturating_sub(1));
+                self.follow_profile_selection();
+            }
+            (KeyCode::Enter, false) if n > 0 => {
+                *detail = true;
+                // The detail is another view: it opens at its top.
+                self.main_scroll = 0;
+            }
+            (KeyCode::Up, true) => self.main_scroll = self.main_scroll.saturating_sub(1),
+            (KeyCode::Down, true) => {
+                self.main_scroll = (self.main_scroll + 1).min(self.main_scroll_bound());
+            }
+            _ => {}
+        }
+        WbAction::None
+    }
+
+    /// Keep the selected column of a Profile's table on screen: the table
+    /// sits under a heading line and its own header row, which is the `2`.
+    fn follow_profile_selection(&mut self) {
+        let Context::Profile { selected, detail: false, .. } = &self.context else { return };
+        let visible = self.main_view_rows.saturating_sub(PROFILE_HEAD_ROWS).max(1);
+        if *selected < self.main_scroll {
+            self.main_scroll = *selected;
+        } else if *selected >= self.main_scroll + visible {
+            self.main_scroll = selected + 1 - visible;
+        }
+    }
+
+    /// `p` over a File: the `.profile` line for the file on show — with
+    /// `--sheet` naming the sheet on show when the workbook has several, so
+    /// what is profiled is what is on screen.
+    fn profile_shown_file(&self) -> WbAction {
+        let Context::File { path, raw, .. } = &self.context else { return WbAction::None };
+        let mut line = format!(".profile {}", quote_rel(&self.rel_spelling(path)));
+        if raw.sheets.len() > 1 {
+            if let Some(s) = &raw.grid_sheet {
+                line.push_str(&format!(" --sheet {}", quote_rel(s)));
+            }
+        }
+        WbAction::Dispatch(line)
+    }
+
+    /// `p` over a Member: the `.profile` line for that member — its sheet,
+    /// and its block's rows (`--rows`, 1-based and inclusive, as the title
+    /// shows them) when the report carries the window. A block whose
+    /// window the report does not carry (a sheet's) is named as the member
+    /// itself, `book.xlsx#Q1#2`, which its sidecar resolves.
+    fn profile_member(&self) -> WbAction {
+        let Context::Member { target, report, member, .. } = &self.context else {
+            return WbAction::None;
+        };
+        let Some(m) = report.members.get(*member) else { return WbAction::None };
+        let file = self.rel_spelling(&member_preview_path(target, &m.path));
+        let sheet = m.sheet.as_ref().map(|s| format!(" --sheet {}", quote_rel(s))).unwrap_or_default();
+        let line = match (m.region, m.window) {
+            (_, Some(w)) => format!(".profile {}{sheet} --rows {}-{}", quote_rel(&file), w.start + 1, w.end),
+            (Some(r), None) => {
+                let name = tdy::member::MemberRef { path: file, sheet: m.sheet.clone(), region: Some(r) }.name();
+                format!(".profile {}", quote_rel(&name))
+            }
+            (None, None) => format!(".profile {}{sheet}", quote_rel(&file)),
+        };
+        WbAction::Dispatch(line)
     }
 
     /// `a` over a Member with a live judgement waiting on review (`review:

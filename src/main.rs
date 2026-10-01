@@ -35,7 +35,7 @@ struct Cli {
     #[arg(long, global = true)]
     model: Option<String>,
 
-    /// Emit machine-readable JSON instead of text (sniff, fit, check)
+    /// Emit machine-readable JSON instead of text (sniff, fit, check, profile)
     #[arg(long, global = true)]
     json: bool,
 
@@ -80,6 +80,32 @@ enum Command {
         #[arg(long)]
         no_llm: bool,
     },
+    /// What each column of a file holds: counts, distinct values, min and
+    /// max, the most frequent values and the shapes they take.
+    ///
+    /// Read over the whole file, in the frame a fresh sidecar gives (or the
+    /// sniffer's, heuristics only, when there is none). Evidence for a
+    /// person: nothing is written, and nothing reads a profile to change a
+    /// spec.
+    Profile {
+        /// The data file, or a member reference (`book.xlsx#Q1`,
+        /// `report.csv#2`).
+        file: PathBuf,
+        /// One sheet of a workbook.
+        #[arg(long)]
+        sheet: Option<String>,
+        /// One block of rows, 1-based and inclusive (`6-9`), as a region
+        /// member's title counts it.
+        #[arg(long)]
+        rows: Option<String>,
+        /// One column's detail: its top values and every shape.
+        #[arg(long)]
+        column: Option<String>,
+        /// Profile only the first N rows (the output says it is not the
+        /// whole file).
+        #[arg(long)]
+        head: Option<u64>,
+    },
     /// Check an existing sidecar: valid spec, matching fingerprint, and it
     /// actually parses the file.
     Validate {
@@ -110,7 +136,7 @@ enum Command {
     },
     /// Serve tdy's tools over the Model Context Protocol (stdio).
     ///
-    /// For AI agents: the same sniff/draft/fit/check/query/validate surface,
+    /// For AI agents: the same sniff/profile/draft/fit/check/query/validate surface,
     /// with structured results. Every path is confined to --root. Acceptance
     /// of review-gated members is DISABLED unless --allow-accept is given,
     /// because a review reason is a judgement tdy reserves for a human.
@@ -548,6 +574,21 @@ async fn run() -> Result<()> {
                 },
             )
             .await?;
+        }
+        Command::Profile { file, sheet, rows, column, head } => {
+            let cfg = config::load(&overrides)?;
+            let rows = rows.as_deref().map(tdy::profile::parse_rows).transpose()?;
+            let req = tdy::profile::Request { sheet, rows, head };
+            let p = tdy::profile::profile_file(&file, &req, cfg.limits)?;
+            if cli.json {
+                let v = match &column {
+                    Some(c) => serde_json::to_value(tdy::commands::pick_column(&p, c)?)?,
+                    None => serde_json::to_value(&p)?,
+                };
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                print!("{}", tdy::commands::profile_text(&file.display().to_string(), &p, column.as_deref())?);
+            }
         }
         Command::Validate { file, stamp } => {
             let cfg = config::load(&overrides)?;

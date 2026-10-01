@@ -1895,3 +1895,108 @@ fn entering_a_region_member_previews_its_window() {
         other => panic!("expected Member context, got {other:?}"),
     }
 }
+
+// --- profiling ------------------------------------------------------------
+
+/// A real profile of a small file, for the Profile context.
+fn a_profile(d: &tempfile::TempDir) -> tdy::profile::Profile {
+    let p = d.path().join("dates.csv");
+    std::fs::write(&p, "Datum;Region\n2025-01-01;Ost\n2025-01-02;West\n03.01.2025;Ost\n").unwrap();
+    tdy::profile::profile_file(&p, &tdy::profile::Request::default(), tdy::config::Limits::default()).unwrap()
+}
+
+/// `p` on a file in the main pane is the `.profile` line a person would
+/// type — the one-code-path rule, as an equality.
+#[test]
+fn p_on_a_file_dispatches_the_line_a_typed_profile_does() {
+    let d = pile();
+    let mut w = wb(&d);
+    let raw = RawHead { lines: vec!["A;B".into(), "1;2".into()], ..RawHead::default() };
+    w.apply(
+        outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw, spec: None, stale: false }),
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let shortcut = w.key(key(KeyCode::Char('p')));
+    let mut typed = wb(&d);
+    assert_eq!(shortcut, type_line(&mut typed, ".profile a.csv"));
+    assert_eq!(shortcut, WbAction::Dispatch(".profile a.csv".into()));
+}
+
+/// On a workbook the line names the sheet on show, and the browser's `p`
+/// is the same line for the selected file.
+#[test]
+fn p_names_the_sheet_on_show_and_the_browser_has_it_too() {
+    let d = pile();
+    let mut w = wb(&d);
+    let raw = RawHead {
+        sheets: vec![("One".into(), 3, 2), ("Two".into(), 4, 2)],
+        grid: vec![vec!["A".into(), "B".into()]],
+        grid_sheet: Some("Two".into()),
+        ..RawHead::default()
+    };
+    w.apply(
+        outcome("", "", Payload::Shown { path: d.path().join("b.csv"), raw, spec: None, stale: false }),
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile b.csv --sheet Two".into()));
+
+    let mut w = wb(&d);
+    w.key(key(KeyCode::Tab)); // Browser; sub/ first
+    w.key(key(KeyCode::Down)); // a.csv
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile a.csv".into()));
+}
+
+/// A member's profile is of that member: the plain file, its sheet, its
+/// block's rows — or, for a block whose rows the report does not carry,
+/// the member's own name, which its sidecar resolves.
+#[test]
+fn p_on_a_member_profiles_that_member() {
+    let d = pile();
+    let (mut w, _) = pile_and_enter(&d, vec![member("2025-08.csv", MemberStatus::Gaps)], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile 2025-08.csv".into()));
+
+    let mut m = member("report.csv", MemberStatus::NeedsReview);
+    m.region = Some(2);
+    m.window = Some(RowWindow { start: 5, end: 9, ordinal: 2 });
+    let (mut w, _) = pile_and_enter(&d, vec![m], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile report.csv --rows 6-9".into()));
+
+    let mut m = member("book.xlsx", MemberStatus::Fits);
+    m.sheet = Some("Q 1".into());
+    let (mut w, _) = pile_and_enter(&d, vec![m], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile book.xlsx --sheet \"Q 1\"".into()));
+
+    let mut m = member("book.xlsx", MemberStatus::Fits);
+    m.sheet = Some("Q1".into());
+    m.region = Some(2);
+    let (mut w, _) = pile_and_enter(&d, vec![m], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile book.xlsx#Q1#2".into()));
+}
+
+/// A profile lands as its own context at its top; Enter opens the selected
+/// column's detail and Esc goes back to the columns, then closes.
+#[test]
+fn a_profile_opens_columns_then_detail_and_esc_walks_back() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.main_scroll = 7;
+    w.apply(outcome(".profile dates.csv", "", Payload::Profile(a_profile(&d))), d.path());
+    assert!(matches!(w.context, Context::Profile { selected: 0, detail: false, .. }), "{:?}", w.context);
+    assert_eq!(w.main_scroll, 0, "a context change resets the scroll");
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab)); // Main
+    w.key(key(KeyCode::Down));
+    w.key(key(KeyCode::Down)); // clamped: two columns
+    assert!(matches!(w.context, Context::Profile { selected: 1, .. }));
+    assert_eq!(w.key(key(KeyCode::Enter)), WbAction::None);
+    assert!(matches!(w.context, Context::Profile { selected: 1, detail: true, .. }));
+    w.key(key(KeyCode::Esc));
+    assert!(matches!(w.context, Context::Profile { selected: 1, detail: false, .. }));
+    assert_eq!(w.focus, Focus::Main, "Esc in a profile walks back, it does not leave the pane");
+    w.key(key(KeyCode::Esc));
+    assert!(matches!(w.context, Context::Empty));
+}

@@ -64,6 +64,7 @@ enum Scope {
     Pile,
     Member,
     Evidence,
+    Profile,
     Confirm,
 }
 
@@ -77,6 +78,7 @@ impl Scope {
             Scope::Pile => "on a pile",
             Scope::Member => "on a member",
             Scope::Evidence => "on the evidence",
+            Scope::Profile => "on a profile",
             Scope::Confirm => "confirming an edit",
         }
     }
@@ -101,9 +103,11 @@ const HELP_KEYS: &[(Scope, &str, &str)] = &[
     (Scope::Browser, "f", "fit the selected target"),
     (Scope::Browser, "d", "mark/unmark the selected file"),
     (Scope::Browser, "D", "draft the marked files"),
+    (Scope::Browser, "p", "profile the selected file's columns"),
     (Scope::Main, "↑ / ↓, PgUp / PgDn", "scroll"),
     (Scope::File, "[ / ]", "previous / next sheet of a workbook"),
     (Scope::File, "s", "sniff this file"),
+    (Scope::File, "p", "profile its columns (the sheet on show)"),
     (Scope::Pile, "↑ / ↓", "move the selected member"),
     (Scope::Pile, "Enter", "open the selected member"),
     (Scope::Pile, "g / G", "next / previous member that needs attention"),
@@ -114,12 +118,16 @@ const HELP_KEYS: &[(Scope, &str, &str)] = &[
     (Scope::Member, "↑ / ↓", "pick a remedy"),
     (Scope::Member, "1-9, Enter", "stage a remedy (shows the diff first)"),
     (Scope::Member, "a", "accept — show the evidence, then accept"),
+    (Scope::Member, "p", "profile this member's columns"),
     (Scope::Member, "e", "edit the file"),
     (Scope::Member, "t", "edit the target"),
     (Scope::Member, "[ / ]", "previous / next sheet of a workbook"),
     (Scope::Member, "Esc", "back to the pile"),
     (Scope::Evidence, "a", "accept"),
     (Scope::Evidence, "Esc", "close (f re-opens the pile)"),
+    (Scope::Profile, "↑ / ↓", "move the selected column (scroll, in the detail)"),
+    (Scope::Profile, "Enter", "the column's top values and shapes"),
+    (Scope::Profile, "Esc", "back to the columns; again to close"),
     (Scope::Confirm, "y", "write the edit"),
     (Scope::Confirm, "Esc / n", "cancel"),
 ];
@@ -138,6 +146,7 @@ fn current_scope(w: &Workbench) -> Scope {
             Context::Pile { .. } => Scope::Pile,
             Context::Member { .. } => Scope::Member,
             Context::Evidence { .. } => Scope::Evidence,
+            Context::Profile { .. } => Scope::Profile,
             Context::Empty | Context::Query(_) => Scope::Main,
         },
     }
@@ -611,6 +620,16 @@ fn context_title(ctx: &Context) -> String {
             })
             .unwrap_or_else(|| "member".to_string()),
         Context::Evidence { member, .. } => format!("accept {member} ?"),
+        Context::Profile { profile, selected, detail } => {
+            let name = std::path::Path::new(&profile.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| profile.path.clone());
+            match profile.columns.get(*selected) {
+                Some(c) if *detail => format!("profile · {name} · `{}`", c.name),
+                _ => format!("profile · {name}"),
+            }
+        }
     }
 }
 
@@ -677,7 +696,108 @@ fn draw_main(f: &mut Frame, area: Rect, w: &Workbench, seams: Seams) {
             }
         }
         Context::Evidence { rows, .. } => draw_evidence(f, area, block, rows, w.main_scroll),
+        Context::Profile { profile, selected, detail } => {
+            draw_profile(f, area, block, profile, *selected, *detail, w.main_scroll)
+        }
     }
+}
+
+/// The Profile view: `.profile`'s answer. The heading is the CLI's own
+/// first line (`commands::profile_heading`) — yellow when `--head` cut the
+/// read short, since a partial profile read as a whole one is the lie a
+/// profile exists to remove. Then a table of the columns, numbers right-
+/// aligned and the selected one reversed; or, in the detail, the selected
+/// column's text exactly as `tdy profile --column` prints it.
+fn draw_profile(
+    f: &mut Frame,
+    area: Rect,
+    block: Block<'static>,
+    p: &tdy::profile::Profile,
+    selected: usize,
+    detail: bool,
+    scroll: usize,
+) {
+    use tdy::profile::Distinct;
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+    let heading_style = if p.complete { Style::new().add_modifier(Modifier::BOLD) } else { Style::new().fg(WARN) };
+    let heading = clip_line(
+        Line::styled(tdy::commands::profile_heading(&p.path, p), heading_style),
+        inner.width as usize,
+    );
+    let [head_area, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+    f.render_widget(Paragraph::new(heading), head_area);
+
+    if detail {
+        let text = tdy::commands::profile_text(&p.path, p, Some(&format!("#{}", selected + 1)))
+            .unwrap_or_else(|e| format!("\n{e:#}\n"));
+        // The heading is already drawn above; the rest is the column.
+        let lines: Vec<Line<'static>> = text.lines().skip(1).skip(scroll).map(|l| Line::raw(l.to_string())).collect();
+        f.render_widget(Paragraph::new(lines), body);
+        return;
+    }
+
+    let share = |n: u64, of: u64| if of == 0 { "-".to_string() } else { format!("{:.1}%", n as f64 * 100.0 / of as f64) };
+    let header = ["#", "column", "non-empty", "empty", "distinct", "min", "max", "most frequent shape"];
+    let right = [true, false, true, true, true, false, false, false];
+    let cells: Vec<[String; 8]> = p
+        .columns
+        .iter()
+        .map(|c| {
+            [
+                c.position.to_string(),
+                c.name.clone(),
+                c.non_empty.to_string(),
+                c.empty.to_string(),
+                match c.distinct {
+                    Distinct::Exact(n) => n.to_string(),
+                    Distinct::AtLeast(n) => format!("{n}+"),
+                },
+                c.min.clone().unwrap_or_else(|| "-".into()),
+                c.max.clone().unwrap_or_else(|| "-".into()),
+                c.shapes
+                    .first()
+                    .map(|s| format!("{} ({})", s.pattern, share(s.count, c.non_empty)))
+                    .unwrap_or_else(|| "-".into()),
+            ]
+        })
+        .collect();
+    let widths: Vec<Constraint> = (0..8)
+        .map(|i| {
+            let w = cells.iter().map(|r| r[i].chars().count()).chain([header[i].chars().count()]).max().unwrap_or(1);
+            if i == 7 {
+                Constraint::Fill(1)
+            } else {
+                Constraint::Length(w.min(TABLE_CELL_MAX) as u16 + if i == 0 { 2 } else { 0 })
+            }
+        })
+        .collect();
+    let align = |i: usize| if right[i] { Alignment::Right } else { Alignment::Left };
+    let head_row = Row::new(
+        (0..8).map(|i| Cell::from(Line::raw(header[i]).alignment(align(i)))).collect::<Vec<_>>(),
+    )
+    .style(Style::new().add_modifier(Modifier::BOLD).fg(DIM));
+    let rows: Vec<Row> = cells
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .map(|(i, r)| {
+            let row = Row::new((0..8).map(|c| {
+                let v = if c == 0 {
+                    format!("{}{}", if i == selected { "▸ " } else { "  " }, r[0])
+                } else {
+                    truncate(&r[c], TABLE_CELL_MAX)
+                };
+                Cell::from(Line::raw(v).alignment(align(c)))
+            }));
+            if i == selected { row.style(Style::new().add_modifier(SELECTED)) } else { row }
+        })
+        .collect();
+    f.render_widget(TableWidget::new(rows, widths).header(head_row).column_spacing(2), body);
 }
 
 /// The Evidence view: `.accept`'s step one, rendered — every judgement in
@@ -1684,7 +1804,7 @@ fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
     };
     let keys = match w.focus {
         Focus::Console => "Tab focus · ^L zoom · ^Q quit",
-        Focus::Browser => "↑↓ move · enter open · s sniff · e edit · Tab focus · ^Q quit",
+        Focus::Browser => "↑↓ move · enter open · s sniff · p profile · e edit · Tab focus · ^Q quit",
         // The keys that actually do something in Main depend on what Main
         // is showing — a Pile's own keys (`f`, `t`) mean nothing in a
         // Member's remedy menu and vice versa, so this mirrors `key_main`'s
@@ -1695,12 +1815,14 @@ fn draw_status(f: &mut Frame, area: Rect, w: &Workbench) {
         // which drop it either.
         Focus::Main => match &w.context {
             Context::Pile { .. } => "↑↓ member · g next problem · / filter · enter open · f refit · t edit target · ^Q quit",
-            Context::Member { .. } => "↑↓ remedy · enter/1-9 stage · a accept · e edit · Esc back · ^Q quit",
+            Context::Member { .. } => "↑↓ remedy · enter/1-9 stage · a accept · p profile · e edit · Esc back · ^Q quit",
             Context::Evidence { .. } => "a accept · Esc close · PgUp/Dn scroll · ^Q quit",
             Context::File { raw, .. } if raw.sheets.len() > 1 => {
-                "↑↓ scroll · [ ] sheet · Tab focus · ^Q quit"
+                "↑↓ scroll · [ ] sheet · p profile · Tab focus · ^Q quit"
             }
-            Context::File { .. } => "↑↓ scroll · Tab focus · ^Q quit",
+            Context::File { .. } => "↑↓ scroll · p profile · Tab focus · ^Q quit",
+            Context::Profile { detail: false, .. } => "↑↓ column · enter detail · Esc close · ^Q quit",
+            Context::Profile { detail: true, .. } => "↑↓ scroll · Esc back to the columns · ^Q quit",
             // A result table scrolls now (`key_main`'s fallback arm), so
             // it advertises the keys that move it; `Empty` has nothing to
             // scroll and keeps the bare hint.
