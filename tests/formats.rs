@@ -1526,3 +1526,48 @@ fn transpose_refuses_a_stray_key() {
     assert!(toml::from_str::<Transform>("op = \"transpose\"\ncolumns = [\"a\"]").is_err());
     assert_eq!(serde_json::to_string(&t).unwrap(), r#"{"op":"transpose"}"#);
 }
+
+/// A plain type takes no options, and a stray key beside one is refused with
+/// serde's own sentence naming it — `type = "utf8"` beside a `format` used to
+/// load as `utf8` and drop the format without a word.
+#[test]
+fn a_plain_type_refuses_a_stray_key() {
+    for ty in ["utf8", "bool", "int64", "float64"] {
+        for stray in ["format = \"%d.%m.%Y\"", "precision = 3"] {
+            let key = stray.split(' ').next().unwrap();
+            let e = toml::from_str::<DType>(&format!("type = \"{ty}\"\n{stray}"))
+                .expect_err("a stray key beside a plain type was accepted");
+            assert!(e.to_string().contains(&format!("unknown field `{key}`")), "{ty}: {e}");
+            let e = serde_json::from_str::<DType>(&format!("{{\"type\":\"{ty}\",\"{key}\":1}}"))
+                .expect_err("a stray key beside a plain type was accepted (JSON)");
+            assert!(e.to_string().contains(&format!("unknown field `{key}`")), "{ty}: {e}");
+        }
+    }
+    // A whole column declaration, as a sidecar carries it.
+    let e = toml::from_str::<ColumnSpec>(
+        "name = \"d\"\n[dtype]\ntype = \"utf8\"\nformat = \"%d.%m.%Y\"\nprecision = 3",
+    )
+    .expect_err("a column typed utf8 with a format was accepted");
+    assert!(format!("{e}").contains("unknown field `format`"), "{e}");
+}
+
+/// Every type still reads what it wrote, in both serialisations.
+#[test]
+fn every_dtype_round_trips() {
+    let all = [
+        DType::Utf8,
+        DType::Bool,
+        DType::Int64,
+        DType::Float64,
+        DType::Decimal { precision: 14, scale: 2 },
+        DType::Date { format: "%d.%m.%Y".into() },
+        DType::Timestamp { format: "%Y-%m-%d %H:%M".into(), timezone: Some("+02:00".into()) },
+    ];
+    for d in all {
+        let j = serde_json::to_string(&d).unwrap();
+        assert_eq!(serde_json::from_str::<DType>(&j).unwrap(), d, "{j}");
+        let t = toml::to_string(&d).unwrap();
+        assert_eq!(toml::from_str::<DType>(&t).unwrap(), d, "{t}");
+    }
+    assert_eq!(serde_json::to_string(&DType::Utf8).unwrap(), r#"{"type":"utf8"}"#);
+}

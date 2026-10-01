@@ -559,7 +559,14 @@ fn default_true() -> bool {
 
 /// Maps 1:1 onto Arrow types. Deliberately small — a grammar-constrained
 /// 8–30B model picks reliably from a short list.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+//
+// Deserialised through `DTypeRepr`, not derived: `deny_unknown_fields` does
+// not reach a unit variant of an internally tagged enum, so `type = "utf8"`
+// beside a stray `format` used to load as `utf8` and drop the format without
+// a word. Serialisation and the JSON Schema stay derived from this enum, so
+// neither the wire format nor the schema changes. (A `//` comment, not `///`:
+// the doc comment is the schema's description, which is part of the prompt.)
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DType {
     Utf8,
@@ -586,6 +593,52 @@ pub enum DType {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timezone: Option<String>,
     },
+}
+
+/// What a sidecar's `dtype` table is read as: [`DType`] with its plain types
+/// as *empty struct* variants, which `deny_unknown_fields` does reach — the
+/// same move `Transform::Transpose {}` and `Transform::RemoveEmpty {}` make.
+/// Private, so `DType::Utf8` stays a unit variant for every caller and for
+/// the published API.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum DTypeRepr {
+    Utf8 {},
+    Bool {},
+    Int64 {},
+    Float64 {},
+    Decimal {
+        precision: u8,
+        scale: i8,
+    },
+    Date {
+        format: String,
+    },
+    Timestamp {
+        format: String,
+        #[serde(default)]
+        timezone: Option<String>,
+    },
+}
+
+impl From<DTypeRepr> for DType {
+    fn from(r: DTypeRepr) -> Self {
+        match r {
+            DTypeRepr::Utf8 {} => DType::Utf8,
+            DTypeRepr::Bool {} => DType::Bool,
+            DTypeRepr::Int64 {} => DType::Int64,
+            DTypeRepr::Float64 {} => DType::Float64,
+            DTypeRepr::Decimal { precision, scale } => DType::Decimal { precision, scale },
+            DTypeRepr::Date { format } => DType::Date { format },
+            DTypeRepr::Timestamp { format, timezone } => DType::Timestamp { format, timezone },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DType {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        DTypeRepr::deserialize(d).map(DType::from)
+    }
 }
 
 /// How a negative number is written, when it is not written with a leading `-`.
