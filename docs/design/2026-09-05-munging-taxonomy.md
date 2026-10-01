@@ -1160,11 +1160,14 @@ in a target OPTIONS(epoch = 'excel_days') on a DATE column*. The floor makes the
 **`spec`** since 2026-10-02 — the reading is declarable. `EpochUnit::ExcelDays`
 (`epoch = "excel_days"` beside `format = "%s"`) reads whole days since
 1899-12-30 on a `date` column and a fraction of a day as the time on a
-`timestamp` one, from the digit string (the fraction becomes microseconds
-exactly, rounded to the nearest one, so the binary `0.333333333333333` is
-08:00:00); a serial below 61 is refused naming its row, a time of day on a
-`date` is refused rather than dropped, and both executors parse through the
-same function. A target declares it per column — `OPTIONS(epoch =
+`timestamp` one, from the digit string by integer arithmetic (the fraction is
+rounded to the millisecond, half away from zero — a spreadsheet's own
+resolution — because it writes a serial to ~15 significant digits: 08:00
+arrives as `45000.3333333333`, which read to the microsecond is
+07:59:59.999997); a serial below 61 or past 2958465 (9999-12-31) is refused
+naming its row, a time of day on a `date` (judged after that rounding) is
+refused rather than dropped, and both executors parse through the same
+function. A target declares it per column — `OPTIONS(epoch =
 'excel_days')` on a `DATE` or `TIMESTAMP` — and that becomes the only reading
 `fit` tries for the column, with a note and no review. Still never inferred:
 the sniffer notes, a person declares. What is still missing is the **1904 date

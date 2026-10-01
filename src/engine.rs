@@ -185,15 +185,25 @@ const DAY_MICROS: i128 = 86_400_000_000;
 /// 1970-01-01 as a spreadsheet serial: days from 1899-12-30.
 const EXCEL_UNIX_SERIAL: i128 = 25_569;
 
+/// The last serial a spreadsheet has: 9999-12-31.
+const EXCEL_LAST_SERIAL: i128 = 2_958_465;
+
+/// Milliseconds in a day: a spreadsheet's own time resolution.
+const DAY_MILLIS: i128 = 86_400_000;
+
 /// A spreadsheet serial, as wall-clock microseconds since 1970.
 ///
 /// Read from the digit string: the integer part is days since 1899-12-30, the
-/// fraction a part of a day turned into microseconds exactly and rounded half
-/// up to the nearest one — a spreadsheet stores 08:00 as the binary
-/// `0.333333333333333`, and that is 08:00:00, not a float's 07:59:59.999999.
+/// fraction a part of a day rounded to the **millisecond**, half away from
+/// zero, by integer arithmetic on the digits. Exact digits are the wrong
+/// target: a spreadsheet writes a serial to ~15 significant digits, so 08:00
+/// arrives as `45000.3333333333`, which read to the microsecond is
+/// 07:59:59.999997 — a time nobody typed. A millisecond is the finest time a
+/// spreadsheet keeps, so rounding there returns the time that was typed.
 /// Serials 1–60 are refused: Excel counts a 29 February 1900 that never was
 /// (Lotus 1-2-3's bug, kept for compatibility), so below 61 no serial maps
-/// through this origin to the date its author saw.
+/// through this origin to the date its author saw. A serial past 2958465
+/// (9999-12-31) is refused before any arithmetic is done with it.
 fn excel_serial_micros(v: &str) -> Result<i64> {
     let t = v.trim().trim_start_matches('+');
     let (int, frac) = t.split_once('.').unwrap_or((t, ""));
@@ -207,24 +217,33 @@ fn excel_serial_micros(v: &str) -> Result<i64> {
     if frac.len() > 18 {
         bail!("{v:?} carries more fractional digits than a spreadsheet serial has");
     }
-    let days: i128 = int
-        .parse()
-        .map_err(|_| anyhow!("{v:?} is further from 1899-12-30 than a timestamp reaches"))?;
+    let past = || anyhow!("{v:?} is past 9999-12-31, the last spreadsheet serial (2958465)");
+    let significant = int.trim_start_matches('0');
+    if significant.len() > 7 {
+        return Err(past());
+    }
+    let days: i128 = significant.parse().unwrap_or(0);
+    if days > EXCEL_LAST_SERIAL {
+        return Err(past());
+    }
     if days < 61 {
         bail!(
             "{v:?} is spreadsheet serial {days}, below 61: spreadsheets count 1900 as a leap \
              year, so serials 1–60 do not name one date"
         );
     }
-    let frac_micros: i128 = if frac.is_empty() {
+    let frac_millis: i128 = if frac.is_empty() {
         0
     } else {
         let den = 10i128.pow(frac.len() as u32);
-        let num: i128 = frac.parse().expect("at most 18 digits");
-        (2 * num * DAY_MICROS + den) / (2 * den)
+        let num: i128 = frac.parse().map_err(|_| past())?;
+        (2 * num * DAY_MILLIS + den) / (2 * den)
     };
-    i64::try_from((days - EXCEL_UNIX_SERIAL) * DAY_MICROS + frac_micros)
-        .map_err(|_| anyhow!("{v:?} is further from 1899-12-30 than a timestamp reaches"))
+    days.checked_sub(EXCEL_UNIX_SERIAL)
+        .and_then(|d| d.checked_mul(DAY_MICROS))
+        .and_then(|m| m.checked_add(frac_millis * 1_000))
+        .and_then(|m| i64::try_from(m).ok())
+        .ok_or_else(past)
 }
 
 /// A spreadsheet serial on a DATE column: whole days only. A time of day is

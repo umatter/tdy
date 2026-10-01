@@ -168,7 +168,9 @@ and gates behind `--accept` exactly like `decimal_shift`. `if_missing_null` is p
 establish: `year_pivot = 'N'` (the century of a two-digit year) and `epoch = '<unit>'` (a
 count: `seconds`/`milliseconds`/`microseconds` since 1970, or `excel_days`, a spreadsheet
 serial — `EpochUnit::ExcelDays`, parsed from the digit string by `engine::excel_serial_micros`,
-serials below 61 refused naming the row, a time of day on a DATE refused rather than dropped).
+the fraction rounded to the millisecond since a spreadsheet writes ~15 significant digits,
+serials below 61 or past 2958465 refused naming the row before any arithmetic, a time of day
+on a DATE refused rather than dropped).
 Both are DATE/TIMESTAMP only, refused when set twice, refused together, and part of
 `target_hash`. **A declaration authorises a reading**: undeclared, `fit` never tries a `%y`
 format or an epoch (a column only `%y` reads is a gap naming the option); declared,

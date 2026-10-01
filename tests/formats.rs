@@ -1595,16 +1595,23 @@ fn excel_days_read_a_serial_as_its_date() {
     assert_eq!(all_dates(&b, 0), vec![d(2023, 3, 15), d(2023, 3, 16), d(1900, 3, 1), d(9999, 12, 31), None]);
 }
 
-/// On a timestamp the fraction is the time of day, read from the digits —
-/// `.5` is noon exactly, and a spreadsheet's binary third of a day
-/// (`0.333333333333333`) is 08:00:00 to the microsecond, not a float's guess.
+/// On a timestamp the fraction is the time of day, read from the digits and
+/// rounded to the millisecond (half away from zero), the resolution a
+/// spreadsheet keeps: it writes a serial to ~15 significant digits, so 08:00
+/// arrives as `45000.3333333333` and read exactly would be 07:59:59.999997.
 #[test]
 fn excel_days_read_the_fraction_as_the_time_of_day() {
     let dir = TempDir::new().unwrap();
     let ts = DType::Timestamp { format: "%s".into(), timezone: None };
-    let noon = chrono::NaiveDate::from_ymd_opt(2023, 3, 15).unwrap().and_hms_opt(12, 0, 0).unwrap();
-    let eight = chrono::NaiveDate::from_ymd_opt(2023, 3, 15).unwrap().and_hms_opt(8, 0, 0).unwrap();
-    for (written, want) in [("45000.5", noon), ("45000.333333333333333", eight)] {
+    let at = |h, m, s| {
+        chrono::NaiveDate::from_ymd_opt(2023, 3, 15).unwrap().and_hms_opt(h, m, s).unwrap()
+    };
+    for (written, want) in [
+        ("45000.5", at(12, 0, 0)),
+        ("45000.3333333333", at(8, 0, 0)),
+        ("45000.9999884259", at(23, 59, 59)),
+        ("45000.7395833333", at(17, 45, 0)),
+    ] {
         let p = dir_file(&dir, "t.csv", &format!("ts,v\n{written},1\n"));
         let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), ts.clone()), &p).unwrap();
         assert_eq!(ts_micros(&b, 0), want.and_utc().timestamp_micros(), "{written}");
@@ -1613,7 +1620,39 @@ fn excel_days_read_the_fraction_as_the_time_of_day() {
     let p = dir_file(&dir, "z.csv", "ts,v\n45000.5,1\n");
     let zoned = DType::Timestamp { format: "%s".into(), timezone: Some("+02:00".into()) };
     let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), zoned), &p).unwrap();
-    assert_eq!(ts_micros(&b, 0), noon.and_utc().timestamp_micros() - 2 * 3_600_000_000);
+    assert_eq!(ts_micros(&b, 0), at(12, 0, 0).and_utc().timestamp_micros() - 2 * 3_600_000_000);
+}
+
+/// On a DATE the time of day is judged after that rounding: a fraction that
+/// rounds to a whole day is that day, any other is refused.
+#[test]
+fn excel_days_judge_a_date_s_time_of_day_after_rounding() {
+    let dir = TempDir::new().unwrap();
+    let date = DType::Date { format: "%s".into() };
+    let p = dir_file(&dir, "d.csv", "ts,v\n45000.99999999999999,1\n45001.0000000001,2\n");
+    let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), date.clone()), &p).unwrap();
+    let d = |y, m, dd| Some(chrono::NaiveDate::from_ymd_opt(y, m, dd).unwrap());
+    assert_eq!(all_dates(&b, 0), vec![d(2023, 3, 16), d(2023, 3, 16)]);
+    let p = dir_file(&dir, "h.csv", "ts,v\n45000.5,1\n");
+    let e = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), date), &p).expect_err("noon");
+    assert!(format!("{e:#}").contains("carries a time of day"), "{e:#}");
+}
+
+/// A serial past 9999-12-31 (2958465) is refused naming its row, before any
+/// arithmetic: unchecked, a 35-digit serial panicked a debug build and wrapped
+/// to 2023-03-14 in a release one.
+#[test]
+fn excel_days_refuse_a_serial_past_the_last_date() {
+    let dir = TempDir::new().unwrap();
+    for dtype in [DType::Date { format: "%s".into() }, DType::Timestamp { format: "%s".into(), timezone: None }] {
+        for big in ["2958466", "41538374868278621028243970633805767", "1".repeat(60).as_str()] {
+            let p = dir_file(&dir, "b.csv", &format!("ts,v\n45000,1\n{big},2\n"));
+            let e = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), dtype.clone()), &p)
+                .expect_err(big);
+            let e = format!("{e:#}");
+            assert!(e.contains("row 2") && e.contains("past 9999-12-31"), "{big}: {e}");
+        }
+    }
 }
 
 /// Excel counts a 29 February 1900 that never was, so serials 1–60 name no

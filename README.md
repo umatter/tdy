@@ -1204,7 +1204,9 @@ Details worth knowing:
   disagree about how to read one value. **`epoch = "excel_days"`** reads a
   spreadsheet serial — `45000` is 2023-03-15 — whole days on a `date` column
   and a fraction for the time of day on a `timestamp` one, from the digits,
-  never through a float; a serial below 61 is refused naming its row (Excel
+  never through a float, rounded to the millisecond (a spreadsheet writes
+  ~15 significant digits, so 08:00 arrives as `45000.3333333333`); a serial
+  below 61 or past 2958465 (9999-12-31) is refused naming its row (Excel
   counts a 29 February 1900 that never was), and a time of day on a `date` is
   refused rather than dropped. A target declares it per column with
   `OPTIONS(epoch = '…')`.
