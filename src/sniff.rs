@@ -691,10 +691,11 @@ fn sniff_excel_extraction(
     sniff_excel_table(extraction, table, &money, doubts)
 }
 
-/// One sheet of a workbook, opened once: its used range and the money
-/// columns its number formats declare (sheet-absolute indices). Framing a
-/// sheet's blocks from this instead of from the path keeps it to one
-/// workbook open per sheet, however many blocks it has.
+/// One sheet of a workbook, opened once per discovery and gating pass: its
+/// used range and the money columns its number formats declare
+/// (sheet-absolute indices). Framing a sheet's blocks from this instead of
+/// from the path keeps each pass to one workbook open per sheet, however
+/// many blocks it has.
 pub(crate) struct OpenSheet {
     pub name: String,
     pub range: calamine::Range<calamine::Data>,

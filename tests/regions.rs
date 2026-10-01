@@ -4,6 +4,9 @@ use tdy::config::Limits;
 use tdy::spec::RowWindow;
 
 fn fixture(name: &str) -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join(name) }
+fn tdy_in(dir: &Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_tdy")).args(args).current_dir(dir).env("TDY_BACKEND", "none").output().unwrap()
+}
 fn tdy(args: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_tdy")).args(args).env("TDY_BACKEND", "none").output().unwrap()
 }
@@ -1054,7 +1057,8 @@ fn headerless_blocks_are_not_candidates_and_the_file_is_read_whole() {
 /// the banner and the two-cell footnote block used to pass by position
 /// alone; neither has a header, so neither is a candidate, no block passes,
 /// and the sheet is read whole through the frame the draft came from — the
-/// pre-regions reading, no review. Against a by-name target the table is
+/// pre-regions reading — reviewed, since the split saw a headed table the
+/// positional target cannot bind. Against a by-name target the table is
 /// the one block that passes, bound by name, and the footnote block is a
 /// data-like run nothing read, so it waits on a person.
 #[test]
@@ -1067,8 +1071,15 @@ fn a_headerless_footnote_block_cannot_stand_in_for_the_sheet() {
     let out = tdy(&["fit", t.to_str().unwrap()]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
-    assert!(!text.contains("book.xlsx#") && !text.contains("REVIEW"), "{text}");
+    assert!(!text.contains("book.xlsx#"), "{text}");
     assert!(!text.contains("not read") && !text.contains("split at blank rows"), "read whole: {text}");
+    // Read whole past a table that has its own header (the data block, its
+    // severed header adopted) is a person's call, not a silent pre-regions
+    // reading: the drafted positional target cannot bind that header.
+    assert!(
+        text.contains("REVIEW: the split found a table with its own header at lines 8–14 that does not fit the declared table; this file is read whole — accept only if that is intended"),
+        "{text}"
+    );
 
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::copy(fixture("regions_footnoted.xlsx"), dir.path().join("book.xlsx")).unwrap();
@@ -1252,4 +1263,70 @@ fn a_stacked_one_column_file_is_drafted_whole() {
     assert!(draft.contains("report.csv: all blocks one field wide; drafted whole"), "{draft}");
     assert!(!draft.contains("skipped"), "{draft}");
     assert!(draft.contains("matches = 'Betrag'"), "{draft}");
+}
+
+/// Draft, then fit the UNEDITED draft: the realistic route. A one-window
+/// split with a line dropped above it used to fall through to a whole-file
+/// draft that declared the line's values as columns; the fit then found no
+/// block passing, read the file whole, and returned the real header as a
+/// data row with no note and no review.
+fn draft_then_fit(content: &str) -> (tempfile::TempDir, PathBuf, String) {
+    let (dir, _) = pile(content, "");
+    // As a person runs it: in the directory, `tdy draft report.csv`.
+    let out = tdy_in(dir.path(), &["draft", "report.csv"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let t = dir.path().join("d.tdy.sql");
+    std::fs::write(&t, &out.stdout).unwrap();
+    let out = tdy_in(dir.path(), &["fit", "d.tdy.sql"]);
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    (dir, t, text)
+}
+
+#[test]
+fn the_unedited_draft_of_a_headed_table_under_a_line_binds_by_name() {
+    let (_d, t, text) = draft_then_fit("Meier;Bern\n\nName;City\nMuster;Zürich\nHuber;Genf\nKeller;Basel\n");
+    assert!(text.contains("name<-\"Name\"") && text.contains("city<-\"City\""), "{text}");
+    assert!(text.contains("REVIEW: a run of 1 line(s) at lines 1–1 was not read"), "{text}");
+    let out = tdy(&["query", &format!("SELECT count(*) AS n FROM dataset('{}')", t.display())]);
+    assert!(!out.status.success(), "unaccepted");
+    let out = tdy_in(_d.path(), &["fit", "d.tdy.sql", "--accept", "report.csv"]);
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let q = query(&t, "SELECT name FROM DS ORDER BY name");
+    assert!(q.contains("| Huber ") && q.contains("| Keller ") && q.contains("| Muster "), "{q}");
+    assert!(!q.contains("| Name ") && !q.contains("Meier"), "{q}");
+    assert!(query(&t, "SELECT count(*) AS n FROM DS").contains("| 3 |"));
+}
+
+#[test]
+fn the_unedited_draft_of_a_titled_report_binds_by_name() {
+    let (_d, t, text) = draft_then_fit("Sales report;Q1 2025\n\nState;Amount\nBern;100.00\nZug;200.00\nUri;300.00\n\nSource: FSO\n");
+    assert!(text.contains("state<-\"State\""), "{text}");
+    assert!(text.contains("REVIEW: a run of 1 line(s) at lines 1–1 was not read"), "{text}");
+    let out = tdy(&["query", &format!("SELECT count(*) AS n FROM dataset('{}')", t.display())]);
+    assert!(!out.status.success(), "unaccepted");
+    let out = tdy_in(_d.path(), &["fit", "d.tdy.sql", "--accept", "report.csv"]);
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(query(&t, "SELECT count(*) AS n, sum(amount) AS total FROM DS").contains("| 3 | 600.00 |"));
+}
+
+/// No block passes, so the file is read whole — but the split saw a table
+/// with its own header there, and reading past it is a judgement: the
+/// whole-file member says so and waits on a person.
+#[test]
+fn a_headed_block_that_does_not_fit_makes_the_whole_file_read_a_question() {
+    let ddl = "CREATE TABLE q (meier TEXT NOT NULL OPTIONS(matches='Meier'), bern TEXT NOT NULL OPTIONS(matches='Bern')) WITH (files='*.csv');";
+    let (_d, t) = pile("Meier;Bern\n\nName;City\nMuster;Zürich\nHuber;Genf\nKeller;Basel\n", ddl);
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("report.csv#"), "{text}");
+    assert!(
+        text.contains("REVIEW: the split found a table with its own header at lines 3–6 that does not fit the declared table; this file is read whole — accept only if that is intended"),
+        "{text}"
+    );
+    let out = tdy(&["query", &format!("SELECT count(*) AS n FROM dataset('{}')", t.display())]);
+    assert!(!out.status.success(), "unaccepted");
+    assert!(tdy(&["fit", t.to_str().unwrap(), "--accept", "report.csv"]).status.success());
+    assert!(query(&t, "SELECT count(*) AS n FROM DS").contains("| 4 |"));
 }

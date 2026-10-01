@@ -568,8 +568,8 @@ pub fn discover_sheets(
         // A sheet that cannot even be framed (empty, say) is rejected here;
         // `total` still counts it, because "of 3 sheets, only one produces
         // the declared table" is the true claim.
-        // One workbook open per sheet: the whole-sheet frame and every
-        // block's come from the same range.
+        // One workbook open per sheet in this pass: the whole-sheet frame
+        // and every block's come from the same range.
         let Ok(open) = sniff::OpenSheet::open(path, &sh.name, limits) else {
             rejected.push(sh.name.clone());
             continue;
@@ -589,7 +589,7 @@ pub fn discover_sheets(
             // admitting a sheet whenever *some* block passed let a footnote
             // block bind a positional target and made a member of it.
             || {
-                let g = gate_sheet(path, &open, target, limits);
+                let g = gate_sheet(path, &open, target, limits).regions;
                 g.windows.len() == 1 && g.table_shaped().next().is_none()
             };
         if passes {
@@ -727,34 +727,54 @@ fn gate_regions(
     regions: &engine::Regions,
     target: &Target,
     limits: Limits,
-) -> engine::Regions {
+) -> GatedRegions {
     if regions.windows.is_empty() {
-        return regions.clone();
+        return GatedRegions { regions: regions.clone(), headed_unfit: Vec::new() };
     }
     let (framed, frames) = frame_blocks(path, sheet, regions, verify_opts(target), limits);
+    let mut headed_unfit = Vec::new();
     let passed: Vec<bool> = frames
         .into_iter()
-        .map(|f| {
-            f.filter(promotes_header)
+        .zip(&framed.windows)
+        .map(|(f, w)| {
+            let headed = f.filter(promotes_header);
+            let is_headed = headed.is_some();
+            let ok = headed
                 .and_then(|d| fit_framed(path, target, limits, d, Rigour::Gates).ok())
                 // A block that binds none of the declared columns is not the
                 // table: with every column declared absent-allowed it "fit"
                 // by filling each with NULL, a member of rows of nothing.
-                .is_some_and(|f| f.spec.columns.iter().any(|c| c.source.is_some()))
+                .is_some_and(|f| f.spec.columns.iter().any(|c| c.source.is_some()));
+            if is_headed && !ok {
+                headed_unfit.push(*w);
+            }
+            ok
         })
         .collect();
-    framed.gated(&passed)
+    GatedRegions { regions: framed.gated(&passed), headed_unfit }
+}
+
+/// What gating a file's or sheet's split found.
+#[derive(Debug, Clone, Default)]
+pub struct GatedRegions {
+    /// The blocks that passed, as members, with everything else dropped.
+    pub regions: engine::Regions,
+    /// Blocks with a header of their own that did not pass. When no block
+    /// passes, the file is read whole; if the split saw a headed table there
+    /// that is a judgement, not a proof (`report::expand_units` asks it).
+    pub headed_unfit: Vec<crate::spec::RowWindow>,
 }
 
 /// [`gate_regions`] over a sheet already open.
-fn gate_sheet(path: &Path, open: &sniff::OpenSheet, target: &Target, limits: Limits) -> engine::Regions {
+fn gate_sheet(path: &Path, open: &sniff::OpenSheet, target: &Target, limits: Limits) -> GatedRegions {
     gate_regions(path, Some(open), &engine::regions_of_range(&open.range), target, limits)
 }
 
 /// The members a file or sheet splits into: its blocks that have a header
 /// and pass the gates against `target`, with everything else as dropped
-/// runs. A sheet is opened once for the split and every block's frame.
-pub fn gated_regions(path: &Path, sheet: Option<&str>, target: &Target, limits: Limits) -> engine::Regions {
+/// runs. A sheet is opened once per discovery and gating pass, for the split
+/// and every block's frame.
+pub fn gated_regions(path: &Path, sheet: Option<&str>, target: &Target, limits: Limits) -> GatedRegions {
     match sheet {
         Some(s) => sniff::OpenSheet::open(path, s, limits)
             .map(|open| gate_sheet(path, &open, target, limits))
@@ -821,7 +841,7 @@ pub fn stacked_note(path: &Path, target: &Target, target_file: &Path, limits: Li
     let sheet = region_read_hint(path, None, limits)?;
     // Only blocks that pass the gates are tables the pile would make
     // members of; a banner and a footnote block are not "stacked tables".
-    let n = gated_regions(path, sheet.as_deref(), target, limits).windows.len();
+    let n = gated_regions(path, sheet.as_deref(), target, limits).regions.windows.len();
     (n >= 2).then(|| {
         format!(
             "{} holds {n} stacked tables, split at blank rows, and `tdy fit TARGET FILE` \

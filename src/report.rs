@@ -413,7 +413,7 @@ pub fn expand_units(
             None => crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits),
         };
         let region_sheet = hint.clone().flatten();
-        let regions = match hint {
+        let crate::fit::GatedRegions { regions, headed_unfit } = match hint {
             // The split proposes blocks; only those that pass the gates
             // against the target are members (the design's table is keyed
             // on exactly that). The rest are runs nothing reads.
@@ -441,7 +441,11 @@ pub fn expand_units(
                 member,
                 notes,
                 window: None,
-                review: None,
+                // No block passed, so the file is read whole. If the split saw
+                // a table with its own header there, reading past it is a
+                // judgement — the same file read whole used to answer with
+                // that header as a data row, and say nothing.
+                review: whole_read_reason(&headed_unfit),
                 dropped: Vec::new(),
                 shaped: Vec::new(),
                 region_sheet: region_sheet.clone(),
@@ -558,6 +562,25 @@ pub fn expand_units(
     Ok(units)
 }
 
+/// The question a whole-file member is asked when the split found headed
+/// tables in it that do not fit; `None` when it found none.
+fn whole_read_reason(headed: &[RowWindow]) -> Option<String> {
+    let at = |w: &RowWindow| format!("lines {}–{}", w.start + 1, w.end);
+    match headed {
+        [] => None,
+        [w] => Some(format!(
+            "the split found a table with its own header at {} that does not fit the declared \
+             table; this file is read whole — accept only if that is intended",
+            at(w)
+        )),
+        several => Some(format!(
+            "the split found tables with their own headers at {} that do not fit the declared \
+             table; this file is read whole — accept only if that is intended",
+            several.iter().map(at).collect::<Vec<_>>().join(" and ")
+        )),
+    }
+}
+
 /// One member as a phrase, for a message that has to tell apart two members
 /// that share a name.
 fn describe_member(m: &MemberRef) -> String {
@@ -650,7 +673,7 @@ fn window_disagreement(
         )),
         Extraction::Excel { region_ordinal: Some(o), range, .. } => {
             let want = expected_range();
-            (Some(*o) != Some(window.ordinal) || *range != want).then(|| {
+            (*o != window.ordinal || *range != want).then(|| {
                 (
                     block(*o, range.clone().unwrap_or_else(|| "the whole sheet".into())),
                     block(window.ordinal, want.unwrap_or_else(|| "an unreadable range".into())),
@@ -910,39 +933,37 @@ pub async fn fit_pile(
                 // reusing it makes two members read one block and total a
                 // plausible wrong number.
                 if let Some((was, now)) = &disagreement {
-                    {
-                        failed += 1;
-                        reports.push(MemberReport {
-                            path: rel.clone(),
-                            sheet: unit.sheet.clone(),
-                            region,
-                            window: spec_window(&spec),
-                            status: MemberStatus::Contradicts,
-                            via: Some(via.into()),
-                            sources: Vec::new(),
-                            review: None,
-                            accepted: false,
-                            notes: Vec::new(),
-                            problems: vec![Problem {
-                                kind: "contradicts".into(),
-                                column: None,
-                                message: format!(
-                                    "the sidecar reads {was}, but the blank-row split puts this \
-                                     member's block at {now}. A region member's spec must read its \
-                                     own block: correct the window, or delete the sidecar and \
-                                     re-run `tdy fit`."
-                                ),
-                                want: None,
-                                tried: Vec::new(),
-                                header: Vec::new(),
-                                choices: Vec::new(),
-                                field: None,
-                                long_form: None,
-                            }],
-                            proposals: Vec::new(),
-                        });
-                        break 'member;
-                    }
+                    failed += 1;
+                    reports.push(MemberReport {
+                        path: rel.clone(),
+                        sheet: unit.sheet.clone(),
+                        region,
+                        window: spec_window(&spec),
+                        status: MemberStatus::Contradicts,
+                        via: Some(via.into()),
+                        sources: Vec::new(),
+                        review: None,
+                        accepted: false,
+                        notes: Vec::new(),
+                        problems: vec![Problem {
+                            kind: "contradicts".into(),
+                            column: None,
+                            message: format!(
+                                "the sidecar reads {was}, but in the blank-row split this \
+                                 member is {now}. A region member's spec must read its \
+                                 own block: correct the window, or delete the sidecar and \
+                                 re-run `tdy fit`."
+                            ),
+                            want: None,
+                            tried: Vec::new(),
+                            header: Vec::new(),
+                            choices: Vec::new(),
+                            field: None,
+                            long_form: None,
+                        }],
+                        proposals: Vec::new(),
+                    });
+                    break 'member;
                 }
                 if let Err(m) = crate::conform::conforms(&spec, &target) {
                     failed += 1;
