@@ -2183,3 +2183,51 @@ fn a_percent_note_needs_every_value_to_carry_the_sign() {
         r.spec.notes
     );
 }
+
+/// `45000` in a CSV exported from a spreadsheet is very often 2023-03-15, and
+/// nothing in the value says so. An integer column with a date-like name and
+/// every value in the serial band keeps its type and gains a note with the
+/// date the first value would be — and the query that converts it, since no
+/// declaration reads days since 1899-12-30.
+#[test]
+fn a_spreadsheet_serial_date_column_is_noted_not_converted() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "s.csv", "Datum,amount\n45000,45000\n45001,45001\n45031,45031\n");
+    let r = sniffed(&p);
+    let datum = r.spec.columns.iter().find(|c| c.name == "datum").unwrap();
+    assert_eq!(datum.dtype, DType::Int64, "never a conversion");
+    let notes: Vec<&String> = r.spec.notes.iter().filter(|n| n.contains("serial")).collect();
+    assert_eq!(notes.len(), 1, "one note, for `datum` only: {:?}", r.spec.notes);
+    assert_eq!(
+        notes[0],
+        "column `datum` holds integers like 45000; as spreadsheet serial days that is \
+         2023-03-15 — if these are dates, no declaration reads them yet, so convert in \
+         the query: CAST(CAST(datum - 25569 AS INT) AS DATE)"
+    );
+}
+
+/// The same integers under a name that says nothing about dates, and one
+/// value outside the band under a name that does: no note either time.
+#[test]
+fn a_serial_date_note_needs_the_name_and_the_band() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "a.csv", "amount\n45000\n45001\n");
+    assert!(!sniffed(&p).spec.notes.iter().any(|n| n.contains("serial")));
+    let p = write(&dir, "b.csv", "datum\n45000\n70000\n");
+    assert!(!sniffed(&p).spec.notes.iter().any(|n| n.contains("serial")));
+}
+
+/// The SQL the note prints has to run, and give the date the note names.
+#[tokio::test]
+async fn the_serial_date_notes_query_runs_and_agrees() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "s.csv", "datum\n45000\n");
+    let sql = format!(
+        "SELECT CAST(CAST(datum - 25569 AS INT) AS DATE) AS d FROM messy('{}')",
+        p.display()
+    );
+    let b = query(&sql).await;
+    let a = b[0].column(0);
+    let d = a.as_any().downcast_ref::<datafusion::arrow::array::Date32Array>().unwrap();
+    assert_eq!(d.value_as_date(0).unwrap().to_string(), "2023-03-15");
+}

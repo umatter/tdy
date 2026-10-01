@@ -1771,10 +1771,13 @@ fn guess_columns(
             } else if g.penalty > 0.0 {
                 doubts.penalty += g.penalty;
             }
-            if g.dtype == DType::Utf8 {
-                if let Some(n) = percent_note(&values, &name) {
-                    doubts.note(n);
-                }
+            let shape_note = match g.dtype {
+                DType::Utf8 => percent_note(&values, &name),
+                DType::Int64 => serial_date_note(&values, &name),
+                _ => None,
+            };
+            if let Some(n) = shape_note {
+                doubts.note(n);
             }
             ColumnSpec {
                 // `source` is the post-transform header name, verbatim: this
@@ -1829,6 +1832,61 @@ fn percent_note(values: &[&str], name: &str) -> Option<String> {
         sample[0],
         bodies[0],
         crate::engine::shift_decimal_point(&plain, -2)
+    ))
+}
+
+/// The band a spreadsheet serial date has to fall in to be noted: 25,000 is
+/// 1968-06-11 and 60,000 is 2064-04-08. Narrow on purpose — a column of
+/// integers is a column of integers, and the name has to agree too.
+const SERIAL_DATE_BAND: std::ops::RangeInclusive<i64> = 25_000..=60_000;
+
+/// Day 0 of the 1900 date system as every spreadsheet counts it.
+///
+/// Excel numbers 1900-01-01 as day 1 and then counts the 29th of February
+/// 1900 that never existed (Lotus 1-2-3's bug, kept for compatibility), so
+/// from serial 61 on the true origin is 1899-12-30. Serial 60 is the phantom
+/// leap day and nothing below 61 maps through this origin — which is why the
+/// band's 25,000 floor makes the arithmetic exact rather than off by one.
+fn serial_origin() -> NaiveDate {
+    NaiveDate::from_ymd_opt(1899, 12, 30).expect("1899-12-30 is a date")
+}
+
+/// An integer column that may be spreadsheet serial dates: say what the
+/// first value would be as one, and convert nothing.
+///
+/// A CSV exported from a spreadsheet writes a date cell whose format was lost
+/// as its serial, `45000`, which types perfectly as an integer and is
+/// 2023-03-15. Both halves of the evidence are needed — every non-missing
+/// sampled value in [`SERIAL_DATE_BAND`] and a header that reads like a date —
+/// and even then it is a note: an order number in that range under a column
+/// called `tag` is not a date, and only a person knows. No declaration reads
+/// days since 1899-12-30 (`epoch` counts from 1970), so the note gives the
+/// query that does; `tests/regression.rs` runs it.
+fn serial_date_note(values: &[&str], name: &str) -> Option<String> {
+    const DATE_WORDS: &[&str] = &["date", "datum", "day", "tag", "zeit", "time", "fecha", "jour"];
+    let lower = name.to_lowercase();
+    if !DATE_WORDS.iter().any(|w| lower.contains(w)) {
+        return None;
+    }
+    let ints: Vec<i64> = values
+        .iter()
+        .map(|v| v.trim())
+        .filter(|v| !is_na(v))
+        .take(TYPE_SAMPLE)
+        .map(|v| v.parse::<i64>().ok())
+        .collect::<Option<_>>()?;
+    if ints.is_empty() || !ints.iter().all(|n| SERIAL_DATE_BAND.contains(n)) {
+        return None;
+    }
+    let first = ints[0];
+    let date = serial_origin() + chrono::Duration::days(first);
+    // 25569 is 1970-01-01 as a serial, so the difference is DataFusion's own
+    // days-since-epoch, which a cast to DATE reads directly.
+    let unix_offset = (NaiveDate::from_ymd_opt(1970, 1, 1).expect("a date") - serial_origin()).num_days();
+    Some(format!(
+        "column `{name}` holds integers like {first}; as spreadsheet serial days that is {date} \
+         — if these are dates, no declaration reads them yet, so convert in the query: \
+         CAST(CAST({name} - {unix_offset} AS INT) AS DATE)"
     ))
 }
 

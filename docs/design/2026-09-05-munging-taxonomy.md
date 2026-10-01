@@ -1131,6 +1131,18 @@ is `int64`, and nothing suggests it might be 2023-03-15. Detectable heuristicall
 (a tight cluster of integers in the 25,000–50,000 band, in a column named
 `datum`/`date`) but only as a *note*, never as a silent conversion.
 
+The note is in since 2026-10-01 (`sniff::serial_date_note`): an integer column
+whose name contains `date`, `datum`, `day`, `tag`, `zeit`, `time`, `fecha` or
+`jour` and whose every sampled value lies in 25,000..=60,000 (1968-06-11 to
+2064-04-08) stays an integer and is told *column `datum` holds integers like
+45000; as spreadsheet serial days that is 2023-03-15 — if these are dates, no
+declaration reads them yet, so convert in the query: CAST(CAST(datum - 25569 AS
+INT) AS DATE)*. The floor makes the 1899-12-30 origin exact (serial 60 is the
+phantom 1900-02-29). It stays `partial` for the half that is still missing: a
+*declarable* serial reading — `epoch` counts from 1970 — so the conversion lives
+in a query rather than in the sidecar, where a target declaring `DATE` could
+prove it.
+
 ### E14 · Two-digit years and century windowing
 **Also called:** `YEARCUTOFF=` (SAS), pivot year, `%y` semantics, Y2K windowing,
 `dmy` with 2-digit input (lubridate).
