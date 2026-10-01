@@ -33,9 +33,20 @@ FIXTURES  (all in testdata/, named profile_*)
    distinct values, past the 10,000 a profile tracks, so it must report
    `AtLeast(10000)` and no top values (an approximate top five is a number
    nobody can check). `kind` cycles a/b/c: exactly 3 distinct, 4,000 each.
+
+3. profile_sheet_named_2.xlsx  (`tests/profile.rs`)
+   One sheet, literally named `2`, holding three `Datum;Region;Betrag`
+   tables stacked at blank rows (rows 1-4, 6-9, 11-14). So the reference
+   `profile_sheet_named_2.xlsx#2` has two true readings — the sheet `2`, and
+   block 2 of the workbook's one sheet — and must be refused naming both,
+   never resolved to either. Requires openpyxl (and lxml, transitively — see
+   gen_fixtures.py); zip stamps and `dcterms:modified` are pinned.
 """
 
 import os
+import re
+import zipfile
+from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -82,9 +93,58 @@ def many_ids():
     write("profile_many_ids.csv", lines)
 
 
+MODIFIED_RE = re.compile(rb"(<dcterms:modified[^>]*>)[^<]*(</dcterms:modified>)")
+ZIP_EPOCH = (2026, 1, 1, 0, 0, 0)
+
+
+def repack(path):
+    """Pin zip stamps and dcterms:modified; see 09_legacy_formats.py."""
+    tmp = path + ".tmp"
+    with zipfile.ZipFile(path) as zin:
+        entries = [(i.filename, zin.read(i.filename)) for i in zin.infolist()]
+    entries = [
+        (n, MODIFIED_RE.sub(rb"\g<1>2026-01-01T00:00:00Z\g<2>", d)
+         if n == "docProps/core.xml" else d)
+        for n, d in entries
+    ]
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
+        for n, d in entries:
+            info = zipfile.ZipInfo(n, date_time=ZIP_EPOCH)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 0
+            info.external_attr = 0o644 << 16
+            zout.writestr(info, d)
+    os.replace(tmp, path)
+
+
+def sheet_named_2():
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "2"
+    blocks = [
+        [("05.01.2025", "Ost", "190.00"), ("12.01.2025", "West", "200.00"), ("19.01.2025", "Nord", "210.00")],
+        [("05.02.2025", "Ost", "490.00"), ("12.02.2025", "West", "500.00"), ("19.02.2025", "Nord", "510.00")],
+        [("05.03.2025", "Ost", "290.00"), ("12.03.2025", "West", "300.00"), ("19.03.2025", "Nord", "310.00")],
+    ]
+    for i, block in enumerate(blocks):
+        if i:
+            ws.append([])
+        ws.append(["Datum", "Region", "Betrag"])
+        for row in block:
+            ws.append(list(row))
+    wb.properties.created = wb.properties.modified = datetime(2026, 1, 1)
+    p = os.path.join(OUT, "profile_sheet_named_2.xlsx")
+    wb.save(p)
+    repack(p)
+    print("wrote", p)
+
+
 def main():
     mixed_dates()
     many_ids()
+    sheet_named_2()
 
 
 if __name__ == "__main__":

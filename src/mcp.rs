@@ -399,7 +399,7 @@ impl McpServer {
     fn profile(&self, args: &Value) -> Result<Value> {
         let raw = str_arg(args, "path")?;
         // Confined before any sidecar beside a candidate is read.
-        let (file, sheet, region) = crate::profile::resolve(&self.root.join(raw), Some(&self.root))?;
+        let (file, sheet, region) = crate::profile::resolve(&self.root.join(raw), Some(&self.root), self.cfg.limits)?;
         let rows = args["rows"].as_str().map(crate::profile::parse_rows).transpose()?;
         let req = crate::profile::Request {
             sheet: args["sheet"].as_str().map(String::from),

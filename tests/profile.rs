@@ -409,6 +409,25 @@ fn member_references_resolve_or_are_refused_by_name() {
     assert_eq!(prof.rows, 3);
     assert_eq!(column(&prof, "Betrag").min.as_deref(), Some("490.00"));
 
+    // A workbook block with no sidecar: `#Data#2` and `#2` read as a block
+    // of sheet `Data` (a sheet called `Data#2` or `2` does not exist), and
+    // reach the designed refusal rather than an ambiguity.
+    let (_d3, offset) = scratch("regions_three_offset.xlsx");
+    for reference in ["regions_three_offset.xlsx#Data#2", "regions_three_offset.xlsx#2"] {
+        let e = profile_file(&offset.with_file_name(reference), &Request::default(), Limits::default())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no fresh sidecar for") && e.contains("--rows") && e.contains("--sheet"), "{reference}: {e}");
+        assert!(!e.contains("could mean"), "{reference}: {e}");
+    }
+    // A workbook that really has a sheet named `2` and a block 2: both
+    // readings are true, and the refusal names both.
+    let (_d4, named2) = scratch("profile_sheet_named_2.xlsx");
+    let e = profile_file(&named2.with_file_name("profile_sheet_named_2.xlsx#2"), &Request::default(), Limits::default())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("could mean") && e.contains("sheet \"2\"") && e.contains("block 2"), "{e}");
+
     let (_d2, book) = scratch("sheet_frames_one_fits.xlsx");
     let sheet_ref = book.with_file_name("sheet_frames_one_fits.xlsx#Daten");
     let prof = profile_file(&sheet_ref, &Request::default(), Limits::default()).unwrap();
@@ -477,6 +496,11 @@ fn the_smaller_sentences() {
     let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
     let t = text_of(&prof, None);
     assert!(t.contains("3 stacked tables") && t.contains("--rows"), "{t}");
+    // Under `--head` the read is not whole, and the note's own pass over
+    // the whole file is not paid.
+    let headed = profile_file(&p, &Request { head: Some(2), ..Request::default() }, Limits::default()).unwrap();
+    assert!(headed.notes.is_empty(), "{:?}", headed.notes);
+    assert!(!text_of(&headed, None).contains("stacked"));
 
     let mut spec = sniffed(&p);
     if let tdy::spec::Extraction::Delimited { region, .. } = &mut spec.extraction {

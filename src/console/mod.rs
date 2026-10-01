@@ -311,7 +311,7 @@ impl Session {
     /// the root. Returns the data file, the sheet and the region.
     pub fn resolve_member(&self, p: &str) -> Result<(PathBuf, Option<String>, Option<u32>)> {
         let joined = self.cwd.join(p);
-        crate::profile::resolve(&joined, Some(&self.root)).with_context(|| p.to_string())
+        crate::profile::resolve(&joined, Some(&self.root), self.cfg.limits).with_context(|| p.to_string())
     }
 
     /// Resolve a path that names something not written yet — `.draft --to`

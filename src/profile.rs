@@ -152,7 +152,7 @@ pub fn parse_rows(s: &str) -> Result<(u64, u64)> {
 /// `path` may also be a member reference — `book.xlsx#Q1`, `report.csv#2` —
 /// split by [`resolve`].
 pub fn profile_file(path: &Path, req: &Request, limits: Limits) -> Result<Profile> {
-    let (file, sheet, region) = resolve(path, None)?;
+    let (file, sheet, region) = resolve(path, None, limits)?;
     let mut p = profile_member(&file, sheet, region, req, limits)?;
     p.path = path.display().to_string();
     Ok(p)
@@ -170,7 +170,7 @@ pub fn profile_file(path: &Path, req: &Request, limits: Limits) -> Result<Profil
 ///
 /// With `root`, every candidate data file is confined to it *before* any
 /// sidecar beside it is read, and the answer is confined again.
-pub fn resolve(path: &Path, root: Option<&Path>) -> Result<(PathBuf, Option<String>, Option<u32>)> {
+pub fn resolve(path: &Path, root: Option<&Path>, limits: Limits) -> Result<(PathBuf, Option<String>, Option<u32>)> {
     let confined = |f: &Path| -> Result<PathBuf> {
         match root {
             Some(r) => crate::fileio::confine(f, r),
@@ -189,11 +189,15 @@ pub fn resolve(path: &Path, root: Option<&Path>) -> Result<(PathBuf, Option<Stri
     let split = match declared {
         Ok(Some(m)) => Some(m),
         Err(several) => bail!("{text} could mean {} — name the file and the sheet unambiguously", readings(&several)),
+        // A reading with a sheet survives only when the workbook has that
+        // sheet: `book.xlsx#Data#2` is not also a sheet called `Data#2`.
+        // A workbook that really has a sheet `2` and a block 2 keeps both
+        // readings, and is refused naming them.
         Ok(None) => match MemberRef::resolve(&text, |m| {
             let f = Path::new(&m.path);
             (m.sheet.is_some() || m.region.is_some())
                 && inside(f)
-                && (m.sheet.is_none() || crate::sample::guess_format(f) == crate::sample::FormatGuess::Excel)
+                && m.sheet.as_deref().is_none_or(|s| sheet_names(f, limits).iter().any(|n| n == s))
         }) {
             Ok(m) => m,
             Err(several) => {
@@ -221,6 +225,16 @@ pub fn resolve(path: &Path, root: Option<&Path>) -> Result<(PathBuf, Option<Stri
             None => bail!("{text} does not exist (not a file, nor a sheet or block of one)"),
         },
     }
+}
+
+/// The sheets of a workbook, in workbook order; empty for anything that is
+/// not one (or cannot be opened within `limits`).
+fn sheet_names(path: &Path, limits: Limits) -> Vec<String> {
+    use calamine::Reader as _;
+    if crate::sample::guess_format(path) != crate::sample::FormatGuess::Excel {
+        return Vec::new();
+    }
+    crate::engine::open_workbook(path, &limits).map(|wb| wb.sheet_names()).unwrap_or_default()
 }
 
 /// Several readings of one reference, each said in words: two readings
@@ -270,7 +284,11 @@ pub fn profile_member(
                     bail!(
                         "no fresh sidecar for {name}{why} — name the block with --rows A-B (the rows \
                          its title shows{}), or re-run `tdy fit`",
-                        if sheet.is_some() { ", with --sheet" } else { "" }
+                        if sheet.is_some() || crate::sample::guess_format(file) == crate::sample::FormatGuess::Excel {
+                            ", with --sheet"
+                        } else {
+                            ""
+                        }
                     )
                 }
             }
@@ -298,7 +316,9 @@ pub fn profile_member(
     }
     // A text file holding several stacked tables, read whole, counts each
     // table's header as data: say so, and name the flag that reads one.
-    if let Extraction::Delimited { region: None, .. } = &frame.extraction {
+    // Not under `--head`: that read is not whole, and the note's own pass
+    // would stream the whole file the head was asked to spare.
+    if let (Extraction::Delimited { region: None, .. }, None) = (&frame.extraction, req.head) {
         if let Ok(r) = crate::engine::regions_of(file, None, limits) {
             if r.windows.len() > 1 {
                 let spans: Vec<String> =
