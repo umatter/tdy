@@ -43,6 +43,24 @@ struct DraftColumn {
     /// a split file, which `files` above (physical-file presence only)
     /// cannot express by itself.
     block_sightings: Vec<(String, u32, usize)>,
+    /// The physical files whose own sniff typed this column at a DECIMAL
+    /// scale above `MONEY_PLACES` — what lets the rounding comment say
+    /// which file the noisy scale came from when not every file did.
+    noisy_files: Vec<String>,
+}
+
+/// The widest scale the sniffer gives money it recognises by shape alone
+/// (`sniff::guess_type`'s non-currency branch caps there). A DECIMAL wider
+/// than this came from a currency-formatted cell holding a computed float:
+/// its scale is the sample's IEEE-754 noise, and a later row can carry one
+/// place more, which the fit refuses unless rounding is declared.
+const MONEY_PLACES: i8 = 6;
+
+fn noisy_scale(d: &DType) -> Option<i8> {
+    match d {
+        DType::Decimal { scale, .. } if *scale > MONEY_PLACES => Some(*scale),
+        _ => None,
+    }
 }
 
 pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
@@ -262,9 +280,19 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
                 format!("  {:<width$} {:<twidth$}", c.name, sql_type(&c.dtype));
             let extra_spellings: Vec<&String> =
                 c.origins.iter().filter(|o| o.as_str() != c.name).collect();
+            let mut options: Vec<String> = Vec::new();
             if !extra_spellings.is_empty() {
                 let m: Vec<String> = extra_spellings.iter().map(|s| s.to_string()).collect();
-                line.push_str(&format!(" OPTIONS(matches = '{}')", m.join(", ")));
+                options.push(format!("matches = '{}'", m.join(", ")));
+            }
+            // The sniffer's scale is reproduced, not second-guessed; the
+            // rounding a longer later value needs is declared beside it, in
+            // the reviewed target, which is where a rounding is authorised.
+            if noisy_scale(&c.dtype).is_some() {
+                options.push("round = 'half_away'".into());
+            }
+            if !options.is_empty() {
+                line.push_str(&format!(" OPTIONS({})", options.join(", ")));
             }
             line
         })
@@ -293,6 +321,18 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
                 let labels: Vec<String> = ordinals.iter().map(|o| format!("{file}#{o}")).collect();
                 notes.push(format!("only in {}", labels.join(", ")));
             }
+        }
+        if let Some(scale) = noisy_scale(&c.dtype) {
+            let from = if c.noisy_files.len() < c.files.len() {
+                format!(" (from {})", c.noisy_files.join(", "))
+            } else {
+                String::new()
+            };
+            notes.push(format!(
+                "scale {scale}{from} is float noise in a currency-formatted cell, not money's \
+                 places; rounding is declared so a longer value does not refuse the file — or \
+                 declare DOUBLE"
+            ));
         }
         if let Some(cv) = &c.caveat {
             notes.push(cv.clone());
@@ -368,6 +408,9 @@ fn record_columns(
                 if let Some((ordinal, total)) = sighting.block {
                     d.block_sightings.push((sighting.physical_file.to_string(), ordinal, total));
                 }
+                if noisy_scale(&c.dtype).is_some() && !d.noisy_files.iter().any(|f| f == sighting.physical_file) {
+                    d.noisy_files.push(sighting.physical_file.to_string());
+                }
                 let (merged, caveat) = merge(&d.dtype, &c.dtype, sighting.physical_file);
                 d.dtype = merged;
                 if d.caveat.is_none() {
@@ -382,6 +425,10 @@ fn record_columns(
                 files: vec![sighting.physical_file.to_string()],
                 block_sightings: match sighting.block {
                     Some((ordinal, total)) => vec![(sighting.physical_file.to_string(), ordinal, total)],
+                    None => Vec::new(),
+                },
+                noisy_files: match noisy_scale(&c.dtype) {
+                    Some(_) => vec![sighting.physical_file.to_string()],
                     None => Vec::new(),
                 },
             }),
