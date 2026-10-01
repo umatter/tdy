@@ -1460,3 +1460,51 @@ fn a_two_digit_year_column_names_its_window() {
     );
     assert_eq!(two_digit_year_note(&col("d", DType::Date { format: "%Y-%m-%d".into() })), None);
 }
+
+/// After a column that fills every row — `source_name`, or a constant with a
+/// value — no row is empty any more and `remove_empty` would do nothing, in
+/// silence. Refused, saying to put it before them. A null-fill constant
+/// (`""`) fills nothing, so it does not count.
+#[test]
+fn remove_empty_after_a_filled_column_is_refused() {
+    let head = || Transform::PromoteHeader { rows: 1, join: " ".into() };
+    for added in [
+        Transform::SourceName { name: "f".into(), from: SourcePart::FileStem, pattern: None },
+        Transform::Constant { name: "kanton".into(), value: "CH".into() },
+    ] {
+        let s = spec(
+            delim(';', RaggedPolicy::PadNulls),
+            vec![head(), added, Transform::RemoveEmpty {}],
+            vec![col("k", DType::Utf8)],
+        );
+        let errs = s.validate().unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.contains("remove_empty") && e.contains("before")),
+            "{errs:?}"
+        );
+    }
+    let null_fill = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        vec![
+            head(),
+            Transform::Constant { name: "kanton".into(), value: String::new() },
+            Transform::RemoveEmpty {},
+        ],
+        vec![col("k", DType::Utf8)],
+    );
+    assert!(null_fill.validate().is_ok());
+
+    // Before them it does its job.
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "k.csv", "k;a\nx;1\n;\ny;3\n");
+    let ok = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        vec![
+            head(),
+            Transform::RemoveEmpty {},
+            Transform::SourceName { name: "f".into(), from: SourcePart::FileStem, pattern: None },
+        ],
+        vec![col("k", DType::Utf8), col("f", DType::Utf8)],
+    );
+    assert_eq!(spec_to_batch(&ok, &p).unwrap().num_rows(), 2);
+}

@@ -1350,6 +1350,28 @@ impl ParseSpec {
                              the last skip_rows, promote_header or transpose"
                         ));
                     }
+                    // After a column that fills every row, no row is empty any
+                    // more and this would do nothing, in silence. A null-fill
+                    // constant (`""`) fills nothing, so it does not count.
+                    let filled_before = self
+                        .transforms
+                        .iter()
+                        .take_while(|o| !std::ptr::eq(*o, t))
+                        .find_map(|o| match o {
+                            Transform::SourceName { name, .. } => {
+                                Some(format!("source_name `{name}`"))
+                            }
+                            Transform::Constant { name, value } if !value.trim().is_empty() => {
+                                Some(format!("constant `{name}`"))
+                            }
+                            _ => None,
+                        });
+                    if let Some(f) = filled_before {
+                        errs.push(format!(
+                            "remove_empty after {f} does nothing: that column has a value in \
+                             every row, so no row is empty any more. Put remove_empty before it"
+                        ));
+                    }
                 }
                 Transform::SkipRows { .. } => {}
             }
