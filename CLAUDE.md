@@ -750,7 +750,9 @@ Things that only become clear from reading several modules:
   after a `drop_rows_matching`) was written against rows that included the blanks, and the
   first cut, which skipped them after the leading run, made such a tail eat a data row in
   silence (`tests/regression.rs::a_skip_rows_tail_after_a_body_transform_counts_the_blank_row`).
-  A body transform before that last framing transform still sees blank rows, as on main.
+  A body transform before that last framing transform still sees blank rows, as on main —
+  except `fill_down`, which leaves a sheet's all-blank row blank (the carry runs on past it)
+  so the drop point still removes it, rather than filling it into a label-only record.
 - **Deliberate omissions:** no drop/rename transforms (the `columns` list is the only
   projection), no locale tables (literal `replace` pairs in the sidecar), no named timezones
   (fixed offsets only — DST cannot be guessed from a value).

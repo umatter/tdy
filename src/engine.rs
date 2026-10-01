@@ -1093,7 +1093,9 @@ fn is_blank_row(cells: &[String]) -> bool {
 /// after a `drop_rows_matching` still removes the blank row it counted,
 /// where a skip at the end of the leading run had removed a data row in its
 /// place. A body transform that sits before that last framing transform
-/// still sees blank rows, as every transform did before the skip existed.
+/// still sees blank rows, as every transform did before the skip existed —
+/// except `fill_down`, which leaves a blank row of such a table blank (the
+/// carry runs on past it), so it still reaches this point and is dropped.
 /// Kept, a blank row became an all-NULL record that `count(*)` counted, or
 /// a copy of the row above it under `fill_down`; a text file's blank lines
 /// never reach a table at all, and a region read skips the one inside its
@@ -1178,6 +1180,12 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     .iter()
                     .map(|c| index.get(c.as_str()).copied().ok_or_else(|| table.missing_column(c)))
                     .collect::<Result<_>>()?;
+                // On a sheet a row whose every cell is empty is a gap, not a
+                // record (`blank_rows_are_gaps`): it is left blank, the carry
+                // runs on past it, and the drop point removes it. Filled, it
+                // became a record of the label alone when this `fill_down`
+                // sat before a later `skip_rows`, ahead of that drop point.
+                let gaps = table.blank_rows_are_gaps;
                 for idx in resolved {
                     let mut last = String::new();
                     // One loop, two directions: filling up is filling down
@@ -1188,6 +1196,9 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                         FillDirection::Up => Box::new(table.rows.iter_mut().rev()),
                     };
                     for row in rows {
+                        if gaps && is_blank_row(row) {
+                            continue;
+                        }
                         let Some(cell) = row.get_mut(idx) else { continue };
                         if cell.trim().is_empty() {
                             cell.clone_from(&last);

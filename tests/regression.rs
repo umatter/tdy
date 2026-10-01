@@ -2010,9 +2010,11 @@ fn a_zip_named_csv_is_refused_not_read_as_a_one_column_table() {
 // A sheet's blank body rows and the row counts a spec states
 // ---------------------------------------------------------------------------
 
-/// Two sheets, written in the test: `S` has a body transform between its
+/// Three sheets, written in the test: `S` has a body transform between its
 /// header and a `skip_rows` tail that counts a blank row; `T` has a title
-/// row, then a blank row inside the body under `fill_down`.
+/// row, then a blank row inside the body under `fill_down`; `U` has blank
+/// rows inside the body under a `fill_down` that sits before a later
+/// `skip_rows` tail.
 fn blank_row_book(dir: &TempDir) -> Option<PathBuf> {
     let script = dir.path().join("mk.py");
     fs::write(
@@ -2026,6 +2028,9 @@ for r in [["Region", "Amount"], ["Ost", 100], ["Note: prelim", None], ["West", 3
 t = wb.create_sheet("T")
 for r in [["Report 2025", None], ["Region", "Amount"], ["Ost", 100], [None, None], ["West", 300]]:
     t.append(r)
+u = wb.create_sheet("U")
+for r in [["Report", None], ["Region", "Amount"], ["Ost", 100], [None, 200], [None, None], ["West", 300], [None, None], ["Total", 600]]:
+    u.append(r)
 wb.save(os.path.join(sys.argv[1], "book.xlsx"))
 "#,
     )
@@ -2100,4 +2105,38 @@ fn a_blank_body_row_is_not_filled_down_into_a_record() {
     let b = provider::spec_to_batch(&spec, &p).unwrap();
     assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("West".into())]);
     assert_eq!(col_i64(&b, 1), vec![Some(100), Some(300)]);
+}
+
+/// A `fill_down` placed before a later `skip_rows` runs before the blank
+/// rows are dropped (they are dropped past the LAST framing transform), so
+/// it used to fill the blank row between Ost's rows and West into a third
+/// Ost record with no amount. On a sheet a row whose every cell is empty is
+/// a gap, not a record: `fill_down` leaves it as it is — the carry runs on
+/// past it unchanged — and it reaches the drop point and is removed.
+#[test]
+fn fill_down_leaves_a_blank_sheet_row_blank_before_a_later_skip_rows() {
+    let dir = TempDir::new().unwrap();
+    let Some(p) = blank_row_book(&dir) else {
+        eprintln!("skipping: python3/openpyxl unavailable");
+        return;
+    };
+    let fill = |direction| {
+        sheet_spec(
+            "U",
+            vec![
+                Transform::SkipRows { head: 1, tail: 0 },
+                Transform::PromoteHeader { rows: 1, join: " ".into() },
+                Transform::FillDown { columns: vec!["Region".into()], direction },
+                Transform::SkipRows { head: 0, tail: 2 },
+            ],
+        )
+    };
+    let b = provider::spec_to_batch(&fill(Default::default()), &p).unwrap();
+    assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("Ost".into()), Some("West".into())]);
+    assert_eq!(col_i64(&b, 1), vec![Some(100), Some(200), Some(300)]);
+    // Upward, the same rule: the blank rows stay blank and are dropped, and
+    // the carry crosses them as before (`|200` takes West from below).
+    let b = provider::spec_to_batch(&fill(tdy::spec::FillDirection::Up), &p).unwrap();
+    assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("West".into()), Some("West".into())]);
+    assert_eq!(col_i64(&b, 1), vec![Some(100), Some(200), Some(300)]);
 }
