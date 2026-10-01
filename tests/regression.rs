@@ -2188,8 +2188,8 @@ fn a_percent_note_needs_every_value_to_carry_the_sign() {
 /// `45000` in a CSV exported from a spreadsheet is very often 2023-03-15, and
 /// nothing in the value says so. An integer column with a date-like name and
 /// every value in the serial band keeps its type and gains a note with the
-/// date the first value would be — and the query that converts it, since no
-/// declaration reads days since 1899-12-30.
+/// date the first value would be — and the declaration that reads it
+/// (`epoch = "excel_days"`), which it never writes itself.
 #[test]
 fn a_spreadsheet_serial_date_column_is_noted_not_converted() {
     let dir = TempDir::new().unwrap();
@@ -2202,8 +2202,9 @@ fn a_spreadsheet_serial_date_column_is_noted_not_converted() {
     assert_eq!(
         notes[0],
         "column `datum` holds integers like 45000; as spreadsheet serial days that is \
-         2023-03-15 — if these are dates, no declaration reads them yet, so convert in \
-         the query: CAST(CAST(\"datum\" - 25569 AS INT) AS DATE)"
+         2023-03-15 — if these are dates, declare it: in the sidecar type = \"date\", \
+         format = \"%s\", epoch = \"excel_days\"; in a target OPTIONS(epoch = 'excel_days') \
+         on a DATE column"
     );
 }
 
@@ -2218,22 +2219,19 @@ fn a_serial_date_note_needs_the_name_and_the_band() {
     assert!(!sniffed(&p).spec.notes.iter().any(|n| n.contains("serial")));
 }
 
-/// The SQL the note prints has to run, and give the date the note names.
-#[tokio::test]
-async fn the_serial_date_notes_query_runs_and_agrees() {
+/// The declaration the note names has to read the column, and give the date
+/// the note names.
+#[test]
+fn the_serial_date_notes_declaration_reads_the_date_it_names() {
     let dir = TempDir::new().unwrap();
-    // `current_date` is a SQL keyword: unquoted, the note's query would read
-    // today's date instead of the column. The note quotes the name.
-    let p = write(&dir, "s.csv", "current_date\n45000\n");
-    let note = sniffed(&p).spec.notes.into_iter().find(|n| n.contains("serial")).unwrap();
-    assert!(note.contains("CAST(CAST(\"current_date\" - 25569 AS INT) AS DATE)"), "{note}");
-    let sql = format!(
-        "SELECT CAST(CAST(\"current_date\" - 25569 AS INT) AS DATE) AS d FROM messy('{}')",
-        p.display()
-    );
-    let b = query(&sql).await;
-    let a = b[0].column(0);
-    let d = a.as_any().downcast_ref::<datafusion::arrow::array::Date32Array>().unwrap();
+    let p = write(&dir, "s.csv", "datum\n45000\n");
+    let mut spec = sniffed(&p).spec;
+    let c = spec.columns.iter_mut().find(|c| c.name == "datum").unwrap();
+    c.dtype = DType::Date { format: "%s".into() };
+    c.parse.epoch = Some(EpochUnit::ExcelDays);
+    spec.validate().unwrap();
+    let b = tdy::engine::execute(&spec, &p, Limits::default()).unwrap();
+    let d = b.column(0).as_any().downcast_ref::<datafusion::arrow::array::Date32Array>().unwrap();
     assert_eq!(d.value_as_date(0).unwrap().to_string(), "2023-03-15");
 }
 

@@ -63,6 +63,8 @@ enum ColOpt {
     Matches(Vec<String>),
     IfMissingNull,
     RoundHalfAway,
+    YearPivot(u8),
+    Epoch(crate::spec::EpochUnit),
 }
 
 /// A per-column `OPTIONS(...)` entry.
@@ -97,11 +99,35 @@ fn column_option(o: &SqlOption) -> std::result::Result<ColOpt, String> {
                  the scale is refused."
             )),
         },
+        // A declared reading: the century of a two-digit year, or the unit of
+        // a count. Each is a fact about the world no value in a file states,
+        // so the planner never tries it undeclared — and, declared, the
+        // reviewed `.tdy.sql` is what authorises it.
+        "year_pivot" => match text.trim().parse::<u8>() {
+            Ok(p) if p <= 100 => Ok(ColOpt::YearPivot(p)),
+            _ => Err(format!(
+                "year_pivot = {text:?} is out of range; it is the two-digit year (0..=100) \
+                 from which 19xx begins — '30' reads 29 as 2029 and 30 as 1930"
+            )),
+        },
+        "epoch" => serde_json::from_value::<crate::spec::EpochUnit>(serde_json::Value::String(
+            text.to_ascii_lowercase(),
+        ))
+        .map(ColOpt::Epoch)
+        .map_err(|_| {
+            format!(
+                "epoch = {text:?} is not a unit tdy reads; the units are 'seconds', \
+                 'milliseconds', 'microseconds' (since 1970) and 'excel_days' (a \
+                 spreadsheet serial, days since 1899-12-30)"
+            )
+        }),
         other => Err(format!(
             "unknown column option `{other}`. Known: matches (header cells this column \
              may be read from), if_missing ('null' to fill the column with nulls in a \
              file that lacks it), round ('half_away' to round a value with more fractional \
-             digits than the scale instead of refusing it)."
+             digits than the scale instead of refusing it), year_pivot ('N', the century \
+             window of a two-digit year), epoch ('seconds', 'milliseconds', 'microseconds' \
+             or 'excel_days', a count read as a date)."
         )),
     }
 }
@@ -161,6 +187,16 @@ pub struct TargetColumn {
     /// declaration, which is what authorises it — and it is part of
     /// `target_hash` for the same reason `if_missing_null` is.
     pub round: bool,
+    /// `year_pivot = 'N'`: two-digit years are read, with this window. Only on
+    /// a DATE or TIMESTAMP column. Undeclared, the planner never tries a `%y`
+    /// format — the century is a fact no value states — and declared, the
+    /// reading needs no review: the declaration is the authorisation, as for
+    /// `round`. Part of `target_hash`.
+    pub year_pivot: Option<u8>,
+    /// `epoch = '<unit>'`: the column is a count in this unit (a spreadsheet
+    /// serial for `excel_days`), and that is the only reading tried for it.
+    /// Only on a DATE or TIMESTAMP column. Part of `target_hash`.
+    pub epoch: Option<crate::spec::EpochUnit>,
 }
 
 /// How a file's header cell is matched to a declared column name.
@@ -328,6 +364,9 @@ impl Target {
             let mut matches: Vec<String> = Vec::new();
             let mut if_missing_null = false;
             let mut round = false;
+            let mut year_pivot: Option<u8> = None;
+            let mut epoch: Option<crate::spec::EpochUnit> = None;
+            let mut twice: Vec<&str> = Vec::new();
             for opt in &c.options {
                 match &opt.option {
                     ColumnOption::NotNull => nullable = false,
@@ -338,6 +377,16 @@ impl Target {
                                 Ok(ColOpt::Matches(m)) => matches.extend(m),
                                 Ok(ColOpt::IfMissingNull) => if_missing_null = true,
                                 Ok(ColOpt::RoundHalfAway) => round = true,
+                                Ok(ColOpt::YearPivot(p)) => {
+                                    if year_pivot.replace(p).is_some() {
+                                        twice.push("year_pivot");
+                                    }
+                                }
+                                Ok(ColOpt::Epoch(u)) => {
+                                    if epoch.replace(u).is_some() {
+                                        twice.push("epoch");
+                                    }
+                                }
                                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
                             }
                         }
@@ -357,12 +406,31 @@ impl Target {
                      column forbids"
                 ));
             }
+            for o in twice {
+                // A list may repeat; a reading may not — the second would
+                // silently overrule the first.
+                errs.push(format!("column `{cname}`: {o} is set more than once"));
+            }
+            if year_pivot.is_some() && epoch.is_some() {
+                errs.push(format!(
+                    "column `{cname}`: year_pivot and epoch are two different readings of one \
+                     value — a two-digit year is written, a count is not; declare one"
+                ));
+            }
             match arrow_type_of(&c.data_type) {
                 Ok(dtype) => {
                     if round && !matches!(dtype, ArrowType::Decimal128(..)) {
                         errs.push(format!(
                             "column `{cname}`: round = 'half_away' only applies to a DECIMAL column"
                         ));
+                    }
+                    let temporal = matches!(dtype, ArrowType::Date32 | ArrowType::Timestamp(..));
+                    for (set, name) in [(year_pivot.is_some(), "year_pivot"), (epoch.is_some(), "epoch")] {
+                        if set && !temporal {
+                            errs.push(format!(
+                                "column `{cname}`: {name} only applies to a DATE or TIMESTAMP column"
+                            ));
+                        }
                     }
                     columns.push(TargetColumn {
                         name: cname,
@@ -371,6 +439,8 @@ impl Target {
                         nullable,
                         if_missing_null,
                         round,
+                        year_pivot,
+                        epoch,
                     })
                 }
                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
@@ -1171,5 +1241,33 @@ mod tests {
         let e = Target::parse("CREATE TABLE t (a DECIMAL(14,2) OPTIONS(round = 'banker')) WITH (files = '*.csv')")
             .expect_err("one mode");
         assert!(format!("{e:#}").contains("half_away"), "{e:#}");
+    }
+
+    /// `year_pivot` and `epoch` declare a reading of a DATE or TIMESTAMP
+    /// column: parsed, refused anywhere else, refused when said twice.
+    #[test]
+    fn year_pivot_and_epoch_are_declarable_on_a_date_column_only_and_once() {
+        let g = t("CREATE TABLE s (a DATE OPTIONS(year_pivot = '30'), b TIMESTAMP OPTIONS(epoch = 'excel_days'), \
+                   c DATE OPTIONS(epoch = 'milliseconds'), d DATE) WITH (files = '*.csv')");
+        assert_eq!(g.columns[0].year_pivot, Some(30));
+        assert_eq!(g.columns[1].epoch, Some(crate::spec::EpochUnit::ExcelDays));
+        assert_eq!(g.columns[2].epoch, Some(crate::spec::EpochUnit::Milliseconds));
+        assert_eq!((g.columns[3].year_pivot, g.columns[3].epoch), (None, None));
+        assert_eq!(t("CREATE TABLE s (a DATE OPTIONS(year_pivot = '100')) WITH (files = 'x')").columns[0].year_pivot, Some(100));
+
+        for (ddl, want) in [
+            ("a TEXT OPTIONS(year_pivot = '30')", "year_pivot only applies to a DATE or TIMESTAMP column"),
+            ("a BIGINT OPTIONS(epoch = 'excel_days')", "epoch only applies to a DATE or TIMESTAMP column"),
+            ("a DATE OPTIONS(year_pivot = '30', year_pivot = '40')", "year_pivot is set more than once"),
+            ("a DATE OPTIONS(epoch = 'seconds') OPTIONS(epoch = 'seconds')", "epoch is set more than once"),
+            ("a DATE OPTIONS(year_pivot = '101')", "out of range"),
+            ("a DATE OPTIONS(year_pivot = 'soon')", "out of range"),
+            ("a DATE OPTIONS(epoch = 'days')", "excel_days"),
+            ("a DATE OPTIONS(epoch = 'excel_days', year_pivot = '30')", "two different readings"),
+        ] {
+            let e = Target::parse(&format!("CREATE TABLE s ({ddl}) WITH (files = '*.csv')"))
+                .expect_err(ddl);
+            assert!(format!("{e:#}").contains(want), "{ddl}: {e:#}");
+        }
     }
 }

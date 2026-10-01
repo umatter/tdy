@@ -864,6 +864,54 @@ declaring or retracting it voids the proofs. Without it a fitted member
 refuses such a value at execution and at fit time's whole-file verification;
 a total is never off by a cent nobody was told about.
 
+A **reading** no value can establish is declared the same way. Whether `45`
+is 1945 or 2045, and whether `45000` is a number or the spreadsheet serial for
+2023-03-15, are facts about the world, so the planner never tries either on
+its own — and a declaration in the target authorises it, with a note and no
+review:
+
+```sh
+printf 'Name;Geboren;Eintritt\nAnna;01.02.45;45000\nBen;13.03.29;45351\n' > staff.csv
+cat > staff.tdy.sql <<'SQL'
+CREATE TABLE staff (
+  name   TEXT NOT NULL OPTIONS(matches = 'Name'),
+  born   DATE NOT NULL OPTIONS(matches = 'Geboren', year_pivot = '30'),
+  joined DATE NOT NULL OPTIONS(matches = 'Eintritt', epoch = 'excel_days')
+) WITH (files = 'staff.csv', date_order = 'dmy');
+SQL
+tdy fit staff.tdy.sql
+tdy query "SELECT * FROM dataset('staff.tdy.sql')"
+```
+
+```
++------+------------+------------+
+| name | born       | joined     |
++------+------------+------------+
+| Anna | 1945-02-01 | 2023-03-15 |
+| Ben  | 2029-03-13 | 2024-02-29 |
++------+------------+------------+
+```
+
+`year_pivot = '30'` reads a two-digit year below 30 as 20xx and from 30 on as
+19xx (`0`..`100`); `epoch` is `'seconds'`, `'milliseconds'`, `'microseconds'`
+(since 1970) or `'excel_days'` (days since 1899-12-30, a serial below 61
+refused naming its row), and it is the only reading tried for that column.
+Both apply to `DATE` and `TIMESTAMP` only, may be said once, and are part of
+the lock's fingerprint. Without `year_pivot`, the same file is a gap that
+names it:
+
+```
+  staff.csv                GAP
+      `born` (DATE): reads "Geboren", whose values cannot produce that type
+          row 1: cannot parse "01.02.45": date does not match format "%Y%m%d": input contains invalid characters
+          these values carry two-digit years, whose century no value states; declare the window:
+            born DATE OPTIONS(year_pivot = '…')
+```
+
+The declaration authorises the planner's reading, not any hand-written one:
+a sidecar reading `%y` under a column that declares no window, or another
+one, still waits for `--accept`.
+
 and the planner null-fills it with a note and **no** review, because the
 declaration sits in the reviewed `.tdy.sql` — the planner is executing your
 decision, not making one. (`if_missing` is refused on a NOT NULL column, and
@@ -1153,7 +1201,13 @@ Details worth knowing:
   timestamp. Seconds also work with `format = "%s"` alone, which is what
   chrono's specifier already means; the option exists for the scales it does
   not spell. It requires `format = "%s"` beside it, so the two cannot
-  disagree about how to read one value.
+  disagree about how to read one value. **`epoch = "excel_days"`** reads a
+  spreadsheet serial — `45000` is 2023-03-15 — whole days on a `date` column
+  and a fraction for the time of day on a `timestamp` one, from the digits,
+  never through a float; a serial below 61 is refused naming its row (Excel
+  counts a 29 February 1900 that never was), and a time of day on a `date` is
+  refused rather than dropped. A target declares it per column with
+  `OPTIONS(epoch = '…')`.
 - **`year_pivot` decides the century of a two-digit year.** Under `%y`, a
   year below the pivot is 20xx and one at or above it 19xx:
   `parse = { year_pivot = 30 }` on `dtype = { type = "date", format =
@@ -1161,7 +1215,8 @@ Details worth knowing:
   Unset keeps chrono's window (1970–2069), which reads that `45` as 2045 — a
   birth year a century late. Only on a `date` or `timestamp` read with `%y`,
   and never inferred: the file does not say which century it means. A target
-  cannot declare it yet; it is a sidecar field.
+  declares it per column with `OPTIONS(year_pivot = '…')`, which is what lets
+  `tdy fit` read two-digit years at all.
 - **`source_name` turns where a file *is* into a column.** The period a
   monthly export covers is very often only in its filename. `from` picks
   `file_stem`, `file_name`, `sheet` or `path`, and an optional `pattern`'s

@@ -164,6 +164,23 @@ hand-written constant *value* ("November is all Ticino") is data the file never 
 and gates behind `--accept` exactly like `decimal_shift`. `if_missing_null` is part of
 `target_hash`, so declaring or retracting a fill voids the proofs.
 
+**Declared readings are in (2026-10-02).** Two column options name a reading no value can
+establish: `year_pivot = 'N'` (the century of a two-digit year) and `epoch = '<unit>'` (a
+count: `seconds`/`milliseconds`/`microseconds` since 1970, or `excel_days`, a spreadsheet
+serial — `EpochUnit::ExcelDays`, parsed from the digit string by `engine::excel_serial_micros`,
+serials below 61 refused naming the row, a time of day on a DATE refused rather than dropped).
+Both are DATE/TIMESTAMP only, refused when set twice, refused together, and part of
+`target_hash`. **A declaration authorises a reading**: undeclared, `fit` never tries a `%y`
+format or an epoch (a column only `%y` reads is a gap naming the option); declared,
+`fit::dated` adds the two-digit formats with that pivot (`date_order` settles a conflict as
+for `%Y`), or binds through the epoch unit as the *only* reading, and the binding carries a
+note and **no review** — the reviewed `.tdy.sql` is the authorisation, as for `round`. That
+exemption is `fit::review_reasons_for(spec, target)`, used wherever a target is in hand
+(`fit`, `fit_pile`'s sidecar reuse, the console's `.accept`): it drops a `%y` reason only when
+the target column declares exactly the pivot the spec reads, so a hand-written `%y` under no
+or another declared window still waits on a person. `draft` declares neither. The sniffer's
+serial-date note now names the declaration instead of SQL.
+
 **`tdy draft` scaffolds a target from a pile** (`src/draft.rs`): sniffs every file, groups
 columns by sanitized name, carries verbatim spellings as `matches`, merges types by widening
 (Int+Decimal → DECIMAL, anything+Utf8 → TEXT with the conflict named), counts per-file

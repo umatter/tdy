@@ -124,6 +124,15 @@ pub fn target_hash(t: &Target) -> String {
         // member that lacks the column, so it must void the proofs.
         h.update(if c.if_missing_null { b"~" } else { b"." });
         h.update(if c.round { b"r" } else { b"." });
+        // A declared reading changes what a value means: 45 is 1945 or 2045,
+        // 45000 is a count or a date. Absent, nothing is hashed, so every
+        // lock written before these options existed keeps its proofs.
+        if let Some(p) = c.year_pivot {
+            h.update(format!("y{p}").as_bytes());
+        }
+        if let Some(u) = c.epoch {
+            h.update(format!("e{u:?}").as_bytes());
+        }
         for m in &c.matches {
             h.update(b"\x1f");
             h.update(m.as_bytes());
@@ -862,6 +871,28 @@ mod tests {
         std::fs::write(d.path().join("exports/2025-01.csv"), "").unwrap();
         let got = expand_glob(d.path(), "exports/2025-*.csv").unwrap();
         assert_eq!(got, vec![d.path().join("exports/2025-01.csv")]);
+    }
+
+    /// A declared reading changes what a member's values mean, so declaring,
+    /// changing or retracting one voids the proofs.
+    #[test]
+    fn year_pivot_and_epoch_are_part_of_the_targets_meaning() {
+        let parse = |s: &str| crate::target::Target::parse(s).unwrap();
+        let hashes: Vec<String> = [
+            "CREATE TABLE t (a DATE) WITH (files = '*.csv')",
+            "CREATE TABLE t (a DATE OPTIONS(year_pivot = '30')) WITH (files = '*.csv')",
+            "CREATE TABLE t (a DATE OPTIONS(year_pivot = '40')) WITH (files = '*.csv')",
+            "CREATE TABLE t (a DATE OPTIONS(epoch = 'excel_days')) WITH (files = '*.csv')",
+            "CREATE TABLE t (a DATE OPTIONS(epoch = 'seconds')) WITH (files = '*.csv')",
+        ]
+        .iter()
+        .map(|s| target_hash(&parse(s)))
+        .collect();
+        for (i, a) in hashes.iter().enumerate() {
+            for b in &hashes[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 
     /// Declaring or retracting rounding changes what a member may do, so it

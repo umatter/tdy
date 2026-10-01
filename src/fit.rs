@@ -53,7 +53,7 @@ use crate::conform::{conforms, Mismatch};
 use crate::engine::{self, ExtractOpts};
 use crate::numfmt;
 use crate::sniff;
-use crate::spec::{Rounding, ColumnSpec, DType, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
+use crate::spec::{Rounding, ColumnSpec, DType, EpochUnit, Extraction, InferenceMethod, ParseSpec, Transform, ValueParsing};
 use crate::target::{DateOrder, MatchMode, Target, Verify};
 
 /// A declared column this file cannot supply, and why.
@@ -270,6 +270,32 @@ pub fn review_reasons(spec: &ParseSpec) -> Vec<String> {
     out
 }
 
+/// [`review_reasons`], less what the target's own declarations authorise.
+///
+/// A `%y` column read with exactly the century window its target column
+/// declares (`year_pivot`) asks a person nothing the reviewed declaration has
+/// not already answered — the same footing as `round` and `if_missing =
+/// 'null'`. A spec reading `%y` under a target that declares no window, or a
+/// different one, keeps its reason: the declaration authorises its own
+/// reading, not whatever a hand-written sidecar says.
+pub fn review_reasons_for(spec: &ParseSpec, target: &Target) -> Vec<String> {
+    let authorised: Vec<String> = spec
+        .columns
+        .iter()
+        .filter(|c| crate::spec::two_digit_year_window(c).is_some())
+        .filter(|c| {
+            target.columns.iter().any(|tc| {
+                tc.name == c.name && tc.year_pivot.is_some() && tc.year_pivot == c.parse.year_pivot
+            })
+        })
+        .map(|c| format!("`{}` reads two-digit years as ", c.name))
+        .collect();
+    review_reasons(spec)
+        .into_iter()
+        .filter(|r| !authorised.iter().any(|a| r.starts_with(a.as_str())))
+        .collect()
+}
+
 /// Why a fit failed. Gaps are the interesting case; the rest are errors about
 /// the file or the plan rather than about the mapping.
 #[derive(Debug)]
@@ -424,7 +450,7 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
                 rows.iter().map(|r| r.get(i).map(|s| s.as_str()).unwrap_or("")).collect();
             let addressable = header.get(i).cloned().unwrap_or_else(|| name.clone());
             if type_for(
-                &Want { column: &tc.name, source: &addressable, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round },
+                &Want { column: &tc.name, source: &addressable, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round, year_pivot: tc.year_pivot, epoch: tc.epoch },
                 &values,
                 target.date_order,
                 target.decimal_separator,
@@ -1523,7 +1549,7 @@ fn fit_framed(
             rows.iter().map(|r| r.get(idx).map(|s| s.as_str()).unwrap_or("")).collect();
 
         match type_for(
-            &Want { column: &tc.name, source: &source, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round },
+            &Want { column: &tc.name, source: &source, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round, year_pivot: tc.year_pivot, epoch: tc.epoch },
             &values,
             target.date_order,
             target.decimal_separator,
@@ -1624,7 +1650,7 @@ fn fit_framed(
     }
 
     let review = {
-        let rs = review_reasons(&spec);
+        let rs = review_reasons_for(&spec, target);
         (!rs.is_empty()).then(|| rs.join("; "))
     };
     Ok(Fitted { spec, notes, review })
@@ -1823,6 +1849,7 @@ struct Ctx<'a> {
     base: ValueParsing,
     date_order: Option<DateOrder>,
     decimal_separator: Option<char>,
+    year_pivot: Option<u8>,
 }
 
 /// Can these values produce the declared type, and how?
@@ -1840,7 +1867,28 @@ struct Want<'a> {
     dtype: &'a ArrowType,
     nullable: bool,
     round: bool,
+    /// The target's declared century window, which is what lets the
+    /// two-digit-year formats be tried at all.
+    year_pivot: Option<u8>,
+    /// The target's declared count unit: the only reading tried.
+    epoch: Option<EpochUnit>,
 }
+
+/// The two-digit-year spellings of [`sniff::DATE_FORMATS`], tried only under a
+/// declared `year_pivot`.
+const DATE_FORMATS_2Y: &[&str] = &["%d.%m.%y", "%d/%m/%y", "%m/%d/%y", "%y-%m-%d"];
+
+/// The two-digit-year spellings of [`sniff::TS_FORMATS`]: each `%Y` form with
+/// `%y` in its place.
+const TS_FORMATS_2Y: &[&str] = &[
+    "%y-%m-%d %H:%M:%S",
+    "%y-%m-%dT%H:%M:%S",
+    "%y-%m-%d %H:%M:%S%.f",
+    "%y-%m-%dT%H:%M:%S%.f",
+    "%d.%m.%y %H:%M:%S",
+    "%d.%m.%y %H:%M",
+    "%y-%m-%d %H:%M",
+];
 
 fn type_for(
     req: &Want<'_>,
@@ -1848,7 +1896,7 @@ fn type_for(
     date_order: Option<DateOrder>,
     decimal_separator: Option<char>,
 ) -> Result<(DType, ValueParsing, Option<String>), Gap> {
-    let Want { column, source, dtype: want, nullable, round } = *req;
+    let Want { column, source, dtype: want, nullable, round, year_pivot, epoch } = *req;
     let untypable = |why: String| Gap::Untypable {
         column: column.to_string(),
         source: source.to_string(),
@@ -1877,7 +1925,32 @@ fn type_for(
         base: base.clone(),
         date_order,
         decimal_separator,
+        year_pivot,
     };
+
+    // A declared count is the only reading of the column: the format is
+    // `%s`, as `validate()` asks of an epoch, and nothing else is tried.
+    if let (Some(unit), ArrowType::Date32 | ArrowType::Timestamp(..)) = (epoch, want) {
+        let dtype = match want {
+            ArrowType::Timestamp(_, tz) => {
+                DType::Timestamp { format: "%s".into(), timezone: tz.as_ref().map(|z| z.to_string()) }
+            }
+            _ => DType::Date { format: "%s".into() },
+        };
+        let parse = ValueParsing { epoch: Some(unit), ..base };
+        let (d, p) = check_one(&ctx, dtype, parse).map_err(untypable)?;
+        let unit_name = serde_json::to_value(unit)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let what = match unit {
+            EpochUnit::ExcelDays => "spreadsheet serial days",
+            EpochUnit::Seconds => "seconds since 1970",
+            EpochUnit::Milliseconds => "milliseconds since 1970",
+            EpochUnit::Microseconds => "microseconds since 1970",
+        };
+        return Ok((d, p, Some(format!("`{column}`: read as {what} (epoch {unit_name}), as the target declares"))));
+    }
 
     match want {
         // Anything is text. No candidate can fail, so there is nothing to check.
@@ -1938,13 +2011,13 @@ fn type_for(
             Ok((d, parse, note))
         }
 
-        ArrowType::Date32 => {
-            pick_format(&ctx, sniff::DATE_FORMATS, |f| DType::Date { format: f.to_string() })
-        }
+        ArrowType::Date32 => dated(&ctx, want, sniff::DATE_FORMATS, DATE_FORMATS_2Y, |f| DType::Date {
+            format: f.to_string(),
+        }),
 
         ArrowType::Timestamp(_, tz) => {
             let zone = tz.as_ref().map(|z| z.to_string());
-            pick_format(&ctx, sniff::TS_FORMATS, move |f| DType::Timestamp {
+            dated(&ctx, want, sniff::TS_FORMATS, TS_FORMATS_2Y, move |f| DType::Timestamp {
                 format: f.to_string(),
                 timezone: zone.clone(),
             })
@@ -2048,6 +2121,91 @@ fn field_order(f: &str) -> Option<DateOrder> {
     }
 }
 
+/// A date or timestamp column: the four-digit formats, plus the two-digit
+/// ones when the target declares a century window.
+///
+/// Undeclared, a two-digit year is never read — its century is a fact no
+/// value in the file states — and a column that only a two-digit format
+/// parses is a gap naming the declaration. Declared, the window is the
+/// target's, the reading is named in a note, and it needs no review: the
+/// reviewed `.tdy.sql` is the authorisation.
+fn dated<F>(
+    ctx: &Ctx<'_>,
+    want: &ArrowType,
+    four: &[&'static str],
+    two: &[&'static str],
+    make: F,
+) -> Result<(DType, ValueParsing, Option<String>), Gap>
+where
+    F: Fn(&str) -> DType,
+{
+    let Some(pivot) = ctx.year_pivot else {
+        return pick_format(ctx, four, &make).map_err(|g| match g {
+            Gap::Untypable { column, source, why, .. } => {
+                let want = render(want);
+                let why = if two_digit_years(ctx, two, &make) {
+                    format!(
+                        "{why}\n    these values carry two-digit years, whose century no value \
+                         states; declare the window:\n      {column} {want} OPTIONS(year_pivot = '…')"
+                    )
+                } else {
+                    why
+                };
+                Gap::Untypable { column, source, want, why }
+            }
+            other => other,
+        });
+    };
+    let formats: Vec<&'static str> = four.iter().chain(two).copied().collect();
+    let (d, p, note) = pick_format(ctx, &formats, &make).map_err(|g| match g {
+        Gap::Untypable { column, source, why, .. } => Gap::Untypable { column, source, want: render(want), why },
+        other => other,
+    })?;
+    if crate::spec::two_digit_year_window(&ColumnSpec {
+        name: ctx.column.to_string(),
+        source: None,
+        dtype: d.clone(),
+        nullable: ctx.nullable,
+        parse: p.clone(),
+        pointer: None,
+    })
+    .is_some()
+    {
+        let (from, to) = (1900 + i32::from(pivot), 1999 + i32::from(pivot));
+        let n = format!(
+            "`{}`: two-digit years are read as {from}–{to} (year_pivot {pivot}), as the target \
+             declares",
+            ctx.column
+        );
+        let note = match note {
+            Some(o) => format!("{o}; {n}"),
+            None => n,
+        };
+        return Ok((d, p, Some(note)));
+    }
+    Ok((d, p, note))
+}
+
+/// Would a two-digit-year format read every value (under chrono's window)?
+/// Only asked to name the declaration in a gap; never to bind.
+fn two_digit_years<F>(ctx: &Ctx<'_>, two: &[&'static str], make: &F) -> bool
+where
+    F: Fn(&str) -> DType,
+{
+    ctx.values.iter().any(|v| !sniff::is_na(v))
+        && two.iter().any(|f| check_one(ctx, make(f), ctx.base.clone()).is_ok())
+}
+
+/// The parse options a format is checked and bound with: a `%y` format
+/// carries the declared century window, any other none (`validate()` refuses
+/// a `year_pivot` beside a format with no `%y` to apply it to).
+fn parse_for(ctx: &Ctx<'_>, f: &str) -> ValueParsing {
+    match ctx.year_pivot {
+        Some(p) if f.contains("%y") => ValueParsing { year_pivot: Some(p), ..ctx.base.clone() },
+        _ => ctx.base.clone(),
+    }
+}
+
 /// Choose a strftime format, refusing when more than one reading is possible.
 ///
 /// The ambiguity test is exact: every format that parses the whole probe is
@@ -2058,12 +2216,12 @@ fn field_order(f: &str) -> Option<DateOrder> {
 fn pick_format<F>(
     ctx: &Ctx<'_>,
     formats: &[&'static str],
-    make: F,
+    make: &F,
 ) -> Result<(DType, ValueParsing, Option<String>), Gap>
 where
     F: Fn(&str) -> DType,
 {
-    let (column, source, values, base) = (ctx.column, ctx.source, ctx.values, &ctx.base);
+    let (column, source, values) = (ctx.column, ctx.source, ctx.values);
     let nullable = ctx.nullable;
     let date_order = ctx.date_order;
     let mut ok: Vec<(&'static str, ArrayRef)> = Vec::new();
@@ -2074,7 +2232,7 @@ where
             source: None,
             dtype: make(f),
             nullable,
-            parse: base.clone(),
+            parse: parse_for(ctx, f),
             pointer: None,
         };
         match engine::build_column_at(&col, values, 0) {
@@ -2107,7 +2265,7 @@ where
         .collect();
 
     if disagreeing.is_empty() {
-        return Ok((make(first), base.clone(), None));
+        return Ok((make(first), parse_for(ctx, first), None));
     }
 
     // There is a real conflict. A declared `date_order` is a human saying
@@ -2121,7 +2279,7 @@ where
             .filter(|f| field_order(f) == Some(order))
             .collect();
         if matching.len() == 1 {
-            return Ok((make(matching[0]), base.clone(), None));
+            return Ok((make(matching[0]), parse_for(ctx, matching[0]), None));
         }
     }
 

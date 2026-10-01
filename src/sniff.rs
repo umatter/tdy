@@ -1939,9 +1939,10 @@ fn date_like_name(name: &str) -> bool {
 /// 2023-03-15. Both halves of the evidence are needed — every non-missing
 /// sampled value in [`SERIAL_DATE_BAND`] and a header that reads like a date —
 /// and even then it is a note: an order number in that range under a column
-/// called `tag` is not a date, and only a person knows. No declaration reads
-/// days since 1899-12-30 (`epoch` counts from 1970), so the note gives the
-/// query that does; `tests/regression.rs` runs it.
+/// called `tag` is not a date, and only a person knows. The note names the
+/// declaration that reads it — `epoch = "excel_days"` in a sidecar,
+/// `OPTIONS(epoch = 'excel_days')` in a target — and `tests/regression.rs`
+/// runs it.
 fn serial_date_note(values: &[&str], name: &str) -> Option<String> {
     if !date_like_name(name) {
         return None;
@@ -1958,13 +1959,10 @@ fn serial_date_note(values: &[&str], name: &str) -> Option<String> {
     }
     let first = ints[0];
     let date = serial_origin() + chrono::Duration::days(first);
-    // 25569 is 1970-01-01 as a serial, so the difference is DataFusion's own
-    // days-since-epoch, which a cast to DATE reads directly.
-    let unix_offset = (NaiveDate::from_ymd_opt(1970, 1, 1).expect("a date") - serial_origin()).num_days();
     Some(format!(
         "column `{name}` holds integers like {first}; as spreadsheet serial days that is {date} \
-         — if these are dates, no declaration reads them yet, so convert in the query: \
-         CAST(CAST(\"{name}\" - {unix_offset} AS INT) AS DATE)"
+         — if these are dates, declare it: in the sidecar type = \"date\", format = \"%s\", \
+         epoch = \"excel_days\"; in a target OPTIONS(epoch = 'excel_days') on a DATE column"
     ))
 }
 

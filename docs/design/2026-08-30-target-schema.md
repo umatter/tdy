@@ -263,6 +263,36 @@ always been a projection.
 
 ---
 
+### 4.4 Column options
+
+Per-column `OPTIONS(...)`, each a quoted string, each refused outside the types
+it applies to and (except `matches`, a list) when set twice:
+
+| Option | Applies to | Says | Review |
+|---|---|---|---|
+| `matches = 'Betrag, Amount'` | any | header cells this column may be read from | none: a binding is proved |
+| `if_missing = 'null'` | nullable | a member without the column fits, null-filled | none |
+| `round = 'half_away'` | `DECIMAL` | extra fractional digits round half away from zero instead of refusing | none |
+| `year_pivot = '30'` | `DATE`, `TIMESTAMP` | two-digit years are read, below 30 as 20xx, from 30 as 19xx (`0..=100`) | none |
+| `epoch = 'excel_days'` | `DATE`, `TIMESTAMP` | the column is a count in this unit: `seconds`, `milliseconds`, `microseconds` (since 1970) or `excel_days` (a spreadsheet serial, days since 1899-12-30) | none |
+
+Every one is part of `target_hash`, so declaring, changing or retracting one
+voids the proofs taken under the old declaration.
+
+**A declaration authorises a reading.** `year_pivot` and `epoch` name readings
+no value in a file can establish — whether `45` is 1945 or 2045, whether `45000`
+is a count or 2023-03-15 — so the planner never tries either undeclared: a
+column of two-digit years is a gap naming `OPTIONS(year_pivot = '…')`, a column
+of integers under a `DATE` is simply untypable. Declared, the reading is tried
+— for `epoch` it is the *only* reading tried for the column; for `year_pivot`
+the two-digit formats join the four-digit ones (which cannot read a two-digit
+year, so the two never compete) and `date_order` settles a conflict exactly as
+it does for four-digit formats — and a planned binding under it carries a note
+and **no review**, because the declaration in the reviewed `.tdy.sql` is the
+authorisation, as it is for `round` and `if_missing = 'null'`. It authorises
+its own reading only: a hand-written sidecar reading `%y` under a column that
+declares no window, or a different one, still waits on a person.
+
 ## 5. Architecture
 
 ### 5.1 New modules
