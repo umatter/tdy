@@ -532,12 +532,16 @@ gate exists for.
 `awk 'NF'`, `mlr remove-empty-columns` (Miller — the one tool surveyed with a
 verb dedicated to exactly this).
 
-**`partial`** — leading/trailing blanks are absorbed by framing; interior blank
-*rows* are skipped (a text reader skips blank lines; a sheet's are skipped where
-its framing ends, since 2026-10-01), but an all-blank *column* becomes a real
-column of nulls (usually named `col_7`). A `remove_empty` operator would be a small,
-uncontroversial addition; today the cure is projection (omit the column) and a
-`WHERE` clause.
+**`spec`** since 2026-10-01 — leading/trailing blanks are absorbed by framing;
+interior blank *rows* are skipped (a text reader skips blank lines; a sheet's are
+skipped where its framing ends), and a delimited row that carries only its
+delimiters (`;;;`) is dropped by `op = "remove_empty"`, a row-local transform on
+both executors that must sit after the framing transforms and is never inferred.
+It drops rows only — `columns` stays the only projection — so an all-blank
+*column* (usually `col_7`) is still emitted, and the sniffer now notes it:
+*column 7 (`col_7`) is empty in every sampled row; omit it from `columns` to drop
+it*. Omitting it is the cure, and it was always declarable; the verdict was
+`partial` for the rows.
 
 ### C8 · Transposition
 **Also called:** `t()` (R), `.T` / `transpose()` (pandas), `Table.Transpose`
@@ -1038,12 +1042,15 @@ stored as 0.45).
 
 **Messy → clean:** `45%` → `45` or `0.45`, and the two are equally defensible.
 
-**`partial`** — `strip = "%"` gives 45; `decimal_shift = -2` gives 0.45. Both are
-declarable, neither is inferred, and the ambiguity is genuinely in the data. The
-current behaviour (leave it as text, confidence unchanged, let a human declare)
-is consistent with the rule. Worth a sniffer *note* — "column looks like
-percentages; strip to keep 45, or shift to get 0.45" — since the fix is a
-one-line edit once you know which you want.
+**`spec`** since 2026-10-01 — `strip = "%"` gives 45; `decimal_shift = -2` gives
+0.45. Both are declarable, neither is inferred, and the ambiguity is genuinely in
+the data, so the sniffer leaves the column as text with its confidence unchanged
+and now says so: a column whose every sampled value is a number (by
+`numfmt::infer`) followed by `%` gets the note *column `anteil` looks like
+percentages (e.g. `"45%"`): `strip = "%"` reads 45; with `decimal_shift = -2` it
+reads 0.45 — the file does not say which is meant*, built from the column's own
+first value (`sniff::percent_note`). The fix is a one-line edit once you know
+which you want. The verdict was `partial` only for want of that note.
 
 ### E7 · Scale factors declared out-of-band
 **Also called:** "in thousands" / "in Mio. CHF" in a title row, `SCALE=` in
@@ -1128,13 +1135,35 @@ is `int64`, and nothing suggests it might be 2023-03-15. Detectable heuristicall
 (a tight cluster of integers in the 25,000–50,000 band, in a column named
 `datum`/`date`) but only as a *note*, never as a silent conversion.
 
+The note is in since 2026-10-01 (`sniff::serial_date_note`): an integer column
+whose name contains `date`, `datum`, `day`, `tag`, `zeit`, `time`, `fecha` or
+`jour` and whose every sampled value lies in 25,000..=60,000 (1968-06-11 to
+2064-04-08) stays an integer and is told *column `datum` holds integers like
+45000; as spreadsheet serial days that is 2023-03-15 — if these are dates, no
+declaration reads them yet, so convert in the query: CAST(CAST(datum - 25569 AS
+INT) AS DATE)*. The floor makes the 1899-12-30 origin exact (serial 60 is the
+phantom 1900-02-29). It stays `partial` for the half that is still missing: a
+*declarable* serial reading — `epoch` counts from 1970 — so the conversion lives
+in a query rather than in the sidecar, where a target declaring `DATE` could
+prove it.
+
 ### E14 · Two-digit years and century windowing
 **Also called:** `YEARCUTOFF=` (SAS), pivot year, `%y` semantics, Y2K windowing,
 `dmy` with 2-digit input (lubridate).
 
-**`partial`** — `%y` parses; the window is chrono's (69/70 split) and is not
-declarable. Rarely decisive, occasionally catastrophic. Worth a note in the
-`Date` doc comment if nothing else.
+**`partial`** — `%y` parses, and since 2026-10-01 the window is declarable:
+`parse.year_pivot` (0..=99) reads a two-digit year below the pivot as 20xx and
+one at or above it as 19xx, re-centring the year chrono parsed from its last two
+digits rather than rewriting the value (`engine::recentre_year`, called by the
+one parse function both executors share). Unset is chrono's window exactly —
+probed, it is 00–69 → 20xx and 70–99 → 19xx, a year off from the 69/70 this
+entry first recorded. `validate()` refuses it on anything but a `date` or
+`timestamp` whose format contains `%y`, and above 99. A spec that reads `%y`
+without a person having written it — the model's tier; the sniffer and `fit`
+choose no `%y` format — carries the note *two-digit years are read as
+1970–2069; set `year_pivot` to change*. It stays `partial` because a **target
+cannot declare it yet**: `year_pivot` is a sidecar field, so a dataset whose
+members write two-digit years has to settle the window per member.
 
 ### E15 · Partial and non-Gregorian period values
 **Also called:** `yearmonth`/`yearquarter` (tsibble), `Period`/`PeriodIndex`
@@ -2120,8 +2149,9 @@ would mean producing a value the file does not contain.
     a silent conversion.
 12. **B7 · Multi-character delimiters** — *moved up from "trivial, rare":* 2.7%
     of real CSVs use comma-plus-whitespace, the third most common dialect.
-13. **E17 · Duration type**, **F3 · ordered categoricals**, **C7 · blank-column
-    removal**, **A5 · Unicode normalisation** — all real, all minor.
+13. **E17 · Duration type**, **F3 · ordered categoricals**, ~~**C7 · blank-column
+    removal**~~ (done: `remove_empty` for rows, a sniffer note for columns),
+    **A5 · Unicode normalisation** — all real, all minor.
 
 **Worth deciding explicitly rather than leaving implicit:**
 

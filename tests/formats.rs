@@ -1338,3 +1338,125 @@ fn a_fractional_epoch_is_an_error_not_a_rounding() {
     let e = format!("{:#}", spec_to_batch(&s, &p).expect_err("not a whole number"));
     assert!(e.contains("whole number"), "{e}");
 }
+
+// ---------------------------------------------------------------------------
+// remove_empty
+// ---------------------------------------------------------------------------
+
+/// `remove_empty` drops a row whose every cell is empty after trimming — the
+/// `;;;` spacer an export writes between groups — and nothing else: a row
+/// with one value left in it is a record, however sparse.
+#[test]
+fn remove_empty_drops_all_empty_rows_and_only_those() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "e.csv", "a;b;c\n1;x;2\n;;\n ; ;\n;y;\n3;z;4\n");
+    let s = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }, Transform::RemoveEmpty {}],
+        vec![col("a", DType::Int64), col("b", DType::Utf8)],
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(ints(&b, 0), vec![Some(1), None, Some(3)]);
+    assert_eq!(strings(&b, 1), vec!["x", "y", "z"]);
+
+    // Without it the spacers are records of nulls, which `count(*)` counts.
+    let without = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("a", DType::Int64)],
+    );
+    assert_eq!(spec_to_batch(&without, &p).unwrap().num_rows(), 5);
+}
+
+/// The TOML spelling is `op = "remove_empty"`, with no options.
+#[test]
+fn remove_empty_is_spelled_as_an_op_with_no_options() {
+    let t: Transform = toml::from_str("op = \"remove_empty\"").unwrap();
+    assert!(matches!(t, Transform::RemoveEmpty {}));
+    assert!(toml::from_str::<Transform>("op = \"remove_empty\"\ncolumns = [\"a\"]").is_err());
+}
+
+/// Before a framing transform it would change what that transform counts —
+/// a `skip_rows` head of 3 would skip three *non-empty* rows — so `validate`
+/// refuses it there and says where it belongs.
+#[test]
+fn remove_empty_before_framing_is_refused_with_where_to_put_it() {
+    for framing in [
+        Transform::PromoteHeader { rows: 1, join: " ".into() },
+        Transform::SkipRows { head: 1, tail: 0 },
+        Transform::Transpose,
+    ] {
+        let s = spec(
+            delim(';', RaggedPolicy::PadNulls),
+            vec![Transform::RemoveEmpty {}, framing],
+            vec![col("a", DType::Utf8)],
+        );
+        let errs = s.validate().unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.contains("remove_empty") && e.contains("after")),
+            "{errs:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// year_pivot
+// ---------------------------------------------------------------------------
+
+fn yy_col(pivot: Option<u8>) -> ColumnSpec {
+    let mut c = col("d", DType::Date { format: "%d.%m.%y".into() });
+    c.parse.year_pivot = pivot;
+    c
+}
+
+/// `year_pivot = 30` reads `29` as 2029 and `30` as 1930; unset keeps
+/// chrono's window, under which both are 20xx.
+#[test]
+fn a_year_pivot_decides_the_century_of_a_two_digit_year() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "y.csv", "d\n01.02.29\n01.02.30\n");
+    let head = vec![Transform::PromoteHeader { rows: 1, join: " ".into() }];
+    let read = |pivot| {
+        let b = spec_to_batch(&spec(delim(',', RaggedPolicy::PadNulls), head.clone(), vec![yy_col(pivot)]), &p)
+            .unwrap();
+        let a = b.column(0).as_any().downcast_ref::<Date32Array>().unwrap();
+        (0..a.len()).map(|i| a.value_as_date(i).unwrap().to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(read(Some(30)), vec!["2029-02-01", "1930-02-01"]);
+    assert_eq!(read(None), vec!["2029-02-01", "2030-02-01"]);
+}
+
+/// Only on a date or timestamp read with `%y`, and only 0..=99; anything
+/// else is refused with a message rather than ignored.
+#[test]
+fn year_pivot_is_refused_where_it_means_nothing() {
+    let refuse = |c: ColumnSpec, needle: &str| {
+        let s = spec(delim(',', RaggedPolicy::PadNulls), vec![], vec![c]);
+        let errs = s.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("year_pivot") && e.contains(needle)), "{errs:?}");
+    };
+    let mut four = col("d", DType::Date { format: "%d.%m.%Y".into() });
+    four.parse.year_pivot = Some(30);
+    refuse(four, "%y");
+    let mut text = col("d", DType::Utf8);
+    text.parse.year_pivot = Some(30);
+    refuse(text, "date");
+    refuse(yy_col(Some(100)), "0..=99");
+    let mut ts = col("t", DType::Timestamp { format: "%d.%m.%y %H:%M".into(), timezone: None });
+    ts.parse.year_pivot = Some(30);
+    assert!(spec(delim(',', RaggedPolicy::PadNulls), vec![], vec![ts, yy_col(Some(0))]).validate().is_ok());
+}
+
+/// When a `%y` format is in force, the note names the window.
+#[test]
+fn a_two_digit_year_column_names_its_window() {
+    assert_eq!(
+        two_digit_year_note(&yy_col(None)).as_deref(),
+        Some("column `d`: two-digit years are read as 1970–2069; set `year_pivot` to change")
+    );
+    assert_eq!(
+        two_digit_year_note(&yy_col(Some(30))).as_deref(),
+        Some("column `d`: two-digit years are read as 1930–2029; set `year_pivot` to change")
+    );
+    assert_eq!(two_digit_year_note(&col("d", DType::Date { format: "%Y-%m-%d".into() })), None);
+}

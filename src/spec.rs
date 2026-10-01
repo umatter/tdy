@@ -410,6 +410,25 @@ pub enum Transform {
         #[serde(default)]
         on_short: ShortSplit,
     },
+    /// Drop every row whose cells are all empty after trimming: the `;;;`
+    /// spacer a CSV export writes between groups, which otherwise becomes a
+    /// record of nulls that `count(*)` counts.
+    ///
+    /// Rows only. There is no column counterpart, deliberately: `columns` is
+    /// the only projection, and an all-empty column is dropped by leaving it
+    /// out of that list (the sniffer says which ones are). A text file's
+    /// truly blank lines and a sheet's blank rows never reach a table, so
+    /// this is for rows that carry delimiters and nothing else.
+    ///
+    /// Must come after the framing transforms (`skip_rows`,
+    /// `promote_header`, `transpose`): before them it would change what they
+    /// count. Never inferred.
+    ///
+    /// Written as a struct with no fields rather than a unit variant so that
+    /// `deny_unknown_fields` holds: `op = "remove_empty"` beside a
+    /// `columns = [...]` (somebody hoping it drops columns) is refused, not
+    /// silently ignored.
+    RemoveEmpty {},
     /// Wide -> long.
     Unpivot {
         id_columns: Vec<String>,
@@ -672,6 +691,21 @@ pub struct ValueParsing {
     /// (`%Y-%m-%d` beside `epoch = "milliseconds"`) says nothing true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epoch: Option<EpochUnit>,
+    /// The century window for a two-digit year (`%y`): a year below the
+    /// pivot is 20xx, at or above it 19xx. `year_pivot = 30` reads `29` as
+    /// 2029 and `30` as 1930.
+    ///
+    /// Unset keeps chrono's window exactly — 00–69 is 20xx, 70–99 is 19xx,
+    /// which is pivot 70 — so no existing sidecar changes meaning. Rarely
+    /// decisive, occasionally catastrophic: birth years in a `%y` column
+    /// land a century late under the default, and only the file's author
+    /// knows which window is meant, so it is declared and never inferred.
+    ///
+    /// Only on a `date` or `timestamp` column whose format contains `%y`,
+    /// and only 0..=99. The year is re-centred from its last two digits
+    /// after chrono parses it; the value itself is never rewritten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year_pivot: Option<u8>,
     /// For Bool columns: e.g. ["ja", "yes", "1"] / ["nein", "no", "0"].
     /// Matched case-insensitively.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -697,6 +731,33 @@ impl ValueParsing {
 // A1 ranges (here rather than in the engine so `validate` can reject a bad
 // one before calamine asserts on it)
 // ---------------------------------------------------------------------------
+
+/// chrono's own window for `%y`, as a pivot: 00–69 is 20xx, 70–99 is 19xx.
+pub const DEFAULT_YEAR_PIVOT: u8 = 70;
+
+/// The note a column read with `%y` carries: which hundred years its
+/// two-digit years land in, and the option that moves them.
+///
+/// `None` for anything without `%y` in its format. Attached wherever a `%y`
+/// format reaches a spec without a person having written it — the model's
+/// tier today; the sniffer and `fit` choose no `%y` format, but `sniff::finish`
+/// runs it too so one added to `DATE_FORMATS` would not arrive silently.
+pub fn two_digit_year_note(c: &ColumnSpec) -> Option<String> {
+    let format = match &c.dtype {
+        DType::Date { format } | DType::Timestamp { format, .. } => format,
+        _ => return None,
+    };
+    if !format.contains("%y") {
+        return None;
+    }
+    let pivot = i32::from(c.parse.year_pivot.unwrap_or(DEFAULT_YEAR_PIVOT));
+    Some(format!(
+        "column `{}`: two-digit years are read as {}–{}; set `year_pivot` to change",
+        c.name,
+        1900 + pivot,
+        1999 + pivot
+    ))
+}
 
 /// "A4:H200" -> ((3, 0), (199, 7)), 0-based inclusive.
 pub fn parse_a1_range(s: &str) -> Result<((u32, u32), (u32, u32))> {
@@ -857,6 +918,32 @@ impl ParseSpec {
                         c.name
                     )),
                     Some(_) => {}
+                }
+            }
+            if let Some(pivot) = c.parse.year_pivot {
+                match &c.dtype {
+                    DType::Timestamp { format, .. } | DType::Date { format } => {
+                        if !format.contains("%y") {
+                            errs.push(format!(
+                                "column `{}`: `year_pivot` decides the century of a two-digit \
+                                 year, and format {format:?} has no `%y` to apply it to",
+                                c.name
+                            ));
+                        }
+                    }
+                    _ => errs.push(format!(
+                        "column `{}`: `year_pivot` only applies to a date or timestamp column \
+                         read with `%y` — this one is {}",
+                        c.name,
+                        dtype_name(&c.dtype)
+                    )),
+                }
+                if pivot > 99 {
+                    errs.push(format!(
+                        "column `{}`: year_pivot {pivot} is out of range (0..=99); it is \
+                         the two-digit year from which 19xx begins",
+                        c.name
+                    ));
                 }
             }
             // A sign convention means nothing outside a number: on a text
@@ -1238,6 +1325,30 @@ impl ParseSpec {
                         .count();
                     if dup > 1 {
                         errs.push(format!("constant: `{name}` is declared twice"));
+                    }
+                }
+                Transform::RemoveEmpty {} => {
+                    // Before a framing transform it changes what that
+                    // transform counts: a `skip_rows` head of 3 would skip
+                    // three non-empty rows, and `promote_header` would take
+                    // its names from a row below a spacer.
+                    let later_framing = self
+                        .transforms
+                        .iter()
+                        .skip_while(|o| !std::ptr::eq(*o, t))
+                        .skip(1)
+                        .find_map(|o| match o {
+                            Transform::SkipRows { .. } => Some("skip_rows"),
+                            Transform::PromoteHeader { .. } => Some("promote_header"),
+                            Transform::Transpose => Some("transpose"),
+                            _ => None,
+                        });
+                    if let Some(f) = later_framing {
+                        errs.push(format!(
+                            "remove_empty must come after {f}: before it, dropping empty rows \
+                             changes the rows that transform counts. Put remove_empty after \
+                             the last skip_rows, promote_header or transpose"
+                        ));
                     }
                 }
                 Transform::SkipRows { .. } => {}
