@@ -62,11 +62,15 @@ is the rule `console::raw_head` already follows.
 
 Shapes are counted exactly; a column with more than 64 distinct shapes keeps the 64
 most frequent seen and reports the rest as one `(other)` row — free text has no
-shape worth listing.
+shape worth listing. At most 10,000 distinct shapes are tracked per column: a shape
+first seen past that is counted only in `(other)`, and the column says
+`shapes_complete: false` — then no renderer names a "most frequent shape", since the
+true one may be among those not tracked, and the detail says the list is incomplete.
 
 ## 4. Bounds, stated in the output
 
-- `distinct` and `top` track at most 10,000 distinct values per column; past that
+- `distinct` and `top` track at most 10,000 distinct values per column (shapes have
+  their own 10,000 bound, §3); past that
   the column reports `AtLeast(10000)` and no `top` (an approximate top-5 would be a
   number nobody can check).
 - Text formats are read in one streamed pass — memory is O(columns × caps), not
@@ -80,25 +84,30 @@ shape worth listing.
 
 One library function, four doors, as for everything else:
 
-- `tdy profile <FILE> [--sheet NAME] [--rows A-B] [--column NAME] [--head N]`
+- `tdy profile <FILE> [--sheet NAME] [--rows A-B] [--pointer /P] [--column NAME] [--head N]`
   (`--json` is the global flag). `--rows` names one stacked table the way a region
   member's title counts it — 1-based and inclusive, `--rows 6-9` — read in a fresh
   sidecar's frame when one reads exactly that block, else in the frame `fit` gives a
   block (`fit::region_frame`); with `--sheet` the rows are the sheet's. `FILE` may
   also be a member reference (`report.csv#2`, `book.xlsx#Q1#2`), which reads the
   block its fresh sidecar names and refuses without one. `--column '#N'` names a
-  column by position, for a file with two columns of one name. Without `--column`: one line per column (name, non-empty/empty,
+  column by position, for a file with two columns of one name (`--column '\#N'` for
+  a column literally named `#N`). With `--sheet`, `--rows` are the sheet's own A1 row
+  numbers — what Excel and a sheet block's `range` show — refused outside the used
+  range, and the heading names the A1 range read. `--pointer /q2` reads one record
+  array of a JSON document holding several; without it the heading names the array
+  read and the other candidates. A member of a pile carries its block's rows
+  (`MemberReport.rows`, fitted or refused, dry run too), which is what `p` passes. Without `--column`: one line per column (name, non-empty/empty,
   distinct, min, max, most frequent shape with its share). With it: that column's
   top values and every shape with count, share and one example.
-- the console: `.profile <file> [--sheet NAME] [--rows A-B] [--column NAME] [--head N]`, text
+- the console: `.profile <file> [--sheet NAME] [--rows A-B] [--pointer /P] [--column NAME] [--head N]`, text
   identical to the CLI's (`commands::profile_text`), `Payload::Profile(Profile)`.
 - the workbench: `p` in the File and Member contexts dispatches the same
   `.profile` line a person would type (the one-code-path rule), and the main pane
   shows `Context::Profile` — a table of columns; Enter on a column opens its detail
   (top values, shapes), Esc goes back. A member's profile is of that member: its
-  sheet, and its region window when it has one — `--rows` from the window the
-  report carries, or the member's own reference for a sheet block, whose window
-  the report does not carry.
+  sheet, and its region window when it has one — `--rows` (with `--sheet` for a
+  sheet block) from the rows the report carries for every block member.
 - MCP: a read-only `profile` tool, confined to `--root` like every other.
 
 ## 6. What it does not do

@@ -13,10 +13,10 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 876 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 896 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
-cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
+cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
 python3 gen_fixtures.py                 # regenerate all fixtures (openpyxl + xlwt)
 python3 gen_fixtures.py 04 --list       # one generator / list them
 cargo run -- sniff testdata/umsatz.xlsx --no-llm
@@ -680,7 +680,9 @@ design: **it infers nothing and writes nothing** — the frame is a fresh sideca
 (`sidecar::load_member`), else the sniffer's with `verify: false` and no backend, never saved
 (a refused member is the one that most needs it); **the bounds are stated, not hidden** — past
 10,000 distinct values a column says `AtLeast(10000)` and gives no top five, past 64 shapes the
-rest are one `(other)` row, and `--head N` sets `complete: false`, which every renderer says on
+rest are one `(other)` row, a shape first seen past the 10,000th tracked is counted only in
+`(other)` and sets `shapes_complete: false` (then no renderer names a "most frequent shape" —
+it could be the one nobody tracked), and `--head N` sets `complete: false`, which every renderer says on
 its *first* line (`commands::profile_heading`, shared by the CLI text and the workbench); and
 **it reads what a query reads** — text goes through `stream::framed_rows`, which is
 `execute_with`'s own reading half (`drive`: measure, frame the header, hand rows over) without
@@ -695,12 +697,22 @@ column profiles at **12 MB peak RSS, 2.6 s wall** including writing the file
 browser file (`Context::Profile { profile, selected, detail }`; Enter for a column's detail,
 which is `profile_text`'s `--column` output verbatim; Esc back, then closed), and a read-only
 `profile` MCP tool confined like the rest. A member's profile is of that member: `--rows` is the
-block as its title counts it (1-based, inclusive) and is framed by `fit::region_frame` unless a
-fresh sidecar reads exactly that window; a member reference (`book.xlsx#Q1#2`) reads the block
-its fresh sidecar names, and **refuses** without one rather than profile the whole sheet under
-the member's name — the workbench dispatches that form for a sheet block, whose window
-`MemberReport` does not carry. Two columns with one name make `--column NAME` an error offering
-`#3`/`#4`; picking one would be a guess.
+block as its title counts it (1-based, inclusive) — physical lines of a text file, the **sheet's
+own A1 rows** with `--sheet` (refused outside the used range, which is named; the heading names
+the A1 `range` read) — framed by `fit::region_frame` unless a fresh sidecar reads exactly that
+block. `MemberReport.rows` (and `rows_sheet`, when the member's name does not carry the sheet)
+is set from the split for every block member, fitted or refused, in a dry run too, so `p`
+dispatches `--rows` for every block; `window` keeps meaning the executed spec's own. A member
+reference (`report.csv#2`) reads the block its fresh sidecar names and without one is refused as
+"no fresh sidecar for report.csv#2 — name the block with --rows A-B …", never as a missing file;
+`profile::resolve` splits references and, given a root (console, MCP), confines every candidate
+data file before reading a sidecar beside it. A JSON document with several record arrays names
+the one read and the candidates in the heading, and `--pointer /q2` picks another. Two columns with one name make `--column NAME` an error offering
+`'#3'`/`'#4'`; picking one would be a guess (`\#3` names a column literally called `#3`).
+The streamed width is measured only over the rows `skip_rows` keeps (`stream::measure`, at most
+`tail` pending widths), as the engine rectangularises after the skip; measuring a skipped title
+wider than the table had given the streamed table phantom `col_N` columns. A 103 MB / 3M-row
+CSV profiles at 19 MB peak RSS, 4.9 s; its `count(*)` stayed at 76 MB peak across that change.
 
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
@@ -955,7 +967,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
   committed reports with the character offsets generator 04 documents), plus the batch-boundary cases a chunked
   pipeline gets wrong (a `fill_down` carry crossing 65,536 rows, a `skip_rows` tail the
   reader has not reached yet, `unpivot` making output rows outnumber input ones)
-- `tests/adversarial.rs` — sweeps every fixture in `testdata/`: never panic, never hang, and
+- `tests/adversarial.rs` (~120 s alone, more under a parallel run) — sweeps every fixture in `testdata/`: never panic, never hang, and
   anything sniffable must be queryable and reproducible under `--frozen`. It picks up new
   fixtures automatically. Note it runs the binary with output to *files*, not pipes: a
   100k-column sidecar is megabytes, and an undrained pipe deadlocks at 64 KB.

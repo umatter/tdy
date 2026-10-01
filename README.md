@@ -943,7 +943,9 @@ shapes:
 
 `--column` gives one column's five most frequent values and every shape with
 an example (`--column '#4'` names one by position when two share a name);
-`--sheet` and `--rows 6-9` profile one sheet or one stacked table. Past 10,000
+`--sheet` and `--rows 6-9` profile one sheet or one stacked table (a sheet's rows
+are its own row numbers, as Excel shows them), and `--pointer /q2` one record array
+of a JSON document that holds several. Past 10,000
 distinct values a column reports a floor and no top five, because an
 approximate count is not one anyone could check. Text is read in one streamed
 pass, so a 50 MB file profiles in about 12 MB of memory. The same profile is
