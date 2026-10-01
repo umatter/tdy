@@ -472,20 +472,23 @@ before anything else — `skip_rows`, `promote_header` and every transform act
 inside the block, exactly as they act on a whole file). A sheet has no
 row-window field at all — `range` already says which rows — so a sheet region
 carries only `region_ordinal: Option<u32>` beside the `range` `fit::fit_region`
-writes. Detection is `engine::regions_of(path, sheet, limits) -> Vec<RowWindow>`:
+writes. Detection is `engine::regions_of(path, sheet, limits) -> Result<Regions>`:
 it splits at runs of blank lines or rows, keeps blocks of at least three rows,
 and returns nothing when the file has exactly one run at all — a table with
 blank padding above or below it is not split. It returns what it *dropped*
 alongside what it kept (`Regions { windows, dropped, block_width, window_widths, window_widest }`): with a
 window applied nothing reads a run below the minimum, so every member of the
-file names those lines in a note the CLI prints, and a dropped run any of
-whose rows holds two or more non-empty fields (`Regions::table_shaped`) is a
-review reason — the `>= 3` rule says a `Total;;1500` line is not a table, and
-a person rules on whether it was data; one cell per row (a banner, footnotes)
-asks nothing. Got wrong first by comparing first-row widths with the kept
-block's: a recap block is a different width by construction, and a block under
-a one-cell title measures 1 wide, so a 72-cell "US population" row matched
-nothing. Those blocks are *candidates*: `fit::gate_regions`
+file names those lines in a note the CLI prints, and a dropped run is a review
+reason (`Regions::table_shaped`) by either of two rules — any of its rows holds
+two or more non-empty fields, or its first row is as wide as the first kept
+block's; the `>= 3` rule says a `Total;;1500` line is not a table, and a person
+rules on whether it was data, while one cell per row over a wider table (a
+banner, footnotes) asks nothing. Each rule alone was tried and missed data:
+same width alone missed a recap block and a 72-cell "US population" row under
+a block that opens with a one-cell title; two-fields alone missed a one-column
+table's own continuation. Text fields are counted by `nonempty_fields`, which
+opens a quote only at a field's first byte — `Rohr 12";5;60.00` is three
+fields, not one. Those blocks are *candidates*: `fit::gate_regions`
 tries each against the target with the cheap gates, in the frame `fit_region` will fit, and
 only the blocks that pass are members — got wrong first, when every run of three rows became
 one, so a title banner was a member that fit nothing and the workbook sweep refused 15 of 16
@@ -494,10 +497,15 @@ region notes. A block whose own frame promoted no header is not a candidate
 either (`fit::promotes_header`): a blank row proves a boundary, a header is what
 tells one block from the next, and a headerless banner or two-cell footnote block
 passed a positional `col_N` target's gates by position alone and stood in for the
-sheet — the corpus's ttb workbook, which is now read whole as before regions. A one-row run as wide as the block directly below it, blank lines between, is
-that block's header cut off by a blank row and is adopted into its window
-(`engine::adopt_severed_headers`; both executors skip the blank row inside it) — dropped, the
-block bound its columns as `col_N`. It streams the text
+sheet — the corpus's ttb workbook, which is now read whole as before regions. Nor is
+a block that binds none of the declared columns, which under an all-`if_missing`
+target "fit" as rows of NULLs. A one-row run as wide as the block directly below
+it, blank lines between, is that block's header cut off by a blank row — but only
+for a block whose own frame promoted no header (`Regions::severed_header`,
+adopted by `fit::frame_blocks`, which `draft` shares; both executors skip the
+blank row inside the window). Adopting on width alone made `Meier;Bern` the
+header of a headed `Name;City` table and `Name|City` a data row, silently;
+not adopting at all left a headerless block bound as `col_N`. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
 (`tests/regions.rs::regions_of_streams_a_large_file`, `#[ignore]`, run by hand
@@ -522,9 +530,14 @@ proves the block is the only *reading*, never that the lines outside it were
 not data. A region sidecar is trusted for exactly one block and both places
 that say which are hand-editable, so `load_member` requires `source.region`
 and the ordinal the spec's own window carries to agree, and `fit_pile`
-refuses to reuse a spec whose window is not the block the split found
-(`CONTRADICTS`, no I/O — the true window is already in hand); without those
-two, an edited window made two members total one block twice. A sidecar the
+refuses to reuse a spec whose window is not the block the split found — a
+text window by its lines, a sheet block by the A1 `range` and ordinal that
+`fit::block_a1` computes for the frame too; without those two, an edited window
+made two members total one block twice, and a sheet block renumbered when one
+more block passed the gates was read twice (3300.00 where the file held
+2406.00). tdy's own sidecar that disagrees is re-planned with a note naming
+both windows (`sidecar window was …; re-planned`), acceptance not carried; a
+`manual` one is `CONTRADICTS`, a person's to settle. A sidecar the
 loader *refuses* is still re-planned, never a hard failure, but the refusal is
 now a note on the member (`sidecar refused: …; re-planned`) — discarding a
 person's edit in silence left the member reading exactly as before with
