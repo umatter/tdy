@@ -1185,3 +1185,22 @@ async fn profile_refuses_a_path_outside_the_root() {
     }
     assert!(s.run(".profile 2025-01.csv", None).await.ok);
 }
+
+/// `.draft --to` writes globs relative to where the target lands, not to
+/// the session's cwd: drafting `data/2025-01.csv` into `sub/t.tdy.sql` and
+/// fitting that target used to fail "no files matched".
+#[tokio::test]
+async fn draft_to_another_directory_writes_globs_that_fit_from_there() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("data")).unwrap();
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    std::fs::copy(corpus().join("2025-01.csv"), d.path().join("data/2025-01.csv")).unwrap();
+    let mut s = session(d.path()).await;
+    let o = s.run(".draft data/2025-01.csv --to sub/t.tdy.sql", None).await;
+    assert!(o.ok, "{}", o.text);
+    let o = s.run(".fit sub/t.tdy.sql --dry-run", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(!o.text.contains("no files matched"), "{}", o.text);
+    let Payload::Fitted(r) = o.payload else { panic!("{}", o.text) };
+    assert_eq!(r.members.len(), 1, "{}", o.text);
+}

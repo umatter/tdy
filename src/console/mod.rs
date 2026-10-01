@@ -687,20 +687,35 @@ impl Session {
                     .iter()
                     .map(|p| p.strip_prefix(&self.cwd).map(Path::to_path_buf).unwrap_or_else(|_| p.clone()))
                     .collect();
-                let ddl = {
-                    // `RestoreCwd` (see its doc comment) keeps this
-                    // realignment from racing `.cd`'s own, permanent one in
-                    // another `Session`, held across the flip, the call, and
-                    // the restore.
-                    let _restore = RestoreCwd::to(&self.cwd).await?;
-                    crate::draft::draft_target(&rel, self.cfg.limits)?
-                };
-                let wrote = match to {
+                // Where the target lands, resolved before drafting: its
+                // `files` globs are relative to *that* directory, since a
+                // target resolves them beside itself. Drafting them relative
+                // to cwd wrote `data/*.csv` into `sub/t.tdy.sql`, which then
+                // matched nothing.
+                let dest = match &to {
                     Some(t) => {
-                        let dest = self.resolve_new(&t)?;
+                        let dest = self.resolve_new(t)?;
                         if dest.exists() {
                             bail!("{t} exists; choose another name or remove it first");
                         }
+                        Some(dest)
+                    }
+                    None => None,
+                };
+                let elsewhere = dest.as_ref().and_then(|d| d.parent()).filter(|p| *p != self.cwd.as_path());
+                let ddl = match elsewhere {
+                    Some(base) => crate::draft::draft_target_in(&paths, Some(base), self.cfg.limits)?,
+                    None => {
+                        // `RestoreCwd` (see its doc comment) keeps this
+                        // realignment from racing `.cd`'s own, permanent one
+                        // in another `Session`, held across the flip, the
+                        // call, and the restore.
+                        let _restore = RestoreCwd::to(&self.cwd).await?;
+                        crate::draft::draft_target(&rel, self.cfg.limits)?
+                    }
+                };
+                let wrote = match dest {
+                    Some(dest) => {
                         crate::fileio::atomic_write(&dest, &ddl)?;
                         Some(dest)
                     }
