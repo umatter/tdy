@@ -499,7 +499,11 @@ tells one block from the next, and a headerless banner or two-cell footnote bloc
 passed a positional `col_N` target's gates by position alone and stood in for the
 sheet — the corpus's ttb workbook, which is now read whole as before regions. Nor is
 a block that binds none of the declared columns, which under an all-`if_missing`
-target "fit" as rows of NULLs. A one-row run as wide as the block directly below
+target "fit" as rows of NULLs. When no block passes, the file is read whole — and
+if the split saw a block with its own header there, that member carries a review
+(`the split found a table with its own header at lines a–b that does not fit …`),
+since reading past a headed table is a judgement; all-headerless or all-banner
+files stay unreviewed. A one-row run as wide as the block directly below
 it, blank lines between, is that block's header cut off by a blank row — but only
 for a block whose own frame promoted no header (`Regions::severed_header`,
 adopted by `fit::frame_blocks`, which `draft` shares; both executors skip the
@@ -566,7 +570,10 @@ whose data starts at C5 against blank margin instead. A sheet passes
 `discover_sheets` through its blocks too, but only when exactly one passes and
 nothing table-shaped was discarded: sheet expansion asks nobody. `tdy draft` gains the
 same split (`sniff::sniff_text_block`, via a scratch file), skipping a block with one
-field per line (named in a `NOTE`, so the unedited draft of a banner-topped export fits)
+field per line (named in a `NOTE`, so the unedited draft of a banner-topped export fits),
+drafting from the block whenever the split separated anything (one block with a dropped
+line above it used to fall through to a whole-file draft that declared the title line's
+values as columns, and the fit then read the real header as a data row, silently)
 and drafting each other block's columns separately and naming which block each column came from; presence and
 heterogeneity notes count physical files, not blocks — got wrong first, when
 the grouping note fired across one file's own blocks as though they were
