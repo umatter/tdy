@@ -1101,7 +1101,7 @@ pub fn apply_spec_transforms(table: &mut RawTable, transforms: &[Transform]) -> 
     let framing = transforms
         .iter()
         .rposition(|t| {
-            matches!(t, Transform::Transpose | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
+            matches!(t, Transform::Transpose {} | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
         })
         .map_or(0, |i| i + 1);
     apply_transforms(table, &transforms[..framing])?;
@@ -1215,7 +1215,7 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                 }
             }
             Transform::RemoveEmpty {} => table.rows.retain(|r| !is_blank_row(r)),
-            Transform::Transpose => {
+            Transform::Transpose {} => {
                 // A partial read has not seen every row, and every row it has
                 // not seen is a *column* of the result — not a few missing
                 // records but a table of the wrong shape. `skip_rows`'s tail

@@ -256,7 +256,7 @@ fn framing_of(spec: &ParseSpec) -> ParseSpec {
         .transforms
         .iter()
         .rposition(|t| {
-            matches!(t, Transform::Transpose | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
+            matches!(t, Transform::Transpose {} | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
         })
         .map_or(0, |i| i + 1);
     let mut f = spec.clone();

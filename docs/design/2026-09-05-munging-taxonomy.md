@@ -84,6 +84,14 @@ it.
    was the one finding in this report that touched the project's central rule
    directly. See **E5**, which now records the fix rather than the defect.
 
+**A known gap in the spec's own strictness (2026-10-01).** `deny_unknown_fields`
+does not reach a *unit* variant of an internally tagged enum: serde accepts and
+drops any stray key beside its tag. `transpose` and `remove_empty` are therefore
+empty struct variants (`Transpose {}`, `RemoveEmpty {}`), which refuse
+`op = "transpose"` beside `rows = 5`. `DType`'s unit variants (`utf8`, `bool`,
+`int64`, `float64`) still have the hole, so a stray key beside one of those
+types is dropped without a word; that is left for its own change.
+
 ### 0.5 A second pass, against the literature and the tool docs
 
 The first draft of this catalogue was written from the code and from recall. It

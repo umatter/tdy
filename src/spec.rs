@@ -386,7 +386,10 @@ pub enum Transform {
     /// Must come before `promote_header`: the two disagree about which
     /// direction the names run. Runs on the materialising executor, since the
     /// first output row cannot be emitted until the last input row is read.
-    Transpose,
+    ///
+    /// An empty struct variant, like `remove_empty`, so `deny_unknown_fields`
+    /// refuses a stray key instead of a unit variant silently dropping it.
+    Transpose {},
     /// Split one column into several, in place.
     ///
     /// The column named by `source` is **replaced** by the columns named in
@@ -1187,11 +1190,11 @@ impl ParseSpec {
                         }
                     }
                 }
-                Transform::Transpose => {
+                Transform::Transpose {} => {
                     // Flipping a table whose names are already established
                     // would turn the header into a column of data and leave
                     // the spec addressing names that no longer run that way.
-                    if self.transforms.iter().take_while(|o| !matches!(o, Transform::Transpose)).any(
+                    if self.transforms.iter().take_while(|o| !matches!(o, Transform::Transpose {})).any(
                         |o| matches!(o, Transform::PromoteHeader { .. }),
                     ) {
                         errs.push(
@@ -1201,7 +1204,7 @@ impl ParseSpec {
                                 .into(),
                         );
                     }
-                    if self.transforms.iter().filter(|o| matches!(o, Transform::Transpose)).count()
+                    if self.transforms.iter().filter(|o| matches!(o, Transform::Transpose {})).count()
                         > 1
                     {
                         errs.push(
@@ -1345,7 +1348,7 @@ impl ParseSpec {
                         .find_map(|o| match o {
                             Transform::SkipRows { .. } => Some("skip_rows"),
                             Transform::PromoteHeader { .. } => Some("promote_header"),
-                            Transform::Transpose => Some("transpose"),
+                            Transform::Transpose {} => Some("transpose"),
                             _ => None,
                         });
                     if let Some(f) = later_framing {

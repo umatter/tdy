@@ -1087,7 +1087,7 @@ fn transpose_turns_a_report_layout_into_a_table() {
     );
     let s = spec(
         delim(',', RaggedPolicy::Error),
-        vec![Transform::Transpose, Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![Transform::Transpose {}, Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![
             col("Kennzahl", DType::Utf8),
             col("Umsatz", DType::Int64),
@@ -1121,7 +1121,7 @@ fn transposing_a_ragged_report_fills_the_gaps_with_nothing() {
     let p = dir_file(&dir, "ragged.csv", "Kennzahl,2021,2022\nUmsatz,100,120\nKosten,80\n");
     let s = spec(
         delim(',', RaggedPolicy::PadNulls),
-        vec![Transform::Transpose, Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![Transform::Transpose {}, Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![col("Kennzahl", DType::Utf8), col("Kosten", DType::Utf8)],
     );
     let b = spec_to_batch(&s, &p).unwrap();
@@ -1136,7 +1136,7 @@ fn transposing_a_ragged_report_fills_the_gaps_with_nothing() {
 fn a_transpose_after_a_header_is_refused() {
     let s = spec(
         delim(',', RaggedPolicy::Error),
-        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }, Transform::Transpose],
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }, Transform::Transpose {}],
         vec![col("a", DType::Utf8)],
     );
     let e = format!("{:?}", s.validate().expect_err("the order is wrong"));
@@ -1144,7 +1144,7 @@ fn a_transpose_after_a_header_is_refused() {
 
     let twice = spec(
         delim(',', RaggedPolicy::Error),
-        vec![Transform::Transpose, Transform::Transpose],
+        vec![Transform::Transpose {}, Transform::Transpose {}],
         vec![col("a", DType::Utf8)],
     );
     let e = format!("{:?}", twice.validate().expect_err("two flips are no flip"));
@@ -1384,7 +1384,7 @@ fn remove_empty_before_framing_is_refused_with_where_to_put_it() {
     for framing in [
         Transform::PromoteHeader { rows: 1, join: " ".into() },
         Transform::SkipRows { head: 1, tail: 0 },
-        Transform::Transpose,
+        Transform::Transpose {},
     ] {
         let s = spec(
             delim(';', RaggedPolicy::PadNulls),
@@ -1507,4 +1507,16 @@ fn remove_empty_after_a_filled_column_is_refused() {
         vec![col("k", DType::Utf8), col("f", DType::Utf8)],
     );
     assert_eq!(spec_to_batch(&ok, &p).unwrap().num_rows(), 2);
+}
+
+/// `transpose` takes no options, and a stray key is refused rather than
+/// silently dropped (it used to validate, and `--stamp` rewrote the file
+/// without it). The spelling is unchanged.
+#[test]
+fn transpose_refuses_a_stray_key() {
+    let t: Transform = toml::from_str("op = \"transpose\"").unwrap();
+    assert!(matches!(t, Transform::Transpose { .. }));
+    assert!(toml::from_str::<Transform>("op = \"transpose\"\nrows = 5").is_err());
+    assert!(toml::from_str::<Transform>("op = \"transpose\"\ncolumns = [\"a\"]").is_err());
+    assert_eq!(serde_json::to_string(&t).unwrap(), r#"{"op":"transpose"}"#);
 }

@@ -1328,7 +1328,7 @@ fn describe_frame(spec: &ParseSpec) -> String {
                 crate::spec::FillDirection::Down => format!("fill_down {columns:?}"),
                 crate::spec::FillDirection::Up => format!("fill_up {columns:?}"),
             },
-            Transform::Transpose => "transpose".into(),
+            Transform::Transpose {} => "transpose".into(),
             Transform::RemoveEmpty {} => "remove_empty".into(),
             Transform::SourceName { name, from, .. } => {
                 format!("source_name {name:?} from {from:?}")
