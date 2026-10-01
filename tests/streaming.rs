@@ -1066,3 +1066,143 @@ fn a_window_on_blank_lines_inside_the_file_is_empty_on_both_executors() {
         );
     }
 }
+
+/// The width a delimited table is rectangularised to is measured over the
+/// rows `skip_rows` keeps, as `engine` measures it after the skip. A title
+/// line wider than the table, skipped, used to widen the streamed table by
+/// phantom columns (`col_3`, `col_4`) the engine never had — a query naming
+/// one read nulls on one executor and failed on the other.
+#[test]
+fn a_skipped_title_wider_than_the_table_adds_no_columns() {
+    let dir = TempDir::new().unwrap();
+    let p = write(
+        &dir,
+        "title.csv",
+        "Bericht Q1, Zuerich, final, v2\n\nDatum,Betrag\n2025-01-01,10\n2025-01-02,11\n2025-01-03,12\n",
+    );
+    let skip_then_header = vec![
+        Transform::SkipRows { head: 1, tail: 0 },
+        Transform::PromoteHeader { rows: 1, join: " ".into() },
+    ];
+    let named = spec(skip_then_header.clone(), vec![col("Datum", DType::Utf8), col("Betrag", DType::Int64)]);
+    assert_paths_agree(&named, &p, "title.csv, the table's own columns");
+    let phantom = spec(skip_then_header.clone(), vec![col("Datum", DType::Utf8), col("col_3", DType::Utf8)]);
+    assert_paths_agree(&phantom, &p, "title.csv, a column only a wide title would make");
+
+    // A footer as wide, cut by the tail, is not measured either.
+    let p = write(&dir, "footer.csv", "Datum,Betrag\n2025-01-01,10\n2025-01-02,11\nSumme, alle, Regionen, 21\n");
+    let tail = spec(
+        vec![Transform::SkipRows { head: 0, tail: 1 }, Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("Datum", DType::Utf8), col("col_4", DType::Utf8)],
+    );
+    assert_paths_agree(&tail, &p, "footer.csv, a column only a wide footer would make");
+
+    // And `ragged = "error"` judges the rows that are left, on both paths.
+    let mut strict = named;
+    if let Extraction::Delimited { ragged, .. } = &mut strict.extraction {
+        *ragged = RaggedPolicy::Error;
+    }
+    let p = dir.path().join("title.csv");
+    assert_paths_agree(&strict, &p, "title.csv under ragged = error");
+    assert!(stream::execute_batches(&strict, &p, Limits::default()).is_ok(), "the skipped title is not a ragged row");
+}
+
+/// `remove_empty` is a row-local op in spec order on both executors, and
+/// its order against `fill_down` means something: filling first puts the
+/// label into the spacer row, which then has a value and survives as a
+/// record with no amount; removing first drops the spacer before the carry
+/// could reach it.
+#[test]
+fn remove_empty_streams_and_its_order_against_fill_down_is_kept() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "spacers.csv", "grp,val\nOst,1\n,\n,2\n,,\nWest,3\n , \n");
+
+    let head = Transform::PromoteHeader { rows: 1, join: " ".into() };
+    let fill = Transform::FillDown { columns: vec!["grp".into()], direction: Default::default() };
+    let cols = || vec![col("grp", DType::Utf8), col("val", DType::Int64)];
+
+    let alone = spec(vec![head.clone(), Transform::RemoveEmpty {}], cols());
+    assert_paths_agree(&alone, &p, "remove_empty alone");
+    let text = render(&stream::execute_batches(&alone, &p, Limits::default()).unwrap());
+    assert_eq!(text.lines().count(), 4 + 3, "three records survive:\n{text}");
+
+    let fill_first = spec(vec![head.clone(), fill.clone(), Transform::RemoveEmpty {}], cols());
+    let remove_first = spec(vec![head, Transform::RemoveEmpty {}, fill], cols());
+    assert_paths_agree(&fill_first, &p, "fill then remove_empty");
+    assert_paths_agree(&remove_first, &p, "remove_empty then fill");
+
+    let a = render(&stream::execute_batches(&fill_first, &p, Limits::default()).unwrap());
+    let b = render(&stream::execute_batches(&remove_first, &p, Limits::default()).unwrap());
+    assert_eq!(a.matches("Ost").count(), 4, "fill-then-remove keeps the filled spacers:\n{a}");
+    assert_eq!(a.matches("West").count(), 2, "{a}");
+    assert_eq!(b.matches("Ost").count(), 2, "remove-then-fill drops them first:\n{b}");
+    assert_eq!(b.matches("West").count(), 1, "{b}");
+}
+
+/// A body transform sees rows after the ragged policy on both executors.
+///
+/// With no `promote_header` nothing had rectangularised the engine's table
+/// before `remove_empty` or a whole-row `drop_rows_matching` ran, so it tested
+/// `;;5` while the streaming reader, which applies the policy as it reads,
+/// tested the truncated `;`: `count(*)` was 3 against 2. Both now see the
+/// row the policy leaves, under every policy.
+#[test]
+fn a_headerless_ragged_file_gives_body_transforms_the_same_rows_on_both_executors() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "rag.csv", "1;2\n;;5\n3;4\n;\n");
+    let with = |ragged, t: Transform| {
+        let mut s = spec(vec![t], vec![col("col_1", DType::Int64), col("col_2", DType::Int64)]);
+        s.extraction = Extraction::Delimited {
+            delimiter: ';',
+            quote: Some('"'),
+            escape: None,
+            encoding: None,
+            comment: None,
+            ragged,
+            region: None,
+        };
+        s
+    };
+    let drop5 = || Transform::DropRowsMatching { pattern: "5".into(), column: None };
+    let rows = |s: &ParseSpec| -> Vec<usize> {
+        let e: usize = engine::execute_batches(s, &p, Limits::default())
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum();
+        let st: usize = stream::execute_batches(s, &p, Limits::default())
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum();
+        vec![e, st]
+    };
+    for (ragged, removed, dropped) in
+        [(RaggedPolicy::TruncateExtra, 2, 4), (RaggedPolicy::PadNulls, 3, 3)]
+    {
+        let r = with(ragged, Transform::RemoveEmpty {});
+        assert_paths_agree(&r, &p, "remove_empty, headerless ragged");
+        assert_eq!(rows(&r), vec![removed, removed], "remove_empty under {ragged:?}");
+        let d = with(ragged, drop5());
+        assert_paths_agree(&d, &p, "drop_rows_matching, headerless ragged");
+        assert_eq!(rows(&d), vec![dropped, dropped], "drop_rows_matching under {ragged:?}");
+    }
+    for t in [Transform::RemoveEmpty {}, drop5()] {
+        let s = with(RaggedPolicy::Error, t);
+        assert!(engine::execute_batches(&s, &p, Limits::default()).is_err());
+        assert!(stream::execute_batches(&s, &p, Limits::default()).is_err());
+    }
+}
+
+/// `year_pivot` is applied by the one parse function both executors call.
+#[test]
+fn a_year_pivot_reads_the_same_on_both_executors() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "yy.csv", "d\n01.02.29\n01.02.30\n31.12.99\n");
+    let mut c = col("d", DType::Date { format: "%d.%m.%y".into() });
+    c.parse.year_pivot = Some(30);
+    let s = spec(vec![Transform::PromoteHeader { rows: 1, join: " ".into() }], vec![c]);
+    assert_paths_agree(&s, &p, "year_pivot");
+    let text = render(&stream::execute_batches(&s, &p, Limits::default()).unwrap());
+    assert!(text.contains("1930-02-01") && text.contains("2029-02-01") && text.contains("1999-12-31"), "{text}");
+}

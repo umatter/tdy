@@ -115,6 +115,8 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         sheet: None,
         region: None,
         window: None,
+        rows: None,
+        rows_sheet: None,
         status,
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
@@ -1989,4 +1991,42 @@ fn a_region_members_marks_land_on_its_own_header_line() {
     assert_eq!(fg_at(&buf, x0 + 6, y0), Color::DarkGray, "line 0 is not this member's header");
     let (x5, y5) = find_from(&buf, head, y0 + 1).unwrap();
     assert_eq!(fg_at(&buf, x5 + 6, y5), Color::Green, "line 5 is, and keeps its marks");
+}
+
+/// The Profile context draws the pinned numbers of `profile_mixed_dates.csv`:
+/// a row per column, then — Enter — one column's shapes with their counts.
+#[test]
+fn the_profile_context_draws_columns_then_a_columns_shapes() {
+    let d = pile();
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/profile_mixed_dates.csv");
+    let mut p =
+        tdy::profile::profile_file(&file, &tdy::profile::Request::default(), tdy::config::Limits::default()).unwrap();
+    p.path = "profile_mixed_dates.csv".into();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    w.apply(
+        tdy::console::Outcome {
+            echo: ".profile profile_mixed_dates.csv".into(),
+            text: String::new(),
+            payload: tdy::console::Payload::Profile(p),
+            ok: true,
+        },
+        d.path(),
+    );
+    let text = screen(&mut w, 140, 40).join("\n");
+    assert!(text.contains("profile_mixed_dates.csv: 100 rows"), "{text}");
+    for want in ["Datum", "Region", "Betrag", "9999-99-99 (94.0%)", "01.03.2025", "2025-04-10"] {
+        assert!(text.contains(want), "{want} missing:\n{text}");
+    }
+    let row = screen(&mut w, 140, 40).into_iter().find(|l| l.contains("Betrag")).unwrap();
+    assert!(row.contains("98") && row.contains(" 2 "), "98 non-empty, 2 empty: {row}");
+
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Enter)); // Datum
+    let text = screen(&mut w, 140, 40).join("\n");
+    assert!(text.contains("column `Datum` (position 1)"), "{text}");
+    let iso = screen(&mut w, 140, 40).into_iter().find(|l| l.contains("9999-99-99")).unwrap();
+    assert!(iso.contains("94") && iso.contains("94.0%") && iso.contains("2025-01-01"), "{iso}");
+    let dotted = screen(&mut w, 140, 40).into_iter().find(|l| l.contains("99.99.9999")).unwrap();
+    assert!(dotted.contains(" 6 ") && dotted.contains("6.0%") && dotted.contains("01.03.2025"), "{dotted}");
 }

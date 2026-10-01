@@ -55,6 +55,8 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         sheet: None,
         region: None,
         window: None,
+        rows: None,
+        rows_sheet: None,
         status,
         via: Some("heuristic".into()),
         sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
@@ -1894,4 +1896,236 @@ fn entering_a_region_member_previews_its_window() {
         }
         other => panic!("expected Member context, got {other:?}"),
     }
+}
+
+// --- profiling ------------------------------------------------------------
+
+/// A real profile of a small file, for the Profile context.
+fn a_profile(d: &tempfile::TempDir) -> tdy::profile::Profile {
+    let p = d.path().join("dates.csv");
+    std::fs::write(&p, "Datum;Region\n2025-01-01;Ost\n2025-01-02;West\n03.01.2025;Ost\n").unwrap();
+    tdy::profile::profile_file(&p, &tdy::profile::Request::default(), tdy::config::Limits::default()).unwrap()
+}
+
+/// `p` on a file in the main pane is the `.profile` line a person would
+/// type — the one-code-path rule, as an equality.
+#[test]
+fn p_on_a_file_dispatches_the_line_a_typed_profile_does() {
+    let d = pile();
+    let mut w = wb(&d);
+    let raw = RawHead { lines: vec!["A;B".into(), "1;2".into()], ..RawHead::default() };
+    w.apply(
+        outcome(".show a.csv", "", Payload::Shown { path: d.path().join("a.csv"), raw, spec: None, stale: false }),
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab)); // Browser
+    w.key(key(KeyCode::Tab)); // Main
+    let shortcut = w.key(key(KeyCode::Char('p')));
+    let mut typed = wb(&d);
+    assert_eq!(shortcut, type_line(&mut typed, ".profile a.csv"));
+    assert_eq!(shortcut, WbAction::Dispatch(".profile a.csv".into()));
+}
+
+/// On a workbook the line names the sheet on show, and the browser's `p`
+/// is the same line for the selected file.
+#[test]
+fn p_names_the_sheet_on_show_and_the_browser_has_it_too() {
+    let d = pile();
+    let mut w = wb(&d);
+    let raw = RawHead {
+        sheets: vec![("One".into(), 3, 2), ("Two".into(), 4, 2)],
+        grid: vec![vec!["A".into(), "B".into()]],
+        grid_sheet: Some("Two".into()),
+        ..RawHead::default()
+    };
+    w.apply(
+        outcome("", "", Payload::Shown { path: d.path().join("b.csv"), raw, spec: None, stale: false }),
+        d.path(),
+    );
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile b.csv --sheet Two".into()));
+
+    let mut w = wb(&d);
+    w.key(key(KeyCode::Tab)); // Browser; sub/ first
+    w.key(key(KeyCode::Down)); // a.csv
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile a.csv".into()));
+}
+
+/// A member's profile is of that member: the plain file, its sheet, its
+/// block's rows — or, for a block whose rows the report does not carry,
+/// the member's own name, which its sidecar resolves.
+#[test]
+fn p_on_a_member_profiles_that_member() {
+    let d = pile();
+    let (mut w, _) = pile_and_enter(&d, vec![member("2025-08.csv", MemberStatus::Gaps)], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile 2025-08.csv".into()));
+
+    let mut m = member("report.csv", MemberStatus::NeedsReview);
+    m.region = Some(2);
+    m.window = Some(RowWindow { start: 5, end: 9, ordinal: 2 });
+    let (mut w, _) = pile_and_enter(&d, vec![m], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile report.csv --rows 6-9".into()));
+
+    let mut m = member("book.xlsx", MemberStatus::Fits);
+    m.sheet = Some("Q 1".into());
+    let (mut w, _) = pile_and_enter(&d, vec![m], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile book.xlsx --sheet \"Q 1\"".into()));
+
+    // A sheet block: the sheet's own A1 rows, from the split.
+    let mut m = member("book.xlsx", MemberStatus::Gaps);
+    m.region = Some(2);
+    m.rows = Some((10, 13));
+    m.rows_sheet = Some("Q1".into());
+    let (mut w, _) = pile_and_enter(&d, vec![m], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile book.xlsx --sheet Q1 --rows 10-13".into()));
+
+    // A block whose rows the report does not carry is named as itself.
+    let mut m = member("book.xlsx", MemberStatus::Fits);
+    m.sheet = Some("Q1".into());
+    m.region = Some(2);
+    let (mut w, _) = pile_and_enter(&d, vec![m], 0);
+    assert_eq!(w.key(key(KeyCode::Char('p'))), WbAction::Dispatch(".profile book.xlsx#Q1#2".into()));
+}
+
+/// A profile lands as its own context at its top; Enter opens the selected
+/// column's detail and Esc goes back to the columns, then closes.
+#[test]
+fn a_profile_opens_columns_then_detail_and_esc_walks_back() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.main_scroll = 7;
+    w.apply(outcome(".profile dates.csv", "", Payload::Profile(a_profile(&d))), d.path());
+    assert!(matches!(w.context, Context::Profile { selected: 0, detail: false, .. }), "{:?}", w.context);
+    assert_eq!(w.main_scroll, 0, "a context change resets the scroll");
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab)); // Main
+    w.key(key(KeyCode::Down));
+    w.key(key(KeyCode::Down)); // clamped: two columns
+    assert!(matches!(w.context, Context::Profile { selected: 1, .. }));
+    assert_eq!(w.key(key(KeyCode::Enter)), WbAction::None);
+    assert!(matches!(w.context, Context::Profile { selected: 1, detail: true, .. }));
+    w.key(key(KeyCode::Esc));
+    assert!(matches!(w.context, Context::Profile { selected: 1, detail: false, .. }));
+    assert_eq!(w.focus, Focus::Main, "Esc in a profile walks back, it does not leave the pane");
+    w.key(key(KeyCode::Esc));
+    assert!(matches!(w.context, Context::Empty));
+}
+
+/// PgDn over a Profile's table pages the columns and keeps the selected
+/// one on screen, rather than leaving its marker scrolled off above.
+#[test]
+fn paging_a_profile_keeps_the_selected_column_visible() {
+    let d = pile();
+    let p = d.path().join("wide.csv");
+    let header: Vec<String> = (1..=40).map(|i| format!("c{i}")).collect();
+    let row: Vec<String> = (1..=40).map(|i| i.to_string()).collect();
+    std::fs::write(&p, format!("{}\n{}\n", header.join(","), row.join(","))).unwrap();
+    let prof = tdy::profile::profile_file(&p, &tdy::profile::Request::default(), tdy::config::Limits::default()).unwrap();
+    let mut w = wb(&d);
+    w.set_main_view_rows(12);
+    w.apply(outcome(".profile wide.csv", "", Payload::Profile(prof)), d.path());
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::PageDown));
+    w.key(key(KeyCode::PageDown));
+    let Context::Profile { selected, .. } = &w.context else { panic!() };
+    let visible = 12 - tdy_tui::workbench::profile_head_rows(match &w.context {
+        Context::Profile { profile, .. } => profile,
+        _ => unreachable!(),
+    });
+    assert!(
+        *selected >= w.main_scroll && *selected < w.main_scroll + visible,
+        "selected {selected} off screen at scroll {}",
+        w.main_scroll
+    );
+    w.key(key(KeyCode::PageUp));
+    w.key(key(KeyCode::PageUp));
+    let Context::Profile { selected, .. } = &w.context else { panic!() };
+    assert!(*selected >= w.main_scroll && *selected < w.main_scroll + visible);
+}
+
+// --- `p` on a block, end to end -------------------------------------------
+
+const Q_TARGET: &str = "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), \
+     region TEXT NOT NULL OPTIONS(matches='Region'), \
+     amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) \
+     WITH (files = 'report.*', date_order = 'dmy');";
+
+fn no_llm() -> tdy::config::Config {
+    tdy::config::load(&tdy::config::Overrides { backend: Some("none".into()), model: None, base_url: None }).unwrap()
+}
+
+/// Dry-run `.fit` the pile in `d` through a real session, open member
+/// `idx`, press `p`, and run the dispatched line through the same session:
+/// the line, and the profile it produced.
+async fn p_on_member(d: &tempfile::TempDir, idx: usize) -> (String, tdy::profile::Profile) {
+    let mut s = tdy::console::Session::new(d.path(), no_llm()).unwrap();
+    let fit = s.run(".fit q.tdy.sql --dry-run --propose", None).await;
+    let Payload::Fitted(report) = fit.payload else { panic!("{}", fit.text) };
+    type BlockRow = (String, Option<(u64, u64)>, MemberStatus);
+    let snapshot: Vec<BlockRow> =
+        report.members.iter().map(|m| (m.name(), m.rows, m.status)).collect();
+    assert!(report.dry_run);
+    let mut w = wb(d);
+    w.begin(".fit q.tdy.sql --dry-run --propose");
+    w.apply(Outcome { echo: String::new(), text: fit.text, payload: Payload::Fitted(report), ok: fit.ok }, d.path());
+    if let Context::Pile { selected, .. } = &mut w.context {
+        *selected = idx;
+    }
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Enter));
+    let WbAction::Dispatch(line) = w.key(key(KeyCode::Char('p'))) else { panic!("{snapshot:?}") };
+    let o = s.run(&line, None).await;
+    let Payload::Profile(p) = o.payload else { panic!("{line}: {}", o.text) };
+    let left: Vec<String> = std::fs::read_dir(d.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into())
+        .filter(|n: &String| n.ends_with(".tdy.toml") || n.ends_with(".tdy.lock"))
+        .collect();
+    assert!(left.is_empty(), "a dry run and a profile write nothing: {left:?}");
+    let _ = snapshot;
+    (line, p)
+}
+
+/// A text block that the gates admitted and the full fit refused: the
+/// report carries its rows although no spec was written, and `p` profiles
+/// exactly those rows.
+#[tokio::test]
+async fn p_profiles_a_refused_text_block_by_its_rows() {
+    let d = tempfile::tempdir().unwrap();
+    let mut csv = String::from("Datum;Region;Betrag\n05.01.2025;Ost;190.00\n12.01.2025;West;200.00\n19.01.2025;Nord;210.00\n\n");
+    csv.push_str("Datum;Region;Betrag\n");
+    for i in 0..2100 {
+        // Past the gates' 2,000-row probe, one amount that is not one.
+        let amount = if i == 2050 { "kaputt".to_string() } else { format!("{}.00", 400 + i % 7) };
+        csv.push_str(&format!("05.02.2025;Ost;{amount}\n"));
+    }
+    std::fs::write(d.path().join("report.csv"), csv).unwrap();
+    std::fs::write(d.path().join("q.tdy.sql"), Q_TARGET).unwrap();
+    let (line, p) = p_on_member(&d, 1).await;
+    assert_eq!(line, ".profile report.csv --rows 6-2106");
+    assert_eq!(p.rows, 2100);
+    let betrag = p.columns.iter().find(|c| c.name == "Betrag").unwrap();
+    assert_eq!(betrag.max.as_deref(), Some("kaputt"), "the value the fit refused is in the evidence");
+}
+
+/// A sheet block in a dry run has no sidecar; its rows — the sheet's own
+/// A1 rows — come with the report, and `p` profiles that block.
+#[tokio::test]
+async fn p_profiles_a_dry_run_sheet_block_by_its_a1_rows() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/regions_three_offset.xlsx"),
+        d.path().join("report.xlsx"),
+    )
+    .unwrap();
+    std::fs::write(d.path().join("q.tdy.sql"), Q_TARGET).unwrap();
+    let (line, p) = p_on_member(&d, 1).await;
+    assert_eq!(line, ".profile report.xlsx --sheet Data --rows 10-13");
+    assert_eq!(p.rows, 3);
+    let betrag = p.columns.iter().find(|c| c.name == "Betrag").unwrap();
+    assert_eq!((betrag.min.as_deref(), betrag.max.as_deref()), (Some("490.00"), Some("510.00")));
 }

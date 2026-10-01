@@ -13,10 +13,10 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 790 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 896 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
-cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
+cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
 python3 gen_fixtures.py                 # regenerate all fixtures (openpyxl + xlwt)
 python3 gen_fixtures.py 04 --list       # one generator / list them
 cargo run -- sniff testdata/umsatz.xlsx --no-llm
@@ -124,7 +124,9 @@ rewrites an absolute or `./` glob directory that lies inside the target's direct
 `exports/` keeps its spelling), and `--accept`/`.accept` name the argument the same way
 (`member::relative_to_target`) before resolving it. An absolute glob used to make the lock's
 members absolute paths, and `--accept` could then name them by neither spelling. `tdy draft`
-writes an absolute path's glob relative to the current directory (the MCP server's: its root).
+writes a glob relative to the current directory (the MCP server's: its root) only when the
+files are in it or below it, and absolute otherwise: a `..` ladder up to a shared `/tmp` was
+relative to where the draft ran and named no file from a target written elsewhere.
 A lock written before this, holding absolute member paths, is drift once: `dataset()` refuses
 it, naming each member as not in the lock, and the next fit re-plans the members under their
 relative names and asks for their acceptances again.
@@ -534,11 +536,24 @@ are candidates. Its cost: a by-name target that misses a year-headed block
 (`STATE;2008;…` over numbers) gets the note, not a review. All-headerless or
 all-banner files stay unreviewed. A one-row run as wide as the block directly below
 it, blank lines between, is that block's header cut off by a blank row — but only
-for a block whose own frame promoted no header (`Regions::severed_header`,
+for a block whose own frame promoted no header (`Regions::header_run`,
 adopted by `fit::frame_blocks`, which `draft` shares; both executors skip the
 blank row inside the window). Adopting on width alone made `Meier;Bern` the
 header of a headed `Name;City` table and `Name|City` a data row, silently;
-not adopting at all left a headerless block bound as `col_N`. It streams the text
+not adopting at all left a headerless block bound as `col_N`. Since 2026-10-01 the
+adopted run may be title lines and the header in one run, as official statistics lay
+them out (`Regions::header_run`: the run's *last* row as wide as the block, a window
+above or a dropped run) — but only when the adopted frame's header ends on the run's
+last row and passes the gates; otherwise the block is framed as before. `fit` adopts it
+also over a promoted header that reads like data, and then the member waits on a person
+(`row a (…) is read as data under the header adopted from lines x–y — accept only if
+that row is data, not this table's header`), never a note alone: `Sales report;Q1 2025`
+over `State;2024` is that shape, and a note let its unedited draft serve `State | 2024`
+as a row (2624, not 600). `draft` never adopts over a promoted header
+(`fit::Adoption::Draft`). A known gap: the text sniffer does not skip title lines padded to
+the table's width (`Table 1. …;;`), so in a CSV such a run is never adopted and the file is
+a loud whole-file GAP (`regions_padded_titles.csv`), where the sheet gives members. ADP-31's run above the states ends in the "United States" total, so it is
+not adopted and that sheet is still read whole. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
 (`tests/regions.rs::regions_of_streams_a_large_file`, `#[ignore]`, run by hand
@@ -602,11 +617,22 @@ same split (`sniff::sniff_text_block`, via a scratch file), skipping a block wit
 field per line (named in a `NOTE`, so the unedited draft of a banner-topped export fits),
 drafting from the block whenever the split separated anything (one block with a dropped
 line above it used to fall through to a whole-file draft that declared the title line's
-values as columns, and the fit then read the real header as a data row, silently). The
-known limit: `draft` does not split workbook *sheets*, so a sheet under a banner still
-drafts positionally (`col_N`) from the whole-sheet sniff; the follow-up is for draft to
-split sheets as it splits text
-and drafting each other block's columns separately and naming which block each column came from; presence and
+values as columns, and the fit then read the real header as a data row, silently). A
+workbook is split the same way since 2026-10-01, on the sheet the whole-file sniff reads
+(`sniff::pick_sheet`, `fit::frame_blocks` over an `OpenSheet`), its blocks labelled as
+`fit` names the members (`book.xlsx#i` — a one-sheet workbook's member stays plain); a
+sheet under a banner used to draft positionally (`col_N`) from the whole-sheet sniff.
+Draft skips, besides one-field banners, a block that is no `fit` candidate
+(`FramedBlocks::draft_kind`: no promoted header, or on a sheet one that reads like data —
+`regions_footnoted.xlsx`'s two-cell footnotes, ADP-31's states) and, when no block is
+left, drafts the file whole, as `fit` reads it. A text block whose promoted header reads
+like data is drafted from its own frame, as before (`State;2024` under a title line); one
+under a run of title lines and a header makes the file drafted whole, with a NOTE. A sheet of a workbook
+with several is drafted from its blocks only when one table is left and nothing
+table-shaped (the condition on which `discover_sheets` admits it): split otherwise, the
+draft fit no sheet, and the corpus sweep's ttb, ADP-31 national and occupational-health
+workbooks were refused (`regions_{footnoted,three}_sheets.xlsx`). Every other block's
+columns are drafted separately, naming which block each came from; presence and
 heterogeneity notes count physical files, not blocks — got wrong first, when
 the grouping note fired across one file's own blocks as though they were
 unrelated files. `source_name` gains `from = "region"` (`SourcePart::Region`),
@@ -641,6 +667,53 @@ answers by hand), splitting on anything other than blank rows, and a region
 inside a JSON document — a JSON array's frame question belongs to the pointer,
 not to this.
 
+**Profiling is in (2026-10-01).** `docs/design/2026-10-01-profiling.md`; taxonomy K5.
+`src/profile.rs` says, per column of the **framed raw table** — the strings `fit` binds
+against, after the frame's `transpose`/`skip_rows`/`promote_header` (the same split
+`engine::apply_spec_transforms` makes), a region window or a sheet `range`, before any body
+transform or cast — non-empty/empty (trimmed; a column's `na_values` count as empty), distinct,
+min/max of the raw strings by byte order, the top five, and every **shape** (`profile::shape`:
+a digit is `9`, a digit run keeps its length up to 8 and is `9+` past it; a letter is `A`/`a`,
+a same-case run `A+`/`a+`; whitespace one space; anything else itself), under the file's own
+spelling (`header_origin` — two `Betrag`s stay two `Betrag`s). Three rules hold it to the
+design: **it infers nothing and writes nothing** — the frame is a fresh sidecar's
+(`sidecar::load_member`), else the sniffer's with `verify: false` and no backend, never saved
+(a refused member is the one that most needs it); **the bounds are stated, not hidden** — past
+10,000 distinct values a column says `AtLeast(10000)` and gives no top five, past 64 shapes the
+rest are one `(other)` row, a shape first seen past the 10,000th tracked is counted only in
+`(other)` and sets `shapes_complete: false` (then no renderer names a "most frequent shape" —
+it could be the one nobody tracked), and `--head N` sets `complete: false`, which every renderer says on
+its *first* line (`commands::profile_heading`, shared by the CLI text and the workbench); and
+**it reads what a query reads** — text goes through `stream::framed_rows`, which is
+`execute_with`'s own reading half (`drive`: measure, frame the header, hand rows over) without
+`Plan::push` or the casts, so memory is O(columns × caps). Measured: a 50 MB CSV with a unique id
+column profiles at **12 MB peak RSS, 2.6 s wall** including writing the file
+(`tests/profile.rs::profile_streams_a_large_file`, `#[ignore]`, run by hand under
+`/usr/bin/time` on the release test binary). Excel, JSON documents and a `transpose` take
+`engine::extract` and materialise within `[limits]`. Four doors, one function
+(`profile::profile_member`): `tdy profile FILE [--sheet] [--rows A-B] [--column NAME|#N]
+[--head N]` (`--json` prints the profile), `.profile` with identical text
+(`tests/console.rs` holds them equal), `p` in the workbench's File and Member contexts and on a
+browser file (`Context::Profile { profile, selected, detail }`; Enter for a column's detail,
+which is `profile_text`'s `--column` output verbatim; Esc back, then closed), and a read-only
+`profile` MCP tool confined like the rest. A member's profile is of that member: `--rows` is the
+block as its title counts it (1-based, inclusive) — physical lines of a text file, the **sheet's
+own A1 rows** with `--sheet` (refused outside the used range, which is named; the heading names
+the A1 `range` read) — framed by `fit::region_frame` unless a fresh sidecar reads exactly that
+block. `MemberReport.rows` (and `rows_sheet`, when the member's name does not carry the sheet)
+is set from the split for every block member, fitted or refused, in a dry run too, so `p`
+dispatches `--rows` for every block; `window` keeps meaning the executed spec's own. A member
+reference (`report.csv#2`) reads the block its fresh sidecar names and without one is refused as
+"no fresh sidecar for report.csv#2 — name the block with --rows A-B …", never as a missing file;
+`profile::resolve` splits references and, given a root (console, MCP), confines every candidate
+data file before reading a sidecar beside it. A JSON document with several record arrays names
+the one read and the candidates in the heading, and `--pointer /q2` picks another. Two columns with one name make `--column NAME` an error offering
+`'#3'`/`'#4'`; picking one would be a guess (`\#3` names a column literally called `#3`).
+The streamed width is measured only over the rows `skip_rows` keeps (`stream::measure`, at most
+`tail` pending widths), as the engine rectangularises after the skip; measuring a skipped title
+wider than the table had given the streamed table phantom `col_N` columns. A 103 MB / 3M-row
+CSV profiles at 19 MB peak RSS, 4.9 s; its `count(*)` stayed at 76 MB peak across that change.
+
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
 2,290 files each with one isolated deviation from RFC 4180) through Pollock's
@@ -674,11 +747,14 @@ accurate notes, which is the documented tier-2 boundary rather than a defect.
 loud error naming the row — never a plausible wrong number. Most of the non-obvious code
 exists to hold that line, and a change that trades it for convenience is a regression even
 if every test passes. Concretely: thousands separators must group in threes (only when the
-separator could also be a decimal point), `%Y` demands four digits, ambiguous date orders
-drop confidence below the escalation threshold, leading-zero and oversized integers stay
-text, money becomes `decimal`, and a decimal value with more fractional digits than the
-declared scale is refused unless the target column declares `round = 'half_away'`
-(`spec::Rounding`; a sniffed sidecar's unset `round` still means half-away, with its note).
+separator could also be a decimal point), `%Y` demands four digits (and a `%y` century
+is chrono's 1970–2069 window unless `year_pivot` declares another — re-centred on the
+parsed date, never by rewriting the string — and a `%y` member waits on review either
+way), ambiguous date orders drop confidence below the escalation threshold, leading-zero
+and oversized integers stay text, money becomes `decimal`, and a decimal value with more
+fractional digits than the declared scale is refused unless the target column declares
+`round = 'half_away'` (`spec::Rounding`; a sniffed sidecar's unset `round` still means
+half-away, with its note).
 
 ## Architecture
 
@@ -739,9 +815,12 @@ Things that only become clear from reading several modules:
   after a `drop_rows_matching`) was written against rows that included the blanks, and the
   first cut, which skipped them after the leading run, made such a tail eat a data row in
   silence (`tests/regression.rs::a_skip_rows_tail_after_a_body_transform_counts_the_blank_row`).
-  A body transform before that last framing transform still sees blank rows, as on main.
+  A body transform before that last framing transform still sees blank rows, as on main —
+  except `fill_down`, which leaves a sheet's all-blank row blank (the carry runs on past it)
+  so the drop point still removes it, rather than filling it into a label-only record.
 - **Deliberate omissions:** no drop/rename transforms (the `columns` list is the only
-  projection), no locale tables (literal `replace` pairs in the sidecar), no named timezones
+  projection — `remove_empty` drops *rows* whose every cell is empty and nothing else; an
+  all-empty column gets a sniffer note telling you to leave it out of `columns`), no locale tables (literal `replace` pairs in the sidecar), no named timezones
   (fixed offsets only — DST cannot be guessed from a value).
 - **`infer.rs`** puts the JSON Schema in the *prompt*, not only in
   `response_format`. Verified against OpenRouter: OpenAI's strict mode rejects a
@@ -754,6 +833,8 @@ Things that only become clear from reading several modules:
   `strict:false` because the schema uses `$ref`), and an Anthropic forced tool call.
   Transport failures retry the same prompt; *spec* problems go back to the model as text.
   Bump `PROMPT_VERSION` when changing the prompt — it is recorded in sidecar provenance.
+  A schema change (a new transform or `ValueParsing` field) counts as a prompt change,
+  since the schema is pasted into the prompt.
 - **Bounded I/O lives in `fileio`**: head/tail sampling by seek, streaming blake3, atomic
   sidecar writes (temp + rename).
 - **Two providers, chosen by size.** Under `LAZY_ABOVE_BYTES` (64 MB, `TDY_LAZY_ABOVE_BYTES`)
@@ -768,14 +849,14 @@ Things that only become clear from reading several modules:
   batch exists, derived by building each column over *zero* rows so it cannot drift from the
   code that types real data.
 - **`stream` is the executor for text formats; `engine` is the fallback and the reference.**
-  It is plumbing only — where an answer could differ (`promote_header_from`,
+  It is plumbing only — where an answer could differ (`promote_header_recording`,
   `build_column_at`) it calls the same function `engine` calls, deliberately, so the two
   cannot drift. It covers delimited, `lines`, `fixed_width` and NDJSON — everything whose rows are
   independent — behind a `Source` enum; Excel and a JSON *array* cannot stream, since each
   is one document with no records until it is parsed whole. NDJSON's header is the union of
   every record's keys, so `discover_ndjson` makes a real pass rather than guessing from a
   prefix: a key appearing only in the last record still has to become a column. It accepts only
-  `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down)* [unpivot]?`;
+  `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down | remove_empty)* [unpivot]?`;
   `can_stream` returns false for anything else and the caller falls back, so an unusual spec
   is never *refused*, only executed the old way. `TDY_NO_STREAM=1` forces `engine` — that is
   `stream::enabled()`, kept separate from `can_stream()` so turning streaming off cannot make
@@ -892,7 +973,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
   committed reports with the character offsets generator 04 documents), plus the batch-boundary cases a chunked
   pipeline gets wrong (a `fill_down` carry crossing 65,536 rows, a `skip_rows` tail the
   reader has not reached yet, `unpivot` making output rows outnumber input ones)
-- `tests/adversarial.rs` — sweeps every fixture in `testdata/`: never panic, never hang, and
+- `tests/adversarial.rs` (~120 s alone, more under a parallel run) — sweeps every fixture in `testdata/`: never panic, never hang, and
   anything sniffable must be queryable and reproducible under `--frozen`. It picks up new
   fixtures automatically. Note it runs the binary with output to *files*, not pipes: a
   100k-column sidecar is megabytes, and an undrained pipe deadlocks at 64 KB.

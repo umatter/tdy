@@ -258,3 +258,47 @@ fn a_noisy_scale_from_one_file_of_several_is_attributed() {
     let ddl = tdy::draft::draft_target(&[fixture("draft_float_money.xlsx")], Limits::default()).unwrap();
     assert!(!column_line(&ddl, "energy_value_2020_mwh").contains("(from "), "{ddl}");
 }
+
+/// The glob is relative only when the files sit in the directory the draft
+/// is run from or below it; anywhere else it is absolute. A ladder of `..`
+/// up to a shared prefix such as `/tmp` was relative to the current
+/// directory, and from a target written beside the data it named no file.
+#[test]
+fn a_draft_of_files_outside_the_current_directory_writes_an_absolute_glob() {
+    let here = tempfile::TempDir::new().unwrap();
+    let there = tempfile::TempDir::new().unwrap();
+    let rows = "Datum;Region;Betrag\n05.01.2025;Ost;190.00\n12.01.2025;West;200.00\n";
+    std::fs::write(there.path().join("a.csv"), rows).unwrap();
+    std::fs::create_dir(here.path().join("sub")).unwrap();
+    std::fs::write(here.path().join("sub").join("b.csv"), rows).unwrap();
+    let run = |cwd: &Path, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_tdy")).args(args).current_dir(cwd).env("TDY_BACKEND", "none").output().unwrap()
+    };
+
+    let a = there.path().join("a.csv");
+    let out = run(here.path(), &["draft", a.to_str().unwrap()]);
+    let ddl = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{ddl}");
+    let abs = there.path().canonicalize().unwrap();
+    assert!(ddl.contains(&format!("files = '{}/*.csv'", abs.display())), "{ddl}");
+    // Unedited, written into yet another directory, it still names the file.
+    let elsewhere = tempfile::TempDir::new().unwrap();
+    let t = elsewhere.path().join("t.tdy.sql");
+    std::fs::write(&t, &ddl).unwrap();
+    let out = run(here.path(), &["fit", t.to_str().unwrap()]);
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+
+    // Below the current directory, absolute or relative argument alike, the
+    // glob stays relative.
+    let b = here.path().join("sub").join("b.csv");
+    for arg in [b.to_str().unwrap(), "sub/b.csv"] {
+        let out = run(here.path(), &["draft", arg]);
+        assert!(String::from_utf8_lossy(&out.stdout).contains("files = 'sub/*.csv'"), "{}", String::from_utf8_lossy(&out.stdout));
+    }
+    // And a relative path that climbs out is absolute too.
+    let out = run(&here.path().join("sub"), &["draft", "../sub/b.csv"]);
+    let sub = here.path().join("sub").canonicalize().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("files = '*.csv'"), "{}", String::from_utf8_lossy(&out.stdout));
+    let out = run(&here.path().join("sub"), &["draft", a.to_str().unwrap()]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("files = '{}/*.csv'", abs.display())), "{sub:?}");
+}

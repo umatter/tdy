@@ -106,7 +106,7 @@ fn an_agent_can_fit_and_query_a_pile_over_mcp() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["sniff", "draft", "fit", "check", "query", "validate"]);
+    assert_eq!(names, ["sniff", "profile", "draft", "fit", "check", "query", "validate"]);
 
     let (report, err) = s.call("fit", serde_json::json!({"target": "sales_ok.tdy.sql"}));
     assert!(!err, "{report:#}");
@@ -374,4 +374,52 @@ fn a_lock_member_outside_the_root_is_refused_at_query_time() {
     assert!(err, "a lock member outside --root must be refused: {msg:#}");
     let text = msg.as_str().unwrap_or_default();
     assert!(text.contains("root"), "{text}");
+}
+
+/// `profile` answers with the profile as data, writes nothing, and is
+/// confined to the root like every other tool.
+#[test]
+fn the_profile_tool_answers_and_stays_inside_the_root() {
+    // The root one level inside its own tempdir, so a file "beside the
+    // root" lives in that tempdir too and goes when it does.
+    let outer = tempfile::TempDir::new().unwrap();
+    let root = outer.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let pile = staged();
+    for e in std::fs::read_dir(pile.path()).unwrap().flatten() {
+        std::fs::copy(e.path(), root.join(e.file_name())).unwrap();
+    }
+    let mut s = Server::start(&root, false);
+    let tools = s.request("tools/list", serde_json::json!({}));
+    assert!(
+        tools["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "profile"),
+        "{tools:#}"
+    );
+
+    let (p, err) = s.call("profile", serde_json::json!({"path": "2025-08.csv"}));
+    assert!(!err, "{p:#}");
+    let names: Vec<&str> = p["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Datum", "Region", "Betrag", "Betrag"], "the file's own spelling: {p:#}");
+    assert_eq!(p["rows"], 4);
+    assert_eq!(p["complete"], true);
+    assert_eq!(p["columns"][0]["shapes"][0]["pattern"], "99.99.9999");
+    assert!(!root.join("2025-08.csv.tdy.toml").exists(), "a profile writes no sidecar");
+
+    let (p, err) = s.call("profile", serde_json::json!({"path": "2025-08.csv", "head": 2}));
+    assert!(!err, "{p:#}");
+    assert_eq!((p["rows"].as_u64(), p["complete"].as_bool()), (Some(2), Some(false)));
+
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::write(outside.path().join("secret.csv"), "a,b\n1,2\n").unwrap();
+    let (msg, err) = s.call("profile", serde_json::json!({"path": outside.path().join("secret.csv")}));
+    assert!(err, "a path outside the root must be refused: {msg:#}");
+    assert!(msg.as_str().unwrap().contains("outside"), "{msg:#}");
+    // A file that really is at `root/../secret.csv`, and a member
+    // reference into it: each refused as outside, not as missing.
+    std::fs::write(outer.path().join("secret.csv"), "a,b\n1,2\n").unwrap();
+    for path in ["../secret.csv", "../secret.csv#2"] {
+        let (msg, err) = s.call("profile", serde_json::json!({"path": path}));
+        assert!(err, "{path}: {msg:#}");
+        assert!(msg.as_str().unwrap().contains("outside"), "{path}: {msg:#}");
+    }
 }

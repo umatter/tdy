@@ -2010,9 +2010,11 @@ fn a_zip_named_csv_is_refused_not_read_as_a_one_column_table() {
 // A sheet's blank body rows and the row counts a spec states
 // ---------------------------------------------------------------------------
 
-/// Two sheets, written in the test: `S` has a body transform between its
+/// Three sheets, written in the test: `S` has a body transform between its
 /// header and a `skip_rows` tail that counts a blank row; `T` has a title
-/// row, then a blank row inside the body under `fill_down`.
+/// row, then a blank row inside the body under `fill_down`; `U` has blank
+/// rows inside the body under a `fill_down` that sits before a later
+/// `skip_rows` tail.
 fn blank_row_book(dir: &TempDir) -> Option<PathBuf> {
     let script = dir.path().join("mk.py");
     fs::write(
@@ -2026,6 +2028,9 @@ for r in [["Region", "Amount"], ["Ost", 100], ["Note: prelim", None], ["West", 3
 t = wb.create_sheet("T")
 for r in [["Report 2025", None], ["Region", "Amount"], ["Ost", 100], [None, None], ["West", 300]]:
     t.append(r)
+u = wb.create_sheet("U")
+for r in [["Report", None], ["Region", "Amount"], ["Ost", 100], [None, 200], [None, None], ["West", 300], [None, None], ["Total", 600]]:
+    u.append(r)
 wb.save(os.path.join(sys.argv[1], "book.xlsx"))
 "#,
     )
@@ -2100,4 +2105,217 @@ fn a_blank_body_row_is_not_filled_down_into_a_record() {
     let b = provider::spec_to_batch(&spec, &p).unwrap();
     assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("West".into())]);
     assert_eq!(col_i64(&b, 1), vec![Some(100), Some(300)]);
+}
+
+/// A `fill_down` placed before a later `skip_rows` runs before the blank
+/// rows are dropped (they are dropped past the LAST framing transform), so
+/// it used to fill the blank row between Ost's rows and West into a third
+/// Ost record with no amount. On a sheet a row whose every cell is empty is
+/// a gap, not a record: `fill_down` leaves it as it is — the carry runs on
+/// past it unchanged — and it reaches the drop point and is removed.
+#[test]
+fn fill_down_leaves_a_blank_sheet_row_blank_before_a_later_skip_rows() {
+    let dir = TempDir::new().unwrap();
+    let Some(p) = blank_row_book(&dir) else {
+        eprintln!("skipping: python3/openpyxl unavailable");
+        return;
+    };
+    let fill = |direction| {
+        sheet_spec(
+            "U",
+            vec![
+                Transform::SkipRows { head: 1, tail: 0 },
+                Transform::PromoteHeader { rows: 1, join: " ".into() },
+                Transform::FillDown { columns: vec!["Region".into()], direction },
+                Transform::SkipRows { head: 0, tail: 2 },
+            ],
+        )
+    };
+    let b = provider::spec_to_batch(&fill(Default::default()), &p).unwrap();
+    assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("Ost".into()), Some("West".into())]);
+    assert_eq!(col_i64(&b, 1), vec![Some(100), Some(200), Some(300)]);
+    // Upward, the same rule: the blank rows stay blank and are dropped, and
+    // the carry crosses them as before (`|200` takes West from below).
+    let b = provider::spec_to_batch(&fill(tdy::spec::FillDirection::Up), &p).unwrap();
+    assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("West".into()), Some("West".into())]);
+    assert_eq!(col_i64(&b, 1), vec![Some(100), Some(200), Some(300)]);
+}
+
+// ---------------------------------------------------------------------------
+// Notes that name a declaration without making it (taxonomy E6, E13, C7)
+// ---------------------------------------------------------------------------
+
+/// `45%` is 45 or 0.45, and both readings are defensible: the column stays
+/// text, confidence unchanged, and a note names both declarations so the
+/// choice is a one-line edit once a person knows which is meant.
+#[test]
+fn a_percent_column_stays_text_and_names_both_readings() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "pct.csv", "region,anteil,betrag\nZH,45%,10\nBE,12.5 %,20\nGE,3%,30\n");
+    let r = sniffed(&p);
+    let anteil = r.spec.columns.iter().find(|c| c.name == "anteil").unwrap();
+    // The snapshot taken before the note existed: text, 0.95.
+    assert_eq!(anteil.dtype, DType::Utf8);
+    assert!(anteil.parse.strip.is_none() && anteil.parse.decimal_shift.is_none());
+    assert!((r.confidence - 0.95).abs() < 1e-6, "confidence moved: {}", r.confidence);
+    let note = r
+        .spec
+        .notes
+        .iter()
+        .find(|n| n.contains("percentages"))
+        .unwrap_or_else(|| panic!("no percent note in {:?}", r.spec.notes));
+    assert_eq!(
+        note,
+        "column `anteil` looks like percentages (e.g. `\"45%\"`): `strip = \"%\"` reads 45; \
+         with `strip` and `decimal_shift = -2` it reads 0.45 — the file does not say which is \
+         meant"
+    );
+}
+
+/// One value without its `%` and the column is not a column of percentages.
+#[test]
+fn a_percent_note_needs_every_value_to_carry_the_sign() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "pct.csv", "region,anteil\nZH,45%\nBE,12\nGE,3%\n");
+    let r = sniffed(&p);
+    assert!(
+        !r.spec.notes.iter().any(|n| n.contains("percentages")),
+        "{:?}",
+        r.spec.notes
+    );
+}
+
+/// `45000` in a CSV exported from a spreadsheet is very often 2023-03-15, and
+/// nothing in the value says so. An integer column with a date-like name and
+/// every value in the serial band keeps its type and gains a note with the
+/// date the first value would be — and the query that converts it, since no
+/// declaration reads days since 1899-12-30.
+#[test]
+fn a_spreadsheet_serial_date_column_is_noted_not_converted() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "s.csv", "Datum,amount\n45000,45000\n45001,45001\n45031,45031\n");
+    let r = sniffed(&p);
+    let datum = r.spec.columns.iter().find(|c| c.name == "datum").unwrap();
+    assert_eq!(datum.dtype, DType::Int64, "never a conversion");
+    let notes: Vec<&String> = r.spec.notes.iter().filter(|n| n.contains("serial")).collect();
+    assert_eq!(notes.len(), 1, "one note, for `datum` only: {:?}", r.spec.notes);
+    assert_eq!(
+        notes[0],
+        "column `datum` holds integers like 45000; as spreadsheet serial days that is \
+         2023-03-15 — if these are dates, no declaration reads them yet, so convert in \
+         the query: CAST(CAST(\"datum\" - 25569 AS INT) AS DATE)"
+    );
+}
+
+/// The same integers under a name that says nothing about dates, and one
+/// value outside the band under a name that does: no note either time.
+#[test]
+fn a_serial_date_note_needs_the_name_and_the_band() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "a.csv", "amount\n45000\n45001\n");
+    assert!(!sniffed(&p).spec.notes.iter().any(|n| n.contains("serial")));
+    let p = write(&dir, "b.csv", "datum\n45000\n70000\n");
+    assert!(!sniffed(&p).spec.notes.iter().any(|n| n.contains("serial")));
+}
+
+/// The SQL the note prints has to run, and give the date the note names.
+#[tokio::test]
+async fn the_serial_date_notes_query_runs_and_agrees() {
+    let dir = TempDir::new().unwrap();
+    // `current_date` is a SQL keyword: unquoted, the note's query would read
+    // today's date instead of the column. The note quotes the name.
+    let p = write(&dir, "s.csv", "current_date\n45000\n");
+    let note = sniffed(&p).spec.notes.into_iter().find(|n| n.contains("serial")).unwrap();
+    assert!(note.contains("CAST(CAST(\"current_date\" - 25569 AS INT) AS DATE)"), "{note}");
+    let sql = format!(
+        "SELECT CAST(CAST(\"current_date\" - 25569 AS INT) AS DATE) AS d FROM messy('{}')",
+        p.display()
+    );
+    let b = query(&sql).await;
+    let a = b[0].column(0);
+    let d = a.as_any().downcast_ref::<datafusion::arrow::array::Date32Array>().unwrap();
+    assert_eq!(d.value_as_date(0).unwrap().to_string(), "2023-03-15");
+}
+
+/// A column empty in every sampled row is said out loud, by position and by
+/// name, with the projection that drops it — and still emitted, so nothing a
+/// person relied on moves.
+#[test]
+fn an_all_empty_column_is_noted_and_still_emitted() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "e.csv", "a,b,c,d,e,f,g\n1,2,3,4,5,6,\n7,8,9,10,11,12,\n");
+    let r = sniffed(&p);
+    assert!(r.spec.columns.iter().any(|c| c.name == "g"), "the column is still emitted");
+    assert!(
+        r.spec.notes.iter().any(|n| n
+            == "column 7 (`g`) is empty in every sampled row; omit it from `columns` to drop it"),
+        "{:?}",
+        r.spec.notes
+    );
+    // A header with a blank seventh name is how `col_7` happens.
+    let p = write(&dir, "f.csv", "a,b,c,d,e,f,\n1,2,3,4,5,6,\n7,8,9,10,11,12,\n");
+    let r = sniffed(&p);
+    assert!(
+        r.spec.notes.iter().any(|n| n
+            == "column 7 (`col_7`) is empty in every sampled row; omit it from `columns` to drop it"),
+        "{:?}",
+        r.spec.notes
+    );
+    // Several: one note naming them all.
+    let p = write(&dir, "g.csv", "a,b,c,,\n1,,2,,\n3,,4,,\n");
+    let r = sniffed(&p);
+    let empty: Vec<&String> = r.spec.notes.iter().filter(|n| n.contains("empty in every")).collect();
+    assert_eq!(
+        empty,
+        vec!["columns 2 (`b`), 4 (`col_4`) and 5 (`col_5`) are empty in every sampled row; \
+              omit them from `columns` to drop them"],
+        "{:?}",
+        r.spec.notes
+    );
+    // Every column: said once, not once per column.
+    let p = write(&dir, "h.csv", "a,b\n,\n,\n");
+    let r = sniffed(&p);
+    let empty: Vec<&String> = r.spec.notes.iter().filter(|n| n.contains("empty in every")).collect();
+    assert_eq!(empty, vec!["every column is empty in every sampled row"], "{:?}", r.spec.notes);
+}
+
+/// A date-like name is a `_`-separated token that is, or ends with, a date
+/// word — and a token saying the column counts or identifies something
+/// (`id`, `count`, `ms`, `s`, `sec`, `nr`, `n`) vetoes it.
+#[test]
+fn the_serial_date_note_reads_name_tokens_not_substrings() {
+    let dir = TempDir::new().unwrap();
+    let noted = |name: &str| {
+        let p = write(&dir, &format!("{name}.csv"), &format!("{name}\n45000\n45001\n"));
+        sniffed(&p).spec.notes.iter().any(|n| n.contains("serial"))
+    };
+    for name in ["update_count", "timeout_ms", "stage", "birthday_id", "runtime_s"] {
+        assert!(!noted(name), "{name} is not a date");
+    }
+    for name in ["datum", "buchungsdatum", "stichtag", "order_date"] {
+        assert!(noted(name), "{name} reads like a date");
+    }
+}
+
+/// `1,250%` is 1250 or 1.25 before it is a percentage at all: the note says
+/// the separator is undecided rather than quoting a number for either.
+#[test]
+fn a_percent_note_with_an_undecided_separator_quotes_no_number() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "pct.csv", "region,anteil\nZH,\"1,250%\"\nBE,\"2,500%\"\n");
+    let r = sniffed(&p);
+    let note = r
+        .spec
+        .notes
+        .iter()
+        .find(|n| n.contains("percentages"))
+        .unwrap_or_else(|| panic!("{:?}", r.spec.notes));
+    assert_eq!(
+        note,
+        "column `anteil` looks like percentages (e.g. `\"1,250%\"`), but `,` could be a \
+         thousands separator or a decimal point here: declare `decimal_separator` or \
+         `thousands_separator`, and then `strip = \"%\"` reads the number as written and \
+         `strip` with `decimal_shift = -2` reads it as a fraction — the file does not say which \
+         is meant"
+    );
 }

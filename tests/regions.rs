@@ -23,14 +23,14 @@ fn stacked_blocks_are_found_at_blank_rows_in_file_order() {
     // and says the banner is two lines nothing reads.
     let w = tdy::engine::regions_of(&fixture("regions_titled.csv"), None, Limits::default()).unwrap();
     assert_eq!(w.windows, [RowWindow { start: 3, end: 7, ordinal: 1 }]);
-    assert_eq!(w.dropped, [tdy::engine::DroppedRun { start: 0, end: 2, width: 1, widest: 1 }]);
+    assert_eq!(w.dropped, [tdy::engine::DroppedRun { start: 0, end: 2, width: 1, widest: 1, last_width: 1 }]);
     assert_eq!(w.block_width, 3);
     assert_eq!(w.table_shaped().count(), 0, "a 1-field banner is not a table");
     // The same file with a 3-field run below the minimum: the run is dropped
     // and it IS table-shaped, so a person has to rule on it.
     let w = tdy::engine::regions_of(&fixture("regions_short_block.csv"), None, Limits::default()).unwrap();
     assert_eq!(w.windows, [RowWindow { start: 3, end: 7, ordinal: 1 }]);
-    assert_eq!(w.dropped, [tdy::engine::DroppedRun { start: 0, end: 2, width: 3, widest: 3 }]);
+    assert_eq!(w.dropped, [tdy::engine::DroppedRun { start: 0, end: 2, width: 3, widest: 3, last_width: 3 }]);
     assert_eq!(w.table_shaped().count(), 1);
 }
 
@@ -934,7 +934,7 @@ fn a_table_shaped_block_that_fails_the_gates_still_waits_on_a_person() {
 
 /// The split's own answer for the banner layout: the one-line header the
 /// blank row cut off is a dropped run directly above the block, as wide as
-/// it — a candidate header (`severed_header`), adopted only by the framing
+/// it — a candidate header run (`header_run`), adopted only by the framing
 /// step and only for a block with no header of its own. Widths are counted
 /// with the table's separator, not one a banner and a footnote block
 /// out-voted it on. Gating then keeps the table alone, renumbered as
@@ -946,20 +946,20 @@ fn a_severed_header_is_a_candidate_and_gating_keeps_the_table() {
         RowWindow { start: 9, end: 14, ordinal: 2 },
         RowWindow { start: 15, end: 18, ordinal: 3 },
     ];
-    let header = tdy::engine::DroppedRun { start: 7, end: 8, width: 4, widest: 4 };
+    let header = tdy::engine::DroppedRun { start: 7, end: 8, width: 4, widest: 4, last_width: 4 };
     let r = tdy::engine::regions_of(&fixture("regions_banner.csv"), None, Limits::default()).unwrap();
     assert_eq!(r.windows, want);
     assert_eq!(r.dropped, [header], "{r:?}");
     assert_eq!(r.window_widths, [1, 4, 1]);
-    assert_eq!(r.severed_header(1), Some(0));
-    assert_eq!(r.severed_header(0), None);
-    assert_eq!(r.severed_header(2), None, "the header sits above block 2, not below it");
+    assert_eq!(r.header_run(1), Some(tdy::engine::HeaderRun::Dropped(0)));
+    assert_eq!(r.header_run(0), None);
+    assert_eq!(r.header_run(2), None, "the header sits above block 2, not below it");
     let x = tdy::engine::regions_of(&fixture("regions_banner.xlsx"), Some("Bottles"), Limits::default()).unwrap();
     assert_eq!(x.windows, want);
     assert_eq!(x.window_widths, [1, 4, 1]);
 
     let mut a = r.clone();
-    a.adopt(1, 0);
+    a.adopt(1, tdy::engine::HeaderRun::Dropped(0));
     assert_eq!(a.windows[1], RowWindow { start: 7, end: 14, ordinal: 2 });
     assert!(a.dropped.is_empty());
     let g = a.gated(&[false, true, false]);
@@ -967,7 +967,7 @@ fn a_severed_header_is_a_candidate_and_gating_keeps_the_table() {
     assert_eq!(g.block_width, 4);
     assert_eq!(
         g.dropped,
-        [tdy::engine::DroppedRun { start: 0, end: 6, width: 1, widest: 1 }, tdy::engine::DroppedRun { start: 15, end: 18, width: 1, widest: 1 }]
+        [tdy::engine::DroppedRun { start: 0, end: 6, width: 1, widest: 1, last_width: 1 }, tdy::engine::DroppedRun { start: 15, end: 18, width: 1, widest: 1, last_width: 1 }]
     );
     assert_eq!(g.table_shaped().count(), 0);
     assert_eq!(r.gated(&[false, false, false]), tdy::engine::Regions::default(), "none pass: read whole");
@@ -979,7 +979,7 @@ fn a_severed_header_is_a_candidate_and_gating_keeps_the_table() {
     std::fs::write(&p, "a;b\n\n1;2\n3;4\n5;6\n").unwrap();
     let h = tdy::engine::regions_of(&p, None, Limits::default()).unwrap();
     assert_eq!(h.windows, [RowWindow { start: 2, end: 5, ordinal: 1 }]);
-    assert_eq!(h.severed_header(0), Some(0));
+    assert_eq!(h.header_run(0), Some(tdy::engine::HeaderRun::Dropped(0)));
 }
 
 /// "Table-shaped" is any row of the run holding two or more fields, not the
@@ -992,16 +992,17 @@ fn a_severed_header_is_a_candidate_and_gating_keeps_the_table() {
 fn a_wide_row_under_a_one_cell_title_is_table_shaped() {
     let r = tdy::engine::Regions {
         windows: vec![RowWindow { start: 0, end: 109, ordinal: 1 }],
-        dropped: vec![tdy::engine::DroppedRun { start: 111, end: 112, width: 72, widest: 72 }],
+        dropped: vec![tdy::engine::DroppedRun { start: 111, end: 112, width: 72, widest: 72, last_width: 72 }],
         block_width: 1,
         window_widths: vec![1],
         window_widest: vec![73],
+        window_last_widths: vec![1],
     };
     assert_eq!(r.table_shaped().count(), 1);
     // A one-cell line over a wider table stays unreviewed; over a block
     // that is itself one cell wide on its first row it is as wide as the
     // table, which is the other rule.
-    let one = vec![tdy::engine::DroppedRun { start: 111, end: 112, width: 1, widest: 1 }];
+    let one = vec![tdy::engine::DroppedRun { start: 111, end: 112, width: 1, widest: 1, last_width: 1 }];
     let r = tdy::engine::Regions { dropped: one.clone(), block_width: 4, ..r };
     assert_eq!(r.table_shaped().count(), 0);
     let r = tdy::engine::Regions { dropped: one, block_width: 1, ..r };
@@ -1053,21 +1054,20 @@ fn headerless_blocks_are_not_candidates_and_the_file_is_read_whole() {
     assert!(q.contains("| 9 "), "the whole file: {q}");
 }
 
-/// The corpus's ttb sheet, reduced. Against the drafted positional target
-/// the banner and the two-cell footnote block used to pass by position
-/// alone; neither has a header, so neither is a candidate, no block passes,
-/// and the sheet is read whole through the frame the draft came from — the
-/// pre-regions reading, unreviewed for a positional target. Against a
-/// by-name target the table is
+/// The corpus's ttb sheet, reduced. Against a positional target — what the
+/// whole-sheet draft declared before `draft` split sheets — the banner and
+/// the two-cell footnote block used to pass by position alone; neither has
+/// a header, so neither is a candidate, no block passes, and the sheet is
+/// read whole — the pre-regions reading, unreviewed for a positional
+/// target. Against a by-name target the table is
 /// the one block that passes, bound by name, and the footnote block is a
 /// data-like run nothing read, so it waits on a person.
 #[test]
 fn a_headerless_footnote_block_cannot_stand_in_for_the_sheet() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::copy(fixture("regions_footnoted.xlsx"), dir.path().join("book.xlsx")).unwrap();
-    let out = tdy(&["draft", dir.path().join("book.xlsx").to_str().unwrap()]);
     let t = dir.path().join("d.tdy.sql");
-    std::fs::write(&t, out.stdout).unwrap();
+    std::fs::write(&t, "CREATE TABLE d (col_1 TEXT, col_2 TEXT, col_3 BIGINT, col_4 BIGINT) WITH (files = '*.xlsx');").unwrap();
     let out = tdy(&["fit", t.to_str().unwrap()]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
@@ -1340,6 +1340,12 @@ fn a_headed_block_that_does_not_fit_makes_the_whole_file_read_a_question() {
 /// sheet read whole against its by-name draft asks nothing — it only notes
 /// the block. (The cost, recorded in the docs: a by-name target that misses
 /// a year-headed block gets the note, not a review.)
+///
+/// Nor is the run above the states adopted as their header run: it is the
+/// header AND the "United States" total, so its last row is data, and an
+/// adopted frame's header would end one row short of it. Adopting it would
+/// make the states a block that leaves Puerto Rico outside — nine rows and
+/// a question, where the whole read is all ten.
 #[test]
 fn a_block_whose_promoted_header_is_data_does_not_question_the_whole_read() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -1354,6 +1360,7 @@ fn a_block_whose_promoted_header_is_data_does_not_question_the_whole_read() {
     assert!(text.contains("state<-\"State\""), "bound by name: {text}");
     assert!(!text.contains("REVIEW"), "{text}");
     assert!(text.contains("note: the split found a block at lines 7–14 whose header reads like data"), "{text}");
+    assert!(!text.contains("adopted from lines"), "{text}");
     // `count(*)` and `count(state)` alike: a whole-sheet read skips the
     // sheet's interior blank rows, as a region read and a text read do,
     // rather than keeping them as all-NULL rows that `count(*)` counts.
@@ -1362,4 +1369,312 @@ fn a_block_whose_promoted_header_is_data_does_not_question_the_whole_read() {
         "SELECT count(*) AS n, count(state) AS s, sum(all_workers_in_the_labor_force) AS w FROM DS",
     );
     assert!(q.contains("| 10 | 10 | 32816265 |"), "{q}");
+}
+
+/// Official statistics put the title lines and the header in one run, then a
+/// blank row, then the body — twice, stacked. Each body has no header of its
+/// own, so it adopts the whole run above it: its frame skips the titles and
+/// promotes the header, both tables bind by name, and each is a region
+/// member waiting on a person like any other stacked table.
+fn two_statetables_bind_by_name(fixture_name: &str, as_name: &str) {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture(fixture_name), dir.path().join(as_name)).unwrap();
+    let t = dir.path().join("w.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE w (state TEXT NOT NULL OPTIONS(matches='State'), \
+         all_workers BIGINT NOT NULL OPTIONS(matches='All workers'), \
+         actors BIGINT NOT NULL OPTIONS(matches='Actors')) WITH (files = '{as_name}', provenance = 'true');"
+            .replace("{as_name}", as_name),
+    )
+    .unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    for n in 1..=2 {
+        assert!(text.contains(&format!("{as_name}#{n}")), "{text}");
+        assert!(
+            text.contains(&format!("REVIEW: table {n} of 2 in this file, split at blank rows")),
+            "{text}"
+        );
+    }
+    assert!(!text.contains(&format!("{as_name}#3")), "the title runs are not members: {text}");
+    assert_eq!(text.matches("state<-\"State\"").count(), 2, "bound by name: {text}");
+    assert!(!text.contains("reads like data"), "{text}");
+    // The bodies promote no header of their own (`Alabama | 88165 | 10` is
+    // not taken as one), so the run is adopted by a headerless block and no
+    // row is read as data: the standing "table i of n" reason is the only one.
+    assert!(!text.contains("is read as data"), "{text}");
+    let out = tdy(&["query", &format!("SELECT count(*) AS n FROM dataset('{}')", t.display())]);
+    assert!(!out.status.success(), "unaccepted");
+    for n in 1..=2 {
+        let out = tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("{as_name}#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let q = query(&t, "SELECT _member, count(*) AS n, sum(all_workers) AS w, sum(actors) AS a FROM DS GROUP BY 1 ORDER BY 1");
+    assert!(q.contains(&format!("| {as_name}#1 | 5 | 3012640 | 965 ")), "{q}");
+    assert!(q.contains(&format!("| {as_name}#2 | 5 | 3032000 | 1024 ")), "{q}");
+}
+
+#[test]
+fn title_lines_and_header_in_one_run_are_adopted_whole_on_a_sheet() {
+    two_statetables_bind_by_name("regions_two_statetables.xlsx", "book.xlsx");
+}
+
+#[test]
+fn title_lines_and_header_in_one_run_are_adopted_whole_in_text() {
+    two_statetables_bind_by_name("regions_two_statetables.csv", "report.csv");
+}
+
+/// One table in that layout, under a two-line title, as text: the run above
+/// the body is two lines (title, header), below the three-row minimum, so
+/// it is a dropped run — adopted whole all the same, one plain member, no
+/// review, nothing named as unread.
+#[test]
+fn a_two_line_title_and_header_run_is_adopted_into_the_one_block() {
+    let (_d, t, text) = draft_then_fit("Table 1. Workers by state\nState;All workers;Actors\n\nAlabama;88165;10\nAlaska;26875;0\nArizona;1033370;45\n");
+    assert!(text.contains("state<-\"State\""), "{text}");
+    assert!(!text.contains("REVIEW") && !text.contains("not read"), "{text}");
+    assert!(query(&t, "SELECT count(*) AS n, sum(all_workers) AS w FROM DS").contains("| 3 | 1148410 |"));
+}
+
+/// The contrived layout the design page records as the cost of adoption: a
+/// one-row run `Kanton;Betrag`, a blank row, then a block whose promoted
+/// header `Region;2024` reads like data (a number over a numeric column).
+/// Against a target naming `Kanton`/`Betrag` the run is adopted and
+/// `Region | 2024` is read as a data row — the literal reading. That is a
+/// judgement, not a proof (a title line over a year-headed table is the
+/// same shape), so the member waits on a person. See
+/// docs/design/2026-09-08-regions.md §4.
+#[test]
+fn an_adopted_header_over_a_promoted_one_waits_on_a_person() {
+    let ddl = "CREATE TABLE q (kanton TEXT NOT NULL OPTIONS(matches='Kanton'), betrag BIGINT NOT NULL OPTIONS(matches='Betrag')) WITH (files='*.csv');";
+    let (_d, t) = pile("Kanton;Betrag\n\nRegion;2024\nBern;100\nZug;200\nUri;300\n", ddl);
+    waits_then_reads(
+        &t,
+        "REVIEW: row 3 (`Region | 2024`) is read as data under the header adopted from lines 1–1 — accept only if that row is data, not this table's header",
+        "betrag",
+        "2624 ",
+    );
+    assert!(query(&t, "SELECT kanton FROM DS ORDER BY betrag DESC LIMIT 1").contains("| Region "));
+}
+
+/// A title line over a year-headed table — the shape the adoption above
+/// cannot tell from it. Draft never adopts over a header the block's own
+/// frame promoted, so the UNEDITED draft declares the block's own columns,
+/// binds them by name, and the title line is a data-like run nothing read,
+/// waiting on a person. Adopting there drafted `sales_report`/`q1_2025`,
+/// fit with only a note and served `State | 2024` as a row: 2624, not 600.
+fn year_headed_under_a_title(content: &str, first: &str, first_src: &str) {
+    let (d, t, text) = draft_then_fit(content);
+    assert!(text.contains(&format!("{first}<-\"{first_src}\"")) && text.contains("c_2024<-\"2024\""), "{text}");
+    assert!(text.contains("REVIEW: a run of 1 line(s) at lines 1–1 was not read"), "{text}");
+    assert!(!text.contains("adopted from lines"), "{text}");
+    let out = tdy(&["query", &format!("SELECT count(*) AS n FROM dataset('{}')", t.display())]);
+    assert!(!out.status.success(), "unaccepted");
+    assert!(tdy_in(d.path(), &["fit", "d.tdy.sql", "--accept", "report.csv"]).status.success());
+    let q = query(&t, "SELECT count(*) AS n, sum(c_2024) AS total FROM DS");
+    assert!(q.contains("| 3 | 600"), "{q}");
+}
+
+#[test]
+fn the_unedited_draft_of_a_year_headed_table_under_a_title_binds_its_own_header() {
+    year_headed_under_a_title("Sales report;Q1 2025\n\nState;2024\nBern;100.00\nZug;200.00\nUri;300.00\n", "state", "State");
+    year_headed_under_a_title("Q1 report;CHF\n\nRegion;2024\nBern;100.00\nZug;200.00\nUri;300.00\n", "region", "Region");
+    year_headed_under_a_title("Kanton;Betrag\n\nRegion;2024\nBern;100\nZug;200\nUri;300\n", "region", "Region");
+}
+
+/// The adoption is gated: a header run whose frame does not pass against the
+/// target leaves the block exactly as it was. Here the target binds
+/// `Region;2024` itself, so the block keeps that header and the one-row run
+/// above it stays a data-like run nothing read, waiting on a person.
+#[test]
+fn an_adoption_that_fails_the_gates_leaves_the_block_as_it_was() {
+    let ddl = "CREATE TABLE q (region TEXT NOT NULL OPTIONS(matches='Region'), y2024 BIGINT NOT NULL OPTIONS(matches='2024')) WITH (files='*.csv');";
+    let (_d, t) = pile("Kanton;Betrag\n\nRegion;2024\nBern;100\nZug;200\nUri;300\n", ddl);
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("region<-\"Region\""), "{text}");
+    assert!(!text.contains("adopted from lines"), "{text}");
+    waits_then_reads(&t, "REVIEW: a run of 1 line(s) at lines 1–1 was not read", "y2024", "600  ");
+}
+
+/// `tdy draft` splits a workbook's sheet as it splits a text file: the
+/// banner is skipped (one cell a row), the footnote block too (no header of
+/// its own, as it is no `fit` candidate), the header the blank row cut off
+/// is adopted, and the table drafts by name. The UNEDITED draft fits: one
+/// member, bound by name, the footnote block a data-like run nothing read.
+#[test]
+fn the_draft_of_a_footnoted_sheet_binds_by_name_and_fits() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_footnoted.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
+    let draft = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{draft}{}", String::from_utf8_lossy(&out.stderr));
+    let has = |col: &str, m: &str| draft.lines().any(|l| l.trim_start().starts_with(&format!("{col} ")) && l.contains(&format!("matches = '{m}'")));
+    assert!(has("state", "State") && has("c_2008", "2008") && has("c_2010", "2010"), "{draft}");
+    assert!(!draft.contains("col_"), "{draft}");
+    assert!(draft.contains("book.xlsx: block 1 (lines 1–6) skipped: one field per line"), "{draft}");
+    assert!(draft.contains("book.xlsx: block 3 (lines 16–18) skipped: no header of its own"), "{draft}");
+    std::fs::write(dir.path().join("d.tdy.sql"), &draft).unwrap();
+    let out = tdy_in(dir.path(), &["fit", "d.tdy.sql"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("book.xlsx#"), "one member: {text}");
+    assert!(text.contains("state<-\"State\""), "{text}");
+    assert!(text.contains("lines 16–18 was not read"), "{text}");
+    assert!(tdy_in(dir.path(), &["fit", "d.tdy.sql", "--accept", "book.xlsx"]).status.success());
+    let q = query(&dir.path().join("d.tdy.sql"), "SELECT count(*) AS n, sum(c_2008) AS a, sum(c_2009) AS b, sum(c_2010) AS c FROM DS");
+    assert!(q.contains("| 5 | 1500 | 1550 | 1600 |"), "{q}");
+}
+
+/// Two identical sheets, each a table under a banner: the draft splits the
+/// sheet the whole-file sniff reads, declares ONE column set by name, and
+/// the unedited draft fits both sheets as members.
+#[test]
+fn the_draft_of_a_banner_workbook_declares_one_column_set_and_fits() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_banner.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
+    let draft = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{draft}{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(draft.matches("matches = 'State'").count(), 1, "{draft}");
+    assert!(draft.contains("c_2009 BIGINT OPTIONS(matches = '2009')"), "{draft}");
+    assert!(!draft.contains("col_") && !draft.contains("only in"), "{draft}");
+    assert!(draft.contains("book.xlsx#Premise: block 3 (lines 16–18) skipped: one field per line"), "{draft}");
+    let t = dir.path().join("d.tdy.sql");
+    std::fs::write(&t, &draft).unwrap();
+    let out = tdy_in(dir.path(), &["fit", "d.tdy.sql"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("book.xlsx#Premise") && text.contains("book.xlsx#Bottles") && !text.contains("REVIEW"), "{text}");
+    let q = query(&t, "SELECT count(*) AS n, sum(c_2008) AS a FROM DS");
+    assert!(q.contains("| 10 | 4500 |"), "{q}");
+}
+
+/// Two stacked tables on one sheet, each under its own title-and-header
+/// run: the draft labels each block as `fit` names its member — `book.xlsx#i`,
+/// since a one-sheet workbook's member stays plain — declares the one shared
+/// column set by name, and the unedited draft fits both blocks, each
+/// accepted by the label the draft printed.
+#[test]
+fn the_draft_of_stacked_tables_on_a_sheet_labels_each_block() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_two_statetables.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
+    let draft = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{draft}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(draft.contains("book.xlsx holds 2 stacked tables; each is drafted as book.xlsx#i"), "{draft}");
+    assert!(draft.contains("all_workers BIGINT OPTIONS(matches = 'All workers')"), "{draft}");
+    let t = dir.path().join("d.tdy.sql");
+    std::fs::write(&t, &draft).unwrap();
+    let out = tdy_in(dir.path(), &["fit", "d.tdy.sql"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("book.xlsx#1") && text.contains("book.xlsx#2"), "{text}");
+    for n in 1..=2 {
+        let out = tdy_in(dir.path(), &["fit", "d.tdy.sql", "--accept", &format!("book.xlsx#{n}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let q = query(&t, "SELECT count(*) AS n, sum(all_workers) AS w FROM DS");
+    assert!(q.contains("| 10 | 6044640 |"), "{q}");
+}
+
+/// A column confined to some blocks: the per-column comment names the sheet
+/// block as `fit` names its member, `book.xlsx#i`, exactly as a text block
+/// is `file#i`.
+#[test]
+fn a_column_confined_to_one_sheet_block_is_labelled_as_its_member() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_renumber.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
+    let draft = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{draft}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(draft.lines().any(|l| l.contains("menge") && l.contains("only in book.xlsx#1")), "{draft}");
+    assert!(draft.lines().any(|l| l.contains("betrag") && l.contains("only in book.xlsx#2, book.xlsx#3")), "{draft}");
+}
+
+/// A workbook with several sheets: `fit` makes a sheet a member through its
+/// blocks only when exactly one passes and nothing table-shaped is left
+/// over (sheet expansion asks nobody), so a draft declared from the blocks
+/// of such a sheet fits none of them — the corpus sweep's ttb and
+/// occupational-health workbooks, refused. Draft therefore drafts such a
+/// sheet whole, as before, and says why; the unedited draft fits.
+fn several_sheets_draft_whole(name: &str) -> String {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture(name), dir.path().join("book.xlsx")).unwrap();
+    let out = tdy_in(dir.path(), &["draft", "book.xlsx"]);
+    let draft = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{draft}{}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.path().join("d.tdy.sql"), &draft).unwrap();
+    let out = tdy_in(dir.path(), &["fit", "d.tdy.sql"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{draft}{text}{}", String::from_utf8_lossy(&out.stderr));
+    draft
+}
+
+#[test]
+fn a_footnoted_sheet_of_several_is_drafted_whole() {
+    let draft = several_sheets_draft_whole("regions_footnoted_sheets.xlsx");
+    assert!(draft.contains("book.xlsx#Premise: drafted whole"), "{draft}");
+}
+
+#[test]
+fn a_stacked_sheet_of_several_is_drafted_whole() {
+    let draft = several_sheets_draft_whole("regions_three_sheets.xlsx");
+    assert!(draft.contains("book.xlsx#Q1: drafted whole"), "{draft}");
+}
+
+/// A body whose own first row was promoted and reads like data, under a run
+/// of a title line and a header: a draft does not adopt over it, so it is no
+/// table a draft can declare from, and the file is drafted whole, saying
+/// why. `fit` still adopts the run against that by-name draft — over a
+/// promoted header, so the member waits on a person, and after `--accept`
+/// `Region | 2024` is a row.
+#[test]
+fn a_year_headed_body_under_a_title_and_header_run_is_drafted_whole() {
+    let (d, t) = pile("Table 1. Sales by canton\nKanton;Betrag\n\nRegion;2024\nBern;100\nZug;200\nUri;300\n", "");
+    let out = tdy_in(d.path(), &["draft", "report.csv"]);
+    let draft = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{draft}");
+    assert!(
+        draft.contains("report.csv: block 1's first row reads like data; drafted whole — a by-name target can still bind it through its header run"),
+        "{draft}"
+    );
+    assert!(draft.contains("matches = 'Kanton'") && draft.contains("matches = 'Betrag'"), "{draft}");
+    std::fs::write(&t, &draft).unwrap();
+    waits_then_reads(
+        &t,
+        "REVIEW: row 4 (`Region | 2024`) is read as data under the header adopted from lines 1–2 — accept only if that row is data, not this table's header",
+        "betrag",
+        "2624 ",
+    );
+}
+
+/// A known gap, pinned as loud: title lines padded to the table's width
+/// (`Table 1. …;;`, as Excel writes a sheet as CSV). The text sniffer does
+/// not skip a padded title line, so the adopted frame's header never ends
+/// on the run's last row, nothing is adopted, and the file — three tables
+/// a sheet would give as three members — is refused whole, naming what it
+/// has. Never a partial or a wrong reading.
+#[test]
+fn padded_title_lines_in_text_are_a_loud_gap() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_padded_titles.csv"), dir.path().join("report.csv")).unwrap();
+    let t = dir.path().join("w.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE w (state TEXT NOT NULL OPTIONS(matches='State'), all_workers BIGINT NOT NULL OPTIONS(matches='All workers'), \
+         actors BIGINT NOT NULL OPTIONS(matches='Actors')) WITH (files = 'report.csv');",
+    )
+    .unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("report.csv               GAP"), "{text}");
+    assert!(text.contains("`state` (TEXT): no column of this file binds"), "{text}");
+    assert!(text.contains("the file has [\"col_1\", \"col_2\", \"col_3\"]"), "{text}");
+    assert!(!text.contains("report.csv#"), "{text}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no lock written"));
 }

@@ -484,6 +484,8 @@ tdy validate data/export.csv                       # spec valid? fingerprint fre
                                                     # does it still parse?
 tdy validate data/export.csv --stamp               # re-fingerprint a hand-edited
                                                     # spec against the current file
+tdy profile data/export.csv                        # what each column holds, over
+                                                    # the whole file; writes nothing
 tdy draft exports/*.csv > sales.tdy.sql            # scaffold a target from the
                                                     # pile, for you to edit
 tdy fit sales.tdy.sql exports/2025-01.csv          # plan a spec that lands on
@@ -500,7 +502,7 @@ tdy mcp --root exports/                            # serve the tools over MCP
                                                     # for AI agents (stdio)
 ```
 
-`sniff`, `fit` and `check` take a global `--json` for machine-readable output:
+`sniff`, `fit`, `check` and `profile` take a global `--json` for machine-readable output:
 the same facts as the text, structured — a gap comes back with the column, the
 names that were tried, the file's own header, and the remedy, so a script or
 an agent can act on it instead of re-parsing prose.
@@ -888,6 +890,68 @@ conformance already proved every member has an identical schema, the union is
 a concatenation — there is nothing to coerce, and no chance of the silent
 Int64-plus-Utf8-becomes-Utf8 widening an ordinary `UNION ALL` would do.
 
+### What a column holds: `tdy profile`
+
+Every judgement left to a person — a `matches` clause, a `date_order`, which
+of two columns is the amount — used to be made from the first rows of the
+file, and the first rows are exactly where the trouble is not. `tdy profile`
+reads the whole file in the frame tdy would read it with (the sidecar's, or
+the sniffer's when there is none) and says, per column, what is there:
+
+```bash
+$ tdy profile testdata/drifting_exports/2025-08.csv
+testdata/drifting_exports/2025-08.csv: 4 rows, the whole table; 4 column(s); frame: sniffed (no sidecar; heuristics only, not saved)
+  #  column  non-empty  empty  distinct  min         max         most frequent shape
+  1  Datum           4      0         1  31.08.2025  31.08.2025  99.99.9999 (100.0%)
+  2  Region          4      0         4  Nord        West        Aa+ (100.0%)
+  3  Betrag          4      0         4  1'800.00    1'830.00    9'999.99 (100.0%)
+  4  Betrag          4      0         4  1'945.80    1'978.23    9'999.99 (100.0%)
+```
+
+That is the member `tdy fit` refused for having two `Betrag` columns, under the
+file's own spelling, and the second runs about 8% above the first. Which one
+is the amount is still your sentence to write — the profile infers nothing,
+writes nothing, and nothing in tdy reads one to change a spec.
+
+A *shape* is the value with every digit a `9` and every letter an `A` or `a`
+(runs of one case collapse to `A+`/`a+`, digit runs past eight to `9+`), which
+is what makes a format drifting halfway down a column visible.
+`testdata/profile_mixed_dates.csv` hides six dotted dates after row 60:
+
+```bash
+$ tdy profile testdata/profile_mixed_dates.csv --head 50
+testdata/profile_mixed_dates.csv: first 50 rows only (--head) — NOT the whole table; 3 column(s); frame: sniffed (no sidecar; heuristics only, not saved)
+  #  column  non-empty  empty  distinct  min         max         most frequent shape
+  1  Datum          50      0        50  2025-01-01  2025-02-22  9999-99-99 (100.0%)
+  2  Region         50      0         4  Nord        West        Aa+ (100.0%)
+  3  Betrag         48      2        48  1'201.50    1'250.50    9'999.99 (100.0%)
+$ tdy profile testdata/profile_mixed_dates.csv --column Datum
+testdata/profile_mixed_dates.csv: 100 rows, the whole table; 3 column(s); frame: sniffed (no sidecar; heuristics only, not saved)
+column `Datum` (position 1): 100 non-empty, 0 empty, 100 distinct
+  min  01.03.2025
+  max  2025-04-10
+top values:
+  01.03.2025  1  1.0%
+  02.03.2025  1  1.0%
+  03.03.2025  1  1.0%
+  04.03.2025  1  1.0%
+  05.03.2025  1  1.0%
+shapes:
+  9999-99-99  94   94.0%  2025-01-01
+  99.99.9999   6    6.0%  01.03.2025
+```
+
+`--column` gives one column's five most frequent values and every shape with
+an example (`--column '#4'` names one by position when two share a name);
+`--sheet` and `--rows 6-9` profile one sheet or one stacked table (a sheet's rows
+are its own row numbers, as Excel shows them), and `--pointer /q2` one record array
+of a JSON document that holds several. Past 10,000
+distinct values a column reports a floor and no top five, because an
+approximate count is not one anyone could check. Text is read in one streamed
+pass, so a 50 MB file profiles in about 12 MB of memory. The same profile is
+`.profile` in the console, `p` on a file or a member in the workbench, and the
+`profile` tool over MCP.
+
 ## For humans: `tdy ui`
 
 ```bash
@@ -997,7 +1061,7 @@ sheet_name = "Umsatz"
 
 [[spec.transforms]]         # applied in order, on raw strings
 op = "skip_rows"            # skip_rows | promote_header | drop_rows_matching
-head = 3                    # | fill_down | unpivot
+head = 3                    # | fill_down | remove_empty | unpivot
 tail = 1
 
 [[spec.transforms]]
@@ -1090,6 +1154,14 @@ Details worth knowing:
   chrono's specifier already means; the option exists for the scales it does
   not spell. It requires `format = "%s"` beside it, so the two cannot
   disagree about how to read one value.
+- **`year_pivot` decides the century of a two-digit year.** Under `%y`, a
+  year below the pivot is 20xx and one at or above it 19xx:
+  `parse = { year_pivot = 30 }` on `dtype = { type = "date", format =
+  "%d.%m.%y" }` reads `01.02.29` as 2029-02-01 and `01.02.45` as 1945-02-01.
+  Unset keeps chrono's window (1970–2069), which reads that `45` as 2045 — a
+  birth year a century late. Only on a `date` or `timestamp` read with `%y`,
+  and never inferred: the file does not say which century it means. A target
+  cannot declare it yet; it is a sidecar field.
 - **`source_name` turns where a file *is* into a column.** The period a
   monthly export covers is very often only in its filename. `from` picks
   `file_stem`, `file_name`, `sheet` or `path`, and an optional `pattern`'s
@@ -1125,6 +1197,16 @@ Details worth knowing:
   written at the *bottom* of its group. Both readings are valid for a file
   with blanks in a category column, which is why the direction is declared and
   never inferred.
+- **`remove_empty` drops rows that hold nothing.** A row whose every cell is
+  empty after trimming — the `;;;` spacer an export writes between groups —
+  is otherwise a record of nulls that `count(*)` counts. It takes no options,
+  it drops rows only, and it must come after `skip_rows`, `promote_header` and
+  `transpose`, since before them it would change what they count, and before
+  `source_name` or a valued `constant`, since after them no row is empty. Its
+  order against `fill_down` matters: filling first puts the label into a
+  spacer row, which then survives as a record with no amount. Never inferred;
+  for an all-empty *column*, the sniffer's note says to leave it out of
+  `columns`.
 - **`columns` is a projection.** There is no drop or rename op; `source` →
   `name` is the only renaming, and unlisted columns do not appear.
 

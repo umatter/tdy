@@ -167,6 +167,22 @@ fn tool_list(allow_accept: bool) -> Value {
             }, "required": ["path"]},
         },
         {
+            "name": "profile",
+            "description": "Read-only: what each column of a file holds — non-empty and empty \
+                counts, distinct values (a floor past 10000, with no top values), min and max \
+                of the raw strings, the five most frequent values, and the shapes the values \
+                take (`9999-99-99`, `Aa+`). Over the whole file unless `head` is given, in the \
+                frame a fresh sidecar gives (or the sniffer's, heuristics only). Evidence for \
+                a judgement such as a `matches` clause or a date order; writes nothing.",
+            "inputSchema": {"type": "object", "properties": {
+                "path": path_arg("The data file, or a member reference (`book.xlsx#Q1`, `report.csv#2`)."),
+                "sheet": {"type": "string", "description": "One sheet of a workbook."},
+                "rows": {"type": "string", "description": "One block of rows, 1-based and inclusive: `6-9`."},
+                "head": {"type": "integer", "description": "Profile only the first N rows; the answer says complete: false."},
+                "pointer": {"type": "string", "description": "The record array of a JSON document to read (`/q2`), when it holds several."}
+            }, "required": ["path"]},
+        },
+        {
             "name": "draft",
             "description": "Draft a CREATE TABLE target declaration from a pile of files: \
                 every column name in every spelling seen, merged types, per-file presence. \
@@ -239,6 +255,7 @@ impl McpServer {
             "check" => self.check(args),
             "query" => self.query(args).await,
             "validate" => self.validate(args),
+            "profile" => self.profile(args),
             other => bail!("unknown tool {other:?}"),
         }
     }
@@ -374,6 +391,25 @@ impl McpServer {
             "row_count": total,
             "truncated": total > rows.len(),
         }))
+    }
+
+    /// Read-only. A member reference is split by `profile::resolve`, which
+    /// confines every candidate data file before reading a sidecar beside
+    /// it, and confines the answer again.
+    fn profile(&self, args: &Value) -> Result<Value> {
+        let raw = str_arg(args, "path")?;
+        // Confined before any sidecar beside a candidate is read.
+        let (file, sheet, region) = crate::profile::resolve(&self.root.join(raw), Some(&self.root), self.cfg.limits)?;
+        let rows = args["rows"].as_str().map(crate::profile::parse_rows).transpose()?;
+        let req = crate::profile::Request {
+            sheet: args["sheet"].as_str().map(String::from),
+            rows,
+            head: args["head"].as_u64(),
+            pointer: args["pointer"].as_str().map(String::from),
+        };
+        let mut p = crate::profile::profile_member(&file, sheet, region, &req, self.cfg.limits)?;
+        p.path = raw.to_string();
+        Ok(serde_json::to_value(p)?)
     }
 
     fn validate(&self, args: &Value) -> Result<Value> {

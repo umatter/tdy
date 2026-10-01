@@ -24,6 +24,18 @@ pub enum Command {
     Ls { dir: Option<String> },
     Cd { dir: String },
     Show { file: String, sheet: Option<String> },
+    /// `.profile FILE [--sheet NAME] [--rows A-B] [--column NAME] [--head N]`.
+    Profile {
+        file: String,
+        sheet: Option<String>,
+        /// A block, 1-based and inclusive, as a region member's title
+        /// counts it.
+        rows: Option<(u64, u64)>,
+        column: Option<String>,
+        head: Option<u64>,
+        /// The record array of a JSON document (`/q2`).
+        pointer: Option<String>,
+    },
     Edit { file: String },
     Help { command: Option<String> },
     /// Discard a half-typed SQL statement (console-only — a workbench
@@ -42,6 +54,8 @@ pub enum ParseError {
     Unexpected { command: &'static str, token: String },    // `.schema foo`, `.sniff a b`
     UnknownFlag { command: &'static str, flag: String },
     FlagNeedsValue { command: &'static str, flag: String },
+    /// A flag whose value is not of the kind it takes: `--head ten`.
+    BadValue { command: &'static str, flag: String, value: String, want: &'static str },
     UnterminatedQuote,
 }
 
@@ -58,6 +72,9 @@ impl fmt::Display for ParseError {
             }
             ParseError::FlagNeedsValue { command, flag } => {
                 write!(f, "`.{command} {flag}` needs a value")
+            }
+            ParseError::BadValue { command, flag, value, want } => {
+                write!(f, "`.{command} {flag}` wants {want}, not `{value}`")
             }
             ParseError::UnterminatedQuote => write!(f, "unterminated quote"),
         }
@@ -259,6 +276,35 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
             a.exactly(&["FILE"])?;
             Command::Show { file: a.positional[0].clone(), sheet: a.value("--sheet") }
         }
+        "profile" => {
+            let a = Args::collect("profile", args, &[], &["--sheet", "--rows", "--column", "--head", "--pointer"])?;
+            a.exactly(&["FILE"])?;
+            let bad = |flag: &str, value: String, want: &'static str| ParseError::BadValue {
+                command: "profile",
+                flag: flag.to_string(),
+                value,
+                want,
+            };
+            let head = match a.value("--head") {
+                Some(v) => Some(v.parse::<u64>().map_err(|_| bad("--head", v, "a number of rows"))?),
+                None => None,
+            };
+            let rows = match a.value("--rows") {
+                Some(v) => Some(
+                    crate::profile::parse_rows(&v)
+                        .map_err(|_| bad("--rows", v, "START-END, 1-based and inclusive"))?,
+                ),
+                None => None,
+            };
+            Command::Profile {
+                file: a.positional[0].clone(),
+                sheet: a.value("--sheet"),
+                rows,
+                column: a.value("--column"),
+                head,
+                pointer: a.value("--pointer"),
+            }
+        }
         "edit" => {
             let a = Args::collect("edit", args, &[], &[])?;
             a.exactly(&["FILE"])?;
@@ -404,6 +450,51 @@ mod tests {
         assert_eq!(
             parse(".show book.xlsx --sheet"),
             Err(ParseError::FlagNeedsValue { command: "show", flag: "--sheet".into() })
+        );
+    }
+
+    #[test]
+    fn profile_takes_sheet_rows_column_and_head() {
+        assert_eq!(
+            p(".profile book.xlsx --sheet Q1 --rows 6-9 --column 'Betrag CHF' --head 10"),
+            Command::Profile {
+                file: "book.xlsx".into(),
+                sheet: Some("Q1".into()),
+                rows: Some((6, 9)),
+                column: Some("Betrag CHF".into()),
+                head: Some(10),
+                pointer: None,
+            }
+        );
+        assert_eq!(
+            p(".profile a.csv"),
+            Command::Profile { file: "a.csv".into(), sheet: None, rows: None, column: None, head: None, pointer: None }
+        );
+        assert_eq!(
+            p(".profile doc.json --pointer /q2"),
+            Command::Profile {
+                file: "doc.json".into(),
+                sheet: None,
+                rows: None,
+                column: None,
+                head: None,
+                pointer: Some("/q2".into()),
+            }
+        );
+        assert_eq!(parse(".profile"), Err(ParseError::Missing { command: "profile", what: "FILE" }));
+        assert_eq!(
+            parse(".profile a.csv --head ten"),
+            Err(ParseError::BadValue {
+                command: "profile",
+                flag: "--head".into(),
+                value: "ten".into(),
+                want: "a number of rows",
+            })
+        );
+        assert!(matches!(parse(".profile a.csv --rows 9-6"), Err(ParseError::BadValue { .. })));
+        assert_eq!(
+            parse(".profile a.csv --head ten").unwrap_err().to_string(),
+            "`.profile --head` wants a number of rows, not `ten`"
         );
     }
 

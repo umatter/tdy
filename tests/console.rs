@@ -1131,3 +1131,76 @@ async fn accept_names_a_member_by_absolute_path_under_an_absolute_glob() {
     let Payload::Fitted(r) = &o.payload else { panic!("{}", o.text) };
     assert!(r.members[0].accepted, "{}", o.text);
 }
+
+/// `.profile` prints exactly what `tdy profile` prints — the whole table,
+/// and one column's detail under `--head` — carries the profile as its
+/// payload, and writes nothing beside the file.
+#[tokio::test]
+async fn profile_text_equals_the_binary() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/profile_mixed_dates.csv"),
+        d.path().join("mixed.csv"),
+    )
+    .unwrap();
+    let mut s = session(d.path()).await;
+    for args in [
+        vec!["mixed.csv"],
+        vec!["mixed.csv", "--column", "Datum", "--head", "10"],
+        vec!["mixed.csv", "--column", "Datum"],
+    ] {
+        let cli = tdy(d.path(), &[&["profile"], args.as_slice()].concat());
+        assert!(cli.status.success(), "{}", String::from_utf8_lossy(&cli.stderr));
+        let o = s.run(&format!(".profile {}", args.join(" ")), None).await;
+        assert!(o.ok, "{}", o.text);
+        assert_eq!(o.text, String::from_utf8_lossy(&cli.stdout), "{args:?}");
+        let Payload::Profile(p) = o.payload else { panic!("{:?}", o.payload) };
+        assert_eq!(p.columns.len(), 3);
+    }
+    let o = s.run(".profile mixed.csv --column Nope", None).await;
+    assert!(!o.ok && o.text.contains("no column `Nope`"), "{}", o.text);
+    let left: Vec<String> =
+        std::fs::read_dir(d.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into()).collect();
+    assert_eq!(left, ["mixed.csv"], "a profile writes nothing");
+}
+
+/// `.profile` is confined like every other command that names a path.
+#[tokio::test]
+async fn profile_refuses_a_path_outside_the_root() {
+    // A real file beside the root, so a refusal can only be confinement's.
+    let outer = tempfile::tempdir().unwrap();
+    let root = outer.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(outer.path().join("secret.csv"), "a,b\n1,2\n").unwrap();
+    std::fs::copy(corpus().join("2025-01.csv"), root.join("2025-01.csv")).unwrap();
+    let mut s = session(&root).await;
+    for line in [
+        ".profile ../secret.csv".to_string(),
+        format!(".profile {}", outer.path().join("secret.csv").display()),
+        ".profile ../secret.csv#2".to_string(),
+    ] {
+        let o = s.run(&line, None).await;
+        assert!(!o.ok, "{line}: {}", o.text);
+        assert!(o.text.contains("outside"), "{line}: {}", o.text);
+    }
+    assert!(s.run(".profile 2025-01.csv", None).await.ok);
+}
+
+/// `.draft --to` writes globs relative to where the target lands, not to
+/// the session's cwd: drafting `data/2025-01.csv` into `sub/t.tdy.sql` and
+/// fitting that target used to fail "no files matched".
+#[tokio::test]
+async fn draft_to_another_directory_writes_globs_that_fit_from_there() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("data")).unwrap();
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    std::fs::copy(corpus().join("2025-01.csv"), d.path().join("data/2025-01.csv")).unwrap();
+    let mut s = session(d.path()).await;
+    let o = s.run(".draft data/2025-01.csv --to sub/t.tdy.sql", None).await;
+    assert!(o.ok, "{}", o.text);
+    let o = s.run(".fit sub/t.tdy.sql --dry-run", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(!o.text.contains("no files matched"), "{}", o.text);
+    let Payload::Fitted(r) = o.payload else { panic!("{}", o.text) };
+    assert_eq!(r.members.len(), 1, "{}", o.text);
+}

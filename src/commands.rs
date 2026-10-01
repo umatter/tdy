@@ -374,3 +374,237 @@ pub fn describe_dtype(d: &DType) -> String {
         },
     }
 }
+
+/// `tdy profile`'s text, and `.profile`'s. `shown` is the file as the
+/// caller typed it. Without `column`: one line per column. With it: that
+/// column's top values and every shape with count, share and an example.
+///
+/// The first line says what was read — and, under `--head`, that it was
+/// not the whole file, before anything else is said.
+pub fn profile_text(shown: &str, p: &crate::profile::Profile, column: Option<&str>) -> Result<String> {
+    use crate::profile::Distinct;
+    let mut text = String::new();
+    writeln!(text, "{}", profile_heading(shown, p))?;
+    for n in &p.notes {
+        writeln!(text, "note: {n}")?;
+    }
+
+    let Some(want) = column else {
+        let rows = profile_summary_rows(p);
+        let head = PROFILE_COLUMNS;
+        let widths: Vec<usize> = (0..8)
+            .map(|i| rows.iter().map(|r| r[i].chars().count()).chain([head[i].chars().count()]).max().unwrap_or(0))
+            .collect();
+        let line = |cells: &[String]| -> String {
+            let mut l = String::new();
+            for (i, c) in cells.iter().enumerate() {
+                let pad = widths[i].saturating_sub(c.chars().count());
+                if PROFILE_RIGHT[i] {
+                    l.push_str(&format!("  {}{c}", " ".repeat(pad)));
+                } else if i + 1 == cells.len() {
+                    l.push_str(&format!("  {c}"));
+                } else {
+                    l.push_str(&format!("  {c}{}", " ".repeat(pad)));
+                }
+            }
+            l.trim_end().to_string()
+        };
+        writeln!(text, "{}", line(&head.map(String::from)))?;
+        for r in &rows {
+            writeln!(text, "{}", line(r))?;
+        }
+        return Ok(text);
+    };
+
+    let c = pick_column(p, want)?;
+    writeln!(
+        text,
+        "column `{}` (position {}): {} non-empty, {} empty, {} distinct",
+        shown_value(&c.name),
+        c.position,
+        c.non_empty,
+        c.empty,
+        distinct_text(&c.distinct)
+    )?;
+    writeln!(text, "  min  {}", c.min.as_deref().map(shown_value).unwrap_or_else(|| "-".into()))?;
+    writeln!(text, "  max  {}", c.max.as_deref().map(shown_value).unwrap_or_else(|| "-".into()))?;
+    match c.distinct {
+        Distinct::AtLeast(n) => writeln!(
+            text,
+            "top values: not given — more than {n} distinct values, and an approximate count \
+             is not one anyone could check"
+        )?,
+        Distinct::Exact(_) if c.top.is_empty() => writeln!(text, "top values: none")?,
+        Distinct::Exact(_) => {
+            writeln!(text, "top values:")?;
+            let shown: Vec<String> = c.top.iter().map(|(v, _)| clip(&shown_value(v), 40)).collect();
+            let w = shown.iter().map(|v| v.chars().count()).max().unwrap_or(0);
+            let nw = c.top.iter().map(|(_, n)| n.to_string().len()).max().unwrap_or(0);
+            for (v, (_, n)) in shown.iter().zip(&c.top) {
+                let pad = w.saturating_sub(v.chars().count());
+                writeln!(text, "  {v}{}  {n:>nw$}  {}", " ".repeat(pad), share(*n, c.non_empty))?;
+            }
+        }
+    }
+    if c.shapes.is_empty() {
+        writeln!(text, "shapes: none")?;
+    } else {
+        if c.shapes_complete {
+            writeln!(text, "shapes:")?;
+        } else {
+            writeln!(
+                text,
+                "shapes — INCOMPLETE: shapes first seen past the {}th were not tracked and are \
+                 counted only in {}, so which shape is most frequent is not known:",
+                crate::profile::MAX_SHAPE_TRACK,
+                crate::profile::OTHER_SHAPES
+            )?;
+        }
+        // Patterns whole here: the detail is where a long one is read.
+        let w = c.shapes.iter().map(|s| s.pattern.chars().count()).max().unwrap_or(0);
+        let nw = c.shapes.iter().map(|s| s.count.to_string().len()).max().unwrap_or(0);
+        for s in &c.shapes {
+            let pad = w.saturating_sub(s.pattern.chars().count());
+            let pct = share(s.count, c.non_empty);
+            writeln!(
+                text,
+                "  {}{}  {:>nw$}  {pct:>6}  {}",
+                s.pattern,
+                " ".repeat(pad),
+                s.count,
+                clip(&shown_value(&s.example), 40)
+            )?;
+        }
+    }
+    Ok(text)
+}
+
+/// The summary table's header, shared with the workbench's Profile view.
+pub const PROFILE_COLUMNS: [&str; 8] =
+    ["#", "column", "non-empty", "empty", "distinct", "min", "max", "most frequent shape"];
+/// Which of [`PROFILE_COLUMNS`] are numbers, right-aligned.
+pub const PROFILE_RIGHT: [bool; 8] = [true, false, true, true, true, false, false, false];
+
+/// One summary row per column, as the CLI prints it and the workbench
+/// draws it — one place, so the two cannot say different things. A column
+/// whose shapes are not complete has no most frequent shape to show.
+pub fn profile_summary_rows(p: &crate::profile::Profile) -> Vec<[String; 8]> {
+    p.columns
+        .iter()
+        .map(|c| {
+            let shape = if !c.shapes_complete {
+                format!("(shapes past {} not tracked)", crate::profile::MAX_SHAPE_TRACK)
+            } else {
+                c.shapes
+                    .first()
+                    .map(|s| format!("{} ({})", clip(&s.pattern, 20), share(s.count, c.non_empty)))
+                    .unwrap_or_else(|| "-".into())
+            };
+            [
+                c.position.to_string(),
+                clip(&shown_value(&c.name), 24),
+                c.non_empty.to_string(),
+                c.empty.to_string(),
+                distinct_text(&c.distinct),
+                clip(&c.min.as_deref().map(shown_value).unwrap_or_else(|| "-".into()), 20),
+                clip(&c.max.as_deref().map(shown_value).unwrap_or_else(|| "-".into()), 20),
+                shape,
+            ]
+        })
+        .collect()
+}
+
+fn distinct_text(d: &crate::profile::Distinct) -> String {
+    match d {
+        crate::profile::Distinct::Exact(n) => n.to_string(),
+        crate::profile::Distinct::AtLeast(n) => format!("{n}+"),
+    }
+}
+
+/// `n` of `of`, as a percentage with one decimal; `-` of nothing.
+pub fn share(n: u64, of: u64) -> String {
+    if of == 0 { "-".to_string() } else { format!("{:.1}%", n as f64 * 100.0 / of as f64) }
+}
+
+/// A raw value as one line of text: a line break inside it is `↵`, so a
+/// quoted multi-line cell cannot break a table apart.
+pub fn shown_value(v: &str) -> String {
+    v.replace("\r\n", "↵").replace(['\n', '\r'], "↵")
+}
+
+/// The first line of a profile: what was read, how much of it — under
+/// `--head`, that it was NOT the whole table, before anything else is
+/// said — and in which frame. Shared with the workbench's Profile view.
+pub fn profile_heading(shown: &str, p: &crate::profile::Profile) -> String {
+    let mut what = shown.to_string();
+    if let Some(s) = &p.sheet {
+        what.push_str(&format!(", sheet {s:?}"));
+    }
+    if let Some(r) = &p.range {
+        what.push_str(&format!(", range {r}"));
+    }
+    if let Some(w) = &p.window {
+        what.push_str(&format!(", rows {}\u{2013}{}", w.start + 1, w.end));
+    }
+    if let Some(ptr) = &p.pointer {
+        what.push_str(&format!(", record array {ptr}"));
+        if p.pointer_candidates.len() > 1 {
+            what.push_str(&format!(
+                " — one of {} candidates ({}); --pointer picks another",
+                p.pointer_candidates.len(),
+                p.pointer_candidates.join(", ")
+            ));
+        }
+    }
+    let extent = if p.complete {
+        format!("{} rows, the whole table", p.rows)
+    } else {
+        format!("first {} rows only (--head) — NOT the whole table", p.rows)
+    };
+    format!("{what}: {extent}; {} column(s); frame: {}", p.columns.len(), p.frame)
+}
+
+/// The column `--column` names: by the file's own spelling, `#N` by
+/// position, or `\#N` for a column literally named `#N`. Two columns with
+/// one name are refused, naming both positions — picking one would be a
+/// guess.
+pub fn pick_column<'a>(p: &'a crate::profile::Profile, want: &str) -> Result<&'a crate::profile::ColumnProfile> {
+    let name = match want.strip_prefix('\\') {
+        Some(literal) if literal.starts_with('#') => literal,
+        _ => {
+            if let Some(n) = want.strip_prefix('#').and_then(|n| n.parse::<usize>().ok()) {
+                return p
+                    .columns
+                    .iter()
+                    .find(|c| c.position == n)
+                    .ok_or_else(|| anyhow!("no column #{n} — there are {}", p.columns.len()));
+            }
+            want
+        }
+    };
+    let hits: Vec<&crate::profile::ColumnProfile> = p.columns.iter().filter(|c| c.name == name).collect();
+    match hits.as_slice() {
+        [one] => Ok(one),
+        [] => {
+            let names: Vec<String> = p.columns.iter().map(|c| format!("`{}`", c.name)).collect();
+            Err(anyhow!("no column `{name}` — the columns are {}", names.join(", ")))
+        }
+        several => {
+            let at: Vec<String> = several.iter().map(|c| format!("--column '#{}'", c.position)).collect();
+            Err(anyhow!(
+                "{} columns are called `{name}` — name one by position: {}",
+                several.len(),
+                at.join(" or ")
+            ))
+        }
+    }
+}
+
+/// At most `n` characters, an ellipsis marking a cut.
+pub fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>())
+    }
+}

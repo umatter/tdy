@@ -1023,18 +1023,13 @@ fn json_kind(v: &serde_json::Value) -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Turn the first `n` rows of a table into one header, as `promote_header`
-/// means it.
+/// means it, returning it beside the header **before** duplicate names
+/// were disambiguated — see `RawTable::header_origin`.
 ///
-/// Factored out so the streaming executor in `stream` builds headers with
-/// *this* code rather than a copy of it: a header that differed between the
-/// two paths would rename columns, which is the quietest way to return the
-/// wrong data.
-pub(crate) fn promote_header_from(header_rows: Vec<Vec<String>>, join: &str) -> Vec<String> {
-    promote_header_recording(header_rows, join).0
-}
-
-/// As [`promote_header_from`], but also returning the header **before**
-/// duplicate names were disambiguated — see `RawTable::header_origin`.
+/// Shared with the streaming executor in `stream`, so it builds headers
+/// with *this* code rather than a copy of it: a header that differed
+/// between the two paths would rename columns, which is the quietest way to
+/// return the wrong data.
 pub(crate) fn promote_header_recording(
     header_rows: Vec<Vec<String>>,
     join: &str,
@@ -1080,7 +1075,7 @@ pub(crate) fn promote_header_recording(
 }
 
 /// A row whose every cell is empty or whitespace.
-fn is_blank_row(cells: &[String]) -> bool {
+pub(crate) fn is_blank_row(cells: &[String]) -> bool {
     cells.iter().all(|c| c.trim().is_empty())
 }
 
@@ -1093,7 +1088,9 @@ fn is_blank_row(cells: &[String]) -> bool {
 /// after a `drop_rows_matching` still removes the blank row it counted,
 /// where a skip at the end of the leading run had removed a data row in its
 /// place. A body transform that sits before that last framing transform
-/// still sees blank rows, as every transform did before the skip existed.
+/// still sees blank rows, as every transform did before the skip existed —
+/// except `fill_down`, which leaves a blank row of such a table blank (the
+/// carry runs on past it), so it still reaches this point and is dropped.
 /// Kept, a blank row became an all-NULL record that `count(*)` counted, or
 /// a copy of the row above it under `fill_down`; a text file's blank lines
 /// never reach a table at all, and a region read skips the one inside its
@@ -1104,12 +1101,23 @@ pub fn apply_spec_transforms(table: &mut RawTable, transforms: &[Transform]) -> 
     let framing = transforms
         .iter()
         .rposition(|t| {
-            matches!(t, Transform::Transpose | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
+            matches!(t, Transform::Transpose {} | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
         })
         .map_or(0, |i| i + 1);
     apply_transforms(table, &transforms[..framing])?;
     if table.blank_rows_are_gaps {
         table.rows.retain(|r| !is_blank_row(r));
+    }
+    // Every body transform sees rows after the ragged policy, as the
+    // streaming reader's do — it applies the policy as it reads. Most body
+    // transforms rectangularise on their own (through `ensure_header`), but a
+    // whole-row `drop_rows_matching` and `remove_empty` do not, and on a
+    // headerless `truncate_extra` file they tested `;;5` where the stream
+    // tested the `;` the policy leaves: two executors, two row counts. After
+    // the framing, so `skip_rows` still removes title rows before the policy
+    // judges the widths.
+    if framing < transforms.len() {
+        table.rectangularize()?;
     }
     apply_transforms(table, &transforms[framing..])
 }
@@ -1178,6 +1186,12 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     .iter()
                     .map(|c| index.get(c.as_str()).copied().ok_or_else(|| table.missing_column(c)))
                     .collect::<Result<_>>()?;
+                // On a sheet a row whose every cell is empty is a gap, not a
+                // record (`blank_rows_are_gaps`): it is left blank, the carry
+                // runs on past it, and the drop point removes it. Filled, it
+                // became a record of the label alone when this `fill_down`
+                // sat before a later `skip_rows`, ahead of that drop point.
+                let gaps = table.blank_rows_are_gaps;
                 for idx in resolved {
                     let mut last = String::new();
                     // One loop, two directions: filling up is filling down
@@ -1188,6 +1202,9 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                         FillDirection::Up => Box::new(table.rows.iter_mut().rev()),
                     };
                     for row in rows {
+                        if gaps && is_blank_row(row) {
+                            continue;
+                        }
                         let Some(cell) = row.get_mut(idx) else { continue };
                         if cell.trim().is_empty() {
                             cell.clone_from(&last);
@@ -1197,7 +1214,8 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     }
                 }
             }
-            Transform::Transpose => {
+            Transform::RemoveEmpty {} => table.rows.retain(|r| !is_blank_row(r)),
+            Transform::Transpose {} => {
                 // A partial read has not seen every row, and every row it has
                 // not seen is a *column* of the result — not a few missing
                 // records but a table of the wrong shape. `skip_rows`'s tail
@@ -1757,7 +1775,7 @@ pub(crate) fn build_column_at(
                     let micros = epoch_micros(s, unit)?;
                     Ok::<i32, anyhow::Error>(micros.div_euclid(86_400_000_000) as i32)
                 }),
-                None => parse_all!(i32, |s: &str| parse_date_days(s, format)),
+                None => parse_all!(i32, |s: &str| parse_date_days(s, format, p.year_pivot)),
             };
             (ArrowType::Date32, Arc::new(Date32Array::from(out)))
         }
@@ -1775,7 +1793,9 @@ pub(crate) fn build_column_at(
                 // An epoch is a count, not a rendering: it has no format to
                 // parse and no timezone to place it in — it is already UTC.
                 Some(unit) => parse_all!(i64, |s: &str| epoch_micros(s, unit)),
-                None => parse_all!(i64, |s: &str| parse_timestamp_micros(s, format, offset)),
+                None => {
+                    parse_all!(i64, |s: &str| parse_timestamp_micros(s, format, offset, p.year_pivot))
+                }
             };
             // Store the offset in the one spelling every Arrow consumer
             // parses: "Z", "utc" and "GMT" are readable in a sidecar but not
@@ -1927,7 +1947,25 @@ fn epoch() -> NaiveDate {
     NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 is a date")
 }
 
-fn parse_date_days(s: &str, format: &str) -> Result<i32> {
+/// Move a `%y` year into the declared century window.
+///
+/// chrono has already read the two digits and put them in its own window
+/// (1970–2069); the last two digits of that year are the ones the value
+/// wrote, so re-centring from them changes the century and nothing else.
+/// Done on the parsed date, never by rewriting the string. A date that does
+/// not exist in the new century (29 February '00 read as 1900) is an error,
+/// not the 1st of March.
+fn recentre_year(date: NaiveDate, s: &str, format: &str, pivot: Option<u8>) -> Result<NaiveDate> {
+    use chrono::Datelike;
+    let Some(pivot) = pivot.filter(|_| format.contains("%y")) else { return Ok(date) };
+    let yy = date.year().rem_euclid(100);
+    let year = if yy < i32::from(pivot) { 2000 + yy } else { 1900 + yy };
+    date.with_year(year).ok_or_else(|| {
+        anyhow!("{s:?} read with year_pivot {pivot} is in {year}, where that date does not exist")
+    })
+}
+
+fn parse_date_days(s: &str, format: &str, pivot: Option<u8>) -> Result<i32> {
     let date = NaiveDate::parse_from_str(s, format)
         .or_else(|e| {
             // Month-year forms ("%b %Y" on "Jan 2025") lack a day; pin day 1.
@@ -1940,6 +1978,7 @@ fn parse_date_days(s: &str, format: &str) -> Result<i32> {
         })
         .map_err(|e| anyhow!("date does not match format {format:?}: {e}"))?;
     check_year(s, format)?;
+    let date = recentre_year(date, s, format, pivot)?;
     Ok((date - epoch()).num_days() as i32)
 }
 
@@ -1976,6 +2015,7 @@ fn parse_timestamp_micros(
     s: &str,
     format: &str,
     offset: Option<chrono::FixedOffset>,
+    pivot: Option<u8>,
 ) -> Result<i64> {
     use chrono::{DateTime, TimeZone};
 
@@ -1985,7 +2025,14 @@ fn parse_timestamp_micros(
         let dt = DateTime::parse_from_str(s, format)
             .map_err(|e| anyhow!("timestamp does not match format {format:?}: {e}"))?;
         check_year(s, format)?;
-        return Ok(dt.timestamp_micros());
+        let local = dt.naive_local();
+        let local = recentre_year(local.date(), s, format, pivot)?.and_time(local.time());
+        return dt
+            .offset()
+            .from_local_datetime(&local)
+            .single()
+            .map(|t| t.timestamp_micros())
+            .ok_or_else(|| anyhow!("{s:?} does not exist in its own offset"));
     }
 
     let naive = NaiveDateTime::parse_from_str(s, format)
@@ -1996,6 +2043,7 @@ fn parse_timestamp_micros(
         })
         .map_err(|e| anyhow!("timestamp does not match format {format:?}: {e}"))?;
     check_year(s, format)?;
+    let naive = recentre_year(naive.date(), s, format, pivot)?.and_time(naive.time());
 
     match offset {
         // A timezone-bearing Arrow timestamp is a UTC instant. The written
@@ -2145,6 +2193,10 @@ pub struct DroppedRun {
     /// for a sheet, non-empty fields under the blocks' delimiter for text).
     /// Two or more is data-like — see [`Regions::table_shaped`].
     pub widest: usize,
+    /// Fields on its last row, counted as `width` is. A run whose last row
+    /// is as wide as the block directly below it may be that block's header
+    /// run ([`Regions::header_run`]).
+    pub last_width: usize,
 }
 
 /// What [`regions_of`] found: the blocks it kept, and the runs it did not.
@@ -2165,6 +2217,20 @@ pub struct Regions {
     pub window_widths: Vec<usize>,
     /// Each window's widest row, in non-empty fields, beside `windows`.
     pub window_widest: Vec<usize>,
+    /// Each window's own last-row width, beside `windows`: what makes it a
+    /// candidate header run for the window below it ([`Regions::header_run`]).
+    pub window_last_widths: Vec<usize>,
+}
+
+/// The run directly above a window that may be its header run
+/// ([`Regions::header_run`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderRun {
+    /// `dropped[k]`: a run below the three-row minimum.
+    Dropped(usize),
+    /// The window just above, `windows[i - 1]`: title lines and a header
+    /// long enough to be a block of their own.
+    Window,
 }
 
 impl Regions {
@@ -2187,33 +2253,77 @@ impl Regions {
         self.dropped.iter().filter(move |d| d.widest >= 2 || (w > 0 && d.width == w))
     }
 
-    /// The dropped run that may be window `i`'s header, cut off by a blank
-    /// row: the run directly above it (blank lines only between), exactly
-    /// one row, as wide as the window's first row. Its index in `dropped`.
-    /// Whether it *is* the header is the framing step's question: only a
-    /// block with no header of its own adopts one (`fit::frame_blocks`) —
-    /// adopting above a headed block made a same-width data line the header
-    /// and the real header a data row, silently.
-    pub fn severed_header(&self, i: usize) -> Option<usize> {
+    /// The run directly above window `i` (blank lines only between) whose
+    /// LAST row is as wide as the window's first row: the window's header
+    /// run — a header cut off by a blank row, or title lines and the header
+    /// in one run, as official statistics lay them out. Short of the
+    /// three-row minimum it is a dropped run; three rows or more, it is the
+    /// window above. Whether it *is* the header is the framing step's
+    /// question (`fit::frame_blocks`): only a block with no plausible header
+    /// of its own adopts one, and only when the adopted frame's header ends
+    /// on the run's last row — adopting above a headed block made a
+    /// same-width data line the header and the real header a data row,
+    /// silently.
+    pub fn header_run(&self, i: usize) -> Option<HeaderRun> {
         let w = self.windows.get(i)?;
-        let after = if i == 0 { 0 } else { self.windows[i - 1].end };
         let width = *self.window_widths.get(i)?;
-        self.dropped
+        let after = if i == 0 { 0 } else { self.windows[i - 1].end };
+        let nearest = self
+            .dropped
             .iter()
             .enumerate()
             .filter(|(_, d)| d.end <= w.start && d.start >= after)
-            .max_by_key(|(_, d)| d.end)
-            .filter(|(_, d)| d.end - d.start == 1 && d.width > 0 && d.width == width)
-            .map(|(k, _)| k)
+            .max_by_key(|(_, d)| d.end);
+        match nearest {
+            Some((k, d)) => (d.last_width > 0 && d.last_width == width).then_some(HeaderRun::Dropped(k)),
+            None if i > 0 => {
+                (self.window_last_widths[i - 1] > 0 && self.window_last_widths[i - 1] == width)
+                    .then_some(HeaderRun::Window)
+            }
+            None => None,
+        }
     }
 
-    /// Take dropped run `k` into window `i` as its header: the window starts
-    /// at the run's line, the blank lines between inside it (both executors
-    /// skip a blank row inside a window), and the run is no longer dropped.
-    pub fn adopt(&mut self, i: usize, k: usize) {
-        let d = self.dropped.remove(k);
-        self.windows[i].start = d.start;
-        self.window_widest[i] = self.window_widest[i].max(d.widest);
+    /// The first line and the length of window `i`'s header run `h`.
+    pub fn header_run_span(&self, i: usize, h: HeaderRun) -> (u64, u64) {
+        let (start, end) = match h {
+            HeaderRun::Dropped(k) => (self.dropped[k].start, self.dropped[k].end),
+            HeaderRun::Window => (self.windows[i - 1].start, self.windows[i - 1].end),
+        };
+        (start, end - start)
+    }
+
+    /// Take header run `h` into window `i`: the window starts at the run's
+    /// first line, the blank lines between inside it (both executors skip a
+    /// blank row in a window), and the run is no longer dropped — or, for a
+    /// window above, no longer a window of its own. The window keeps its own
+    /// first-row width, so the runs around it are measured against the
+    /// table's width, not a title's. Returns the merged window's index.
+    pub fn adopt(&mut self, i: usize, h: HeaderRun) -> usize {
+        match h {
+            HeaderRun::Dropped(k) => {
+                let d = self.dropped.remove(k);
+                self.windows[i].start = d.start;
+                self.window_widest[i] = self.window_widest[i].max(d.widest);
+                i
+            }
+            HeaderRun::Window => {
+                let above = self.windows.remove(i - 1);
+                self.window_widths.remove(i - 1);
+                let widest = self.window_widest.remove(i - 1);
+                self.window_last_widths.remove(i - 1);
+                let j = i - 1;
+                self.windows[j].start = above.start;
+                self.window_widest[j] = self.window_widest[j].max(widest);
+                if j == 0 {
+                    self.block_width = self.window_widths[0];
+                }
+                for (n, w) in self.windows.iter_mut().enumerate() {
+                    w.ordinal = (n + 1) as u32;
+                }
+                j
+            }
+        }
     }
 
     /// Keep only the blocks that passed the gates (`passed[i]` for
@@ -2230,10 +2340,11 @@ impl Regions {
         let all: Vec<(RowWindow, DroppedRun, bool)> = self
             .windows
             .iter()
-            .zip(self.window_widths.iter().zip(&self.window_widest))
+            .zip(self.window_widths.iter().zip(&self.window_widest).zip(&self.window_last_widths))
             .zip(passed)
-            .map(|((w, (width, widest)), ok)| {
-                (*w, DroppedRun { start: w.start, end: w.end, width: *width, widest: *widest }, *ok)
+            .map(|((w, ((width, widest), last)), ok)| {
+                let d = DroppedRun { start: w.start, end: w.end, width: *width, widest: *widest, last_width: *last };
+                (*w, d, *ok)
             })
             .collect();
         let kept: Vec<&(RowWindow, DroppedRun, bool)> = all.iter().filter(|x| x.2).collect();
@@ -2247,6 +2358,7 @@ impl Regions {
             block_width: kept[0].1.width,
             window_widths: kept.iter().map(|x| x.1.width).collect(),
             window_widest: kept.iter().map(|x| x.1.widest).collect(),
+            window_last_widths: kept.iter().map(|x| x.1.last_width).collect(),
             windows: kept
                 .iter()
                 .enumerate()
@@ -2340,6 +2452,12 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     // the delimiter is known — which is only after the split has said which
     // runs are blocks. O(runs), not O(file).
     let mut heads: Vec<String> = Vec::new();
+    // And its last line, for the same reason: a run whose last row is as
+    // wide as the block below may be that block's header run. The current
+    // run's last line is kept in one reused buffer, copied out only when
+    // the run closes.
+    let mut tails: Vec<String> = Vec::new();
+    let mut last_line: Vec<u8> = Vec::new();
     // Per run, the most non-empty fields on any of its rows under each
     // candidate delimiter — one scan of the line answers all four, and the
     // delimiter is chosen only once the runs are known. O(runs).
@@ -2370,11 +2488,14 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
             }
             (true, Some(s)) => {
                 runs.push((s, index));
+                tails.push(String::from_utf8_lossy(&last_line).into_owned());
                 run_start = None;
             }
             _ => {}
         }
         if !blank {
+            last_line.clear();
+            last_line.extend_from_slice(line);
             if let Some(w) = widest.last_mut() {
                 let counts = nonempty_fields(line);
                 for (m, c) in w.iter_mut().zip(counts) {
@@ -2386,6 +2507,7 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     }
     if let Some(s) = run_start {
         runs.push((s, index));
+        tails.push(String::from_utf8_lossy(&last_line).into_owned());
     }
     // The delimiter is the one the blocks that survived the minimum are best
     // read with — never one guessed from the dropped runs themselves, or a
@@ -2399,8 +2521,14 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     let (delim, at) = pick_block_delimiter(&kept);
     let measured: Vec<Run> = runs
         .iter()
-        .zip(heads.iter().zip(&widest))
-        .map(|(&(start, end), (h, w))| Run { start, end, width: field_count(h, delim), widest: w[at] })
+        .zip(heads.iter().zip(&tails).zip(&widest))
+        .map(|(&(start, end), ((h, t), w))| Run {
+            start,
+            end,
+            width: field_count(h, delim),
+            widest: w[at],
+            last_width: field_count(t, delim),
+        })
         .collect();
     Ok(windows_from_runs(measured))
 }
@@ -2542,6 +2670,7 @@ fn blocks_from(blanks: &[bool], widths: &[usize]) -> Regions {
             start: s as u64,
             end: e as u64,
             width: widths.get(s).copied().unwrap_or(0),
+            last_width: e.checked_sub(1).and_then(|l| widths.get(l)).copied().unwrap_or(0),
             widest: widths.get(s..e).and_then(|w| w.iter().max().copied()).unwrap_or(0),
         })
         .collect();
@@ -2556,6 +2685,7 @@ struct Run {
     end: u64,
     width: usize,
     widest: usize,
+    last_width: usize,
 }
 
 /// The filtering rule, shared by the text path (which finds its runs by
@@ -2578,11 +2708,12 @@ struct Run {
 /// tool refuses. When no window is kept there is nothing dropped either:
 /// the file is then read whole, so every line is read.
 ///
-/// A one-row run directly above a block, as wide as the block's first row,
-/// may be that block's header cut off by a blank row; whether it is depends
-/// on whether the block has a header of its own, which only a frame can
-/// say, so adoption is the framing step's (`Regions::severed_header`,
-/// `fit::frame_blocks`), not this one's. Here it is an ordinary dropped run.
+/// A run directly above a block whose last row is as wide as the block's
+/// first row may be that block's header run, cut off by a blank row;
+/// whether it is depends on whether the block has a header of its own,
+/// which only a frame can say, so adoption is the framing step's
+/// (`Regions::header_run`, `fit::frame_blocks`), not this one's. Here it is
+/// an ordinary dropped run, or an ordinary window.
 fn windows_from_runs(runs: Vec<Run>) -> Regions {
     if runs.len() == 1 {
         return Regions::default();
@@ -2595,6 +2726,7 @@ fn windows_from_runs(runs: Vec<Run>) -> Regions {
         block_width: kept[0].width,
         window_widths: kept.iter().map(|r| r.width).collect(),
         window_widest: kept.iter().map(|r| r.widest).collect(),
+        window_last_widths: kept.iter().map(|r| r.last_width).collect(),
         windows: kept
             .into_iter()
             .enumerate()
@@ -2602,7 +2734,7 @@ fn windows_from_runs(runs: Vec<Run>) -> Regions {
             .collect(),
         dropped: short
             .into_iter()
-            .map(|r| DroppedRun { start: r.start, end: r.end, width: r.width, widest: r.widest })
+            .map(|r| DroppedRun { start: r.start, end: r.end, width: r.width, widest: r.widest, last_width: r.last_width })
             .collect(),
     }
 }
@@ -2697,26 +2829,57 @@ mod tests {
         assert_eq!(parse_decimal("1.2", 12, 2, Error).unwrap(), 120);
     }
 
+    /// `year_pivot` re-centres a `%y` year from its last two digits: below
+    /// the pivot is 20xx, at or above it 19xx. Unset is chrono's own window,
+    /// which is pivot 70 exactly (00–69 is 20xx, 70–99 is 19xx — probed
+    /// here, since the taxonomy and the brief both had it one year off).
+    #[test]
+    fn a_year_pivot_recentres_two_digit_years() {
+        use chrono::Datelike;
+        let year = |s: &str, p: Option<u8>| {
+            let d = parse_date_days(s, "%d/%m/%y", p).unwrap();
+            (epoch() + chrono::Duration::days(d.into())).year()
+        };
+        assert_eq!(year("01/02/29", Some(30)), 2029);
+        assert_eq!(year("01/02/30", Some(30)), 1930);
+        assert_eq!(year("01/02/69", None), 2069);
+        assert_eq!(year("01/02/70", None), 1970);
+        for yy in 0..100 {
+            let v = format!("01/02/{yy:02}");
+            assert_eq!(year(&v, None), year(&v, Some(crate::spec::DEFAULT_YEAR_PIVOT)), "{v}");
+        }
+        // 100: every two-digit year is 20xx.
+        assert_eq!(year("01/02/99", Some(100)), 2099);
+        assert_eq!(year("01/02/00", Some(100)), 2000);
+        // 1900 had no 29th of February: an error, never the 1st of March.
+        assert!(parse_date_days("29/02/00", "%d/%m/%y", Some(0)).is_err());
+        assert!(parse_date_days("29/02/00", "%d/%m/%y", None).is_ok());
+        // A timestamp goes through the same re-centring.
+        let us = parse_timestamp_micros("01/02/45 10:00", "%d/%m/%y %H:%M", None, Some(30)).unwrap();
+        let dt = chrono::DateTime::from_timestamp_micros(us).unwrap();
+        assert_eq!(dt.year(), 1945);
+    }
+
     #[test]
     fn two_digit_years_are_refused_under_percent_capital_y() {
-        assert!(parse_date_days("01/02/25", "%d/%m/%Y").is_err());
-        assert!(parse_date_days("01/02/2025", "%d/%m/%Y").is_ok());
+        assert!(parse_date_days("01/02/25", "%d/%m/%Y", None).is_err());
+        assert!(parse_date_days("01/02/2025", "%d/%m/%Y", None).is_ok());
         // %y is the explicit opt-in.
-        assert!(parse_date_days("01/02/25", "%d/%m/%y").is_ok());
+        assert!(parse_date_days("01/02/25", "%d/%m/%y", None).is_ok());
     }
 
     #[test]
     fn month_year_pinning_only_when_the_format_lacks_a_day() {
-        assert!(parse_date_days("2025 Jan", "%Y %b").is_ok());
+        assert!(parse_date_days("2025 Jan", "%Y %b", None).is_ok());
         // A format that wants a day must actually get one.
-        assert!(parse_date_days("2025 Jan", "%Y %b %d").is_err());
+        assert!(parse_date_days("2025 Jan", "%Y %b %d", None).is_err());
     }
 
     #[test]
     fn timestamps_convert_from_the_declared_offset_to_utc() {
         let off = parse_fixed_offset("+02:00").unwrap();
-        let with = parse_timestamp_micros("2026-01-05 10:00:00", "%Y-%m-%d %H:%M:%S", Some(off)).unwrap();
-        let without = parse_timestamp_micros("2026-01-05 10:00:00", "%Y-%m-%d %H:%M:%S", None).unwrap();
+        let with = parse_timestamp_micros("2026-01-05 10:00:00", "%Y-%m-%d %H:%M:%S", Some(off), None).unwrap();
+        let without = parse_timestamp_micros("2026-01-05 10:00:00", "%Y-%m-%d %H:%M:%S", None, None).unwrap();
         assert_eq!(without - with, 2 * 3600 * 1_000_000);
     }
 
@@ -2734,9 +2897,10 @@ mod tests {
             "2026-01-05 10:00:00 +0200",
             "%Y-%m-%d %H:%M:%S %z",
             None,
+            None,
         )
         .unwrap();
-        let b = parse_timestamp_micros("2026-01-05 08:00:00", "%Y-%m-%d %H:%M:%S", None).unwrap();
+        let b = parse_timestamp_micros("2026-01-05 08:00:00", "%Y-%m-%d %H:%M:%S", None, None).unwrap();
         assert_eq!(a, b);
     }
 
