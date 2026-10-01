@@ -1771,6 +1771,11 @@ fn guess_columns(
             } else if g.penalty > 0.0 {
                 doubts.penalty += g.penalty;
             }
+            if g.dtype == DType::Utf8 {
+                if let Some(n) = percent_note(&values, &name) {
+                    doubts.note(n);
+                }
+            }
             ColumnSpec {
                 // `source` is the post-transform header name, verbatim: this
                 // is the guarantee that it resolves.
@@ -1784,6 +1789,47 @@ fn guess_columns(
         })
         .collect();
     (columns, probe_empty)
+}
+
+/// A column of `45%`-shaped values: say what the two declarations would make
+/// of it, and decide nothing.
+///
+/// `45%` is 45 to `parse_number` and 0.45 to a spreadsheet, and both are
+/// defensible readings of the same text, so the column stays text with its
+/// confidence untouched — a note, never a type. Every non-missing sampled
+/// value has to be a number (`numfmt::infer`, the same shape test every
+/// numeric column passes) followed by `%`, optionally after a space; one
+/// value without the sign and this is not a column of percentages.
+fn percent_note(values: &[&str], name: &str) -> Option<String> {
+    let sample: Vec<&str> = values
+        .iter()
+        .map(|v| v.trim())
+        .filter(|v| !is_na(v))
+        .take(TYPE_SAMPLE)
+        .collect();
+    let bodies: Vec<&str> = sample
+        .iter()
+        .map(|v| v.strip_suffix('%').map(|b| b.strip_suffix(' ').unwrap_or(b)))
+        .collect::<Option<_>>()?;
+    if bodies.iter().any(|b| b.is_empty() || b.ends_with(char::is_whitespace)) {
+        return None;
+    }
+    let fmt = numfmt::infer(&bodies)?;
+    // The example in the note is the column's own first value, read both
+    // ways. The shift is shown on the plain spelling of that number, which
+    // is what `decimal_shift` moves once the separators are applied.
+    let plain: String = bodies[0]
+        .chars()
+        .filter(|c| Some(*c) != fmt.thousands)
+        .map(|c| if Some(c) == fmt.decimal { '.' } else { c })
+        .collect();
+    Some(format!(
+        "column `{name}` looks like percentages (e.g. `{:?}`): `strip = \"%\"` reads {}; \
+         with `decimal_shift = -2` it reads {} — the file does not say which is meant",
+        sample[0],
+        bodies[0],
+        crate::engine::shift_decimal_point(&plain, -2)
+    ))
 }
 
 /// Words that mean "this column is money" in the languages these files come

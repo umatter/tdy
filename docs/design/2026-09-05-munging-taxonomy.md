@@ -1038,12 +1038,15 @@ stored as 0.45).
 
 **Messy → clean:** `45%` → `45` or `0.45`, and the two are equally defensible.
 
-**`partial`** — `strip = "%"` gives 45; `decimal_shift = -2` gives 0.45. Both are
-declarable, neither is inferred, and the ambiguity is genuinely in the data. The
-current behaviour (leave it as text, confidence unchanged, let a human declare)
-is consistent with the rule. Worth a sniffer *note* — "column looks like
-percentages; strip to keep 45, or shift to get 0.45" — since the fix is a
-one-line edit once you know which you want.
+**`spec`** since 2026-10-01 — `strip = "%"` gives 45; `decimal_shift = -2` gives
+0.45. Both are declarable, neither is inferred, and the ambiguity is genuinely in
+the data, so the sniffer leaves the column as text with its confidence unchanged
+and now says so: a column whose every sampled value is a number (by
+`numfmt::infer`) followed by `%` gets the note *column `anteil` looks like
+percentages (e.g. `"45%"`): `strip = "%"` reads 45; with `decimal_shift = -2` it
+reads 0.45 — the file does not say which is meant*, built from the column's own
+first value (`sniff::percent_note`). The fix is a one-line edit once you know
+which you want. The verdict was `partial` only for want of that note.
 
 ### E7 · Scale factors declared out-of-band
 **Also called:** "in thousands" / "in Mio. CHF" in a title row, `SCALE=` in

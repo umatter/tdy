@@ -2140,3 +2140,46 @@ fn fill_down_leaves_a_blank_sheet_row_blank_before_a_later_skip_rows() {
     assert_eq!(col_str(&b, 0), vec![Some("Ost".into()), Some("West".into()), Some("West".into())]);
     assert_eq!(col_i64(&b, 1), vec![Some(100), Some(200), Some(300)]);
 }
+
+// ---------------------------------------------------------------------------
+// Notes that name a declaration without making it (taxonomy E6, E13, C7)
+// ---------------------------------------------------------------------------
+
+/// `45%` is 45 or 0.45, and both readings are defensible: the column stays
+/// text, confidence unchanged, and a note names both declarations so the
+/// choice is a one-line edit once a person knows which is meant.
+#[test]
+fn a_percent_column_stays_text_and_names_both_readings() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "pct.csv", "region,anteil,betrag\nZH,45%,10\nBE,12.5 %,20\nGE,3%,30\n");
+    let r = sniffed(&p);
+    let anteil = r.spec.columns.iter().find(|c| c.name == "anteil").unwrap();
+    // The snapshot taken before the note existed: text, 0.95.
+    assert_eq!(anteil.dtype, DType::Utf8);
+    assert!(anteil.parse.strip.is_none() && anteil.parse.decimal_shift.is_none());
+    assert!((r.confidence - 0.95).abs() < 1e-6, "confidence moved: {}", r.confidence);
+    let note = r
+        .spec
+        .notes
+        .iter()
+        .find(|n| n.contains("percentages"))
+        .unwrap_or_else(|| panic!("no percent note in {:?}", r.spec.notes));
+    assert_eq!(
+        note,
+        "column `anteil` looks like percentages (e.g. `\"45%\"`): `strip = \"%\"` reads 45; \
+         with `decimal_shift = -2` it reads 0.45 — the file does not say which is meant"
+    );
+}
+
+/// One value without its `%` and the column is not a column of percentages.
+#[test]
+fn a_percent_note_needs_every_value_to_carry_the_sign() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "pct.csv", "region,anteil\nZH,45%\nBE,12\nGE,3%\n");
+    let r = sniffed(&p);
+    assert!(
+        !r.spec.notes.iter().any(|n| n.contains("percentages")),
+        "{:?}",
+        r.spec.notes
+    );
+}
