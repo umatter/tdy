@@ -1201,10 +1201,12 @@ Details worth knowing:
   empty after trimming — the `;;;` spacer an export writes between groups —
   is otherwise a record of nulls that `count(*)` counts. It takes no options,
   it drops rows only, and it must come after `skip_rows`, `promote_header` and
-  `transpose`, since before them it would change what they count. Its order
-  against `fill_down` matters: filling first puts the label into a spacer row,
-  which then survives as a record with no amount. Never inferred; for an
-  all-empty *column*, the sniffer's note says to leave it out of `columns`.
+  `transpose`, since before them it would change what they count, and before
+  `source_name` or a valued `constant`, since after them no row is empty. Its
+  order against `fill_down` matters: filling first puts the label into a
+  spacer row, which then survives as a record with no amount. Never inferred;
+  for an all-empty *column*, the sniffer's note says to leave it out of
+  `columns`.
 - **`columns` is a projection.** There is no drop or rename op; `source` →
   `name` is the only renaming, and unlisted columns do not appear.
 

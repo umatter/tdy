@@ -240,6 +240,20 @@ pub fn review_reasons(spec: &ParseSpec) -> Vec<String> {
         }
     }
     for c in &spec.columns {
+        // A two-digit year lands in a century the file never states — the
+        // window decides it, and whether 45 is 1945 or 2045 is a fact about
+        // the world, declared (`year_pivot`) or left at chrono's default.
+        if let Some((from, to)) = crate::spec::two_digit_year_window(c) {
+            let why = match c.parse.year_pivot {
+                Some(p) => format!("year_pivot {p}"),
+                None => "chrono's default; set `year_pivot` to change".to_string(),
+            };
+            out.push(format!(
+                "`{}` reads two-digit years as {from}–{to} ({why}), a century no value in \
+                 the file states",
+                c.name
+            ));
+        }
         if let Some(shift) = c.parse.decimal_shift {
             if shift != 0 {
                 out.push(format!(
@@ -1321,7 +1335,7 @@ fn describe_frame(spec: &ParseSpec) -> String {
                 crate::spec::FillDirection::Down => format!("fill_down {columns:?}"),
                 crate::spec::FillDirection::Up => format!("fill_up {columns:?}"),
             },
-            Transform::Transpose => "transpose".into(),
+            Transform::Transpose {} => "transpose".into(),
             Transform::RemoveEmpty {} => "remove_empty".into(),
             Transform::SourceName { name, from, .. } => {
                 format!("source_name {name:?} from {from:?}")

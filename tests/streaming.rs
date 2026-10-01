@@ -1139,6 +1139,61 @@ fn remove_empty_streams_and_its_order_against_fill_down_is_kept() {
     assert_eq!(b.matches("West").count(), 1, "{b}");
 }
 
+/// A body transform sees rows after the ragged policy on both executors.
+///
+/// With no `promote_header` nothing had rectangularised the engine's table
+/// before `remove_empty` or a whole-row `drop_rows_matching` ran, so it tested
+/// `;;5` while the streaming reader, which applies the policy as it reads,
+/// tested the truncated `;`: `count(*)` was 3 against 2. Both now see the
+/// row the policy leaves, under every policy.
+#[test]
+fn a_headerless_ragged_file_gives_body_transforms_the_same_rows_on_both_executors() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "rag.csv", "1;2\n;;5\n3;4\n;\n");
+    let with = |ragged, t: Transform| {
+        let mut s = spec(vec![t], vec![col("col_1", DType::Int64), col("col_2", DType::Int64)]);
+        s.extraction = Extraction::Delimited {
+            delimiter: ';',
+            quote: Some('"'),
+            escape: None,
+            encoding: None,
+            comment: None,
+            ragged,
+            region: None,
+        };
+        s
+    };
+    let drop5 = || Transform::DropRowsMatching { pattern: "5".into(), column: None };
+    let rows = |s: &ParseSpec| -> Vec<usize> {
+        let e: usize = engine::execute_batches(s, &p, Limits::default())
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum();
+        let st: usize = stream::execute_batches(s, &p, Limits::default())
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum();
+        vec![e, st]
+    };
+    for (ragged, removed, dropped) in
+        [(RaggedPolicy::TruncateExtra, 2, 4), (RaggedPolicy::PadNulls, 3, 3)]
+    {
+        let r = with(ragged, Transform::RemoveEmpty {});
+        assert_paths_agree(&r, &p, "remove_empty, headerless ragged");
+        assert_eq!(rows(&r), vec![removed, removed], "remove_empty under {ragged:?}");
+        let d = with(ragged, drop5());
+        assert_paths_agree(&d, &p, "drop_rows_matching, headerless ragged");
+        assert_eq!(rows(&d), vec![dropped, dropped], "drop_rows_matching under {ragged:?}");
+    }
+    for t in [Transform::RemoveEmpty {}, drop5()] {
+        let s = with(RaggedPolicy::Error, t);
+        assert!(engine::execute_batches(&s, &p, Limits::default()).is_err());
+        assert!(stream::execute_batches(&s, &p, Limits::default()).is_err());
+    }
+}
+
 /// `year_pivot` is applied by the one parse function both executors call.
 #[test]
 fn a_year_pivot_reads_the_same_on_both_executors() {

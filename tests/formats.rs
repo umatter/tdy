@@ -1087,7 +1087,7 @@ fn transpose_turns_a_report_layout_into_a_table() {
     );
     let s = spec(
         delim(',', RaggedPolicy::Error),
-        vec![Transform::Transpose, Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![Transform::Transpose {}, Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![
             col("Kennzahl", DType::Utf8),
             col("Umsatz", DType::Int64),
@@ -1121,7 +1121,7 @@ fn transposing_a_ragged_report_fills_the_gaps_with_nothing() {
     let p = dir_file(&dir, "ragged.csv", "Kennzahl,2021,2022\nUmsatz,100,120\nKosten,80\n");
     let s = spec(
         delim(',', RaggedPolicy::PadNulls),
-        vec![Transform::Transpose, Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![Transform::Transpose {}, Transform::PromoteHeader { rows: 1, join: " ".into() }],
         vec![col("Kennzahl", DType::Utf8), col("Kosten", DType::Utf8)],
     );
     let b = spec_to_batch(&s, &p).unwrap();
@@ -1136,7 +1136,7 @@ fn transposing_a_ragged_report_fills_the_gaps_with_nothing() {
 fn a_transpose_after_a_header_is_refused() {
     let s = spec(
         delim(',', RaggedPolicy::Error),
-        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }, Transform::Transpose],
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }, Transform::Transpose {}],
         vec![col("a", DType::Utf8)],
     );
     let e = format!("{:?}", s.validate().expect_err("the order is wrong"));
@@ -1144,7 +1144,7 @@ fn a_transpose_after_a_header_is_refused() {
 
     let twice = spec(
         delim(',', RaggedPolicy::Error),
-        vec![Transform::Transpose, Transform::Transpose],
+        vec![Transform::Transpose {}, Transform::Transpose {}],
         vec![col("a", DType::Utf8)],
     );
     let e = format!("{:?}", twice.validate().expect_err("two flips are no flip"));
@@ -1384,7 +1384,7 @@ fn remove_empty_before_framing_is_refused_with_where_to_put_it() {
     for framing in [
         Transform::PromoteHeader { rows: 1, join: " ".into() },
         Transform::SkipRows { head: 1, tail: 0 },
-        Transform::Transpose,
+        Transform::Transpose {},
     ] {
         let s = spec(
             delim(';', RaggedPolicy::PadNulls),
@@ -1426,7 +1426,7 @@ fn a_year_pivot_decides_the_century_of_a_two_digit_year() {
     assert_eq!(read(None), vec!["2029-02-01", "2030-02-01"]);
 }
 
-/// Only on a date or timestamp read with `%y`, and only 0..=99; anything
+/// Only on a date or timestamp read with `%y`, and only 0..=100; anything
 /// else is refused with a message rather than ignored.
 #[test]
 fn year_pivot_is_refused_where_it_means_nothing() {
@@ -1441,7 +1441,13 @@ fn year_pivot_is_refused_where_it_means_nothing() {
     let mut text = col("d", DType::Utf8);
     text.parse.year_pivot = Some(30);
     refuse(text, "date");
-    refuse(yy_col(Some(100)), "0..=99");
+    refuse(yy_col(Some(101)), "0..=100");
+    // 100 is the top: every two-digit year is 20xx.
+    assert!(spec(delim(',', RaggedPolicy::PadNulls), vec![], vec![yy_col(Some(100))]).validate().is_ok());
+    assert_eq!(
+        two_digit_year_note(&yy_col(Some(100))).as_deref(),
+        Some("column `d`: two-digit years are read as 2000–2099; set `year_pivot` to change")
+    );
     let mut ts = col("t", DType::Timestamp { format: "%d.%m.%y %H:%M".into(), timezone: None });
     ts.parse.year_pivot = Some(30);
     assert!(spec(delim(',', RaggedPolicy::PadNulls), vec![], vec![ts, yy_col(Some(0))]).validate().is_ok());
@@ -1459,4 +1465,64 @@ fn a_two_digit_year_column_names_its_window() {
         Some("column `d`: two-digit years are read as 1930–2029; set `year_pivot` to change")
     );
     assert_eq!(two_digit_year_note(&col("d", DType::Date { format: "%Y-%m-%d".into() })), None);
+}
+
+/// After a column that fills every row — `source_name`, or a constant with a
+/// value — no row is empty any more and `remove_empty` would do nothing, in
+/// silence. Refused, saying to put it before them. A null-fill constant
+/// (`""`) fills nothing, so it does not count.
+#[test]
+fn remove_empty_after_a_filled_column_is_refused() {
+    let head = || Transform::PromoteHeader { rows: 1, join: " ".into() };
+    for added in [
+        Transform::SourceName { name: "f".into(), from: SourcePart::FileStem, pattern: None },
+        Transform::Constant { name: "kanton".into(), value: "CH".into() },
+    ] {
+        let s = spec(
+            delim(';', RaggedPolicy::PadNulls),
+            vec![head(), added, Transform::RemoveEmpty {}],
+            vec![col("k", DType::Utf8)],
+        );
+        let errs = s.validate().unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.contains("remove_empty") && e.contains("before")),
+            "{errs:?}"
+        );
+    }
+    let null_fill = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        vec![
+            head(),
+            Transform::Constant { name: "kanton".into(), value: String::new() },
+            Transform::RemoveEmpty {},
+        ],
+        vec![col("k", DType::Utf8)],
+    );
+    assert!(null_fill.validate().is_ok());
+
+    // Before them it does its job.
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "k.csv", "k;a\nx;1\n;\ny;3\n");
+    let ok = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        vec![
+            head(),
+            Transform::RemoveEmpty {},
+            Transform::SourceName { name: "f".into(), from: SourcePart::FileStem, pattern: None },
+        ],
+        vec![col("k", DType::Utf8), col("f", DType::Utf8)],
+    );
+    assert_eq!(spec_to_batch(&ok, &p).unwrap().num_rows(), 2);
+}
+
+/// `transpose` takes no options, and a stray key is refused rather than
+/// silently dropped (it used to validate, and `--stamp` rewrote the file
+/// without it). The spelling is unchanged.
+#[test]
+fn transpose_refuses_a_stray_key() {
+    let t: Transform = toml::from_str("op = \"transpose\"").unwrap();
+    assert!(matches!(t, Transform::Transpose { .. }));
+    assert!(toml::from_str::<Transform>("op = \"transpose\"\nrows = 5").is_err());
+    assert!(toml::from_str::<Transform>("op = \"transpose\"\ncolumns = [\"a\"]").is_err());
+    assert_eq!(serde_json::to_string(&t).unwrap(), r#"{"op":"transpose"}"#);
 }

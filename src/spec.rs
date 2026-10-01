@@ -386,7 +386,10 @@ pub enum Transform {
     /// Must come before `promote_header`: the two disagree about which
     /// direction the names run. Runs on the materialising executor, since the
     /// first output row cannot be emitted until the last input row is read.
-    Transpose,
+    ///
+    /// An empty struct variant, like `remove_empty`, so `deny_unknown_fields`
+    /// refuses a stray key instead of a unit variant silently dropping it.
+    Transpose {},
     /// Split one column into several, in place.
     ///
     /// The column named by `source` is **replaced** by the columns named in
@@ -702,7 +705,8 @@ pub struct ValueParsing {
     /// knows which window is meant, so it is declared and never inferred.
     ///
     /// Only on a `date` or `timestamp` column whose format contains `%y`,
-    /// and only 0..=99. The year is re-centred from its last two digits
+    /// and only 0..=100 — 100 reads every two-digit year as 20xx (2000–2099),
+    /// 0 every one as 19xx. The year is re-centred from its last two digits
     /// after chrono parses it; the value itself is never rewritten.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub year_pivot: Option<u8>,
@@ -743,6 +747,16 @@ pub const DEFAULT_YEAR_PIVOT: u8 = 70;
 /// tier today; the sniffer and `fit` choose no `%y` format, but `sniff::finish`
 /// runs it too so one added to `DATE_FORMATS` would not arrive silently.
 pub fn two_digit_year_note(c: &ColumnSpec) -> Option<String> {
+    let (from, to) = two_digit_year_window(c)?;
+    Some(format!(
+        "column `{}`: two-digit years are read as {from}–{to}; set `year_pivot` to change",
+        c.name
+    ))
+}
+
+/// The first and last year a `%y` column's two-digit years can land in,
+/// under the pivot in force. `None` for a column that reads no `%y`.
+pub fn two_digit_year_window(c: &ColumnSpec) -> Option<(i32, i32)> {
     let format = match &c.dtype {
         DType::Date { format } | DType::Timestamp { format, .. } => format,
         _ => return None,
@@ -751,12 +765,7 @@ pub fn two_digit_year_note(c: &ColumnSpec) -> Option<String> {
         return None;
     }
     let pivot = i32::from(c.parse.year_pivot.unwrap_or(DEFAULT_YEAR_PIVOT));
-    Some(format!(
-        "column `{}`: two-digit years are read as {}–{}; set `year_pivot` to change",
-        c.name,
-        1900 + pivot,
-        1999 + pivot
-    ))
+    Some((1900 + pivot, 1999 + pivot))
 }
 
 /// "A4:H200" -> ((3, 0), (199, 7)), 0-based inclusive.
@@ -938,10 +947,11 @@ impl ParseSpec {
                         dtype_name(&c.dtype)
                     )),
                 }
-                if pivot > 99 {
+                if pivot > 100 {
                     errs.push(format!(
-                        "column `{}`: year_pivot {pivot} is out of range (0..=99); it is \
-                         the two-digit year from which 19xx begins",
+                        "column `{}`: year_pivot {pivot} is out of range (0..=100); it is \
+                         the two-digit year from which 19xx begins, and 100 reads every one \
+                         as 20xx",
                         c.name
                     ));
                 }
@@ -1182,11 +1192,11 @@ impl ParseSpec {
                         }
                     }
                 }
-                Transform::Transpose => {
+                Transform::Transpose {} => {
                     // Flipping a table whose names are already established
                     // would turn the header into a column of data and leave
                     // the spec addressing names that no longer run that way.
-                    if self.transforms.iter().take_while(|o| !matches!(o, Transform::Transpose)).any(
+                    if self.transforms.iter().take_while(|o| !matches!(o, Transform::Transpose {})).any(
                         |o| matches!(o, Transform::PromoteHeader { .. }),
                     ) {
                         errs.push(
@@ -1196,7 +1206,7 @@ impl ParseSpec {
                                 .into(),
                         );
                     }
-                    if self.transforms.iter().filter(|o| matches!(o, Transform::Transpose)).count()
+                    if self.transforms.iter().filter(|o| matches!(o, Transform::Transpose {})).count()
                         > 1
                     {
                         errs.push(
@@ -1340,7 +1350,7 @@ impl ParseSpec {
                         .find_map(|o| match o {
                             Transform::SkipRows { .. } => Some("skip_rows"),
                             Transform::PromoteHeader { .. } => Some("promote_header"),
-                            Transform::Transpose => Some("transpose"),
+                            Transform::Transpose {} => Some("transpose"),
                             _ => None,
                         });
                     if let Some(f) = later_framing {
@@ -1348,6 +1358,28 @@ impl ParseSpec {
                             "remove_empty must come after {f}: before it, dropping empty rows \
                              changes the rows that transform counts. Put remove_empty after \
                              the last skip_rows, promote_header or transpose"
+                        ));
+                    }
+                    // After a column that fills every row, no row is empty any
+                    // more and this would do nothing, in silence. A null-fill
+                    // constant (`""`) fills nothing, so it does not count.
+                    let filled_before = self
+                        .transforms
+                        .iter()
+                        .take_while(|o| !std::ptr::eq(*o, t))
+                        .find_map(|o| match o {
+                            Transform::SourceName { name, .. } => {
+                                Some(format!("source_name `{name}`"))
+                            }
+                            Transform::Constant { name, value } if !value.trim().is_empty() => {
+                                Some(format!("constant `{name}`"))
+                            }
+                            _ => None,
+                        });
+                    if let Some(f) = filled_before {
+                        errs.push(format!(
+                            "remove_empty after {f} does nothing: that column has a value in \
+                             every row, so no row is empty any more. Put remove_empty before it"
                         ));
                     }
                 }

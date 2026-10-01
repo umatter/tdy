@@ -1439,3 +1439,90 @@ fn accept_names_a_member_when_the_target_and_its_glob_are_absolute() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(tdy::lockfile::Lock::load(&h).unwrap().unwrap().members[0].accepted);
 }
+
+/// A two-digit year is read into a century the file never states — chrono's
+/// 1970–2069, or the one `year_pivot` declares — and which one is meant is a
+/// fact about the world. So a member read with `%y` waits on a person, and
+/// the reason names the window in force, declared or default.
+#[test]
+fn a_two_digit_year_member_waits_on_a_person_naming_its_window() {
+    for (pivot, window) in [
+        (None, "1970–2069 (chrono's default; set `year_pivot` to change)"),
+        (Some(30), "1930–2029 (year_pivot 30)"),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let csv = dir.path().join("yy.csv");
+        std::fs::write(&csv, "Datum;Betrag\n01.02.45;10.00\n01.03.29;20.00\n").unwrap();
+        let t = dir.path().join("yy.tdy.sql");
+        std::fs::write(
+            &t,
+            "CREATE TABLE yy (d DATE NOT NULL OPTIONS(matches='Datum'), \
+             amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) \
+             WITH (files = 'yy.csv');",
+        )
+        .unwrap();
+        let parse = pivot.map(|p| format!("[spec.columns.parse]\nyear_pivot = {p}\n")).unwrap_or_default();
+        std::fs::write(
+            tdy::sidecar::sidecar_path(&csv),
+            format!(
+                r#"spec_version = 1
+[source]
+path = "yy.csv"
+blake3 = "0"
+bytes = 0
+[provenance]
+method = "manual"
+tool_version = "0.1.0"
+created_at = "2026-01-01T00:00:00Z"
+[spec]
+[spec.extraction]
+format = "delimited"
+delimiter = ";"
+quote = '"'
+ragged = "pad_nulls"
+[[spec.transforms]]
+op = "promote_header"
+rows = 1
+join = " "
+[[spec.columns]]
+name = "d"
+source = "Datum"
+nullable = false
+[spec.columns.dtype]
+type = "date"
+format = "%d.%m.%y"
+{parse}[[spec.columns]]
+name = "amount"
+source = "Betrag"
+nullable = false
+[spec.columns.dtype]
+type = "decimal"
+precision = 14
+scale = 2
+"#
+            ),
+        )
+        .unwrap();
+        assert!(tdy(&["validate", csv.to_str().unwrap(), "--stamp"]).status.success());
+
+        let ts = t.to_str().unwrap();
+        let out = tdy(&["fit", ts]);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(text.contains("REVIEW"), "{text}");
+        let reason = format!(
+            "`d` reads two-digit years as {window}, a century no value in the file states"
+        );
+        assert!(text.contains(&reason), "want {reason:?} in:\n{text}");
+
+        let q = format!("SELECT min(d) FROM dataset('{ts}')");
+        assert!(!tdy(&["query", &q]).status.success(), "an unaccepted %y member was queried");
+        let acc = tdy(&["fit", ts, "--accept", "yy.csv"]);
+        assert!(acc.status.success(), "{}", String::from_utf8_lossy(&acc.stderr));
+        let ok = tdy(&["query", &q]);
+        let text = String::from_utf8_lossy(&ok.stdout);
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let want = if pivot.is_some() { "1945-02-01" } else { "2029-03-01" };
+        assert!(text.contains(want), "{text}");
+    }
+}

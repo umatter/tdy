@@ -747,13 +747,14 @@ accurate notes, which is the documented tier-2 boundary rather than a defect.
 loud error naming the row — never a plausible wrong number. Most of the non-obvious code
 exists to hold that line, and a change that trades it for convenience is a regression even
 if every test passes. Concretely: thousands separators must group in threes (only when the
-separator could also be a decimal point), `%Y` demands four digits (and a `%y` century is chrono's 1970–2069 window
-unless `year_pivot` declares another — re-centred on the parsed date, never by
-rewriting the string), ambiguous date orders
-drop confidence below the escalation threshold, leading-zero and oversized integers stay
-text, money becomes `decimal`, and a decimal value with more fractional digits than the
-declared scale is refused unless the target column declares `round = 'half_away'`
-(`spec::Rounding`; a sniffed sidecar's unset `round` still means half-away, with its note).
+separator could also be a decimal point), `%Y` demands four digits (and a `%y` century
+is chrono's 1970–2069 window unless `year_pivot` declares another — re-centred on the
+parsed date, never by rewriting the string — and a `%y` member waits on review either
+way), ambiguous date orders drop confidence below the escalation threshold, leading-zero
+and oversized integers stay text, money becomes `decimal`, and a decimal value with more
+fractional digits than the declared scale is refused unless the target column declares
+`round = 'half_away'` (`spec::Rounding`; a sniffed sidecar's unset `round` still means
+half-away, with its note).
 
 ## Architecture
 
@@ -832,6 +833,8 @@ Things that only become clear from reading several modules:
   `strict:false` because the schema uses `$ref`), and an Anthropic forced tool call.
   Transport failures retry the same prompt; *spec* problems go back to the model as text.
   Bump `PROMPT_VERSION` when changing the prompt — it is recorded in sidecar provenance.
+  A schema change (a new transform or `ValueParsing` field) counts as a prompt change,
+  since the schema is pasted into the prompt.
 - **Bounded I/O lives in `fileio`**: head/tail sampling by seek, streaming blake3, atomic
   sidecar writes (temp + rename).
 - **Two providers, chosen by size.** Under `LAZY_ABOVE_BYTES` (64 MB, `TDY_LAZY_ABOVE_BYTES`)

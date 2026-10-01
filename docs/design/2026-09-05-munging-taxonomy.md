@@ -84,6 +84,14 @@ it.
    was the one finding in this report that touched the project's central rule
    directly. See **E5**, which now records the fix rather than the defect.
 
+**A known gap in the spec's own strictness (2026-10-01).** `deny_unknown_fields`
+does not reach a *unit* variant of an internally tagged enum: serde accepts and
+drops any stray key beside its tag. `transpose` and `remove_empty` are therefore
+empty struct variants (`Transpose {}`, `RemoveEmpty {}`), which refuse
+`op = "transpose"` beside `rows = 5`. `DType`'s unit variants (`utf8`, `bool`,
+`int64`, `float64`) still have the hole, so a stray key beside one of those
+types is dropped without a word; that is left for its own change.
+
 ### 0.5 A second pass, against the literature and the tool docs
 
 The first draft of this catalogue was written from the code and from recall. It
@@ -1047,9 +1055,10 @@ stored as 0.45).
 the data, so the sniffer leaves the column as text with its confidence unchanged
 and now says so: a column whose every sampled value is a number (by
 `numfmt::infer`) followed by `%` gets the note *column `anteil` looks like
-percentages (e.g. `"45%"`): `strip = "%"` reads 45; with `decimal_shift = -2` it
-reads 0.45 — the file does not say which is meant*, built from the column's own
-first value (`sniff::percent_note`). The fix is a one-line edit once you know
+percentages (e.g. `"45%"`): `strip = "%"` reads 45; with `strip` and
+`decimal_shift = -2` it reads 0.45 — the file does not say which is meant*, built
+from the column's own first value (`sniff::percent_note`). Where the separator is
+itself undecided (`1,250%`), the note quotes no number and says to declare it. The fix is a one-line edit once you know
 which you want. The verdict was `partial` only for want of that note.
 
 ### E7 · Scale factors declared out-of-band
@@ -1136,12 +1145,14 @@ is `int64`, and nothing suggests it might be 2023-03-15. Detectable heuristicall
 `datum`/`date`) but only as a *note*, never as a silent conversion.
 
 The note is in since 2026-10-01 (`sniff::serial_date_note`): an integer column
-whose name contains `date`, `datum`, `day`, `tag`, `zeit`, `time`, `fecha` or
-`jour` and whose every sampled value lies in 25,000..=60,000 (1968-06-11 to
+with a name token that is or ends with `date`, `datum`, `day`, `tag`, `zeit`,
+`time`, `fecha` or `jour` (`buchungsdatum`, `order_date`; not `stage`, and never
+beside an `id`, `count`, `ms`, `s`, `sec`, `nr` or `n` token) and whose every
+sampled value lies in 25,000..=60,000 (1968-06-11 to
 2064-04-08) stays an integer and is told *column `datum` holds integers like
 45000; as spreadsheet serial days that is 2023-03-15 — if these are dates, no
-declaration reads them yet, so convert in the query: CAST(CAST(datum - 25569 AS
-INT) AS DATE)*. The floor makes the 1899-12-30 origin exact (serial 60 is the
+declaration reads them yet, so convert in the query: CAST(CAST("datum" - 25569
+AS INT) AS DATE)* — the name quoted, since `current_date` unquoted is today. The floor makes the 1899-12-30 origin exact (serial 60 is the
 phantom 1900-02-29). It stays `partial` for the half that is still missing: a
 *declarable* serial reading — `epoch` counts from 1970 — so the conversion lives
 in a query rather than in the sidecar, where a target declaring `DATE` could
@@ -1152,15 +1163,17 @@ prove it.
 `dmy` with 2-digit input (lubridate).
 
 **`partial`** — `%y` parses, and since 2026-10-01 the window is declarable:
-`parse.year_pivot` (0..=99) reads a two-digit year below the pivot as 20xx and
+`parse.year_pivot` (0..=100) reads a two-digit year below the pivot as 20xx and
 one at or above it as 19xx, re-centring the year chrono parsed from its last two
 digits rather than rewriting the value (`engine::recentre_year`, called by the
 one parse function both executors share). Unset is chrono's window exactly —
 probed, it is 00–69 → 20xx and 70–99 → 19xx, a year off from the 69/70 this
 entry first recorded. `validate()` refuses it on anything but a `date` or
-`timestamp` whose format contains `%y`, and above 99. A spec that reads `%y`
-without a person having written it — the model's tier; the sniffer and `fit`
-choose no `%y` format — carries the note *two-digit years are read as
+`timestamp` whose format contains `%y`, and above 100 (100 reads every year as
+20xx). A member read with `%y` waits on review in a pile, naming the window in
+force, declared or default. A spec that reads `%y` without a person having
+written it — the model's tier; the sniffer and `fit` choose no `%y` format —
+carries the note *two-digit years are read as
 1970–2069; set `year_pivot` to change*. It stays `partial` because a **target
 cannot declare it yet**: `year_pivot` is a sidecar field, so a dataset whose
 members write two-digit years has to settle the window per member.

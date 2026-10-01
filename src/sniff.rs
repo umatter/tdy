@@ -1756,7 +1756,8 @@ fn guess_columns(
     let mut names: Vec<String> = header.iter().map(|h| sanitize(h)).collect();
     dedupe(&mut names);
     let mut probe_empty = Vec::new();
-    let columns = header
+    let mut empty: Vec<String> = Vec::new();
+    let columns: Vec<ColumnSpec> = header
         .iter()
         .enumerate()
         .map(|(i, original)| {
@@ -1790,14 +1791,10 @@ fn guess_columns(
             }
             // A spacer column — usually `col_7`, from a trailing delimiter or
             // a blank sheet column inside the used range. Still emitted, so a
-            // spec nobody edited reads exactly as before; the note says how
-            // to drop it, since `columns` is the only projection.
+            // spec nobody edited reads exactly as before; the note after the
+            // loop says how to drop it, since `columns` is the only projection.
             if !body.is_empty() && values.iter().all(|v| v.trim().is_empty()) {
-                doubts.note(format!(
-                    "column {} (`{name}`) is empty in every sampled row; omit it from \
-                     `columns` to drop it",
-                    i + 1
-                ));
+                empty.push(format!("{} (`{name}`)", i + 1));
             }
             ColumnSpec {
                 // `source` is the post-transform header name, verbatim: this
@@ -1811,6 +1808,22 @@ fn guess_columns(
             }
         })
         .collect();
+    // One note, however many: a list is read at a glance, a note per
+    // spacer column is noise.
+    match empty.len() {
+        0 => {}
+        n if n == columns.len() => doubts.note("every column is empty in every sampled row"),
+        1 => doubts.note(format!(
+            "column {} is empty in every sampled row; omit it from `columns` to drop it",
+            empty[0]
+        )),
+        n => doubts.note(format!(
+            "columns {} and {} are empty in every sampled row; omit them from `columns` to \
+             drop them",
+            empty[..n - 1].join(", "),
+            empty[n - 1]
+        )),
+    }
     (columns, probe_empty)
 }
 
@@ -1838,19 +1851,32 @@ fn percent_note(values: &[&str], name: &str) -> Option<String> {
         return None;
     }
     let fmt = numfmt::infer(&bodies)?;
+    if fmt.ambiguous {
+        // `1,250%` is 1250 or 1.25 before it is a percentage at all, so no
+        // number is quoted for either reading until a separator is declared.
+        return Some(format!(
+            "column `{name}` looks like percentages (e.g. `{:?}`), but `{}` could be a \
+             thousands separator or a decimal point here: declare `decimal_separator` or \
+             `thousands_separator`, and then `strip = \"%\"` reads the number as written and \
+             `strip` with `decimal_shift = -2` reads it as a fraction — the file does not say \
+             which is meant",
+            sample[0],
+            fmt.thousands.or(fmt.decimal).unwrap_or('.')
+        ));
+    }
     // The example in the note is the column's own first value, read both
-    // ways. The shift is shown on the plain spelling of that number, which
-    // is what `decimal_shift` moves once the separators are applied.
+    // ways, on the plain spelling of that number — what `strip` leaves once
+    // the separators are applied, and what `decimal_shift` then moves.
     let plain: String = bodies[0]
         .chars()
         .filter(|c| Some(*c) != fmt.thousands)
         .map(|c| if Some(c) == fmt.decimal { '.' } else { c })
         .collect();
     Some(format!(
-        "column `{name}` looks like percentages (e.g. `{:?}`): `strip = \"%\"` reads {}; \
-         with `decimal_shift = -2` it reads {} — the file does not say which is meant",
+        "column `{name}` looks like percentages (e.g. `{:?}`): `strip = \"%\"` reads {plain}; \
+         with `strip` and `decimal_shift = -2` it reads {} — the file does not say which is \
+         meant",
         sample[0],
-        bodies[0],
         crate::engine::shift_decimal_point(&plain, -2)
     ))
 }
@@ -1871,6 +1897,22 @@ fn serial_origin() -> NaiveDate {
     NaiveDate::from_ymd_opt(1899, 12, 30).expect("1899-12-30 is a date")
 }
 
+/// Does a (sanitized, `_`-separated) column name read like a date?
+///
+/// By token, not by substring: a token that is, or ends with, a date word
+/// (`datum`, `buchungsdatum`, `stichtag`, `order_date`) — never one that
+/// merely contains it (`stage`, `timeout`). A token saying the column counts
+/// or identifies something vetoes it, so `birthday_id`, `update_count`,
+/// `timeout_ms` and `runtime_s` are not dates.
+fn date_like_name(name: &str) -> bool {
+    const DATE_WORDS: &[&str] = &["date", "datum", "day", "tag", "zeit", "time", "fecha", "jour"];
+    const VETO: &[&str] = &["id", "count", "ms", "s", "sec", "nr", "n"];
+    let lower = name.to_lowercase();
+    let tokens: Vec<&str> = lower.split('_').filter(|t| !t.is_empty()).collect();
+    !tokens.iter().any(|t| VETO.contains(t))
+        && tokens.iter().any(|t| DATE_WORDS.iter().any(|w| t.ends_with(w)))
+}
+
 /// An integer column that may be spreadsheet serial dates: say what the
 /// first value would be as one, and convert nothing.
 ///
@@ -1883,9 +1925,7 @@ fn serial_origin() -> NaiveDate {
 /// days since 1899-12-30 (`epoch` counts from 1970), so the note gives the
 /// query that does; `tests/regression.rs` runs it.
 fn serial_date_note(values: &[&str], name: &str) -> Option<String> {
-    const DATE_WORDS: &[&str] = &["date", "datum", "day", "tag", "zeit", "time", "fecha", "jour"];
-    let lower = name.to_lowercase();
-    if !DATE_WORDS.iter().any(|w| lower.contains(w)) {
+    if !date_like_name(name) {
         return None;
     }
     let ints: Vec<i64> = values
@@ -1906,7 +1946,7 @@ fn serial_date_note(values: &[&str], name: &str) -> Option<String> {
     Some(format!(
         "column `{name}` holds integers like {first}; as spreadsheet serial days that is {date} \
          — if these are dates, no declaration reads them yet, so convert in the query: \
-         CAST(CAST({name} - {unix_offset} AS INT) AS DATE)"
+         CAST(CAST(\"{name}\" - {unix_offset} AS INT) AS DATE)"
     ))
 }
 
