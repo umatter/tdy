@@ -717,62 +717,41 @@ fn draw_profile(
     detail: bool,
     scroll: usize,
 ) {
-    use tdy::profile::Distinct;
-
     let inner = block.inner(area);
     f.render_widget(block, area);
     if inner.height == 0 {
         return;
     }
     let heading_style = if p.complete { Style::new().add_modifier(Modifier::BOLD) } else { Style::new().fg(WARN) };
-    let heading = clip_line(
-        Line::styled(tdy::commands::profile_heading(&p.path, p), heading_style),
-        inner.width as usize,
-    );
-    let [head_area, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
-    f.render_widget(Paragraph::new(heading), head_area);
+    let mut head: Vec<Line<'static>> =
+        vec![clip_line(Line::styled(tdy::commands::profile_heading(&p.path, p), heading_style), inner.width as usize)];
+    head.extend(p.notes.iter().map(|n| clip_line(Line::styled(format!("note: {n}"), Style::new().fg(WARN)), inner.width as usize)));
+    let [head_area, body] =
+        Layout::vertical([Constraint::Length(head.len() as u16), Constraint::Fill(1)]).areas(inner);
+    f.render_widget(Paragraph::new(head), head_area);
 
     if detail {
         let text = tdy::commands::profile_text(&p.path, p, Some(&format!("#{}", selected + 1)))
             .unwrap_or_else(|e| format!("\n{e:#}\n"));
-        // The heading is already drawn above; the rest is the column.
-        let lines: Vec<Line<'static>> = text.lines().skip(1).skip(scroll).map(|l| Line::raw(l.to_string())).collect();
+        // The heading and notes are already drawn above; the rest is the column.
+        let lines: Vec<Line<'static>> =
+            text.lines().skip(1 + p.notes.len()).skip(scroll).map(|l| Line::raw(l.to_string())).collect();
         f.render_widget(Paragraph::new(lines), body);
         return;
     }
 
-    let share = |n: u64, of: u64| if of == 0 { "-".to_string() } else { format!("{:.1}%", n as f64 * 100.0 / of as f64) };
-    let header = ["#", "column", "non-empty", "empty", "distinct", "min", "max", "most frequent shape"];
-    let right = [true, false, true, true, true, false, false, false];
-    let cells: Vec<[String; 8]> = p
-        .columns
-        .iter()
-        .map(|c| {
-            [
-                c.position.to_string(),
-                c.name.clone(),
-                c.non_empty.to_string(),
-                c.empty.to_string(),
-                match c.distinct {
-                    Distinct::Exact(n) => n.to_string(),
-                    Distinct::AtLeast(n) => format!("{n}+"),
-                },
-                c.min.clone().unwrap_or_else(|| "-".into()),
-                c.max.clone().unwrap_or_else(|| "-".into()),
-                c.shapes
-                    .first()
-                    .map(|s| format!("{} ({})", s.pattern, share(s.count, c.non_empty)))
-                    .unwrap_or_else(|| "-".into()),
-            ]
-        })
-        .collect();
+    // The CLI's own cells (`commands::profile_summary_rows`): one place
+    // says what a column's row reads, for both.
+    let cells = tdy::commands::profile_summary_rows(p);
+    let header = tdy::commands::PROFILE_COLUMNS;
+    let right = tdy::commands::PROFILE_RIGHT;
     let widths: Vec<Constraint> = (0..8)
         .map(|i| {
             let w = cells.iter().map(|r| r[i].chars().count()).chain([header[i].chars().count()]).max().unwrap_or(1);
             if i == 7 {
                 Constraint::Fill(1)
             } else {
-                Constraint::Length(w.min(TABLE_CELL_MAX) as u16 + if i == 0 { 2 } else { 0 })
+                Constraint::Length(w as u16 + if i == 0 { 2 } else { 0 })
             }
         })
         .collect();
@@ -787,11 +766,7 @@ fn draw_profile(
         .skip(scroll)
         .map(|(i, r)| {
             let row = Row::new((0..8).map(|c| {
-                let v = if c == 0 {
-                    format!("{}{}", if i == selected { "▸ " } else { "  " }, r[0])
-                } else {
-                    truncate(&r[c], TABLE_CELL_MAX)
-                };
+                let v = if c == 0 { format!("{}{}", if i == selected { "▸ " } else { "  " }, r[0]) } else { r[c].clone() };
                 Cell::from(Line::raw(v).alignment(align(c)))
             }));
             if i == selected { row.style(Style::new().add_modifier(SELECTED)) } else { row }

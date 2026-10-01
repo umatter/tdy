@@ -311,9 +311,7 @@ impl Session {
     /// the root. Returns the data file, the sheet and the region.
     pub fn resolve_member(&self, p: &str) -> Result<(PathBuf, Option<String>, Option<u32>)> {
         let joined = self.cwd.join(p);
-        let (file, sheet, region) = crate::sidecar::resolve_ref(&joined)?;
-        let file = crate::fileio::confine(&file, &self.root).with_context(|| p.to_string())?;
-        Ok((file, sheet, region))
+        crate::profile::resolve(&joined, Some(&self.root)).with_context(|| p.to_string())
     }
 
     /// Resolve a path that names something not written yet — `.draft --to`
@@ -656,9 +654,9 @@ impl Session {
                 let text = render_shown(&file, &raw, spec.as_ref(), stale);
                 Outcome::ok(text, Payload::Shown { path, raw, spec, stale })
             }
-            Command::Profile { file, sheet, rows, column, head } => {
+            Command::Profile { file, sheet, rows, column, head, pointer } => {
                 let (path, ref_sheet, region) = self.resolve_member(&file)?;
-                let req = crate::profile::Request { sheet, rows, head };
+                let req = crate::profile::Request { sheet, rows, head, pointer };
                 let mut p = crate::profile::profile_member(&path, ref_sheet, region, &req, self.cfg.limits)?;
                 p.path = file.clone();
                 let text = crate::commands::profile_text(&file, &p, column.as_deref())?;
@@ -1415,7 +1413,7 @@ overwrite an existing one). Everything else is a dot-command:
   .accept TARGET MEMBER                                     show the evidence; again to accept
   .output [FILE] [--format parquet|csv] [--force]           route the next result to a file
   .show FILE [--sheet NAME]  the raw head beside what the sidecar says
-  .profile FILE [--sheet NAME] [--rows A-B] [--column NAME] [--head N]   what each column holds
+  .profile FILE [--sheet NAME] [--rows A-B] [--pointer /P] [--column NAME] [--head N]   what each column holds
   .abort              discard a half-typed SQL statement
   .ls [DIR]  .cd DIR  .edit FILE  .schema  .config init  .help [CMD]  .quit
 ";

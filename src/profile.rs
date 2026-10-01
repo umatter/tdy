@@ -13,12 +13,13 @@
 //! See docs/design/2026-10-01-profiling.md.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
 use crate::config::Limits;
+use crate::member::MemberRef;
 use crate::spec::{Extraction, ParseSpec, RowWindow, Transform};
 
 /// Distinct values tracked per column. Past this the count is a floor and
@@ -29,6 +30,10 @@ pub const MAX_DISTINCT: usize = 10_000;
 pub const MAX_SHAPES: usize = 64;
 /// The most frequent values listed per column.
 pub const TOP: usize = 5;
+/// Distinct shapes tracked per column. A shape first seen past this is
+/// counted only in `(other)`, and the column says its shapes are not
+/// complete.
+pub const MAX_SHAPE_TRACK: usize = 10_000;
 /// The pattern of the row that stands for every shape past [`MAX_SHAPES`].
 pub const OTHER_SHAPES: &str = "(other)";
 
@@ -42,9 +47,24 @@ pub struct Profile {
     /// 0-based, half-open raw lines, as `RowWindow` always is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<RowWindow>,
+    /// The A1 range read, for a workbook frame that declares one (a sheet
+    /// block, or `--rows` on a sheet): rows in the sheet's own numbering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    /// The record array read, for a JSON document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<String>,
     /// Which frame was read: `sidecar` (a fresh one), or `sniffed (…)` with
     /// the reason no sidecar was used.
     pub frame: String,
+    /// The other record arrays the document holds, when the sniffer chose
+    /// among several and no sidecar or `--pointer` settled it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pointer_candidates: Vec<String>,
+    /// What the heading adds about the read: other record arrays the
+    /// document holds, stacked tables a file read whole holds.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     /// Body rows profiled.
     pub rows: u64,
     /// False when `--head` stopped the read before the end of the table.
@@ -71,6 +91,10 @@ pub struct ColumnProfile {
     /// Every shape, most frequent first (ties by pattern), at most
     /// [`MAX_SHAPES`] plus one [`OTHER_SHAPES`] row for the rest.
     pub shapes: Vec<Shape>,
+    /// False when a shape first seen past the [`MAX_SHAPE_TRACK`] bound
+    /// was counted only in `(other)`: then nobody knows which shape is
+    /// most frequent, and no renderer says one is.
+    pub shapes_complete: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -104,6 +128,9 @@ pub struct Request {
     /// (`--rows 6-9`).
     pub rows: Option<(u64, u64)>,
     pub head: Option<u64>,
+    /// The record array of a JSON document to read (`/q2`), in place of
+    /// the one the sidecar or the sniffer chose.
+    pub pointer: Option<String>,
 }
 
 /// Parse `--rows`' `START-END` (1-based, inclusive; an en dash, as the
@@ -123,13 +150,77 @@ pub fn parse_rows(s: &str) -> Result<(u64, u64)> {
 /// the framed raw table ([`profile`]). The one function every door calls.
 ///
 /// `path` may also be a member reference — `book.xlsx#Q1`, `report.csv#2` —
-/// resolved the way every single-file tool resolves one
-/// (`sidecar::resolve_ref`).
+/// split by [`resolve`].
 pub fn profile_file(path: &Path, req: &Request, limits: Limits) -> Result<Profile> {
-    let (file, sheet, region) = crate::sidecar::resolve_ref(path)?;
+    let (file, sheet, region) = resolve(path, None)?;
     let mut p = profile_member(&file, sheet, region, req, limits)?;
     p.path = path.display().to_string();
     Ok(p)
+}
+
+/// Split a typed file or member reference into the data file, the sheet
+/// and the region it names.
+///
+/// A plain file wins; then a member a sidecar declares
+/// (`sidecar::resolve_ref`'s rule); then a split into a data file that
+/// exists plus a sheet (of a workbook) or a region — which
+/// [`profile_member`] then reads, or, for a region with no sidecar to say
+/// which rows it is, refuses by name rather than as a missing file. Two
+/// readings are refused, naming both.
+///
+/// With `root`, every candidate data file is confined to it *before* any
+/// sidecar beside it is read, and the answer is confined again.
+pub fn resolve(path: &Path, root: Option<&Path>) -> Result<(PathBuf, Option<String>, Option<u32>)> {
+    let confined = |f: &Path| -> Result<PathBuf> {
+        match root {
+            Some(r) => crate::fileio::confine(f, r),
+            None => Ok(f.to_path_buf()),
+        }
+    };
+    if path.is_file() {
+        return Ok((confined(path)?, None, None));
+    }
+    let inside = |f: &Path| f.is_file() && root.is_none_or(|r| crate::fileio::confine(f, r).is_ok());
+    let text = path.to_string_lossy().into_owned();
+    let declared = MemberRef::resolve(&text, |m| {
+        let f = Path::new(&m.path);
+        inside(f) && crate::sidecar::declares_member(f, m.sheet.as_deref(), m.region)
+    });
+    let split = match declared {
+        Ok(Some(m)) => Some(m),
+        Err(several) => bail!("{text} could mean {} — name the file and the sheet unambiguously", MemberRef::names(&several)),
+        Ok(None) => match MemberRef::resolve(&text, |m| {
+            let f = Path::new(&m.path);
+            (m.sheet.is_some() || m.region.is_some())
+                && inside(f)
+                && (m.sheet.is_none() || crate::sample::guess_format(f) == crate::sample::FormatGuess::Excel)
+        }) {
+            Ok(m) => m,
+            Err(several) => {
+                bail!("{text} could mean {} — name the file and the sheet unambiguously", MemberRef::names(&several))
+            }
+        },
+    };
+    match split {
+        Some(m) => Ok((confined(Path::new(&m.path))?, m.sheet, m.region)),
+        None => match root {
+            // Confinement's own sentence: a split whose data file exists but
+            // lies outside is "outside" (no sidecar beside it was read);
+            // anything else is the path's own "outside" or "does not exist".
+            Some(r) => {
+                let outside = match MemberRef::resolve(&text, |m| {
+                    (m.sheet.is_some() || m.region.is_some()) && Path::new(&m.path).is_file()
+                }) {
+                    Ok(Some(m)) => Some(m),
+                    Err(mut several) => several.pop(),
+                    Ok(None) => None,
+                };
+                let probe = outside.map(|m| PathBuf::from(m.path)).unwrap_or_else(|| path.to_path_buf());
+                Err(crate::fileio::confine(&probe, r).err().unwrap_or_else(|| anyhow!("{text} is not a file")))
+            }
+            None => bail!("{text} does not exist (not a file, nor a sheet or block of one)"),
+        },
+    }
 }
 
 /// [`profile_file`] for a member already resolved: the data file, the
@@ -147,24 +238,69 @@ pub fn profile_member(
         }
         (a, b) => a.or(b),
     };
-    let (frame, source) = match ref_region {
+    let (mut frame, mut source) = match ref_region {
         Some(r) => {
+            let name = MemberRef { path: file.display().to_string(), sheet: sheet.clone(), region: Some(r) }.name();
             if req.rows.is_some() {
-                bail!("a member reference already names its block; drop --rows");
+                bail!("{name} already names its block; drop --rows");
             }
-            match crate::sidecar::load_member(file, sheet.as_deref(), Some(r))? {
-                crate::sidecar::SidecarStatus::Fresh(sc) => (sc.spec, "sidecar".to_string()),
-                _ => bail!(
-                    "region {r} of {} has no fresh sidecar to say which rows it is; name the \
-                     block with --rows START-END (what its title shows), or re-run `tdy fit`",
-                    file.display()
-                ),
+            match crate::sidecar::load_member(file, sheet.as_deref(), Some(r)) {
+                Ok(crate::sidecar::SidecarStatus::Fresh(sc)) => (sc.spec, "sidecar".to_string()),
+                other => {
+                    let why = match other {
+                        Ok(crate::sidecar::SidecarStatus::Stale(_)) => " (its sidecar is stale)".to_string(),
+                        Err(e) => format!(" (its sidecar was refused: {e:#})"),
+                        _ => String::new(),
+                    };
+                    bail!(
+                        "no fresh sidecar for {name}{why} — name the block with --rows A-B (the rows \
+                         its title shows{}), or re-run `tdy fit`",
+                        if sheet.is_some() { ", with --sheet" } else { "" }
+                    )
+                }
             }
         }
         None => frame_for(file, sheet.as_deref(), req.rows, limits)?,
     };
+    let mut notes = Vec::new();
+    let mut candidates = Vec::new();
+    if let Extraction::Json { lines: false, pointer } = &mut frame.extraction {
+        match &req.pointer {
+            Some(want) => {
+                *pointer = Some(want.clone());
+                source.push_str("; record array from --pointer");
+            }
+            None if source != "sidecar" => {
+                let all = crate::sniff::json_record_pointers(file, limits);
+                if all.len() > 1 {
+                    candidates = all;
+                }
+            }
+            None => {}
+        }
+    } else if let Some(want) = &req.pointer {
+        bail!("--pointer {want:?} picks a record array of a JSON document; {} is not read as one", file.display());
+    }
+    // A text file holding several stacked tables, read whole, counts each
+    // table's header as data: say so, and name the flag that reads one.
+    if let Extraction::Delimited { region: None, .. } = &frame.extraction {
+        if let Ok(r) = crate::engine::regions_of(file, None, limits) {
+            if r.windows.len() > 1 {
+                let spans: Vec<String> =
+                    r.windows.iter().map(|w| format!("{}\u{2013}{}", w.start + 1, w.end)).collect();
+                notes.push(format!(
+                    "this file holds {} stacked tables (rows {}), read whole here with their headers \
+                     as data; --rows A-B reads one",
+                    r.windows.len(),
+                    spans.join(", ")
+                ));
+            }
+        }
+    }
     let mut p = profile(file, &frame, limits, ProfileOpts { head: req.head })?;
     p.frame = source;
+    p.notes = notes;
+    p.pointer_candidates = candidates;
     Ok(p)
 }
 
@@ -176,9 +312,11 @@ pub fn profile_member(
 /// disk. A refused member is the screen that most needs a profile and has
 /// no sidecar; this is the rule `console::raw_head` follows.
 ///
-/// `rows` names a block (1-based, inclusive): a fresh region sidecar whose
-/// window is exactly that block, or else the frame `fit` reads a block
-/// with (`fit::region_frame`).
+/// `rows` names a block, 1-based and inclusive: physical lines of a text
+/// file, or — with `sheet` — the sheet's own A1 row numbers, what Excel and
+/// a sheet block's `range` show. A fresh sidecar that reads exactly that
+/// block is used; otherwise the frame `fit` reads a block with
+/// (`fit::region_frame`).
 pub fn frame_for(
     path: &Path,
     sheet: Option<&str>,
@@ -192,46 +330,18 @@ pub fn frame_for(
         }
     }
     if let Some((a, b)) = rows {
-        let window = RowWindow { start: a - 1, end: b, ordinal: 1 };
-        if sheet.is_none() {
-            if workbook {
-                bail!("--rows on a workbook needs --sheet: rows are counted within one sheet");
+        return match sheet {
+            Some(s) => sheet_block_frame(path, s, (a, b), limits),
+            None if workbook => {
+                bail!("--rows on a workbook needs --sheet: rows are counted within one sheet")
             }
-            // A fresh sidecar that reads exactly this block: a region
-            // member's, or a plain one whose file is one block with
-            // padding around it.
-            let plain = std::iter::once(None);
-            let regions = crate::sidecar::region_sidecars(path, None).into_iter().map(Some);
-            for r in plain.chain(regions) {
-                if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) =
-                    crate::sidecar::load_member(path, None, r)
-                {
-                    if let Extraction::Delimited { region: Some(w), .. } = &sc.spec.extraction {
-                        if (w.start, w.end) == (window.start, window.end) {
-                            return Ok((sc.spec, "sidecar".into()));
-                        }
-                    }
-                }
-            }
-        }
-        let open = match sheet {
-            Some(s) => Some(crate::sniff::OpenSheet::open(path, s, limits)?),
-            None => None,
+            None => text_block_frame(path, (a, b), limits),
         };
-        let spec = crate::fit::region_frame(
-            path,
-            open.as_ref(),
-            window,
-            crate::sniff::SniffOpts { verify: false },
-            limits,
-        )
-        .map_err(|e| anyhow!("{e}"))?;
-        return Ok((spec, "sniffed (the block's own frame, as fit reads it; not saved)".into()));
     }
     let why = match crate::sidecar::load_member(path, sheet, None) {
         Ok(crate::sidecar::SidecarStatus::Fresh(sc)) => return Ok((sc.spec, "sidecar".into())),
         Ok(crate::sidecar::SidecarStatus::Stale(_)) => "the sidecar is stale".to_string(),
-        Ok(crate::sidecar::SidecarStatus::Absent) => "no sidecar".to_string(),
+        Ok(crate::sidecar::SidecarStatus::Absent) => absent_why(path, sheet),
         Err(e) => format!("the sidecar was refused: {e:#}"),
     };
     let spec = match sheet {
@@ -246,6 +356,103 @@ pub fn frame_for(
         }
     };
     Ok((spec, format!("sniffed ({why}; heuristics only, not saved)")))
+}
+
+/// "No sidecar", naming the member sidecars that do exist beside the file:
+/// a workbook expanded into sheets, a file or sheet split into blocks.
+fn absent_why(path: &Path, sheet: Option<&str>) -> String {
+    let regions = crate::sidecar::region_sidecars(path, sheet);
+    let regions: Vec<String> = regions.iter().map(|r| format!("#{r}")).collect();
+    let sheets = if sheet.is_none() { crate::sidecar::sheet_sidecars(path) } else { Vec::new() };
+    let whole = if sheet.is_some() { "sheet" } else if sheets.is_empty() { "file" } else { "workbook" };
+    let mut has = Vec::new();
+    if !sheets.is_empty() {
+        has.push(format!("sheet sidecars: {}", sheets.join(", ")));
+    }
+    if !regions.is_empty() {
+        has.push(format!("region sidecars: {}", regions.join(", ")));
+    }
+    if has.is_empty() {
+        "no sidecar".into()
+    } else {
+        format!("no sidecar for the whole {whole}; {}", has.join("; "))
+    }
+}
+
+/// `--rows A-B` of a text file: physical lines, refused past the end with
+/// the file's own length.
+fn text_block_frame(path: &Path, (a, b): (u64, u64), limits: Limits) -> Result<(ParseSpec, String)> {
+    let lines = count_lines(path, limits)?;
+    if b > lines {
+        bail!(
+            "--rows {a}-{b} reaches past the end of {} ({lines} lines)",
+            path.display()
+        );
+    }
+    let window = RowWindow { start: a - 1, end: b, ordinal: 1 };
+    // A fresh sidecar that reads exactly this block: a region member's, or
+    // a plain one whose file is one block with padding around it.
+    let plain = std::iter::once(None);
+    let regions = crate::sidecar::region_sidecars(path, None).into_iter().map(Some);
+    for r in plain.chain(regions) {
+        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = crate::sidecar::load_member(path, None, r) {
+            if let Extraction::Delimited { region: Some(w), .. } = &sc.spec.extraction {
+                if (w.start, w.end) == (window.start, window.end) {
+                    return Ok((sc.spec, "sidecar".into()));
+                }
+            }
+        }
+    }
+    let spec = crate::fit::region_frame(path, None, window, crate::sniff::SniffOpts { verify: false }, limits)
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok((spec, "sniffed (the block's own frame, as fit reads it; not saved)".into()))
+}
+
+/// `--sheet S --rows A-B`: the sheet's own A1 rows, refused outside its
+/// used range (which is named), then the block's A1 range — a fresh sheet
+/// block sidecar's when one reads exactly it.
+fn sheet_block_frame(path: &Path, sheet: &str, (a, b): (u64, u64), limits: Limits) -> Result<(ParseSpec, String)> {
+    let open = crate::sniff::OpenSheet::open(path, sheet, limits)?;
+    let (r0, c0) = open.range.start().unwrap_or((0, 0));
+    let height = open.range.height() as u64;
+    let (first, last) = (u64::from(r0) + 1, u64::from(r0) + height);
+    if height == 0 || a < first || b > last {
+        bail!(
+            "--rows {a}-{b} is outside sheet {sheet:?}'s used range, rows {first}\u{2013}{last}: a \
+             sheet's rows are its own A1 row numbers"
+        );
+    }
+    let window = RowWindow { start: a - first, end: b - u64::from(r0), ordinal: 1 };
+    let a1 = crate::fit::block_a1((r0, c0), open.range.width(), window);
+    for r in crate::sidecar::region_sidecars(path, Some(sheet)) {
+        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = crate::sidecar::load_member(path, Some(sheet), Some(r)) {
+            if let Extraction::Excel { range: Some(got), .. } = &sc.spec.extraction {
+                if *got == a1 {
+                    return Ok((sc.spec, "sidecar".into()));
+                }
+            }
+        }
+    }
+    let spec = crate::fit::region_frame(path, Some(&open), window, crate::sniff::SniffOpts { verify: false }, limits)
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok((spec, "sniffed (the block's own frame, as fit reads it; not saved)".into()))
+}
+
+/// Physical lines in a text file, counted as `RowWindow` counts them,
+/// streamed.
+fn count_lines(path: &Path, limits: Limits) -> Result<u64> {
+    use std::io::BufRead;
+    let real = crate::fileio::materialize(path, limits.max_decompressed_bytes)?;
+    let f = std::fs::File::open(real.as_ref() as &Path).with_context(|| format!("cannot open {}", path.display()))?;
+    let mut r = std::io::BufReader::new(f);
+    let (mut n, mut buf) = (0u64, Vec::new());
+    loop {
+        buf.clear();
+        if r.read_until(b'\n', &mut buf)? == 0 {
+            return Ok(n);
+        }
+        n += 1;
+    }
 }
 
 /// The frame's framing half: its transforms up to and including the last
@@ -300,7 +507,13 @@ pub fn profile(path: &Path, frame: &ParseSpec, limits: Limits, opts: ProfileOpts
         Extraction::Delimited { region, .. } => *region,
         _ => None,
     };
-    Ok(tally.finish(path.display().to_string(), sheet, window))
+    let mut p = tally.finish(path.display().to_string(), sheet, window);
+    match &frame.extraction {
+        Extraction::Excel { range, .. } => p.range.clone_from(range),
+        Extraction::Json { pointer, .. } => p.pointer.clone_from(pointer),
+        _ => {}
+    }
+    Ok(p)
 }
 
 /// The running counts of every column.
@@ -308,8 +521,9 @@ struct Tally {
     head: Option<u64>,
     rows: u64,
     complete: bool,
-    /// Each header name's `na_values`, from the frame's column that reads it.
-    na: HashMap<String, Vec<String>>,
+    /// Each frame column's source and `na_values`, resolved to a position
+    /// when the header is known.
+    na: Vec<(String, Vec<String>)>,
     columns: Vec<Acc>,
 }
 
@@ -326,7 +540,7 @@ struct Acc {
     max: Option<String>,
     /// pattern -> (count, first example).
     shapes: HashMap<String, (u64, String)>,
-    /// Values whose shape arrived after [`MAX_DISTINCT`] shapes were already
+    /// Values whose shape arrived after [`MAX_SHAPE_TRACK`] shapes were already
     /// tracked: counted, but only as `(other)`.
     untracked: u64,
 }
@@ -348,7 +562,11 @@ impl Tally {
             path,
             sheet,
             window,
-            frame: String::new(),
+            range: None,
+            pointer: None,
+            frame: "given by the caller".to_string(),
+            notes: Vec::new(),
+            pointer_candidates: Vec::new(),
             rows: self.rows,
             complete: self.complete,
             columns,
@@ -358,12 +576,21 @@ impl Tally {
 
 impl crate::stream::FramedSink for Tally {
     fn header(&mut self, header: &[String], origin: &[String]) -> Result<()> {
+        // `na_values` by the position a frame column reads — the header is
+        // deduplicated, so a name is one position — and the union when two
+        // columns read the same one.
+        let mut na: Vec<Vec<String>> = vec![Vec::new(); header.len()];
+        for (source, values) in &self.na {
+            if let Some(i) = header.iter().position(|h| h == source) {
+                na[i].extend(values.iter().cloned());
+            }
+        }
         self.columns = header
             .iter()
             .enumerate()
             .map(|(i, h)| Acc {
                 name: origin.get(i).cloned().unwrap_or_else(|| h.clone()),
-                na: self.na.get(h).cloned().unwrap_or_default(),
+                na: std::mem::take(&mut na[i]),
                 non_empty: 0,
                 empty: 0,
                 values: Some(HashMap::new()),
@@ -421,7 +648,7 @@ impl Acc {
         let pattern = shape(v);
         if let Some((n, _)) = self.shapes.get_mut(&pattern) {
             *n += 1;
-        } else if self.shapes.len() < MAX_DISTINCT {
+        } else if self.shapes.len() < MAX_SHAPE_TRACK {
             self.shapes.insert(pattern, (1, v.to_string()));
         } else {
             self.untracked += 1;
@@ -461,6 +688,7 @@ impl Acc {
             max: self.max,
             top,
             shapes,
+            shapes_complete: self.untracked == 0,
         }
     }
 }

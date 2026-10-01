@@ -98,9 +98,15 @@ enum Command {
         /// member's title counts it.
         #[arg(long)]
         rows: Option<String>,
-        /// One column's detail: its top values and every shape.
+        /// One column's detail: its top values and every shape. A name as
+        /// the file spells it, `#N` for the Nth column, or `\#N` for a
+        /// column literally named `#N`.
         #[arg(long)]
         column: Option<String>,
+        /// The record array of a JSON document to read (`/q2`), when it
+        /// holds several.
+        #[arg(long)]
+        pointer: Option<String>,
         /// Profile only the first N rows (the output says it is not the
         /// whole file).
         #[arg(long)]
@@ -575,10 +581,10 @@ async fn run() -> Result<()> {
             )
             .await?;
         }
-        Command::Profile { file, sheet, rows, column, head } => {
+        Command::Profile { file, sheet, rows, column, head, pointer } => {
             let cfg = config::load(&overrides)?;
             let rows = rows.as_deref().map(tdy::profile::parse_rows).transpose()?;
-            let req = tdy::profile::Request { sheet, rows, head };
+            let req = tdy::profile::Request { sheet, rows, head, pointer };
             let p = tdy::profile::profile_file(&file, &req, cfg.limits)?;
             if cli.json {
                 let v = match &column {

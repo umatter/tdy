@@ -2000,3 +2000,36 @@ fn a_profile_opens_columns_then_detail_and_esc_walks_back() {
     w.key(key(KeyCode::Esc));
     assert!(matches!(w.context, Context::Empty));
 }
+
+/// PgDn over a Profile's table pages the columns and keeps the selected
+/// one on screen, rather than leaving its marker scrolled off above.
+#[test]
+fn paging_a_profile_keeps_the_selected_column_visible() {
+    let d = pile();
+    let p = d.path().join("wide.csv");
+    let header: Vec<String> = (1..=40).map(|i| format!("c{i}")).collect();
+    let row: Vec<String> = (1..=40).map(|i| i.to_string()).collect();
+    std::fs::write(&p, format!("{}\n{}\n", header.join(","), row.join(","))).unwrap();
+    let prof = tdy::profile::profile_file(&p, &tdy::profile::Request::default(), tdy::config::Limits::default()).unwrap();
+    let mut w = wb(&d);
+    w.set_main_view_rows(12);
+    w.apply(outcome(".profile wide.csv", "", Payload::Profile(prof)), d.path());
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::PageDown));
+    w.key(key(KeyCode::PageDown));
+    let Context::Profile { selected, .. } = &w.context else { panic!() };
+    let visible = 12 - tdy_tui::workbench::profile_head_rows(match &w.context {
+        Context::Profile { profile, .. } => profile,
+        _ => unreachable!(),
+    });
+    assert!(
+        *selected >= w.main_scroll && *selected < w.main_scroll + visible,
+        "selected {selected} off screen at scroll {}",
+        w.main_scroll
+    );
+    w.key(key(KeyCode::PageUp));
+    w.key(key(KeyCode::PageUp));
+    let Context::Profile { selected, .. } = &w.context else { panic!() };
+    assert!(*selected >= w.main_scroll && *selected < w.main_scroll + visible);
+}

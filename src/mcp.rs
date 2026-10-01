@@ -178,7 +178,8 @@ fn tool_list(allow_accept: bool) -> Value {
                 "path": path_arg("The data file, or a member reference (`book.xlsx#Q1`, `report.csv#2`)."),
                 "sheet": {"type": "string", "description": "One sheet of a workbook."},
                 "rows": {"type": "string", "description": "One block of rows, 1-based and inclusive: `6-9`."},
-                "head": {"type": "integer", "description": "Profile only the first N rows; the answer says complete: false."}
+                "head": {"type": "integer", "description": "Profile only the first N rows; the answer says complete: false."},
+                "pointer": {"type": "string", "description": "The record array of a JSON document to read (`/q2`), when it holds several."}
             }, "required": ["path"]},
         },
         {
@@ -392,19 +393,19 @@ impl McpServer {
         }))
     }
 
-    /// Read-only. A member reference is split by the sidecar it names
-    /// (`sidecar::resolve_ref`) and the data file it resolves to confined
-    /// like any other path — before anything opens it.
+    /// Read-only. A member reference is split by `profile::resolve`, which
+    /// confines every candidate data file before reading a sidecar beside
+    /// it, and confines the answer again.
     fn profile(&self, args: &Value) -> Result<Value> {
         let raw = str_arg(args, "path")?;
-        let joined = self.root.join(raw);
-        let (file, sheet, region) = crate::sidecar::resolve_ref(&joined)?;
-        let file = crate::fileio::confine(&file, &self.root)?;
+        // Confined before any sidecar beside a candidate is read.
+        let (file, sheet, region) = crate::profile::resolve(&self.root.join(raw), Some(&self.root))?;
         let rows = args["rows"].as_str().map(crate::profile::parse_rows).transpose()?;
         let req = crate::profile::Request {
             sheet: args["sheet"].as_str().map(String::from),
             rows,
             head: args["head"].as_u64(),
+            pointer: args["pointer"].as_str().map(String::from),
         };
         let mut p = crate::profile::profile_member(&file, sheet, region, &req, self.cfg.limits)?;
         p.path = raw.to_string();

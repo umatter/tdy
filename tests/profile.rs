@@ -224,3 +224,296 @@ fn profile_streams_a_large_file() {
     assert_eq!(column(&prof, "id").distinct, Distinct::AtLeast(10_000));
     assert_eq!(column(&prof, "city").distinct, Distinct::Exact(4));
 }
+
+// --- fix wave ---------------------------------------------------------------
+
+fn text_of(p: &Profile, column: Option<&str>) -> String {
+    tdy::commands::profile_text(&p.path, p, column).unwrap()
+}
+
+fn sniffed(p: &Path) -> tdy::spec::ParseSpec {
+    tdy::sniff::sniff_opts(
+        p,
+        &tdy::sample::build(p, 16 * 1024, Limits::default()).unwrap(),
+        Limits::default(),
+        tdy::sniff::SniffOpts { verify: false },
+    )
+    .unwrap()
+    .spec
+}
+
+fn save(p: &Path, spec: &tdy::spec::ParseSpec) {
+    tdy::sidecar::save(
+        p,
+        spec,
+        tdy::sidecar::ProvenanceInfo {
+            method: tdy::spec::InferenceMethod::Manual,
+            model: None,
+            prompt_version: None,
+            sampled_bytes: None,
+        },
+    )
+    .unwrap();
+}
+
+/// `--sheet S --rows A-B` are the sheet's own row numbers — what Excel and a
+/// sheet block's sidecar `range` show — not rows of the used range. The
+/// used range of `regions_three_offset.xlsx` is C5:E18 and block 2 is
+/// C10:E13; the heading says which range was read.
+#[test]
+fn sheet_rows_are_the_sheets_own_row_numbers() {
+    let (_d, p) = scratch("regions_three_offset.xlsx");
+    let req = Request { sheet: Some("Data".into()), rows: Some((10, 13)), ..Request::default() };
+    let prof = profile_file(&p, &req, Limits::default()).unwrap();
+    assert_eq!(prof.rows, 3);
+    let betrag = column(&prof, "Betrag");
+    assert_eq!((betrag.min.as_deref(), betrag.max.as_deref()), (Some("490.00"), Some("510.00")));
+    assert_eq!(prof.range.as_deref(), Some("C10:E13"));
+    assert!(text_of(&prof, None).lines().next().unwrap().contains("range C10:E13"), "{}", text_of(&prof, None));
+
+    let req = Request { sheet: Some("Data".into()), rows: Some((2, 4)), ..Request::default() };
+    let e = profile_file(&p, &req, Limits::default()).unwrap_err().to_string();
+    assert!(e.contains("5") && e.contains("18"), "names the used range: {e}");
+}
+
+/// Past 10,000 distinct shapes the shapes are not all tracked: the column
+/// says so, and no renderer claims a "most frequent shape" it cannot know.
+/// 10,000 punctuation-only values, each its own shape, then 20,000 ISO
+/// dates: the true answer (`9999-99-99`, 66.7%) arrived after the bound.
+#[test]
+fn an_untracked_shape_is_said_not_guessed() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("v.csv");
+    let mut s = String::from("v;n\n");
+    let marks = ['.', '-', '/'];
+    for i in 0..10_000u32 {
+        let mut k = i;
+        let v: String = (0..9).map(|_| { let c = marks[(k % 3) as usize]; k /= 3; c }).collect();
+        s.push_str(&format!("{v};1\n"));
+    }
+    for _ in 0..20_000 {
+        s.push_str("2025-01-01;1\n");
+    }
+    std::fs::write(&p, s).unwrap();
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    let v = column(&prof, "v");
+    assert!(!v.shapes_complete);
+    let summary = text_of(&prof, None);
+    let row = summary.lines().find(|l| l.contains("  v  ")).unwrap();
+    assert!(row.contains("(shapes past 10000 not tracked)"), "{row}");
+    assert!(!row.contains("0.0%"), "no false most-frequent shape: {row}");
+    let detail = text_of(&prof, Some("v"));
+    assert!(detail.contains("not tracked"), "{detail}");
+    assert!(column(&prof, "n").shapes_complete);
+}
+
+/// 65 shapes: the 64 most frequent are listed, the least frequent is the
+/// one `(other)` row, and the shapes are still complete — every one was
+/// counted.
+#[test]
+fn past_64_shapes_the_rest_are_one_other_row() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("s.csv");
+    let mut s = String::from("v,n\n");
+    for k in 0..65usize {
+        // `x` then k dots: one shape each; shape k appears 66 - k times.
+        for _ in 0..(66 - k) {
+            s.push_str(&format!("x{},1\n", ".".repeat(k)));
+        }
+    }
+    std::fs::write(&p, s).unwrap();
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    let v = column(&prof, "v");
+    assert!(v.shapes_complete);
+    assert_eq!(v.shapes.len(), 65);
+    assert_eq!(v.shapes[0], shape("a", 66, "x"));
+    assert_eq!(v.shapes[64].pattern, "(other)");
+    assert_eq!(v.shapes[64].count, 2, "the 65th shape, two values");
+    assert_eq!(v.shapes.iter().map(|s| s.count).sum::<u64>(), v.non_empty);
+}
+
+/// A column's `na_values` count as empty, by the column that reads that
+/// position — case-folded, as the executor reads them.
+#[test]
+fn na_values_count_as_empty() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("na.csv");
+    std::fs::write(&p, "Datum;Region;Betrag\n2025-01-01;  ost ;1\n2025-01-02;N/A;2\n2025-01-03;West;3\n2025-01-04;  ;4\n")
+        .unwrap();
+    let mut spec = sniffed(&p);
+    for c in &mut spec.columns {
+        if c.source_name() == "Region" {
+            c.parse.na_values = vec!["n/a".into()];
+        }
+    }
+    save(&p, &spec);
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    assert_eq!(prof.frame, "sidecar");
+    let region = column(&prof, "Region");
+    assert_eq!((region.non_empty, region.empty), (2, 2), "`N/A` and a blank are empty");
+    assert_eq!(region.min.as_deref(), Some("West"));
+    assert_eq!(region.max.as_deref(), Some("ost"), "trimmed");
+}
+
+/// Two columns with one name: `--column NAME` is refused offering both
+/// positions, quoted for a shell; `#4` picks one; `\#3` names a column
+/// literally called `#3`.
+#[test]
+fn columns_are_picked_by_name_by_position_or_literally() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("2025-08.csv");
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/drifting_exports/2025-08.csv"), &p).unwrap();
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    let e = tdy::commands::profile_text("x", &prof, Some("Betrag")).unwrap_err().to_string();
+    assert!(e.contains("--column '#3'") && e.contains("--column '#4'"), "{e}");
+    let t = text_of(&prof, Some("#4"));
+    assert!(t.contains("column `Betrag` (position 4)") && t.contains("1'945.80"), "{t}");
+
+    let p = d.path().join("hash.csv");
+    std::fs::write(&p, "a,#3,c\n1,x,3\n2,y,4\n").unwrap();
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    assert!(text_of(&prof, Some("#3")).contains("column `c` (position 3)"));
+    assert!(text_of(&prof, Some("\\#3")).contains("column `#3` (position 2)"));
+}
+
+/// A member reference reads the block its fresh sidecar names; without one
+/// it is refused with the designed sentence, not "no such file"; a sheet
+/// reference needs no sidecar.
+#[test]
+fn member_references_resolve_or_are_refused_by_name() {
+    let d = tempfile::tempdir().unwrap();
+    let report = d.path().join("report.csv");
+    std::fs::copy(fixture("regions_three.csv"), &report).unwrap();
+    let e = profile_file(&d.path().join("report.csv#2"), &Request::default(), Limits::default())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("no fresh sidecar for") && e.contains("report.csv#2") && e.contains("--rows"), "{e}");
+
+    std::fs::write(
+        d.path().join("q.tdy.sql"),
+        "CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), \
+         region TEXT NOT NULL OPTIONS(matches='Region'), \
+         amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) \
+         WITH (files = '*.csv', date_order = 'dmy');",
+    )
+    .unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["fit", "q.tdy.sql"])
+        .current_dir(d.path())
+        .env("TDY_BACKEND", "none")
+        .output()
+        .unwrap();
+    assert!(d.path().join("report.csv#2.tdy.toml").exists(), "{}", String::from_utf8_lossy(&out.stdout));
+    let prof = profile_file(&d.path().join("report.csv#2"), &Request::default(), Limits::default()).unwrap();
+    assert_eq!(prof.frame, "sidecar");
+    assert_eq!(prof.rows, 3);
+    assert_eq!(column(&prof, "Betrag").min.as_deref(), Some("490.00"));
+
+    let (_d2, book) = scratch("sheet_frames_one_fits.xlsx");
+    let sheet_ref = book.with_file_name("sheet_frames_one_fits.xlsx#Daten");
+    let prof = profile_file(&sheet_ref, &Request::default(), Limits::default()).unwrap();
+    assert_eq!((prof.sheet.as_deref(), prof.rows), (Some("Daten"), 4));
+}
+
+/// A stale sidecar is not trusted: the sniffer's frame is read, and the
+/// profile says why.
+#[test]
+fn a_stale_sidecar_is_not_trusted() {
+    let (_d, p) = scratch("profile_mixed_dates.csv");
+    let mut spec = sniffed(&p);
+    spec.transforms.insert(0, tdy::spec::Transform::SkipRows { head: 2, tail: 0 });
+    save(&p, &spec);
+    let mut text = std::fs::read_to_string(&p).unwrap();
+    text.push_str("2025-05-01;Ost;1'301.50\n");
+    std::fs::write(&p, text).unwrap();
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    assert!(prof.frame.starts_with("sniffed (the sidecar is stale"), "{}", prof.frame);
+    assert_eq!(prof.columns[0].name, "Datum");
+    assert_eq!(prof.rows, 101);
+}
+
+/// A title line wider than the table adds no phantom columns (the streamed
+/// width is measured as the engine measures it).
+#[test]
+fn a_wide_title_adds_no_columns() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("title.csv");
+    std::fs::write(&p, "Bericht Q1, Zuerich, final, v2\n\nDatum,Betrag\n2025-01-01,10\n2025-01-02,11\n2025-01-03,12\n")
+        .unwrap();
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    let names: Vec<&str> = prof.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Datum", "Betrag"]);
+}
+
+/// A document with several record arrays: the heading names the array
+/// profiled and the candidates; `--pointer` picks another.
+#[test]
+fn several_record_arrays_are_named_and_pickable() {
+    let (_d, p) = scratch("json_frames_two_fit.json");
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    let head = text_of(&prof, None).lines().next().unwrap().to_string();
+    assert!(head.contains("record array /q1") && head.contains("one of 2 candidates (/q1, /q2)"), "{head}");
+    assert!(head.contains("--pointer"), "{head}");
+    let req = Request { pointer: Some("/q2".into()), ..Request::default() };
+    let prof = profile_file(&p, &req, Limits::default()).unwrap();
+    assert_eq!(prof.pointer.as_deref(), Some("/q2"));
+    assert_eq!(column(&prof, "amount").min.as_deref(), Some("490.00"));
+    let head = text_of(&prof, None).lines().next().unwrap().to_string();
+    assert!(head.contains("record array /q2") && !head.contains("candidates"), "{head}");
+}
+
+/// The smaller sentences: rows past the end name the file and its length;
+/// a stacked file read whole says so; "no sidecar" names the members'
+/// sidecars that do exist; a newline in a value draws as `↵`; a long shape
+/// is elided in the summary and whole in the detail; `profile()` called
+/// directly says its frame came from the caller.
+#[test]
+fn the_smaller_sentences() {
+    let (d, p) = scratch("regions_three.csv");
+    let req = Request { rows: Some((20, 30)), ..Request::default() };
+    let e = profile_file(&p, &req, Limits::default()).unwrap_err().to_string();
+    assert!(e.contains("regions_three.csv") && e.contains("14 lines"), "{e}");
+
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    let t = text_of(&prof, None);
+    assert!(t.contains("3 stacked tables") && t.contains("--rows"), "{t}");
+
+    let mut spec = sniffed(&p);
+    if let tdy::spec::Extraction::Delimited { region, .. } = &mut spec.extraction {
+        *region = Some(tdy::spec::RowWindow { start: 5, end: 9, ordinal: 2 });
+    }
+    tdy::sidecar::save_member(
+        &p,
+        None,
+        Some(2),
+        &spec,
+        tdy::sidecar::ProvenanceInfo {
+            method: tdy::spec::InferenceMethod::Manual,
+            model: None,
+            prompt_version: None,
+            sampled_bytes: None,
+        },
+    )
+    .unwrap();
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    assert!(prof.frame.contains("region sidecars: #2"), "{}", prof.frame);
+    drop(d);
+
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("nl.csv");
+    let long = "x.".repeat(30);
+    std::fs::write(&p, format!("a,b\n\"one\ntwo\",{long}\n")).unwrap();
+    let prof = profile_file(&p, &Request::default(), Limits::default()).unwrap();
+    let t = text_of(&prof, None);
+    assert!(t.contains("one↵two"), "{t}");
+    assert!(!t.contains(&shape_of(&long)), "elided in the summary: {t}");
+    assert!(text_of(&prof, Some("b")).contains(&shape_of(&long)), "whole in the detail");
+
+    let spec = sniffed(&p);
+    let direct = tdy::profile::profile(&p, &spec, Limits::default(), tdy::profile::ProfileOpts::default()).unwrap();
+    assert!(!direct.frame.is_empty());
+}
+
+fn shape_of(v: &str) -> String {
+    tdy::profile::shape(v)
+}

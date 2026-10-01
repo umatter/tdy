@@ -1167,9 +1167,21 @@ async fn profile_text_equals_the_binary() {
 /// `.profile` is confined like every other command that names a path.
 #[tokio::test]
 async fn profile_refuses_a_path_outside_the_root() {
-    let d = pile();
-    let mut s = session(d.path()).await;
-    let o = s.run(".profile ../../etc/passwd", None).await;
-    assert!(!o.ok, "{}", o.text);
-    assert!(o.text.contains("outside") || o.text.contains("does not exist"), "{}", o.text);
+    // A real file beside the root, so a refusal can only be confinement's.
+    let outer = tempfile::tempdir().unwrap();
+    let root = outer.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(outer.path().join("secret.csv"), "a,b\n1,2\n").unwrap();
+    std::fs::copy(corpus().join("2025-01.csv"), root.join("2025-01.csv")).unwrap();
+    let mut s = session(&root).await;
+    for line in [
+        ".profile ../secret.csv".to_string(),
+        format!(".profile {}", outer.path().join("secret.csv").display()),
+        ".profile ../secret.csv#2".to_string(),
+    ] {
+        let o = s.run(&line, None).await;
+        assert!(!o.ok, "{line}: {}", o.text);
+        assert!(o.text.contains("outside"), "{line}: {}", o.text);
+    }
+    assert!(s.run(".profile 2025-01.csv", None).await.ok);
 }

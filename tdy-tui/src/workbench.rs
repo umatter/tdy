@@ -20,9 +20,12 @@ use tdy::report::{MemberStatus, MemberReport, PileReport};
 use crate::browser::Browser;
 use crate::remedy::{self, Edit, Remedy};
 
-/// Rows a Profile's table draws above its first column: the heading line
-/// and the table's own header row. Shared with `wb_ui::draw_profile`.
-pub const PROFILE_HEAD_ROWS: usize = 2;
+/// Rows a Profile's table draws above its first column: the heading line,
+/// one per note under it, and the table's own header row — the arithmetic
+/// `wb_ui::draw_profile` lays out.
+pub fn profile_head_rows(p: &tdy::profile::Profile) -> usize {
+    2 + p.notes.len()
+}
 
 /// Which pane keys are routed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1153,10 +1156,12 @@ impl Workbench {
         match k.code {
             KeyCode::PageDown => {
                 self.main_scroll = (self.main_scroll + 5).min(self.main_scroll_bound());
+                self.keep_profile_selection_in_view();
                 return WbAction::None;
             }
             KeyCode::PageUp => {
                 self.main_scroll = self.main_scroll.saturating_sub(5);
+                self.keep_profile_selection_in_view();
                 return WbAction::None;
             }
             _ => {}
@@ -1395,13 +1400,25 @@ impl Workbench {
     /// Keep the selected column of a Profile's table on screen: the table
     /// sits under a heading line and its own header row, which is the `2`.
     fn follow_profile_selection(&mut self) {
-        let Context::Profile { selected, detail: false, .. } = &self.context else { return };
-        let visible = self.main_view_rows.saturating_sub(PROFILE_HEAD_ROWS).max(1);
+        let Context::Profile { profile, selected, detail: false } = &self.context else { return };
+        let visible = self.main_view_rows.saturating_sub(profile_head_rows(profile)).max(1);
         if *selected < self.main_scroll {
             self.main_scroll = *selected;
         } else if *selected >= self.main_scroll + visible {
             self.main_scroll = selected + 1 - visible;
         }
+    }
+
+    /// After a page key over a Profile's table: the scroll moved, so move
+    /// the selection into what is now on screen — a marker paged off the
+    /// top would leave Enter opening a column nobody can see.
+    fn keep_profile_selection_in_view(&mut self) {
+        let rows = self.main_view_rows;
+        let scroll = self.main_scroll;
+        let Context::Profile { profile, selected, detail: false } = &mut self.context else { return };
+        let visible = rows.saturating_sub(profile_head_rows(profile)).max(1);
+        let last = profile.columns.len().saturating_sub(1);
+        *selected = (*selected).clamp(scroll.min(last), (scroll + visible - 1).min(last));
     }
 
     /// `p` over a File: the `.profile` line for the file on show — with

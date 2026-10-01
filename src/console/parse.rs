@@ -33,6 +33,8 @@ pub enum Command {
         rows: Option<(u64, u64)>,
         column: Option<String>,
         head: Option<u64>,
+        /// The record array of a JSON document (`/q2`).
+        pointer: Option<String>,
     },
     Edit { file: String },
     Help { command: Option<String> },
@@ -275,7 +277,7 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
             Command::Show { file: a.positional[0].clone(), sheet: a.value("--sheet") }
         }
         "profile" => {
-            let a = Args::collect("profile", args, &[], &["--sheet", "--rows", "--column", "--head"])?;
+            let a = Args::collect("profile", args, &[], &["--sheet", "--rows", "--column", "--head", "--pointer"])?;
             a.exactly(&["FILE"])?;
             let bad = |flag: &str, value: String, want: &'static str| ParseError::BadValue {
                 command: "profile",
@@ -300,6 +302,7 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
                 rows,
                 column: a.value("--column"),
                 head,
+                pointer: a.value("--pointer"),
             }
         }
         "edit" => {
@@ -460,11 +463,23 @@ mod tests {
                 rows: Some((6, 9)),
                 column: Some("Betrag CHF".into()),
                 head: Some(10),
+                pointer: None,
             }
         );
         assert_eq!(
             p(".profile a.csv"),
-            Command::Profile { file: "a.csv".into(), sheet: None, rows: None, column: None, head: None }
+            Command::Profile { file: "a.csv".into(), sheet: None, rows: None, column: None, head: None, pointer: None }
+        );
+        assert_eq!(
+            p(".profile doc.json --pointer /q2"),
+            Command::Profile {
+                file: "doc.json".into(),
+                sheet: None,
+                rows: None,
+                column: None,
+                head: None,
+                pointer: Some("/q2".into()),
+            }
         );
         assert_eq!(parse(".profile"), Err(ParseError::Missing { command: "profile", what: "FILE" }));
         assert_eq!(

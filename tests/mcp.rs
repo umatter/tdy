@@ -406,6 +406,18 @@ fn the_profile_tool_answers_and_stays_inside_the_root() {
     let (msg, err) = s.call("profile", serde_json::json!({"path": outside.path().join("secret.csv")}));
     assert!(err, "a path outside the root must be refused: {msg:#}");
     assert!(msg.as_str().unwrap().contains("outside"), "{msg:#}");
-    let (msg, err) = s.call("profile", serde_json::json!({"path": "../secret.csv"}));
-    assert!(err, "{msg:#}");
+    // A file that really is at `root/../secret.csv`, and a member
+    // reference into it: each refused as outside, not as missing.
+    let parent = dir.path().parent().unwrap().join(format!(
+        "secret-{}.csv",
+        dir.path().file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(&parent, "a,b\n1,2\n").unwrap();
+    let rel = format!("../{}", parent.file_name().unwrap().to_string_lossy());
+    for path in [rel.clone(), format!("{rel}#2")] {
+        let (msg, err) = s.call("profile", serde_json::json!({"path": path}));
+        assert!(err, "{path}: {msg:#}");
+        assert!(msg.as_str().unwrap().contains("outside"), "{path}: {msg:#}");
+    }
+    std::fs::remove_file(&parent).unwrap();
 }
