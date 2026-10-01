@@ -118,6 +118,13 @@ FIXTURES  (all in testdata/, named regions_*)
    belongs to #2. Reusing it reads B twice and loses A. Ground truth: B+C =
    2400.00; A+B+C = 2406.00.
 
+11. regions_banner_notes.xlsx
+   A "Notes" sheet (three one-cell lines) first, then sheet "Data" laid out
+   as one sheet of #8 ("Premise", banner and footnotes in column A). Only
+   "Data" holds the table, so sheet discovery finds one fitting sheet: the
+   member is plain, and its region split must still read "Data" — not give
+   up because the workbook has two sheets. Ground truth: 1500/1550/1600.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
@@ -125,7 +132,8 @@ regions_short_block.csv -> [{3,7}] plus a dropped table-shaped run {0,2};
 regions_banner.csv -> one member, window {7,14}, sums 1500/1550/1600;
 regions_banner.xlsx -> two sheet members, sums 1500/1550/1600 and 3000/3100/3200;
 regions_footnoted.xlsx -> read whole positionally, or one by-name member, 1500/1550/1600;
-regions_renumber.{csv,xlsx} -> 2400.00 (Betrag), 2406.00 (Betrag, Menge).
+regions_renumber.{csv,xlsx} -> 2400.00 (Betrag), 2406.00 (Betrag, Menge);
+regions_banner_notes.xlsx -> one plain member, 1500/1550/1600.
 """
 import os
 import re
@@ -433,6 +441,38 @@ def build_regions_renumber():
     save_workbook(wb, "regions_renumber.xlsx", "regions_renumber.csv as sheet \"Data\"")
 
 
+def build_regions_banner_notes_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    notes = wb.active
+    notes.title = "Notes"
+    for i, text in enumerate(["About this workbook", "Source: somewhere", "Contact: nobody"], 1):
+        notes.cell(row=i, column=1, value=text)
+    ws = wb.create_sheet("Data")
+    row = 1
+    for text in BANNER:
+        ws.cell(row=row, column=1, value=text)
+        row += 1
+    row += 1
+    for j, h in enumerate(BANNER_HEADER):
+        ws.cell(row=row, column=1 + j, value=h)
+    row += 2
+    for vals in BANNER_ROWS:
+        for j, v in enumerate(vals):
+            ws.cell(row=row, column=1 + j, value=v)
+        row += 1
+    row += 1
+    for text in FOOTNOTES:
+        ws.cell(row=row, column=1, value=text)
+        row += 1
+    save_workbook(
+        wb,
+        "regions_banner_notes.xlsx",
+        "a Notes sheet, then one banner/table/footnotes sheet; one fitting sheet",
+    )
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -445,6 +485,7 @@ def main():
     build_regions_banner_xlsx()
     build_regions_footnoted_xlsx()
     build_regions_renumber()
+    build_regions_banner_notes_xlsx()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "

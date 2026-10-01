@@ -1216,3 +1216,20 @@ fn a_two_field_title_over_a_headed_table_is_reviewed_not_adopted() {
     let (_d, t) = pile("Sales report;Q1 2025\n\nState;Amount\nBern;100.00\nZug;200.00\nUri;300.00\n\nSource: FSO\n", ddl);
     waits_then_reads(&t, "REVIEW: a run of 1 line(s) at lines 1–1 was not read", "amount", "600.00");
 }
+
+/// A workbook where only one sheet holds the table is a plain member, and
+/// its split must still read that sheet: "a workbook with several sheets"
+/// gave no sheet to split, the banner was read as data, and the member was
+/// refused where the same sheet alone fits.
+#[test]
+fn the_one_fitting_sheet_of_a_workbook_is_split_and_fits() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_banner_notes.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let t = banner_target(dir.path(), "*.xlsx");
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("book.xlsx#") && !text.contains("REVIEW"), "{text}");
+    let q = query(&t, "SELECT count(*) AS n, sum(y2008) AS a, sum(y2009) AS b, sum(y2010) AS c FROM DS");
+    for want in ["| 5 ", "| 1500 ", "| 1550 ", "| 1600 "] { assert!(q.contains(want), "{want}: {q}"); }
+}

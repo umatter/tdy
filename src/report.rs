@@ -323,6 +323,11 @@ pub struct Unit {
     /// Those of `dropped` shaped like the blocks that were kept: `review`'s
     /// own subject.
     pub shaped: Vec<crate::engine::DroppedRun>,
+    /// The sheet the split read, when the file is a workbook: the member's
+    /// own sheet, a single-sheet workbook's only one, or the one sheet of
+    /// several that fits. `fit_region` and the reused-sidecar check read
+    /// the same sheet the split did.
+    pub region_sheet: Option<String>,
 }
 
 impl Unit {
@@ -370,19 +375,27 @@ pub fn expand_units(
     limits: crate::config::Limits,
     excluded_files: &[(String, String)],
 ) -> Result<Vec<Unit>> {
-    let mut sheet_units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
+    // (member, notes, the sheet a plain member's split should read)
+    let mut sheet_units: Vec<(MemberRef, Vec<String>, Option<String>)> = Vec::new();
     for rel in rels {
         let p = dir.join(rel);
         match crate::fit::discover_sheets(&p, target, limits) {
             Ok(Some(d)) if d.fitting.len() >= 2 => {
                 let note = expansion_note(&d);
                 for sheet in &d.fitting {
-                    sheet_units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()]));
+                    sheet_units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()], None));
                 }
+            }
+            // One sheet of several fits: the member stays plain (`fit`
+            // eliminates the others), but its split must read that sheet —
+            // without a name, no split ran at all and the sheet's banner
+            // was read as data.
+            Ok(Some(d)) if d.fitting.len() == 1 => {
+                sheet_units.push((MemberRef::file(rel.clone()), Vec::new(), d.fitting.first().cloned()))
             }
             // One fitting sheet, none, a non-workbook, or an unreadable
             // file: a plain member, and `plan` says what is wrong.
-            _ => sheet_units.push((MemberRef::file(rel.clone()), Vec::new())),
+            _ => sheet_units.push((MemberRef::file(rel.clone()), Vec::new(), None)),
         }
     }
 
@@ -393,9 +406,14 @@ pub fn expand_units(
     // member itself stays plain (`book.xlsx#2`, never `book.xlsx#Data#2` —
     // only a sheet that was itself expanded into a member gets `#Sheet#N`).
     let mut units: Vec<Unit> = Vec::new();
-    for (member, notes) in sheet_units {
+    for (member, notes, fitting_sheet) in sheet_units {
         let p = dir.join(&member.path);
-        let regions = match crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits) {
+        let hint = match fitting_sheet {
+            Some(s) => Some(Some(s)),
+            None => crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits),
+        };
+        let region_sheet = hint.clone().flatten();
+        let regions = match hint {
             // The split proposes blocks; only those that pass the gates
             // against the target are members (the design's table is keyed
             // on exactly that). The rest are runs nothing reads.
@@ -426,6 +444,7 @@ pub fn expand_units(
                 review: None,
                 dropped: Vec::new(),
                 shaped: Vec::new(),
+                region_sheet: region_sheet.clone(),
             }),
             1 => {
                 let w = regions.windows[0];
@@ -443,6 +462,7 @@ pub fn expand_units(
                     review: shaped_reason,
                     dropped: regions.dropped.clone(),
                     shaped: shaped.clone(),
+                    region_sheet: region_sheet.clone(),
                 });
             }
             _ => {
@@ -467,6 +487,7 @@ pub fn expand_units(
                         review,
                         dropped: regions.dropped.clone(),
                         shaped: shaped.clone(),
+                        region_sheet: region_sheet.clone(),
                     });
                 }
             }
@@ -841,8 +862,7 @@ pub async fn fit_pile(
             // window is in hand) and one workbook open for a sheet block.
             let disagreement = window.and_then(|w| {
                 window_disagreement(&sc.spec, w, || {
-                    let s = crate::fit::region_read_hint(&p, sheet, limits).flatten()?;
-                    crate::fit::region_a1(&p, &s, w, limits).ok()
+                    crate::fit::region_a1(&p, u.region_sheet.as_deref()?, w, limits).ok()
                 })
             });
             // tdy's own sidecar is re-planned, saying so; a person's
@@ -1049,8 +1069,7 @@ pub async fn fit_pile(
         }
         let planned = match window {
             Some(w) => {
-                let region_sheet = crate::fit::region_read_hint(&p, sheet, limits).flatten();
-                crate::fit::fit_region(&p, region_sheet.as_deref(), *w, &target, limits).map(|fitted| {
+                crate::fit::fit_region(&p, u.region_sheet.as_deref(), *w, &target, limits).map(|fitted| {
                     crate::fit::Planned { fitted, method: InferenceMethod::Heuristic, model: None }
                 })
             }
