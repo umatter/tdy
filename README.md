@@ -1152,6 +1152,14 @@ Details worth knowing:
   chrono's specifier already means; the option exists for the scales it does
   not spell. It requires `format = "%s"` beside it, so the two cannot
   disagree about how to read one value.
+- **`year_pivot` decides the century of a two-digit year.** Under `%y`, a
+  year below the pivot is 20xx and one at or above it 19xx:
+  `parse = { year_pivot = 30 }` on `dtype = { type = "date", format =
+  "%d.%m.%y" }` reads `01.02.29` as 2029-02-01 and `01.02.45` as 1945-02-01.
+  Unset keeps chrono's window (1970–2069), which reads that `45` as 2045 — a
+  birth year a century late. Only on a `date` or `timestamp` read with `%y`,
+  and never inferred: the file does not say which century it means. A target
+  cannot declare it yet; it is a sidecar field.
 - **`source_name` turns where a file *is* into a column.** The period a
   monthly export covers is very often only in its filename. `from` picks
   `file_stem`, `file_name`, `sheet` or `path`, and an optional `pattern`'s

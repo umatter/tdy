@@ -1173,6 +1173,15 @@ fn finish(
         }
     }
 
+    // No format in `DATE_FORMATS`/`TS_FORMATS` reads `%y` today, so this says
+    // nothing yet; it is here so that one added there names its century
+    // window rather than arriving silently.
+    for c in &columns {
+        if let Some(n) = crate::spec::two_digit_year_note(c) {
+            doubts.note(n);
+        }
+    }
+
     let (confidence, notes) = doubts.finish(base_confidence);
     let spec = ParseSpec {
         extraction,

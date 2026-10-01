@@ -429,6 +429,16 @@ pub async fn ensure_sidecar_opts(
             // still runs.
             sniff::verify_types(&mut spec, path, cfg.limits, &[]);
         }
+        // A model may read two-digit years (`%y`), and the century they land
+        // in is chrono's window unless the spec says otherwise — said here,
+        // since the model's own notes need not mention it.
+        let windows: Vec<String> =
+            spec.columns.iter().filter_map(crate::spec::two_digit_year_note).collect();
+        for n in windows {
+            if !spec.notes.contains(&n) {
+                spec.notes.push(n);
+            }
+        }
         (spec, InferenceMethod::Llm, Some(inferred.model))
     } else {
         eprintln!(

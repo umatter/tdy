@@ -1098,3 +1098,16 @@ fn remove_empty_streams_and_its_order_against_fill_down_is_kept() {
     assert_eq!(b.matches("Ost").count(), 2, "remove-then-fill drops them first:\n{b}");
     assert_eq!(b.matches("West").count(), 1, "{b}");
 }
+
+/// `year_pivot` is applied by the one parse function both executors call.
+#[test]
+fn a_year_pivot_reads_the_same_on_both_executors() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "yy.csv", "d\n01.02.29\n01.02.30\n31.12.99\n");
+    let mut c = col("d", DType::Date { format: "%d.%m.%y".into() });
+    c.parse.year_pivot = Some(30);
+    let s = spec(vec![Transform::PromoteHeader { rows: 1, join: " ".into() }], vec![c]);
+    assert_paths_agree(&s, &p, "year_pivot");
+    let text = render(&stream::execute_batches(&s, &p, Limits::default()).unwrap());
+    assert!(text.contains("1930-02-01") && text.contains("2029-02-01") && text.contains("1999-12-31"), "{text}");
+}

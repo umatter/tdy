@@ -1764,7 +1764,7 @@ pub(crate) fn build_column_at(
                     let micros = epoch_micros(s, unit)?;
                     Ok::<i32, anyhow::Error>(micros.div_euclid(86_400_000_000) as i32)
                 }),
-                None => parse_all!(i32, |s: &str| parse_date_days(s, format)),
+                None => parse_all!(i32, |s: &str| parse_date_days(s, format, p.year_pivot)),
             };
             (ArrowType::Date32, Arc::new(Date32Array::from(out)))
         }
@@ -1782,7 +1782,9 @@ pub(crate) fn build_column_at(
                 // An epoch is a count, not a rendering: it has no format to
                 // parse and no timezone to place it in — it is already UTC.
                 Some(unit) => parse_all!(i64, |s: &str| epoch_micros(s, unit)),
-                None => parse_all!(i64, |s: &str| parse_timestamp_micros(s, format, offset)),
+                None => {
+                    parse_all!(i64, |s: &str| parse_timestamp_micros(s, format, offset, p.year_pivot))
+                }
             };
             // Store the offset in the one spelling every Arrow consumer
             // parses: "Z", "utc" and "GMT" are readable in a sidecar but not
@@ -1934,7 +1936,25 @@ fn epoch() -> NaiveDate {
     NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 is a date")
 }
 
-fn parse_date_days(s: &str, format: &str) -> Result<i32> {
+/// Move a `%y` year into the declared century window.
+///
+/// chrono has already read the two digits and put them in its own window
+/// (1970–2069); the last two digits of that year are the ones the value
+/// wrote, so re-centring from them changes the century and nothing else.
+/// Done on the parsed date, never by rewriting the string. A date that does
+/// not exist in the new century (29 February '00 read as 1900) is an error,
+/// not the 1st of March.
+fn recentre_year(date: NaiveDate, s: &str, format: &str, pivot: Option<u8>) -> Result<NaiveDate> {
+    use chrono::Datelike;
+    let Some(pivot) = pivot.filter(|_| format.contains("%y")) else { return Ok(date) };
+    let yy = date.year().rem_euclid(100);
+    let year = if yy < i32::from(pivot) { 2000 + yy } else { 1900 + yy };
+    date.with_year(year).ok_or_else(|| {
+        anyhow!("{s:?} read with year_pivot {pivot} is in {year}, where that date does not exist")
+    })
+}
+
+fn parse_date_days(s: &str, format: &str, pivot: Option<u8>) -> Result<i32> {
     let date = NaiveDate::parse_from_str(s, format)
         .or_else(|e| {
             // Month-year forms ("%b %Y" on "Jan 2025") lack a day; pin day 1.
@@ -1947,6 +1967,7 @@ fn parse_date_days(s: &str, format: &str) -> Result<i32> {
         })
         .map_err(|e| anyhow!("date does not match format {format:?}: {e}"))?;
     check_year(s, format)?;
+    let date = recentre_year(date, s, format, pivot)?;
     Ok((date - epoch()).num_days() as i32)
 }
 
@@ -1983,6 +2004,7 @@ fn parse_timestamp_micros(
     s: &str,
     format: &str,
     offset: Option<chrono::FixedOffset>,
+    pivot: Option<u8>,
 ) -> Result<i64> {
     use chrono::{DateTime, TimeZone};
 
@@ -1992,7 +2014,14 @@ fn parse_timestamp_micros(
         let dt = DateTime::parse_from_str(s, format)
             .map_err(|e| anyhow!("timestamp does not match format {format:?}: {e}"))?;
         check_year(s, format)?;
-        return Ok(dt.timestamp_micros());
+        let local = dt.naive_local();
+        let local = recentre_year(local.date(), s, format, pivot)?.and_time(local.time());
+        return dt
+            .offset()
+            .from_local_datetime(&local)
+            .single()
+            .map(|t| t.timestamp_micros())
+            .ok_or_else(|| anyhow!("{s:?} does not exist in its own offset"));
     }
 
     let naive = NaiveDateTime::parse_from_str(s, format)
@@ -2003,6 +2032,7 @@ fn parse_timestamp_micros(
         })
         .map_err(|e| anyhow!("timestamp does not match format {format:?}: {e}"))?;
     check_year(s, format)?;
+    let naive = recentre_year(naive.date(), s, format, pivot)?.and_time(naive.time());
 
     match offset {
         // A timezone-bearing Arrow timestamp is a UTC instant. The written
@@ -2788,26 +2818,54 @@ mod tests {
         assert_eq!(parse_decimal("1.2", 12, 2, Error).unwrap(), 120);
     }
 
+    /// `year_pivot` re-centres a `%y` year from its last two digits: below
+    /// the pivot is 20xx, at or above it 19xx. Unset is chrono's own window,
+    /// which is pivot 70 exactly (00–69 is 20xx, 70–99 is 19xx — probed
+    /// here, since the taxonomy and the brief both had it one year off).
+    #[test]
+    fn a_year_pivot_recentres_two_digit_years() {
+        use chrono::Datelike;
+        let year = |s: &str, p: Option<u8>| {
+            let d = parse_date_days(s, "%d/%m/%y", p).unwrap();
+            (epoch() + chrono::Duration::days(d.into())).year()
+        };
+        assert_eq!(year("01/02/29", Some(30)), 2029);
+        assert_eq!(year("01/02/30", Some(30)), 1930);
+        assert_eq!(year("01/02/69", None), 2069);
+        assert_eq!(year("01/02/70", None), 1970);
+        for yy in 0..100 {
+            let v = format!("01/02/{yy:02}");
+            assert_eq!(year(&v, None), year(&v, Some(crate::spec::DEFAULT_YEAR_PIVOT)), "{v}");
+        }
+        // 1900 had no 29th of February: an error, never the 1st of March.
+        assert!(parse_date_days("29/02/00", "%d/%m/%y", Some(0)).is_err());
+        assert!(parse_date_days("29/02/00", "%d/%m/%y", None).is_ok());
+        // A timestamp goes through the same re-centring.
+        let us = parse_timestamp_micros("01/02/45 10:00", "%d/%m/%y %H:%M", None, Some(30)).unwrap();
+        let dt = chrono::DateTime::from_timestamp_micros(us).unwrap();
+        assert_eq!(dt.year(), 1945);
+    }
+
     #[test]
     fn two_digit_years_are_refused_under_percent_capital_y() {
-        assert!(parse_date_days("01/02/25", "%d/%m/%Y").is_err());
-        assert!(parse_date_days("01/02/2025", "%d/%m/%Y").is_ok());
+        assert!(parse_date_days("01/02/25", "%d/%m/%Y", None).is_err());
+        assert!(parse_date_days("01/02/2025", "%d/%m/%Y", None).is_ok());
         // %y is the explicit opt-in.
-        assert!(parse_date_days("01/02/25", "%d/%m/%y").is_ok());
+        assert!(parse_date_days("01/02/25", "%d/%m/%y", None).is_ok());
     }
 
     #[test]
     fn month_year_pinning_only_when_the_format_lacks_a_day() {
-        assert!(parse_date_days("2025 Jan", "%Y %b").is_ok());
+        assert!(parse_date_days("2025 Jan", "%Y %b", None).is_ok());
         // A format that wants a day must actually get one.
-        assert!(parse_date_days("2025 Jan", "%Y %b %d").is_err());
+        assert!(parse_date_days("2025 Jan", "%Y %b %d", None).is_err());
     }
 
     #[test]
     fn timestamps_convert_from_the_declared_offset_to_utc() {
         let off = parse_fixed_offset("+02:00").unwrap();
-        let with = parse_timestamp_micros("2026-01-05 10:00:00", "%Y-%m-%d %H:%M:%S", Some(off)).unwrap();
-        let without = parse_timestamp_micros("2026-01-05 10:00:00", "%Y-%m-%d %H:%M:%S", None).unwrap();
+        let with = parse_timestamp_micros("2026-01-05 10:00:00", "%Y-%m-%d %H:%M:%S", Some(off), None).unwrap();
+        let without = parse_timestamp_micros("2026-01-05 10:00:00", "%Y-%m-%d %H:%M:%S", None, None).unwrap();
         assert_eq!(without - with, 2 * 3600 * 1_000_000);
     }
 
@@ -2825,9 +2883,10 @@ mod tests {
             "2026-01-05 10:00:00 +0200",
             "%Y-%m-%d %H:%M:%S %z",
             None,
+            None,
         )
         .unwrap();
-        let b = parse_timestamp_micros("2026-01-05 08:00:00", "%Y-%m-%d %H:%M:%S", None).unwrap();
+        let b = parse_timestamp_micros("2026-01-05 08:00:00", "%Y-%m-%d %H:%M:%S", None, None).unwrap();
         assert_eq!(a, b);
     }
 

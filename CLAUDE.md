@@ -735,7 +735,9 @@ accurate notes, which is the documented tier-2 boundary rather than a defect.
 loud error naming the row — never a plausible wrong number. Most of the non-obvious code
 exists to hold that line, and a change that trades it for convenience is a regression even
 if every test passes. Concretely: thousands separators must group in threes (only when the
-separator could also be a decimal point), `%Y` demands four digits, ambiguous date orders
+separator could also be a decimal point), `%Y` demands four digits (and a `%y` century is chrono's 1970–2069 window
+unless `year_pivot` declares another — re-centred on the parsed date, never by
+rewriting the string), ambiguous date orders
 drop confidence below the escalation threshold, leading-zero and oversized integers stay
 text, money becomes `decimal`, and a decimal value with more fractional digits than the
 declared scale is refused unless the target column declares `round = 'half_away'`

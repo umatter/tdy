@@ -1398,3 +1398,65 @@ fn remove_empty_before_framing_is_refused_with_where_to_put_it() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// year_pivot
+// ---------------------------------------------------------------------------
+
+fn yy_col(pivot: Option<u8>) -> ColumnSpec {
+    let mut c = col("d", DType::Date { format: "%d.%m.%y".into() });
+    c.parse.year_pivot = pivot;
+    c
+}
+
+/// `year_pivot = 30` reads `29` as 2029 and `30` as 1930; unset keeps
+/// chrono's window, under which both are 20xx.
+#[test]
+fn a_year_pivot_decides_the_century_of_a_two_digit_year() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "y.csv", "d\n01.02.29\n01.02.30\n");
+    let head = vec![Transform::PromoteHeader { rows: 1, join: " ".into() }];
+    let read = |pivot| {
+        let b = spec_to_batch(&spec(delim(',', RaggedPolicy::PadNulls), head.clone(), vec![yy_col(pivot)]), &p)
+            .unwrap();
+        let a = b.column(0).as_any().downcast_ref::<Date32Array>().unwrap();
+        (0..a.len()).map(|i| a.value_as_date(i).unwrap().to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(read(Some(30)), vec!["2029-02-01", "1930-02-01"]);
+    assert_eq!(read(None), vec!["2029-02-01", "2030-02-01"]);
+}
+
+/// Only on a date or timestamp read with `%y`, and only 0..=99; anything
+/// else is refused with a message rather than ignored.
+#[test]
+fn year_pivot_is_refused_where_it_means_nothing() {
+    let refuse = |c: ColumnSpec, needle: &str| {
+        let s = spec(delim(',', RaggedPolicy::PadNulls), vec![], vec![c]);
+        let errs = s.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("year_pivot") && e.contains(needle)), "{errs:?}");
+    };
+    let mut four = col("d", DType::Date { format: "%d.%m.%Y".into() });
+    four.parse.year_pivot = Some(30);
+    refuse(four, "%y");
+    let mut text = col("d", DType::Utf8);
+    text.parse.year_pivot = Some(30);
+    refuse(text, "date");
+    refuse(yy_col(Some(100)), "0..=99");
+    let mut ts = col("t", DType::Timestamp { format: "%d.%m.%y %H:%M".into(), timezone: None });
+    ts.parse.year_pivot = Some(30);
+    assert!(spec(delim(',', RaggedPolicy::PadNulls), vec![], vec![ts, yy_col(Some(0))]).validate().is_ok());
+}
+
+/// When a `%y` format is in force, the note names the window.
+#[test]
+fn a_two_digit_year_column_names_its_window() {
+    assert_eq!(
+        two_digit_year_note(&yy_col(None)).as_deref(),
+        Some("column `d`: two-digit years are read as 1970–2069; set `year_pivot` to change")
+    );
+    assert_eq!(
+        two_digit_year_note(&yy_col(Some(30))).as_deref(),
+        Some("column `d`: two-digit years are read as 1930–2029; set `year_pivot` to change")
+    );
+    assert_eq!(two_digit_year_note(&col("d", DType::Date { format: "%Y-%m-%d".into() })), None);
+}

@@ -1151,9 +1151,19 @@ prove it.
 **Also called:** `YEARCUTOFF=` (SAS), pivot year, `%y` semantics, Y2K windowing,
 `dmy` with 2-digit input (lubridate).
 
-**`partial`** — `%y` parses; the window is chrono's (69/70 split) and is not
-declarable. Rarely decisive, occasionally catastrophic. Worth a note in the
-`Date` doc comment if nothing else.
+**`partial`** — `%y` parses, and since 2026-10-01 the window is declarable:
+`parse.year_pivot` (0..=99) reads a two-digit year below the pivot as 20xx and
+one at or above it as 19xx, re-centring the year chrono parsed from its last two
+digits rather than rewriting the value (`engine::recentre_year`, called by the
+one parse function both executors share). Unset is chrono's window exactly —
+probed, it is 00–69 → 20xx and 70–99 → 19xx, a year off from the 69/70 this
+entry first recorded. `validate()` refuses it on anything but a `date` or
+`timestamp` whose format contains `%y`, and above 99. A spec that reads `%y`
+without a person having written it — the model's tier; the sniffer and `fit`
+choose no `%y` format — carries the note *two-digit years are read as
+1970–2069; set `year_pivot` to change*. It stays `partial` because a **target
+cannot declare it yet**: `year_pivot` is a sidecar field, so a dataset whose
+members write two-digit years has to settle the window per member.
 
 ### E15 · Partial and non-Gregorian period values
 **Also called:** `yearmonth`/`yearquarter` (tsibble), `Period`/`PeriodIndex`
