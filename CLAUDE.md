@@ -476,17 +476,20 @@ writes. Detection is `engine::regions_of(path, sheet, limits) -> Vec<RowWindow>`
 it splits at runs of blank lines or rows, keeps blocks of at least three rows,
 and returns nothing when the file has exactly one run at all — a table with
 blank padding above or below it is not split. It returns what it *dropped*
-alongside what it kept (`Regions { windows, dropped, block_width, window_widths }`): with a
+alongside what it kept (`Regions { windows, dropped, block_width, window_widths, window_widest }`): with a
 window applied nothing reads a run below the minimum, so every member of the
-file names those lines in a note the CLI prints, and a dropped run whose
-first row is as wide as the kept blocks' (`Regions::table_shaped`) is a
+file names those lines in a note the CLI prints, and a dropped run any of
+whose rows holds two or more non-empty fields (`Regions::table_shaped`) is a
 review reason — the `>= 3` rule says a `Total;;1500` line is not a table, and
-a person rules on whether it was data. Those blocks are *candidates*: `fit::gate_regions`
+a person rules on whether it was data; one cell per row (a banner, footnotes)
+asks nothing. Got wrong first by comparing first-row widths with the kept
+block's: a recap block is a different width by construction, and a block under
+a one-cell title measures 1 wide, so a 72-cell "US population" row matched
+nothing. Those blocks are *candidates*: `fit::gate_regions`
 tries each against the target with the cheap gates, in the frame `fit_region` will fit, and
 only the blocks that pass are members — got wrong first, when every run of three rows became
 one, so a title banner was a member that fit nothing and the workbook sweep refused 15 of 16
-workbooks; a failing block now joins the dropped runs (table-shaped measured against the
-blocks that passed, survivors renumbered), and none passing is the file read whole with no
+workbooks; a failing block now joins the dropped runs (survivors renumbered), and none passing is the file read whole with no
 region notes. A one-row run as wide as the block directly below it, blank lines between, is
 that block's header cut off by a blank row and is adopted into its window
 (`engine::adopt_severed_headers`; both executors skip the blank row inside it) — dropped, the
@@ -542,8 +545,9 @@ rows of the used range, not of the sheet, and the naive address read a sheet
 whose data starts at C5 against blank margin instead. A sheet passes
 `discover_sheets` through its blocks too, but only when exactly one passes and
 nothing table-shaped was discarded: sheet expansion asks nobody. `tdy draft` gains the
-same split (`sniff::sniff_text_block`, via a scratch file), drafting each block's
-columns separately and naming which block each column came from; presence and
+same split (`sniff::sniff_text_block`, via a scratch file), skipping a block with one
+field per line (named in a `NOTE`, so the unedited draft of a banner-topped export fits)
+and drafting each other block's columns separately and naming which block each column came from; presence and
 heterogeneity notes count physical files, not blocks — got wrong first, when
 the grouping note fired across one file's own blocks as though they were
 unrelated files. `source_name` gains `from = "region"` (`SourcePart::Region`),
