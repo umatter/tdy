@@ -173,9 +173,72 @@ fn epoch_micros(v: &str, unit: EpochUnit) -> Result<i64> {
         EpochUnit::Seconds => 1_000_000,
         EpochUnit::Milliseconds => 1_000,
         EpochUnit::Microseconds => 1,
+        EpochUnit::ExcelDays => return excel_serial_micros(v),
     };
     n.checked_mul(scale)
         .ok_or_else(|| anyhow!("{v:?} in {unit:?} is further from 1970 than a timestamp reaches"))
+}
+
+/// Microseconds in a day.
+const DAY_MICROS: i128 = 86_400_000_000;
+
+/// 1970-01-01 as a spreadsheet serial: days from 1899-12-30.
+const EXCEL_UNIX_SERIAL: i128 = 25_569;
+
+/// A spreadsheet serial, as wall-clock microseconds since 1970.
+///
+/// Read from the digit string: the integer part is days since 1899-12-30, the
+/// fraction a part of a day turned into microseconds exactly and rounded half
+/// up to the nearest one — a spreadsheet stores 08:00 as the binary
+/// `0.333333333333333`, and that is 08:00:00, not a float's 07:59:59.999999.
+/// Serials 1–60 are refused: Excel counts a 29 February 1900 that never was
+/// (Lotus 1-2-3's bug, kept for compatibility), so below 61 no serial maps
+/// through this origin to the date its author saw.
+fn excel_serial_micros(v: &str) -> Result<i64> {
+    let t = v.trim().trim_start_matches('+');
+    let (int, frac) = t.split_once('.').unwrap_or((t, ""));
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if int.is_empty() || !digits(int) || !digits(frac) {
+        bail!(
+            "{v:?} is not a spreadsheet serial (whole days since 1899-12-30, with a fraction \
+             for the time of day)"
+        );
+    }
+    if frac.len() > 18 {
+        bail!("{v:?} carries more fractional digits than a spreadsheet serial has");
+    }
+    let days: i128 = int
+        .parse()
+        .map_err(|_| anyhow!("{v:?} is further from 1899-12-30 than a timestamp reaches"))?;
+    if days < 61 {
+        bail!(
+            "{v:?} is spreadsheet serial {days}, below 61: spreadsheets count 1900 as a leap \
+             year, so serials 1–60 do not name one date"
+        );
+    }
+    let frac_micros: i128 = if frac.is_empty() {
+        0
+    } else {
+        let den = 10i128.pow(frac.len() as u32);
+        let num: i128 = frac.parse().expect("at most 18 digits");
+        (2 * num * DAY_MICROS + den) / (2 * den)
+    };
+    i64::try_from((days - EXCEL_UNIX_SERIAL) * DAY_MICROS + frac_micros)
+        .map_err(|_| anyhow!("{v:?} is further from 1899-12-30 than a timestamp reaches"))
+}
+
+/// A spreadsheet serial on a DATE column: whole days only. A time of day is
+/// refused rather than dropped, since a date would silently lose it.
+fn excel_serial_days(v: &str) -> Result<i32> {
+    let micros = i128::from(excel_serial_micros(v)?);
+    if micros.rem_euclid(DAY_MICROS) != 0 {
+        bail!(
+            "{v:?} carries a time of day; a DATE column would drop it — read it into a \
+             TIMESTAMP column"
+        );
+    }
+    i32::try_from(micros.div_euclid(DAY_MICROS))
+        .map_err(|_| anyhow!("{v:?} is further from 1899-12-30 than a date reaches"))
 }
 
 /// Which negative-number marker a value carries, if any — the shape only, not
@@ -1784,6 +1847,7 @@ pub(crate) fn build_column_at(
         }
         DType::Date { format } => {
             let out = match p.epoch {
+                Some(EpochUnit::ExcelDays) => parse_all!(i32, excel_serial_days),
                 Some(unit) => parse_all!(i32, |s: &str| {
                     // Truncating toward the epoch, so 1970-01-01T23:59 is
                     // still 1970-01-01 and a negative instant lands on the day
@@ -1808,6 +1872,15 @@ pub(crate) fn build_column_at(
             let out = match p.epoch {
                 // An epoch is a count, not a rendering: it has no format to
                 // parse and no timezone to place it in — it is already UTC.
+                // Except a spreadsheet serial, which is the wall clock it was
+                // typed on: a declared zone says which, as for a format.
+                Some(EpochUnit::ExcelDays) => parse_all!(i64, |s: &str| {
+                    let local = excel_serial_micros(s)?;
+                    let shift = offset.map_or(0, |o| i64::from(o.local_minus_utc()) * 1_000_000);
+                    local
+                        .checked_sub(shift)
+                        .ok_or_else(|| anyhow!("{s:?} is further from 1970 than a timestamp reaches"))
+                }),
                 Some(unit) => parse_all!(i64, |s: &str| epoch_micros(s, unit)),
                 None => {
                     parse_all!(i64, |s: &str| parse_timestamp_micros(s, format, offset, p.year_pivot))

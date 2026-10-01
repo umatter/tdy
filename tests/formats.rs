@@ -1571,3 +1571,72 @@ fn every_dtype_round_trips() {
     }
     assert_eq!(serde_json::to_string(&DType::Utf8).unwrap(), r#"{"type":"utf8"}"#);
 }
+
+// ---------------------------------------------------------------------------
+// Spreadsheet serial dates (catalogue E14): `epoch = "excel_days"`, whole
+// days since 1899-12-30, a fraction for the time of day.
+// ---------------------------------------------------------------------------
+
+fn all_dates(b: &RecordBatch, i: usize) -> Vec<Option<chrono::NaiveDate>> {
+    let a = b.column(i).as_any().downcast_ref::<Date32Array>().unwrap();
+    (0..a.len()).map(|r| a.value_as_date(r).filter(|_| !a.is_null(r))).collect()
+}
+
+/// Ground truth from the spreadsheet itself: 45000 is 2023-03-15, 61 is
+/// 1900-03-01 (the first serial past Excel's phantom 1900-02-29).
+#[test]
+fn excel_days_read_a_serial_as_its_date() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "x.csv", "ts,v\n45000,1\n45001,2\n61,3\n2958465,4\n,5\n");
+    let s = epoch_spec(Some(EpochUnit::ExcelDays), DType::Date { format: "%s".into() });
+    s.validate().unwrap();
+    let b = spec_to_batch(&s, &p).unwrap();
+    let d = |y, m, dd| Some(chrono::NaiveDate::from_ymd_opt(y, m, dd).unwrap());
+    assert_eq!(all_dates(&b, 0), vec![d(2023, 3, 15), d(2023, 3, 16), d(1900, 3, 1), d(9999, 12, 31), None]);
+}
+
+/// On a timestamp the fraction is the time of day, read from the digits —
+/// `.5` is noon exactly, and a spreadsheet's binary third of a day
+/// (`0.333333333333333`) is 08:00:00 to the microsecond, not a float's guess.
+#[test]
+fn excel_days_read_the_fraction_as_the_time_of_day() {
+    let dir = TempDir::new().unwrap();
+    let ts = DType::Timestamp { format: "%s".into(), timezone: None };
+    let noon = chrono::NaiveDate::from_ymd_opt(2023, 3, 15).unwrap().and_hms_opt(12, 0, 0).unwrap();
+    let eight = chrono::NaiveDate::from_ymd_opt(2023, 3, 15).unwrap().and_hms_opt(8, 0, 0).unwrap();
+    for (written, want) in [("45000.5", noon), ("45000.333333333333333", eight)] {
+        let p = dir_file(&dir, "t.csv", &format!("ts,v\n{written},1\n"));
+        let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), ts.clone()), &p).unwrap();
+        assert_eq!(ts_micros(&b, 0), want.and_utc().timestamp_micros(), "{written}");
+    }
+    // A declared zone says which wall clock the serial was written in.
+    let p = dir_file(&dir, "z.csv", "ts,v\n45000.5,1\n");
+    let zoned = DType::Timestamp { format: "%s".into(), timezone: Some("+02:00".into()) };
+    let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), zoned), &p).unwrap();
+    assert_eq!(ts_micros(&b, 0), noon.and_utc().timestamp_micros() - 2 * 3_600_000_000);
+}
+
+/// Excel counts a 29 February 1900 that never was, so serials 1–60 name no
+/// single date: refused, naming the row. A time of day on a DATE column is
+/// refused rather than dropped, and so is anything that is not a serial.
+#[test]
+fn excel_days_refuse_what_names_no_date() {
+    let dir = TempDir::new().unwrap();
+    let date = DType::Date { format: "%s".into() };
+    for (body, want) in [
+        ("ts,v\n45000,1\n59,2\n", "row 2: cannot parse \"59\": \"59\" is spreadsheet serial 59, below 61"),
+        ("ts,v\n45000.25,1\n", "carries a time of day"),
+        ("ts,v\n-3,1\n", "is not a spreadsheet serial"),
+        ("ts,v\n4.5e4,1\n", "is not a spreadsheet serial"),
+    ] {
+        let p = dir_file(&dir, "r.csv", body);
+        let e = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), date.clone()), &p)
+            .expect_err(body);
+        assert!(format!("{e:#}").contains(want), "{body}: {e:#}");
+    }
+    let text = epoch_spec(Some(EpochUnit::ExcelDays), DType::Int64);
+    let e = format!("{:?}", text.validate().expect_err("a serial is a date, not an integer"));
+    assert!(e.contains("`epoch` counts time, which means nothing for a"), "{e}");
+    let unit: EpochUnit = serde_json::from_str("\"excel_days\"").unwrap();
+    assert_eq!(unit, EpochUnit::ExcelDays);
+}

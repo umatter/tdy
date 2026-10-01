@@ -1241,3 +1241,21 @@ fn a_column_past_a_truncated_width_names_the_ragged_policy_on_both_paths() {
     assert_eq!(format!("{engine:#}"), want);
     assert_eq!(format!("{streamed:#}"), want);
 }
+
+/// Spreadsheet serials read identically on both executors: the date, the
+/// time of day from the fraction, and the refusal below serial 61.
+#[test]
+fn excel_days_agree_on_both_paths() {
+    let dir = TempDir::new().unwrap();
+    let mut ts = col("ts", DType::Timestamp { format: "%s".into(), timezone: None });
+    ts.parse.epoch = Some(EpochUnit::ExcelDays);
+    let mut d = col("d", DType::Date { format: "%s".into() });
+    d.parse.epoch = Some(EpochUnit::ExcelDays);
+    let s = spec(vec![Transform::PromoteHeader { rows: 1, join: " ".into() }], vec![ts, d]);
+    let p = write(&dir, "x.csv", "ts,d\n45000.5,45000\n45001.75,45001\n61,61\n,\n");
+    assert_paths_agree(&s, &p, "excel_days");
+    let bad = write(&dir, "bad.csv", "ts,d\n45000.5,45000\n45001.75,60\n");
+    assert_paths_agree(&s, &bad, "excel_days below 61");
+    let e = stream::execute_batches(&s, &bad, Limits::default()).expect_err("serial 60");
+    assert!(format!("{e:#}").contains("\"60\" is spreadsheet serial 60, below 61"), "{e:#}");
+}

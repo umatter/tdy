@@ -449,12 +449,21 @@ pub enum Transform {
 /// microsecond ones some databases do. `1748736000` and `1748736000000` are
 /// the same instant a thousand apart, and both are plausible integers, so the
 /// scale is declared and never guessed.
+///
+/// `excel_days` is a spreadsheet serial: days since 1899-12-30 (45000 is
+/// 2023-03-15), whole on a date column, with a fraction for the time of day on
+/// a timestamp one. Serials below 61 are refused (the 1900 leap-year bug makes
+/// 1–60 ambiguous).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EpochUnit {
     Seconds,
     Milliseconds,
     Microseconds,
+    // Read from the digits, never through a float. No `///` here: a variant
+    // doc comment turns the schema's flat `enum` into a `oneOf`, a shape
+    // strict structured-output modes refuse.
+    ExcelDays,
 }
 
 /// Which part of a file's location `source_name` reads.
@@ -739,7 +748,8 @@ pub struct ValueParsing {
     /// See [`Rounding`]. Only meaningful on a `decimal` column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round: Option<Rounding>,
-    /// Read this column as an integer count since 1970 in the given unit.
+    /// Read this column as an integer count since 1970 in the given unit, or
+    /// as a spreadsheet serial (`excel_days`, days since 1899-12-30).
     ///
     /// Only on a `date` or `timestamp` column, and only alongside
     /// `format = "%s"` — the format and this option are two statements about
