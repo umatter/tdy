@@ -1075,7 +1075,7 @@ pub(crate) fn promote_header_recording(
 }
 
 /// A row whose every cell is empty or whitespace.
-fn is_blank_row(cells: &[String]) -> bool {
+pub(crate) fn is_blank_row(cells: &[String]) -> bool {
     cells.iter().all(|c| c.trim().is_empty())
 }
 
@@ -1107,6 +1107,17 @@ pub fn apply_spec_transforms(table: &mut RawTable, transforms: &[Transform]) -> 
     apply_transforms(table, &transforms[..framing])?;
     if table.blank_rows_are_gaps {
         table.rows.retain(|r| !is_blank_row(r));
+    }
+    // Every body transform sees rows after the ragged policy, as the
+    // streaming reader's do — it applies the policy as it reads. Most body
+    // transforms rectangularise on their own (through `ensure_header`), but a
+    // whole-row `drop_rows_matching` and `remove_empty` do not, and on a
+    // headerless `truncate_extra` file they tested `;;5` where the stream
+    // tested the `;` the policy leaves: two executors, two row counts. After
+    // the framing, so `skip_rows` still removes title rows before the policy
+    // judges the widths.
+    if framing < transforms.len() {
+        table.rectangularize()?;
     }
     apply_transforms(table, &transforms[framing..])
 }

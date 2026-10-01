@@ -1803,7 +1803,7 @@ impl Plan {
                     }
                 }
                 RowOp::RemoveEmpty => {
-                    if row.iter().all(|c| c.trim().is_empty()) {
+                    if crate::engine::is_blank_row(&row) {
                         return;
                     }
                 }
