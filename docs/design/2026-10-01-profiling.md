@@ -1,6 +1,7 @@
 # Profiling: what a column holds, as evidence
 
-*Design, 2026-10-01. Status: agreed for implementation (taxonomy K5). A profile is
+*Design, 2026-10-01. Status: implemented 2026-10-01 (taxonomy K5) — `src/profile.rs`,
+`tdy profile`, `.profile`, `p` in the workbench, the `profile` MCP tool. A profile is
 evidence for a person; nothing in tdy reads one to change a spec.*
 
 ## 1. Why
@@ -79,17 +80,25 @@ shape worth listing.
 
 One library function, four doors, as for everything else:
 
-- `tdy profile <FILE> [--sheet NAME] [--column NAME] [--head N]` (`--json` is the
-  global flag). Without `--column`: one line per column (name, non-empty/empty,
+- `tdy profile <FILE> [--sheet NAME] [--rows A-B] [--column NAME] [--head N]`
+  (`--json` is the global flag). `--rows` names one stacked table the way a region
+  member's title counts it — 1-based and inclusive, `--rows 6-9` — read in a fresh
+  sidecar's frame when one reads exactly that block, else in the frame `fit` gives a
+  block (`fit::region_frame`); with `--sheet` the rows are the sheet's. `FILE` may
+  also be a member reference (`report.csv#2`, `book.xlsx#Q1#2`), which reads the
+  block its fresh sidecar names and refuses without one. `--column '#N'` names a
+  column by position, for a file with two columns of one name. Without `--column`: one line per column (name, non-empty/empty,
   distinct, min, max, most frequent shape with its share). With it: that column's
   top values and every shape with count, share and one example.
-- the console: `.profile <file> [--sheet NAME] [--column NAME] [--head N]`, text
+- the console: `.profile <file> [--sheet NAME] [--rows A-B] [--column NAME] [--head N]`, text
   identical to the CLI's (`commands::profile_text`), `Payload::Profile(Profile)`.
 - the workbench: `p` in the File and Member contexts dispatches the same
   `.profile` line a person would type (the one-code-path rule), and the main pane
   shows `Context::Profile` — a table of columns; Enter on a column opens its detail
   (top values, shapes), Esc goes back. A member's profile is of that member: its
-  sheet, and its region window when it has one.
+  sheet, and its region window when it has one — `--rows` from the window the
+  report carries, or the member's own reference for a sheet block, whose window
+  the report does not carry.
 - MCP: a read-only `profile` tool, confined to `--root` like every other.
 
 ## 6. What it does not do

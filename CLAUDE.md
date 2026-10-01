@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 790 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 876 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~55s: sweeps every fixture for panics/hangs
@@ -655,6 +655,41 @@ in a sheet (a two-dimensional segmentation problem a declared `range` already
 answers by hand), splitting on anything other than blank rows, and a region
 inside a JSON document — a JSON array's frame question belongs to the pointer,
 not to this.
+
+**Profiling is in (2026-10-01).** `docs/design/2026-10-01-profiling.md`; taxonomy K5.
+`src/profile.rs` says, per column of the **framed raw table** — the strings `fit` binds
+against, after the frame's `transpose`/`skip_rows`/`promote_header` (the same split
+`engine::apply_spec_transforms` makes), a region window or a sheet `range`, before any body
+transform or cast — non-empty/empty (trimmed; a column's `na_values` count as empty), distinct,
+min/max of the raw strings by byte order, the top five, and every **shape** (`profile::shape`:
+a digit is `9`, a digit run keeps its length up to 8 and is `9+` past it; a letter is `A`/`a`,
+a same-case run `A+`/`a+`; whitespace one space; anything else itself), under the file's own
+spelling (`header_origin` — two `Betrag`s stay two `Betrag`s). Three rules hold it to the
+design: **it infers nothing and writes nothing** — the frame is a fresh sidecar's
+(`sidecar::load_member`), else the sniffer's with `verify: false` and no backend, never saved
+(a refused member is the one that most needs it); **the bounds are stated, not hidden** — past
+10,000 distinct values a column says `AtLeast(10000)` and gives no top five, past 64 shapes the
+rest are one `(other)` row, and `--head N` sets `complete: false`, which every renderer says on
+its *first* line (`commands::profile_heading`, shared by the CLI text and the workbench); and
+**it reads what a query reads** — text goes through `stream::framed_rows`, which is
+`execute_with`'s own reading half (`drive`: measure, frame the header, hand rows over) without
+`Plan::push` or the casts, so memory is O(columns × caps). Measured: a 50 MB CSV with a unique id
+column profiles at **12 MB peak RSS, 2.6 s wall** including writing the file
+(`tests/profile.rs::profile_streams_a_large_file`, `#[ignore]`, run by hand under
+`/usr/bin/time` on the release test binary). Excel, JSON documents and a `transpose` take
+`engine::extract` and materialise within `[limits]`. Four doors, one function
+(`profile::profile_member`): `tdy profile FILE [--sheet] [--rows A-B] [--column NAME|#N]
+[--head N]` (`--json` prints the profile), `.profile` with identical text
+(`tests/console.rs` holds them equal), `p` in the workbench's File and Member contexts and on a
+browser file (`Context::Profile { profile, selected, detail }`; Enter for a column's detail,
+which is `profile_text`'s `--column` output verbatim; Esc back, then closed), and a read-only
+`profile` MCP tool confined like the rest. A member's profile is of that member: `--rows` is the
+block as its title counts it (1-based, inclusive) and is framed by `fit::region_frame` unless a
+fresh sidecar reads exactly that window; a member reference (`book.xlsx#Q1#2`) reads the block
+its fresh sidecar names, and **refuses** without one rather than profile the whole sheet under
+the member's name — the workbench dispatches that form for a sheet block, whose window
+`MemberReport` does not carry. Two columns with one name make `--column NAME` an error offering
+`#3`/`#4`; picking one would be a guess.
 
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,

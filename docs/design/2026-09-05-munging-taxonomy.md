@@ -1700,14 +1700,17 @@ ancestor of what tdy's evidence screen is reaching for: it infers a *structure*
 discrepancy as a value that does not match the inferred structure — the
 detection running continuously, in the background, while the user works.
 
-**`partial`** — `tdy sniff` reports notes, confidence, and a preview; the
-workbench's evidence screen shows the raw head and a bounded sheet grid; the
-corpus sweep produces a survey. What does not exist is per-column profiling:
-cardinality, value-frequency, min/max, pattern distribution ("94% match
-`\d{4}-\d{2}-\d{2}`, 6% match `\d{2}\.\d{2}\.\d{4}`"). That last one is Potter's
-Wheel's central idea and would be a natural fit for the evidence screen, since it
-is exactly the evidence a human needs to judge a `matches` clause or a
-`date_order`.
+**`partial`** — profiling landed 2026-10-01 (`docs/design/2026-10-01-profiling.md`):
+`tdy profile`, `.profile`, `p` in the workbench and an MCP tool report, per column of
+the framed raw table and over the whole file, non-empty/empty counts, distinct values,
+min/max, the top five, and the pattern distribution Potter's Wheel named ("94% look
+like `9999-99-99`, 6% like `99.99.9999`"). What stays out is the other half of the
+operator: *discrepancy detection* — flagging values that do not match a column's
+dominant shape, continuously and automatically. A profile is evidence for a person;
+nothing in tdy reads one to change a spec, raise or lower a confidence, or suggest a
+`matches` clause, since an automatic use of the shapes is a guess the declaration
+exists to replace (and the sniffer's whole-file type verification already reads every
+value). Histograms and cross-column profiling are not done either.
 
 ### K6 · Error routing and quarantine
 **Also called:** error output branch (SSIS), `badRecordsPath` /
@@ -2128,7 +2131,7 @@ would mean producing a value the file does not contain.
   one pass and is the strongest candidate if that line ever moves.
 - **K5 · column profiling.** Pattern-frequency profiling is Potter's Wheel's
   central idea and is exactly the evidence the workbench's review screen exists
-  to present.
+  to present. *Decided 2026-10-01: in, as evidence only — see K5.*
 - **C10 / M2 · the `group` class.** Strudel's six-class taxonomy is the closest
   external audit of tdy's framing detectors, and `group` — a label row for the
   rows beneath it — is the one class tdy neither detects nor represents.
