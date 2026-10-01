@@ -616,12 +616,19 @@ fn sql_type(d: &DType) -> String {
 fn file_globs(files: &[PathBuf], base: Option<&Path>) -> Vec<String> {
     let mut globs: BTreeSet<String> = BTreeSet::new();
     for f in files {
-        let dir = match f.parent() {
-            Some(p) if p.is_absolute() => {
-                base.and_then(|b| relative_dir(p, b)).unwrap_or_else(|| p.to_string_lossy().to_string())
+        // Relative only at or below `base`; anywhere else absolute, since a
+        // `..` ladder is relative to wherever the draft ran, not to the
+        // target written beside the data.
+        let dir = match (f.parent(), base) {
+            (None, _) => String::new(),
+            (Some(p), _) if p.as_os_str().is_empty() => String::new(),
+            (Some(p), Some(b)) => {
+                let abs = b.join(p);
+                relative_dir(&abs, b).unwrap_or_else(|| {
+                    abs.canonicalize().unwrap_or(abs).to_string_lossy().to_string()
+                })
             }
-            Some(p) => p.to_string_lossy().to_string(),
-            None => String::new(),
+            (Some(p), None) => p.to_string_lossy().to_string(),
         };
         let ext = f
             .extension()
@@ -636,20 +643,14 @@ fn file_globs(files: &[PathBuf], base: Option<&Path>) -> Vec<String> {
     globs.into_iter().collect()
 }
 
-/// `dir` relative to `base`, both canonicalised, climbing with `..` where
-/// it must — `None` when they share nothing below the filesystem root,
-/// where an absolute path says more than a ladder of `..` would.
+/// `dir` relative to `base`, both canonicalised, when `dir` is `base` or
+/// below it — `None` otherwise. A `..` ladder up to a shared prefix such as
+/// `/tmp` is relative to the directory the draft ran in, and from a target
+/// written beside the data it named no file.
 fn relative_dir(dir: &Path, base: &Path) -> Option<String> {
     let (dir, base) = (dir.canonicalize().ok()?, base.canonicalize().ok()?);
-    let d: Vec<_> = dir.components().collect();
-    let b: Vec<_> = base.components().collect();
-    let common = d.iter().zip(&b).take_while(|(x, y)| x == y).count();
-    if common <= 1 {
-        return None;
-    }
-    let mut parts: Vec<String> = vec!["..".to_string(); b.len() - common];
-    parts.extend(d[common..].iter().map(|c| c.as_os_str().to_string_lossy().to_string()));
-    Some(parts.join("/"))
+    let rest = dir.strip_prefix(&base).ok()?;
+    Some(rest.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/"))
 }
 
 fn table_name(files: &[PathBuf]) -> String {

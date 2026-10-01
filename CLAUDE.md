@@ -124,7 +124,9 @@ rewrites an absolute or `./` glob directory that lies inside the target's direct
 `exports/` keeps its spelling), and `--accept`/`.accept` name the argument the same way
 (`member::relative_to_target`) before resolving it. An absolute glob used to make the lock's
 members absolute paths, and `--accept` could then name them by neither spelling. `tdy draft`
-writes an absolute path's glob relative to the current directory (the MCP server's: its root).
+writes a glob relative to the current directory (the MCP server's: its root) only when the
+files are in it or below it, and absolute otherwise: a `..` ladder up to a shared `/tmp` was
+relative to where the draft ran and named no file from a target written elsewhere.
 A lock written before this, holding absolute member paths, is drift once: `dataset()` refuses
 it, naming each member as not in the lock, and the next fit re-plans the members under their
 relative names and asks for their acceptances again.
