@@ -1651,3 +1651,30 @@ fn a_year_headed_body_under_a_title_and_header_run_is_drafted_whole() {
         "2624 ",
     );
 }
+
+/// A known gap, pinned as loud: title lines padded to the table's width
+/// (`Table 1. …;;`, as Excel writes a sheet as CSV). The text sniffer does
+/// not skip a padded title line, so the adopted frame's header never ends
+/// on the run's last row, nothing is adopted, and the file — three tables
+/// a sheet would give as three members — is refused whole, naming what it
+/// has. Never a partial or a wrong reading.
+#[test]
+fn padded_title_lines_in_text_are_a_loud_gap() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_padded_titles.csv"), dir.path().join("report.csv")).unwrap();
+    let t = dir.path().join("w.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE w (state TEXT NOT NULL OPTIONS(matches='State'), all_workers BIGINT NOT NULL OPTIONS(matches='All workers'), \
+         actors BIGINT NOT NULL OPTIONS(matches='Actors')) WITH (files = 'report.csv');",
+    )
+    .unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("report.csv               GAP"), "{text}");
+    assert!(text.contains("`state` (TEXT): no column of this file binds"), "{text}");
+    assert!(text.contains("the file has [\"col_1\", \"col_2\", \"col_3\"]"), "{text}");
+    assert!(!text.contains("report.csv#"), "{text}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no lock written"));
+}

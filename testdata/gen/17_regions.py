@@ -159,6 +159,15 @@ FIXTURES  (all in testdata/, named regions_*)
    draft from the blocks fits no sheet; each is drafted whole, as before.
    Ground truth: the second sheet doubles the first's values.
 
+15. regions_padded_titles.csv
+   Three stacked tables, each a 3-row run of two title lines and the header
+   (`State;All workers;Actors`), a blank line, and a headerless 3-row body —
+   with every title line padded to the table's width (`Table 1. …;;`), as
+   Excel writes a sheet out as CSV. The text sniffer does not skip a padded
+   title line, so the adopted frame's header never ends on the run's last
+   row, nothing is adopted, and the file is a loud whole-file GAP. Pinned as
+   a known gap, not a reading. Ground truth: 300 / 600 / 900 workers.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
@@ -170,7 +179,8 @@ regions_renumber.{csv,xlsx} -> 2400.00 (Betrag), 2406.00 (Betrag, Menge);
 regions_banner_notes.xlsx -> one plain member, 1500/1550/1600;
 regions_statetable.xlsx -> one plain member read whole, 10 rows, 32816265;
 regions_two_statetables.{xlsx,csv} -> two members, 3012640/965 and 3032000/1024;
-regions_{footnoted,three}_sheets.xlsx -> drafted whole, both sheets fit.
+regions_{footnoted,three}_sheets.xlsx -> drafted whole, both sheets fit;
+regions_padded_titles.csv -> a whole-file GAP (padded title lines, known gap).
 """
 import os
 import re
@@ -635,6 +645,20 @@ def build_regions_several_sheets():
     save_workbook(wb, "regions_three_sheets.xlsx", "two sheets laid out as regions_three.xlsx")
 
 
+def build_regions_padded_titles_csv():
+    lines = []
+    for k in range(3):
+        if k > 0:
+            lines.append("")
+        lines += [f"Table {k + 1}. Workers by state;;", "Persons;;", ";".join(TWO_HEADER), ""]
+        lines += [f"{s};{(k + 1) * w};{a}" for s, w, a in (("Bern", 100, 1), ("Zug", 100, 2), ("Uri", 100, 3))]
+    write_csv(
+        "regions_padded_titles.csv",
+        lines,
+        "three tables under padded title lines + header; a loud whole-file GAP (known gap)",
+    )
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -651,6 +675,7 @@ def main():
     build_regions_statetable_xlsx()
     build_regions_two_statetables()
     build_regions_several_sheets()
+    build_regions_padded_titles_csv()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "
