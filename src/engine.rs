@@ -114,6 +114,50 @@ fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<String> {
     }
 }
 
+/// The refusal for a spec naming a column the table does not have, shared by
+/// both executors so they say the same sentence.
+///
+/// When both the wanted name and every name the table has are the generated
+/// `col_N`, listing them says nothing: the reader is looking at a nameless
+/// table that came out narrower than the spec expects, and the useful fact is
+/// *why*. Under `ragged = "truncate_extra"` that is the policy itself — it cut
+/// every row to the modal width, so a spec naming a column past it asks for
+/// fields the policy dropped. Otherwise two reads of one file disagreed about
+/// its width, which happens when parse state crosses a boundary — an
+/// unbalanced quote is the usual one — because the spec's columns come from a
+/// sample and this table came from the file.
+pub(crate) fn missing_column_error(name: &str, header: &[String], ragged: RaggedPolicy) -> anyhow::Error {
+    let generated = |n: &str| {
+        n.strip_prefix("col_").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+    };
+    if generated(name) && !header.is_empty() && header.iter().all(|h| generated(h)) {
+        if ragged == RaggedPolicy::TruncateExtra {
+            return anyhow!(
+                "the spec names `{name}`, but under `ragged = \"truncate_extra\"` this file's \
+                 rows were truncated to their modal width of {} column(s), so the spec names a \
+                 column beyond it; `ragged = \"pad_nulls\"` keeps the wider rows",
+                header.len()
+            );
+        }
+        return anyhow!(
+            "the spec names `{name}`, but this file's rows yield {} column(s). Two reads \
+             of the file disagreed about its width, which happens when the declared \
+             `quote` is not the character the file actually quotes with: a partial read \
+             then splits rows differently from a whole one. Check `quote` in the sidecar \
+             against the file",
+            header.len()
+        );
+    }
+    let shown: Vec<String> = header.iter().take(50).map(|h| format!("\"{h}\"")).collect();
+    let more = header.len().saturating_sub(shown.len());
+    anyhow!(
+        "no column named `{}`; available columns: [{}{}]",
+        name,
+        shown.join(", "),
+        if more > 0 { format!(", ... {more} more") } else { String::new() }
+    )
+}
+
 /// An integer count since 1970, in the declared unit, as microseconds.
 ///
 /// Refuses anything that is not an integer rather than reaching for a float:
@@ -362,35 +406,7 @@ impl RawTable {
     }
 
     fn missing_column(&self, name: &str) -> anyhow::Error {
-        let header = self.header.as_deref().unwrap_or(&[]);
-        // When both the wanted name and every name the table has are the
-        // generated `col_N`, listing them says nothing: the reader is looking
-        // at a nameless table that came out narrower than the spec expects,
-        // and the useful fact is *why* two reads of one file disagreed about
-        // its width. They disagree when parse state crosses a boundary — an
-        // unbalanced quote is the usual one — because the spec's columns come
-        // from a sample and this table came from the file.
-        let generated = |n: &str| {
-            n.strip_prefix("col_").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
-        };
-        if generated(name) && !header.is_empty() && header.iter().all(|h| generated(h)) {
-            return anyhow!(
-                "the spec names `{name}`, but this file's rows yield {} column(s). Two reads \
-                 of the file disagreed about its width, which happens when the declared \
-                 `quote` is not the character the file actually quotes with: a partial read \
-                 then splits rows differently from a whole one. Check `quote` in the sidecar \
-                 against the file",
-                header.len()
-            );
-        }
-        let shown: Vec<String> = header.iter().take(50).map(|h| format!("\"{h}\"")).collect();
-        let more = header.len().saturating_sub(shown.len());
-        anyhow!(
-            "no column named `{}`; available columns: [{}{}]",
-            name,
-            shown.join(", "),
-            if more > 0 { format!(", ... {more} more") } else { String::new() }
-        )
+        missing_column_error(name, self.header.as_deref().unwrap_or(&[]), self.ragged)
     }
 
     fn col_index(&self, name: &str) -> Result<usize> {
