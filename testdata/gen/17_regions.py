@@ -137,6 +137,18 @@ FIXTURES  (all in testdata/, named regions_*)
    question. Ground truth: the whole sheet reads 10 rows; all-workers sum
    28391970 + 3215390 (states) + 1208905 = 32816265.
 
+13. regions_two_statetables.xlsx / regions_two_statetables.csv (sheet "Data")
+   Two stacked official-statistics tables, each laid out as the corpus's
+   state tables are: two title lines and the header in ONE run (no blank
+   row between them), a blank row, then a headerless body of five state
+   rows; two blank rows between the tables. The split sees four blocks —
+   title+header, body, title+header, body — and neither body has a header
+   of its own (its first row, `Alabama | 88165 | 10`, is data). Each body
+   adopts the run above it whole: its frame skips the two title lines and
+   promotes the header, so each table binds by name. The .csv is the same
+   text, ";"-separated. Ground truth: table 1 workers 3012640, actors 965;
+   table 2 workers 3032000, actors 1024.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
@@ -146,7 +158,8 @@ regions_banner.xlsx -> two sheet members, sums 1500/1550/1600 and 3000/3100/3200
 regions_footnoted.xlsx -> read whole positionally, or one by-name member, 1500/1550/1600;
 regions_renumber.{csv,xlsx} -> 2400.00 (Betrag), 2406.00 (Betrag, Menge);
 regions_banner_notes.xlsx -> one plain member, 1500/1550/1600;
-regions_statetable.xlsx -> one plain member read whole, 10 rows, 32816265.
+regions_statetable.xlsx -> one plain member read whole, 10 rows, 32816265;
+regions_two_statetables.{xlsx,csv} -> two members, 3012640/965 and 3032000/1024.
 """
 import os
 import re
@@ -522,6 +535,56 @@ def build_regions_statetable_xlsx():
     )
 
 
+TWO_HEADER = ["State", "All workers", "Actors"]
+TWO_TABLES = [
+    (
+        ["Table 1. Workers and actors by state: 2019", "Persons in the labor force"],
+        [("Alabama", 88165, 10), ("Alaska", 26875, 0), ("Arizona", 1033370, 45),
+         ("Arkansas", 64230, 10), ("California", 1800000, 900)],
+    ),
+    (
+        ["Table 2. Workers and actors by state: 2020", "Persons in the labor force"],
+        [("Alabama", 90000, 12), ("Alaska", 27000, 1), ("Arizona", 1040000, 50),
+         ("Arkansas", 65000, 11), ("California", 1810000, 950)],
+    ),
+]
+
+
+def two_statetables_rows():
+    """Title lines + header in one run, a blank row, the body; two blank
+    rows between the tables. `None` is a blank row."""
+    rows = []
+    for i, (titles, body) in enumerate(TWO_TABLES):
+        if i > 0:
+            rows += [None, None]
+        rows += [(t,) for t in titles]
+        rows.append(tuple(TWO_HEADER))
+        rows.append(None)
+        rows += body
+    return rows
+
+
+def build_regions_two_statetables():
+    from openpyxl import Workbook
+
+    rows = two_statetables_rows()
+    write_csv(
+        "regions_two_statetables.csv",
+        ["" if r is None else ";".join(str(v) for v in r) for r in rows],
+        "two tables, each title+header in one run, blank, headerless body; "
+        "3012640/965 and 3032000/1024",
+    )
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for i, r in enumerate(rows, 1):
+        if r is None:
+            continue
+        for j, v in enumerate(r, 1):
+            ws.cell(row=i, column=j, value=v)
+    save_workbook(wb, "regions_two_statetables.xlsx", "regions_two_statetables.csv as sheet \"Data\"")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -536,6 +599,7 @@ def main():
     build_regions_renumber()
     build_regions_banner_notes_xlsx()
     build_regions_statetable_xlsx()
+    build_regions_two_statetables()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "

@@ -2145,6 +2145,10 @@ pub struct DroppedRun {
     /// for a sheet, non-empty fields under the blocks' delimiter for text).
     /// Two or more is data-like — see [`Regions::table_shaped`].
     pub widest: usize,
+    /// Fields on its last row, counted as `width` is. A run whose last row
+    /// is as wide as the block directly below it may be that block's header
+    /// run ([`Regions::header_run`]).
+    pub last_width: usize,
 }
 
 /// What [`regions_of`] found: the blocks it kept, and the runs it did not.
@@ -2165,6 +2169,20 @@ pub struct Regions {
     pub window_widths: Vec<usize>,
     /// Each window's widest row, in non-empty fields, beside `windows`.
     pub window_widest: Vec<usize>,
+    /// Each window's own last-row width, beside `windows`: what makes it a
+    /// candidate header run for the window below it ([`Regions::header_run`]).
+    pub window_last_widths: Vec<usize>,
+}
+
+/// The run directly above a window that may be its header run
+/// ([`Regions::header_run`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderRun {
+    /// `dropped[k]`: a run below the three-row minimum.
+    Dropped(usize),
+    /// The window just above, `windows[i - 1]`: title lines and a header
+    /// long enough to be a block of their own.
+    Window,
 }
 
 impl Regions {
@@ -2187,33 +2205,77 @@ impl Regions {
         self.dropped.iter().filter(move |d| d.widest >= 2 || (w > 0 && d.width == w))
     }
 
-    /// The dropped run that may be window `i`'s header, cut off by a blank
-    /// row: the run directly above it (blank lines only between), exactly
-    /// one row, as wide as the window's first row. Its index in `dropped`.
-    /// Whether it *is* the header is the framing step's question: only a
-    /// block with no header of its own adopts one (`fit::frame_blocks`) —
-    /// adopting above a headed block made a same-width data line the header
-    /// and the real header a data row, silently.
-    pub fn severed_header(&self, i: usize) -> Option<usize> {
+    /// The run directly above window `i` (blank lines only between) whose
+    /// LAST row is as wide as the window's first row: the window's header
+    /// run — a header cut off by a blank row, or title lines and the header
+    /// in one run, as official statistics lay them out. Short of the
+    /// three-row minimum it is a dropped run; three rows or more, it is the
+    /// window above. Whether it *is* the header is the framing step's
+    /// question (`fit::frame_blocks`): only a block with no plausible header
+    /// of its own adopts one, and only when the adopted frame's header ends
+    /// on the run's last row — adopting above a headed block made a
+    /// same-width data line the header and the real header a data row,
+    /// silently.
+    pub fn header_run(&self, i: usize) -> Option<HeaderRun> {
         let w = self.windows.get(i)?;
-        let after = if i == 0 { 0 } else { self.windows[i - 1].end };
         let width = *self.window_widths.get(i)?;
-        self.dropped
+        let after = if i == 0 { 0 } else { self.windows[i - 1].end };
+        let nearest = self
+            .dropped
             .iter()
             .enumerate()
             .filter(|(_, d)| d.end <= w.start && d.start >= after)
-            .max_by_key(|(_, d)| d.end)
-            .filter(|(_, d)| d.end - d.start == 1 && d.width > 0 && d.width == width)
-            .map(|(k, _)| k)
+            .max_by_key(|(_, d)| d.end);
+        match nearest {
+            Some((k, d)) => (d.last_width > 0 && d.last_width == width).then_some(HeaderRun::Dropped(k)),
+            None if i > 0 => {
+                (self.window_last_widths[i - 1] > 0 && self.window_last_widths[i - 1] == width)
+                    .then_some(HeaderRun::Window)
+            }
+            None => None,
+        }
     }
 
-    /// Take dropped run `k` into window `i` as its header: the window starts
-    /// at the run's line, the blank lines between inside it (both executors
-    /// skip a blank row inside a window), and the run is no longer dropped.
-    pub fn adopt(&mut self, i: usize, k: usize) {
-        let d = self.dropped.remove(k);
-        self.windows[i].start = d.start;
-        self.window_widest[i] = self.window_widest[i].max(d.widest);
+    /// The first line and the length of window `i`'s header run `h`.
+    pub fn header_run_span(&self, i: usize, h: HeaderRun) -> (u64, u64) {
+        let (start, end) = match h {
+            HeaderRun::Dropped(k) => (self.dropped[k].start, self.dropped[k].end),
+            HeaderRun::Window => (self.windows[i - 1].start, self.windows[i - 1].end),
+        };
+        (start, end - start)
+    }
+
+    /// Take header run `h` into window `i`: the window starts at the run's
+    /// first line, the blank lines between inside it (both executors skip a
+    /// blank row in a window), and the run is no longer dropped — or, for a
+    /// window above, no longer a window of its own. The window keeps its own
+    /// first-row width, so the runs around it are measured against the
+    /// table's width, not a title's. Returns the merged window's index.
+    pub fn adopt(&mut self, i: usize, h: HeaderRun) -> usize {
+        match h {
+            HeaderRun::Dropped(k) => {
+                let d = self.dropped.remove(k);
+                self.windows[i].start = d.start;
+                self.window_widest[i] = self.window_widest[i].max(d.widest);
+                i
+            }
+            HeaderRun::Window => {
+                let above = self.windows.remove(i - 1);
+                self.window_widths.remove(i - 1);
+                let widest = self.window_widest.remove(i - 1);
+                self.window_last_widths.remove(i - 1);
+                let j = i - 1;
+                self.windows[j].start = above.start;
+                self.window_widest[j] = self.window_widest[j].max(widest);
+                if j == 0 {
+                    self.block_width = self.window_widths[0];
+                }
+                for (n, w) in self.windows.iter_mut().enumerate() {
+                    w.ordinal = (n + 1) as u32;
+                }
+                j
+            }
+        }
     }
 
     /// Keep only the blocks that passed the gates (`passed[i]` for
@@ -2230,10 +2292,11 @@ impl Regions {
         let all: Vec<(RowWindow, DroppedRun, bool)> = self
             .windows
             .iter()
-            .zip(self.window_widths.iter().zip(&self.window_widest))
+            .zip(self.window_widths.iter().zip(&self.window_widest).zip(&self.window_last_widths))
             .zip(passed)
-            .map(|((w, (width, widest)), ok)| {
-                (*w, DroppedRun { start: w.start, end: w.end, width: *width, widest: *widest }, *ok)
+            .map(|((w, ((width, widest), last)), ok)| {
+                let d = DroppedRun { start: w.start, end: w.end, width: *width, widest: *widest, last_width: *last };
+                (*w, d, *ok)
             })
             .collect();
         let kept: Vec<&(RowWindow, DroppedRun, bool)> = all.iter().filter(|x| x.2).collect();
@@ -2247,6 +2310,7 @@ impl Regions {
             block_width: kept[0].1.width,
             window_widths: kept.iter().map(|x| x.1.width).collect(),
             window_widest: kept.iter().map(|x| x.1.widest).collect(),
+            window_last_widths: kept.iter().map(|x| x.1.last_width).collect(),
             windows: kept
                 .iter()
                 .enumerate()
@@ -2340,6 +2404,12 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     // the delimiter is known — which is only after the split has said which
     // runs are blocks. O(runs), not O(file).
     let mut heads: Vec<String> = Vec::new();
+    // And its last line, for the same reason: a run whose last row is as
+    // wide as the block below may be that block's header run. The current
+    // run's last line is kept in one reused buffer, copied out only when
+    // the run closes.
+    let mut tails: Vec<String> = Vec::new();
+    let mut last_line: Vec<u8> = Vec::new();
     // Per run, the most non-empty fields on any of its rows under each
     // candidate delimiter — one scan of the line answers all four, and the
     // delimiter is chosen only once the runs are known. O(runs).
@@ -2370,11 +2440,14 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
             }
             (true, Some(s)) => {
                 runs.push((s, index));
+                tails.push(String::from_utf8_lossy(&last_line).into_owned());
                 run_start = None;
             }
             _ => {}
         }
         if !blank {
+            last_line.clear();
+            last_line.extend_from_slice(line);
             if let Some(w) = widest.last_mut() {
                 let counts = nonempty_fields(line);
                 for (m, c) in w.iter_mut().zip(counts) {
@@ -2386,6 +2459,7 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     }
     if let Some(s) = run_start {
         runs.push((s, index));
+        tails.push(String::from_utf8_lossy(&last_line).into_owned());
     }
     // The delimiter is the one the blocks that survived the minimum are best
     // read with — never one guessed from the dropped runs themselves, or a
@@ -2399,8 +2473,14 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     let (delim, at) = pick_block_delimiter(&kept);
     let measured: Vec<Run> = runs
         .iter()
-        .zip(heads.iter().zip(&widest))
-        .map(|(&(start, end), (h, w))| Run { start, end, width: field_count(h, delim), widest: w[at] })
+        .zip(heads.iter().zip(&tails).zip(&widest))
+        .map(|(&(start, end), ((h, t), w))| Run {
+            start,
+            end,
+            width: field_count(h, delim),
+            widest: w[at],
+            last_width: field_count(t, delim),
+        })
         .collect();
     Ok(windows_from_runs(measured))
 }
@@ -2542,6 +2622,7 @@ fn blocks_from(blanks: &[bool], widths: &[usize]) -> Regions {
             start: s as u64,
             end: e as u64,
             width: widths.get(s).copied().unwrap_or(0),
+            last_width: e.checked_sub(1).and_then(|l| widths.get(l)).copied().unwrap_or(0),
             widest: widths.get(s..e).and_then(|w| w.iter().max().copied()).unwrap_or(0),
         })
         .collect();
@@ -2556,6 +2637,7 @@ struct Run {
     end: u64,
     width: usize,
     widest: usize,
+    last_width: usize,
 }
 
 /// The filtering rule, shared by the text path (which finds its runs by
@@ -2578,11 +2660,12 @@ struct Run {
 /// tool refuses. When no window is kept there is nothing dropped either:
 /// the file is then read whole, so every line is read.
 ///
-/// A one-row run directly above a block, as wide as the block's first row,
-/// may be that block's header cut off by a blank row; whether it is depends
-/// on whether the block has a header of its own, which only a frame can
-/// say, so adoption is the framing step's (`Regions::severed_header`,
-/// `fit::frame_blocks`), not this one's. Here it is an ordinary dropped run.
+/// A run directly above a block whose last row is as wide as the block's
+/// first row may be that block's header run, cut off by a blank row;
+/// whether it is depends on whether the block has a header of its own,
+/// which only a frame can say, so adoption is the framing step's
+/// (`Regions::header_run`, `fit::frame_blocks`), not this one's. Here it is
+/// an ordinary dropped run, or an ordinary window.
 fn windows_from_runs(runs: Vec<Run>) -> Regions {
     if runs.len() == 1 {
         return Regions::default();
@@ -2595,6 +2678,7 @@ fn windows_from_runs(runs: Vec<Run>) -> Regions {
         block_width: kept[0].width,
         window_widths: kept.iter().map(|r| r.width).collect(),
         window_widest: kept.iter().map(|r| r.widest).collect(),
+        window_last_widths: kept.iter().map(|r| r.last_width).collect(),
         windows: kept
             .into_iter()
             .enumerate()
@@ -2602,7 +2686,7 @@ fn windows_from_runs(runs: Vec<Run>) -> Regions {
             .collect(),
         dropped: short
             .into_iter()
-            .map(|r| DroppedRun { start: r.start, end: r.end, width: r.width, widest: r.widest })
+            .map(|r| DroppedRun { start: r.start, end: r.end, width: r.width, widest: r.widest, last_width: r.last_width })
             .collect(),
     }
 }

@@ -112,12 +112,13 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
             Default::default()
         } else {
             let found = crate::engine::regions_of(f, None, limits).unwrap_or_default();
-            // A block with no header of its own takes the one-line header a
-            // blank row cut off, exactly as `fit` frames it. The options are
+            // A block with no plausible header of its own takes the header
+            // run a blank row cut off above it, exactly as `fit` frames it. The options are
             // the ones draft sniffs with; adoption cannot differ from fit's,
             // since `verify` only widens column types and adoption asks
             // whether the frame promoted a header.
-            crate::fit::frame_blocks(f, None, &found, crate::sniff::SniffOpts::default(), limits).0
+            crate::fit::frame_blocks(f, None, &found, crate::sniff::SniffOpts::default(), limits, &|_| true)
+                .regions
         };
         // A block none of whose rows holds two fields is a banner or a
         // footnote block, not a table: drafting it declared a column no

@@ -538,7 +538,14 @@ for a block whose own frame promoted no header (`Regions::severed_header`,
 adopted by `fit::frame_blocks`, which `draft` shares; both executors skip the
 blank row inside the window). Adopting on width alone made `Meier;Bern` the
 header of a headed `Name;City` table and `Name|City` a data row, silently;
-not adopting at all left a headerless block bound as `col_N`. It streams the text
+not adopting at all left a headerless block bound as `col_N`. Since 2026-10-01 the
+adopted run may be title lines and the header in one run, as official statistics lay
+them out (`Regions::header_run`: the run's *last* row as wide as the block, a window
+above or a dropped run), and a block whose promoted header reads like data adopts it
+too, with a note naming the row now read as data — but only when the adopted frame's
+header ends on the run's last row and passes the gates; otherwise the block is framed
+as before. ADP-31's run above the states ends in the "United States" total, so it is
+not adopted and that sheet is still read whole. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
 (`tests/regions.rs::regions_of_streams_a_large_file`, `#[ignore]`, run by hand
