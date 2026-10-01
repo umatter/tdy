@@ -645,18 +645,7 @@ fn region_frame(
             // address, or a sheet whose data begins at, say, C5 has its
             // window read against blank margin (or a neighbouring block)
             // instead of the rows it names.
-            let (start, width) = {
-                let mut wb = engine::open_workbook(path, &limits).map_err(FitError::Unreadable)?;
-                let r = engine::checked_worksheet_range(&mut wb, s, &limits).map_err(FitError::Unreadable)?;
-                (r.start().unwrap_or((0, 0)), r.width())
-            };
-            let first_col = col_letter(start.1);
-            let last_col = col_letter(start.1 + width.saturating_sub(1) as u32);
-            let range = format!(
-                "{first_col}{}:{last_col}{}",
-                start.0 + window.start as u32 + 1,
-                start.0 + window.end as u32
-            );
+            let range = region_a1(path, s, window, limits).map_err(FitError::Unreadable)?;
             sniff::frame_excel_block(path, s, range, window.ordinal, limits)
                 .with_context(|| format!("framing block {} of sheet {s:?} of {}", window.ordinal, path.display()))
                 .map_err(FitError::Unreadable)
@@ -721,6 +710,28 @@ pub fn gate_regions(
 /// reading of a file with no headed block is the file whole.
 fn promotes_header(frame: &ParseSpec) -> bool {
     frame.transforms.iter().any(|t| matches!(t, Transform::PromoteHeader { .. }))
+}
+
+/// The A1 address of one block of a sheet: the window's rows, which
+/// `regions_of` counts within the used range, offset by the used range's
+/// own start, over its column span. The one place that computes it, so the
+/// frame a block is fitted with and the check that a reused sidecar still
+/// reads that block cannot disagree about which cells it is.
+pub(crate) fn block_a1(used_start: (u32, u32), used_width: usize, window: crate::spec::RowWindow) -> String {
+    let first_col = col_letter(used_start.1);
+    let last_col = col_letter(used_start.1 + used_width.saturating_sub(1) as u32);
+    format!(
+        "{first_col}{}:{last_col}{}",
+        used_start.0 + window.start as u32 + 1,
+        used_start.0 + window.end as u32
+    )
+}
+
+/// [`block_a1`] for a sheet read from disk.
+pub(crate) fn region_a1(path: &Path, sheet: &str, window: crate::spec::RowWindow, limits: Limits) -> anyhow::Result<String> {
+    let mut wb = engine::open_workbook(path, &limits)?;
+    let r = engine::checked_worksheet_range(&mut wb, sheet, &limits)?;
+    Ok(block_a1(r.start().unwrap_or((0, 0)), r.width(), window))
 }
 
 /// A 0-based column index as A1 letters ("A", "Z", "AA", ...).

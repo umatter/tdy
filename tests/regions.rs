@@ -448,6 +448,11 @@ fn a_region_sidecar_whose_window_names_another_ordinal_is_refused() {
 fn a_region_sidecar_whose_window_is_not_the_blocks_is_a_contradiction() {
     let (dir, t) = three_pile_accepted();
     edit_window(dir.path(), "report.csv#2", 0, 4, 2);
+    // A person's spec says so: `method = "manual"`. A tool-written one whose
+    // window disagrees is re-planned instead (see the renumbering tests).
+    let sc = dir.path().join("report.csv#2.tdy.toml");
+    let text = std::fs::read_to_string(&sc).unwrap().replace("method = \"heuristic\"", "method = \"manual\"");
+    std::fs::write(&sc, text).unwrap();
     let out = tdy(&["fit", t.to_str().unwrap()]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(!out.status.success(), "{text}");
@@ -1121,4 +1126,54 @@ fn a_mid_field_quote_does_not_hide_a_data_row() {
     let ddl = "CREATE TABLE q (item TEXT NOT NULL OPTIONS(matches='Item'), qty BIGINT NOT NULL OPTIONS(matches='Qty'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Amount')) WITH (files='*.csv');";
     let (_d, t) = pile("Item;Qty;Amount\nRohr 10mm;1;10.00\nRohr 20mm;2;20.00\nRohr 30mm;3;30.00\n\nRohr 12\";5;60.00\n", ddl);
     waits_then_reads(&t, "REVIEW: a run of 1 line(s) at lines 6–6 was not read", "amount", "60.00");
+}
+
+/// Fit the renumbering pile (`file` copied as `name`) against `matches`;
+/// accept members `1..=n`; return the dataset's total.
+fn renumber_round(dir: &Path, name: &str, matches: &str, n: u32) -> (String, String) {
+    let t = dir.join("q.tdy.sql");
+    let ext = name.rsplit('.').next().unwrap();
+    std::fs::write(&t, format!("CREATE TABLE q (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='{matches}')) WITH (files = '*.{ext}', date_order = 'dmy');")).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let fit = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{fit}{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(dir.join("q.tdy.lock")).unwrap();
+    assert_eq!(lock.matches("accepted = true").count(), 0, "nothing carried over a renumbering: {lock}");
+    for i in 1..=n {
+        let out = tdy(&["fit", t.to_str().unwrap(), "--accept", &format!("{name}#{i}")]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    (fit, query(&t, "SELECT sum(amount) AS total FROM DS"))
+}
+
+/// The blocks that pass are numbered among themselves, so a declaration that
+/// lets one more block through renumbers the rest, and the sidecar written
+/// for `#1` now names `#2`'s rows. Reusing it read one block twice and lost
+/// another (3300.00 where the file holds 2406.00). A tool-written sidecar
+/// whose window is not its member's block is re-planned, saying so; nothing
+/// accepted carries over, since the question asked changed with the count.
+#[test]
+fn a_renumbered_sheet_region_is_re_planned_not_reused() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_renumber.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let (_, total) = renumber_round(dir.path(), "book.xlsx", "Betrag", 2);
+    assert!(total.contains("| 2400.00 |"), "{total}");
+    let (fit, total) = renumber_round(dir.path(), "book.xlsx", "Betrag, Menge", 3);
+    assert!(fit.contains("sidecar window was block 1") && fit.contains("re-planned"), "{fit}");
+    assert!(!fit.contains("existing spec"), "{fit}");
+    assert!(total.contains("| 2406.00 |"), "{total}");
+}
+
+/// The text twin: re-planned the same way rather than stuck on CONTRADICTS,
+/// which would leave a person deleting tdy's own sidecars by hand.
+#[test]
+fn a_renumbered_text_region_is_re_planned_not_contradicted() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_renumber.csv"), dir.path().join("report.csv")).unwrap();
+    let (_, total) = renumber_round(dir.path(), "report.csv", "Betrag", 2);
+    assert!(total.contains("| 2400.00 |"), "{total}");
+    let (fit, total) = renumber_round(dir.path(), "report.csv", "Betrag, Menge", 3);
+    assert!(fit.contains("sidecar window was block 1 (lines 6–9), the split now gives block 1 (lines 1–4); re-planned"), "{fit}");
+    assert!(!fit.contains("CONTRADICTS"), "{fit}");
+    assert!(total.contains("| 2406.00 |"), "{total}");
 }

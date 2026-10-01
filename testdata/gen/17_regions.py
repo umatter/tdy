@@ -109,13 +109,23 @@ FIXTURES  (all in testdata/, named regions_*)
    is a data-like run nothing read. Ground truth: the table's sums are
    #7's, 1500 / 1550 / 1600.
 
+10. regions_renumber.csv / regions_renumber.xlsx (sheet "Data")
+   Three stacked tables: A (`Datum;Region;Menge`, quantities 1/2/3), B and
+   C (`Datum;Region;Betrag`, B = block 2 of #1, C = block 3 of #1). Against
+   `matches='Betrag'` only B and C pass the gates and are numbered #1 and
+   #2; once the declaration also matches `Menge`, A passes too and the
+   blocks are renumbered #1..#3 — so the sidecar written for #1 (B) now
+   belongs to #2. Reusing it reads B twice and loses A. Ground truth: B+C =
+   2400.00; A+B+C = 2406.00.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
 regions_short_block.csv -> [{3,7}] plus a dropped table-shaped run {0,2};
 regions_banner.csv -> one member, window {7,14}, sums 1500/1550/1600;
 regions_banner.xlsx -> two sheet members, sums 1500/1550/1600 and 3000/3100/3200;
-regions_footnoted.xlsx -> read whole positionally, or one by-name member, 1500/1550/1600.
+regions_footnoted.xlsx -> read whole positionally, or one by-name member, 1500/1550/1600;
+regions_renumber.{csv,xlsx} -> 2400.00 (Betrag), 2406.00 (Betrag, Menge).
 """
 import os
 import re
@@ -393,6 +403,36 @@ def build_regions_footnoted_xlsx():
     )
 
 
+RENUMBER_A = [("05.01.2025", "Ost", "1"), ("12.01.2025", "West", "2"), ("19.01.2025", "Nord", "3")]
+
+
+def renumber_rows():
+    rows = [("Datum", "Region", "Menge")] + RENUMBER_A + [None]
+    rows += [tuple(HEADER.split(";"))] + BLOCK2 + [None]
+    rows += [tuple(HEADER.split(";"))] + BLOCK3
+    return rows
+
+
+def build_regions_renumber():
+    from openpyxl import Workbook
+
+    rows = renumber_rows()
+    write_csv(
+        "regions_renumber.csv",
+        ["" if r is None else ";".join(r) for r in rows],
+        "blocks A (Menge), B, C (Betrag); 2400.00 by Betrag, 2406.00 with Menge",
+    )
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for i, r in enumerate(rows, 1):
+        if r is None:
+            continue
+        for j, v in enumerate(r, 1):
+            ws.cell(row=i, column=j, value=v)
+    save_workbook(wb, "regions_renumber.xlsx", "regions_renumber.csv as sheet \"Data\"")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -404,6 +444,7 @@ def main():
     build_regions_banner_csv()
     build_regions_banner_xlsx()
     build_regions_footnoted_xlsx()
+    build_regions_renumber()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "

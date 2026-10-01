@@ -589,10 +589,11 @@ fn is_dropped_note(n: &str) -> bool {
     n.starts_with("a run of ") && n.ends_with("was not read")
 }
 
-/// Did a hand-edited sidecar get thrown away for this member? The prefix is
-/// fixed so `render_pile_text` can find it.
+/// Did a sidecar get thrown away for this member — refused by the loader,
+/// or tdy's own written for a block that has since been renumbered? The
+/// prefixes are fixed so `render_pile_text` can find them.
 fn is_refusal_note(n: &str) -> bool {
-    n.starts_with("sidecar refused: ")
+    n.starts_with("sidecar refused: ") || n.starts_with("sidecar window was ")
 }
 
 /// The notes the CLI shows under a member. Most of a spec's notes are
@@ -612,6 +613,37 @@ fn one_line(s: &str) -> String {
 
 /// A window as a person counts lines: 1-based and inclusive, or "the whole
 /// file" when there is none.
+/// When a reused region sidecar reads a different block from the one the
+/// split gives this member: `(what the sidecar reads, what the split
+/// gives)`, each as "block N (lines a–b)" or "block N (A1:C4)". `None` when
+/// they agree, and for a sidecar that reads the whole file or sheet (a
+/// different question, answered by `Unit::whole_file_notes`). A sheet
+/// block is compared by its A1 `range` and ordinal, computed by the same
+/// function that framed it.
+fn window_disagreement(
+    spec: &ParseSpec,
+    window: RowWindow,
+    expected_range: impl FnOnce() -> Option<String>,
+) -> Option<(String, String)> {
+    let block = |o: u32, at: String| format!("block {o} ({at})");
+    match &spec.extraction {
+        Extraction::Delimited { region: Some(d), .. } if *d != window => Some((
+            block(d.ordinal, lines_of(Some(*d))),
+            block(window.ordinal, lines_of(Some(window))),
+        )),
+        Extraction::Excel { region_ordinal: Some(o), range, .. } => {
+            let want = expected_range();
+            (Some(*o) != Some(window.ordinal) || *range != want).then(|| {
+                (
+                    block(*o, range.clone().unwrap_or_else(|| "the whole sheet".into())),
+                    block(window.ordinal, want.unwrap_or_else(|| "an unreadable range".into())),
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
 fn lines_of(w: Option<RowWindow>) -> String {
     match w {
         Some(w) => format!("lines {}–{}", w.start + 1, w.end),
@@ -794,7 +826,7 @@ pub async fn fit_pile(
         // the one fact a sidecar cannot be trusted about — but doing it in
         // silence leaves the member reading exactly as it did before, with
         // nothing to say why the edit had no effect.
-        let refused: Option<String> = loaded
+        let mut refused: Option<String> = loaded
             .as_ref()
             .err()
             .map(|e| {
@@ -804,7 +836,24 @@ pub async fn fit_pile(
         if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = loaded {
             let manual = sc.provenance.method == InferenceMethod::Manual;
             let conforming = crate::conform::conforms(&sc.spec, &target).is_ok();
-            if manual || conforming {
+            // The sidecar names an ordinal (`load_member` proved that); only
+            // the split knows which rows that block actually is. Blocks are
+            // numbered among those that pass the gates, so a declaration
+            // that lets one more through renumbers the rest and the sidecar
+            // written for `#1` now reads `#2`'s rows: reused, one block is
+            // read twice and another lost. Costs no I/O for text (the true
+            // window is in hand) and one workbook open for a sheet block.
+            let disagreement = window.and_then(|w| {
+                window_disagreement(&sc.spec, w, || {
+                    let s = crate::fit::region_read_hint(&p, sheet, limits).flatten()?;
+                    crate::fit::region_a1(&p, &s, w, limits).ok()
+                })
+            });
+            // tdy's own sidecar is re-planned, saying so; a person's
+            // (`manual`) is a contradiction they have to settle.
+            if let (Some((was, now)), false) = (&disagreement, manual) {
+                refused = Some(format!("sidecar window was {was}, the split now gives {now}; re-planned"));
+            } else if manual || conforming {
                 let mut spec = sc.spec;
                 // The expansion note is a fact about *this* fit's discovery,
                 // not about the fit the sidecar was written in: a reused
@@ -840,21 +889,18 @@ pub async fn fit_pile(
                     InferenceMethod::Llm => "llm",
                     InferenceMethod::Heuristic => "existing",
                 };
-                // The sidecar names an ordinal (`load_member` proved that);
-                // only the split knows which lines that block actually is.
                 // A hand-edited window that still names its own ordinal
                 // passes every check a sidecar can make on itself, and
                 // reusing it makes two members read one block and total a
-                // plausible wrong number. Costs no I/O: the true window is
-                // already in hand.
-                if let Extraction::Delimited { region: declared, .. } = &spec.extraction {
-                    if declared.is_some() && declared != window {
+                // plausible wrong number.
+                if let Some((was, now)) = &disagreement {
+                    {
                         failed += 1;
                         reports.push(MemberReport {
                             path: rel.clone(),
                             sheet: unit.sheet.clone(),
                             region,
-                            window: *declared,
+                            window: spec_window(&spec),
                             status: MemberStatus::Contradicts,
                             via: Some(via.into()),
                             sources: Vec::new(),
@@ -865,12 +911,10 @@ pub async fn fit_pile(
                                 kind: "contradicts".into(),
                                 column: None,
                                 message: format!(
-                                    "the sidecar reads {}, but the blank-row split puts this \
-                                     member's block at {}. A region member's spec must read its \
+                                    "the sidecar reads {was}, but the blank-row split puts this \
+                                     member's block at {now}. A region member's spec must read its \
                                      own block: correct the window, or delete the sidecar and \
-                                     re-run `tdy fit`.",
-                                    lines_of(*declared),
-                                    lines_of(*window),
+                                     re-run `tdy fit`."
                                 ),
                                 want: None,
                                 tried: Vec::new(),
