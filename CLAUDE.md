@@ -728,9 +728,11 @@ had, so re-run it after touching extraction or framing.
 ## Real data
 
 `scripts/download_corpus.sh` clones twenty-six public data-wrangling exercise repositories
-into `corpus/` (gitignored, ~7 GB, 9,881 files). `TDY_CORPUS=corpus cargo test --test corpus
--- --nocapture` sweeps them: never panic, never hang, anything read confidently is
-reproducible, plus a survey. Nothing in CI sees it, so anything it *finds* has to become a
+into `corpus/` (gitignored, ~7 GB, 9,881 files). `TDY_CORPUS=corpus cargo test --release --test
+corpus -- --nocapture` sweeps them: never panic, never hang, anything read confidently is
+reproducible, plus a survey. `--release` is not optional: the per-file time assertion is
+calibrated on an optimised build, and unoptimised calamine takes ~95 s over a 10 MB workbook
+the release build reads in ~6 s. Nothing in CI sees it, so anything it *finds* has to become a
 fixture in `testdata/` — that is what `12_late_surprises.py` is. The 2026-09-03 sweep's own
 findings live in `gap_reports/AUDIT_FINDINGS.md` (gitignored, like every `gap_reports/`
 report); its fixtures are `15_audit_defects.py` (below).
