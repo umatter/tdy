@@ -785,7 +785,7 @@ Things that only become clear from reading several modules:
   batch exists, derived by building each column over *zero* rows so it cannot drift from the
   code that types real data.
 - **`stream` is the executor for text formats; `engine` is the fallback and the reference.**
-  It is plumbing only — where an answer could differ (`promote_header_from`,
+  It is plumbing only — where an answer could differ (`promote_header_recording`,
   `build_column_at`) it calls the same function `engine` calls, deliberately, so the two
   cannot drift. It covers delimited, `lines`, `fixed_width` and NDJSON — everything whose rows are
   independent — behind a `Source` enum; Excel and a JSON *array* cannot stream, since each

@@ -36,6 +36,7 @@ pub mod lockfile;
 pub mod magnitude;
 pub mod member;
 pub mod numfmt;
+pub mod profile;
 pub mod provider;
 pub mod sample;
 pub mod sidecar;
