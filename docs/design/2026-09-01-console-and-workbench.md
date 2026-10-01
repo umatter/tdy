@@ -1,6 +1,6 @@
 # The console and the workbench
 
-*Design, 2026-09-01. Status: agreed, not yet built.*
+*Design, 2026-09-01. Status: built — the console landed with slice 3 (2026-09-02) and the workbench is `tdy-tui`'s only mode; CLAUDE.md records what landed and where it differs.*
 
 ## 1. Why
 

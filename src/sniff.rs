@@ -659,22 +659,97 @@ fn sniff_excel_sheet(
     path: &Path,
     sheet: Option<String>,
     limits: Limits,
-    mut doubts: Doubts,
+    doubts: Doubts,
 ) -> Result<SniffResult> {
-    let sheet_for_money = sheet.clone();
     let extraction = Extraction::Excel {
         sheet_name: sheet,
         sheet_index: None,
         range: None,
         region_ordinal: None,
     };
+    sniff_excel_extraction(path, extraction, limits, doubts)
+}
 
+/// The sheet sniffer over a given Excel extraction — a whole sheet, or one
+/// block of it (`range` + `region_ordinal`, see [`frame_excel_block`]).
+fn sniff_excel_extraction(
+    path: &Path,
+    extraction: Extraction,
+    limits: Limits,
+    doubts: Doubts,
+) -> Result<SniffResult> {
     // No row cap here, unlike the text formats: calamine materialises the
     // whole sheet to answer any question about it, so capping saves nothing
     // and would hide the last row — which is exactly where a "Total" line
     // lives. `limits.max_cells` is the real guard.
-    let mut table = engine::extract(&extraction, path, &ExtractOpts::full(limits))
+    let table = engine::extract(&extraction, path, &ExtractOpts::full(limits))
         .with_context(|| format!("probing {}", path.display()))?;
+    let money = match &extraction {
+        Extraction::Excel { sheet_name: Some(s), .. } => crate::xlmoney::money_columns(path, s),
+        _ => Default::default(),
+    };
+    sniff_excel_table(extraction, table, &money, doubts)
+}
+
+/// One sheet of a workbook, opened once per discovery and gating pass: its
+/// used range and the money columns its number formats declare
+/// (sheet-absolute indices). Framing a sheet's blocks from this instead of
+/// from the path keeps each pass to one workbook open per sheet, however
+/// many blocks it has.
+pub(crate) struct OpenSheet {
+    pub name: String,
+    pub range: calamine::Range<calamine::Data>,
+    money: std::collections::HashSet<usize>,
+}
+
+impl OpenSheet {
+    pub(crate) fn open(path: &Path, sheet: &str, limits: Limits) -> Result<OpenSheet> {
+        let mut wb = engine::open_workbook(path, &limits)?;
+        let range = engine::checked_worksheet_range(&mut wb, sheet, &limits)?;
+        Ok(OpenSheet {
+            name: sheet.to_string(),
+            range,
+            money: crate::xlmoney::money_columns(path, sheet),
+        })
+    }
+
+    /// Frame the whole sheet, as [`frame_excel_sheet`] does from the path.
+    pub(crate) fn frame_whole(&self, limits: Limits) -> Result<crate::spec::ParseSpec> {
+        self.frame(None, None, limits)
+    }
+
+    /// Frame one block of it — `a1`, carrying the block's `ordinal` — as
+    /// [`frame_excel_block`] does from the path.
+    pub(crate) fn frame_block(&self, a1: String, ordinal: u32, limits: Limits) -> Result<crate::spec::ParseSpec> {
+        self.frame(Some(a1), Some(ordinal), limits)
+    }
+
+    fn frame(&self, a1: Option<String>, ordinal: Option<u32>, limits: Limits) -> Result<crate::spec::ParseSpec> {
+        let table = engine::excel_table_from(
+            &self.range,
+            &self.name,
+            a1.as_deref(),
+            ordinal.is_some(),
+            &ExtractOpts::full(limits),
+        )?;
+        let extraction = Extraction::Excel {
+            sheet_name: Some(self.name.clone()),
+            sheet_index: None,
+            range: a1,
+            region_ordinal: ordinal,
+        };
+        sniff_excel_table(extraction, table, &self.money, Doubts::default()).map(|r| r.spec)
+    }
+}
+
+/// The sheet sniffer over a table already extracted, with the sheet's money
+/// columns as sheet-absolute indices.
+fn sniff_excel_table(
+    extraction: Extraction,
+    mut table: RawTable,
+    money_abs: &std::collections::HashSet<usize>,
+    mut doubts: Doubts,
+) -> Result<SniffResult> {
     if table.rows.is_empty() {
         bail!("sheet appears to be empty");
     }
@@ -695,16 +770,10 @@ fn sniff_excel_sheet(
     // ever remove *rows*, never reorder or drop a column, so once shifted by
     // the offset a column index still matches the header's index by the
     // time `finish` builds column specs from it.
-    let money_columns: std::collections::HashSet<usize> = sheet_for_money
-        .as_deref()
-        .map(|s| {
-            let offset = table.col_offset as usize;
-            crate::xlmoney::money_columns(path, s)
-                .into_iter()
-                .filter_map(|c| c.checked_sub(offset))
-                .collect()
-        })
-        .unwrap_or_default();
+    let money_columns: std::collections::HashSet<usize> = {
+        let offset = table.col_offset as usize;
+        money_abs.iter().filter_map(|c| c.checked_sub(offset)).collect()
+    };
     let width = table.width();
     let non_empty = |r: &Vec<String>| r.iter().filter(|c| !c.trim().is_empty()).count();
 
@@ -831,6 +900,75 @@ pub(crate) fn frame_excel_sheet(
 ) -> Result<crate::spec::ParseSpec> {
     sniff_excel_sheet(path, Some(sheet.to_string()), limits, Doubts::default())
         .map(|r| r.spec)
+}
+
+/// Sniff one stacked block of a text file as if it were its own file: copy
+/// the block's own raw lines out to a scratch file with the same extension
+/// (so format guessing — which reads the extension, not the bytes — sees a
+/// `.csv` for a `.csv`), then run the ordinary sniffer over that. This is
+/// the whole reason a block gets the sniffer's full machinery — title rows,
+/// separator/date inference, type widening — rather than a cut-down pass of
+/// its own that could disagree with what a plain file gets. `draft` drafts
+/// a block from it, and `fit` frames a region with it, so a block's
+/// separator and header are the block's own, never the whole file's (whose
+/// banner can out-vote the table on the separator).
+///
+/// The scratch file lives in `fileio`'s own process-lifetime cache
+/// (`$TMPDIR/tdy-<pid>/scratch/`), removed here and, whatever happens, by
+/// `fileio::clear_cache()` at exit — so the one production path that needs
+/// a temporary file costs the published crate no dependency.
+pub(crate) fn sniff_text_block(
+    path: &Path,
+    window: crate::spec::RowWindow,
+    limits: Limits,
+    opts: SniffOpts,
+) -> Result<crate::spec::ParseSpec> {
+    let bytes = block_bytes(path, window, limits)
+        .with_context(|| format!("reading block {} of {}", window.ordinal, path.display()))?;
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("csv");
+    let tmp = crate::fileio::scratch_file(&format!("block.{ext}"))
+        .context("creating a scratch file for the block")?;
+    std::fs::write(&tmp, &bytes).with_context(|| {
+        format!("writing block {} of {} to a scratch file", window.ordinal, path.display())
+    })?;
+    let sniffed = (|| {
+        let sample = crate::sample::build(&tmp, 16 * 1024, limits)
+            .with_context(|| format!("sampling block {} of {}", window.ordinal, path.display()))?;
+        sniff_opts(&tmp, &sample, limits, opts)
+            .map(|r| r.spec)
+            .with_context(|| format!("sniffing block {} of {}", window.ordinal, path.display()))
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    sniffed
+}
+
+/// The raw bytes of one stacked block, by physical line number — the same
+/// indexing `regions_of` counted `window` against, so a window it returned
+/// names exactly these lines and no others.
+fn block_bytes(path: &Path, window: crate::spec::RowWindow, limits: Limits) -> Result<Vec<u8>> {
+    let real = crate::fileio::materialize(path, limits.max_decompressed_bytes)?;
+    let file = std::fs::File::open(real.as_ref())
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut out = Vec::new();
+    let mut index: u64 = 0;
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        if index >= window.end {
+            break;
+        }
+        buf.clear();
+        let n = std::io::BufRead::read_until(&mut reader, b'\n', &mut buf)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        if index >= window.start {
+            out.extend_from_slice(&buf);
+        }
+        index += 1;
+    }
+    Ok(out)
 }
 
 /// Prefer the first sheet that actually holds a table over a cover sheet.

@@ -533,8 +533,9 @@ gate exists for.
 verb dedicated to exactly this).
 
 **`partial`** — leading/trailing blanks are absorbed by framing; interior blank
-*rows* survive as all-empty rows, and an all-blank *column* becomes a real column
-of nulls (usually named `col_7`). A `remove_empty` operator would be a small,
+*rows* are skipped (a text reader skips blank lines; a sheet's are skipped where
+its framing ends, since 2026-10-01), but an all-blank *column* becomes a real
+column of nulls (usually named `col_7`). A `remove_empty` operator would be a small,
 uncontroversial addition; today the cure is projection (omit the column) and a
 `WHERE` clause.
 
@@ -1617,9 +1618,15 @@ Hive partitioning (`/year=2024/month=03/`), `hive_partitioning=true` (DuckDB),
 `Folder.Files` (Power Query).
 
 **`partial`** — a target's `files` globs and `exclude` list resolve to members
-recorded in the lock (strong), but nothing derives a *column* from the path
-(**H4**, **C9**). For a `data/2024/03/umsatz.csv` layout, the year and month are
-visible in the manifest and invisible in the data.
+recorded in the lock (strong), and since the shape slice (2026-09-06) a column
+*can* be derived from the path: `source_name` with `from = "path"` (or
+`file_stem`, `file_name`, `sheet`, `region`) and a regex whose capture becomes
+the value, plus `WITH (provenance = 'true')` for `_member` and `_row`. For a
+`data/2024/03/umsatz.csv` layout the year and month are one declared pattern
+away. Still `partial` because nothing *infers* it: a Hive-style `key=value`
+segment is not recognised as a partition column, and the sniffer does not
+suggest the pattern — a person writes it, which is the review-gate stance
+(**H4**, **C9**).
 
 ### J5 · Upsert, SCD and incremental merge
 **Also called:** `MERGE` (SQL), Type-1/Type-2 slowly changing dimensions,

@@ -323,6 +323,11 @@ pub struct Unit {
     /// Those of `dropped` shaped like the blocks that were kept: `review`'s
     /// own subject.
     pub shaped: Vec<crate::engine::DroppedRun>,
+    /// The sheet the split read, when the file is a workbook: the member's
+    /// own sheet, a single-sheet workbook's only one, or the one sheet of
+    /// several that fits. `fit_region` and the reused-sidecar check read
+    /// the same sheet the split did.
+    pub region_sheet: Option<String>,
 }
 
 impl Unit {
@@ -370,19 +375,27 @@ pub fn expand_units(
     limits: crate::config::Limits,
     excluded_files: &[(String, String)],
 ) -> Result<Vec<Unit>> {
-    let mut sheet_units: Vec<(MemberRef, Vec<String>)> = Vec::new(); // (member, notes)
+    // (member, notes, the sheet a plain member's split should read)
+    let mut sheet_units: Vec<(MemberRef, Vec<String>, Option<String>)> = Vec::new();
     for rel in rels {
         let p = dir.join(rel);
         match crate::fit::discover_sheets(&p, target, limits) {
             Ok(Some(d)) if d.fitting.len() >= 2 => {
                 let note = expansion_note(&d);
                 for sheet in &d.fitting {
-                    sheet_units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()]));
+                    sheet_units.push((MemberRef::sheet(rel.clone(), sheet.clone()), vec![note.clone()], None));
                 }
+            }
+            // One sheet of several fits: the member stays plain (`fit`
+            // eliminates the others), but its split must read that sheet —
+            // without a name, no split ran at all and the sheet's banner
+            // was read as data.
+            Ok(Some(d)) if d.fitting.len() == 1 => {
+                sheet_units.push((MemberRef::file(rel.clone()), Vec::new(), d.fitting.first().cloned()))
             }
             // One fitting sheet, none, a non-workbook, or an unreadable
             // file: a plain member, and `plan` says what is wrong.
-            _ => sheet_units.push((MemberRef::file(rel.clone()), Vec::new())),
+            _ => sheet_units.push((MemberRef::file(rel.clone()), Vec::new(), None)),
         }
     }
 
@@ -393,12 +406,18 @@ pub fn expand_units(
     // member itself stays plain (`book.xlsx#2`, never `book.xlsx#Data#2` —
     // only a sheet that was itself expanded into a member gets `#Sheet#N`).
     let mut units: Vec<Unit> = Vec::new();
-    for (member, notes) in sheet_units {
+    for (member, notes, fitting_sheet) in sheet_units {
         let p = dir.join(&member.path);
-        let regions = match crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits) {
-            Some(sheet_hint) => {
-                crate::engine::regions_of(&p, sheet_hint.as_deref(), limits).unwrap_or_default()
-            }
+        let hint = match fitting_sheet {
+            Some(s) => Some(Some(s)),
+            None => crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits),
+        };
+        let region_sheet = hint.clone().flatten();
+        let crate::fit::GatedRegions { regions, headed_unfit, header_like_data } = match hint {
+            // The split proposes blocks; only those that pass the gates
+            // against the target are members (the design's table is keyed
+            // on exactly that). The rest are runs nothing reads.
+            Some(sheet_hint) => crate::fit::gated_regions(&p, sheet_hint.as_deref(), target, limits),
             // A workbook with several sheets whose member is not tied to
             // one of them: nothing here can say which sheet is meant, so no
             // region discovery runs for it.
@@ -420,11 +439,38 @@ pub fn expand_units(
         match n {
             0 => units.push(Unit {
                 member,
-                notes,
+                // A by-name target missing a block whose "header" reads like
+                // data is not asked — that header is a data row — but the
+                // block is still named, so the reading is not silent. The
+                // cost: a year-headed block (`STATE;2008;…` over numbers)
+                // reads as data by that test and gets only this note.
+                notes: {
+                    let mut ns = notes;
+                    if target.names_a_column() {
+                        ns.extend(header_like_data.iter().map(|w| {
+                            format!(
+                                "{LIKE_DATA_PREFIX}{}–{} whose header reads like data (a number over a \
+                                 numeric column); this file is read whole",
+                                w.start + 1,
+                                w.end
+                            )
+                        }));
+                    }
+                    ns
+                },
                 window: None,
-                review: None,
+                // No block passed, so the file is read whole. If the split saw
+                // a table with its own header there, reading past it is a
+                // judgement — the same file read whole used to answer with
+                // that header as a data row, and say nothing.
+                // Only for a target that binds by name: a purely positional
+                // one (`col_N`) cannot bind any header, so a headed block
+                // failing it says nothing about the whole-file reading, and
+                // the question would always be answered yes.
+                review: if target.names_a_column() { whole_read_reason(&headed_unfit) } else { None },
                 dropped: Vec::new(),
                 shaped: Vec::new(),
+                region_sheet: region_sheet.clone(),
             }),
             1 => {
                 let w = regions.windows[0];
@@ -442,6 +488,7 @@ pub fn expand_units(
                     review: shaped_reason,
                     dropped: regions.dropped.clone(),
                     shaped: shaped.clone(),
+                    region_sheet: region_sheet.clone(),
                 });
             }
             _ => {
@@ -466,6 +513,7 @@ pub fn expand_units(
                         review,
                         dropped: regions.dropped.clone(),
                         shaped: shaped.clone(),
+                        region_sheet: region_sheet.clone(),
                     });
                 }
             }
@@ -536,6 +584,25 @@ pub fn expand_units(
     Ok(units)
 }
 
+/// The question a whole-file member is asked when the split found headed
+/// tables in it that do not fit; `None` when it found none.
+fn whole_read_reason(headed: &[RowWindow]) -> Option<String> {
+    let at = |w: &RowWindow| format!("lines {}–{}", w.start + 1, w.end);
+    match headed {
+        [] => None,
+        [w] => Some(format!(
+            "the split found a table with its own header at {} that does not fit the declared \
+             table; this file is read whole — accept only if that is intended",
+            at(w)
+        )),
+        several => Some(format!(
+            "the split found tables with their own headers at {} that do not fit the declared \
+             table; this file is read whole — accept only if that is intended",
+            several.iter().map(at).collect::<Vec<_>>().join(" and ")
+        )),
+    }
+}
+
 /// One member as a phrase, for a message that has to tell apart two members
 /// that share a name.
 fn describe_member(m: &MemberRef) -> String {
@@ -579,15 +646,19 @@ fn is_read_anyway_note(n: &str) -> bool {
     n.starts_with("the split found a run of ")
 }
 
+/// How the note for a block whose promoted header reads like data begins.
+const LIKE_DATA_PREFIX: &str = "the split found a block at lines ";
+
 /// Does this note name lines nothing read? [`dropped_note`]'s own shape.
 fn is_dropped_note(n: &str) -> bool {
     n.starts_with("a run of ") && n.ends_with("was not read")
 }
 
-/// Did a hand-edited sidecar get thrown away for this member? The prefix is
-/// fixed so `render_pile_text` can find it.
+/// Did a sidecar get thrown away for this member — refused by the loader,
+/// or tdy's own written for a block that has since been renumbered? The
+/// prefixes are fixed so `render_pile_text` can find them.
 fn is_refusal_note(n: &str) -> bool {
-    n.starts_with("sidecar refused: ")
+    n.starts_with("sidecar refused: ") || n.starts_with("sidecar window was ")
 }
 
 /// The notes the CLI shows under a member. Most of a spec's notes are
@@ -596,7 +667,9 @@ fn is_refusal_note(n: &str) -> bool {
 fn shown_notes(m: &MemberReport) -> impl Iterator<Item = &String> {
     m.notes
         .iter()
-        .filter(|n| is_dropped_note(n) || is_read_anyway_note(n) || is_refusal_note(n))
+        .filter(|n| {
+            is_dropped_note(n) || is_read_anyway_note(n) || is_refusal_note(n) || n.starts_with(LIKE_DATA_PREFIX)
+        })
 }
 
 /// A multi-line message as one line — a sidecar's refusal can list several
@@ -607,6 +680,37 @@ fn one_line(s: &str) -> String {
 
 /// A window as a person counts lines: 1-based and inclusive, or "the whole
 /// file" when there is none.
+/// When a reused region sidecar reads a different block from the one the
+/// split gives this member: `(what the sidecar reads, what the split
+/// gives)`, each as "block N (lines a–b)" or "block N (A1:C4)". `None` when
+/// they agree, and for a sidecar that reads the whole file or sheet (a
+/// different question, answered by `Unit::whole_file_notes`). A sheet
+/// block is compared by its A1 `range` and ordinal, computed by the same
+/// function that framed it.
+fn window_disagreement(
+    spec: &ParseSpec,
+    window: RowWindow,
+    expected_range: impl FnOnce() -> Option<String>,
+) -> Option<(String, String)> {
+    let block = |o: u32, at: String| format!("block {o} ({at})");
+    match &spec.extraction {
+        Extraction::Delimited { region: Some(d), .. } if *d != window => Some((
+            block(d.ordinal, lines_of(Some(*d))),
+            block(window.ordinal, lines_of(Some(window))),
+        )),
+        Extraction::Excel { region_ordinal: Some(o), range, .. } => {
+            let want = expected_range();
+            (*o != window.ordinal || *range != want).then(|| {
+                (
+                    block(*o, range.clone().unwrap_or_else(|| "the whole sheet".into())),
+                    block(window.ordinal, want.unwrap_or_else(|| "an unreadable range".into())),
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
 fn lines_of(w: Option<RowWindow>) -> String {
     match w {
         Some(w) => format!("lines {}–{}", w.start + 1, w.end),
@@ -723,13 +827,15 @@ pub async fn fit_pile(
     // identified by its path *relative to the target* (plus an optional
     // sheet), so that is what --accept must name. Matching on the basename
     // accepted the wrong file when two directories held the same name, and
-    // could never accept a member in a subdirectory at all.
+    // could never accept a member in a subdirectory at all. An absolute
+    // argument is made relative to the target exactly as the lock's member
+    // paths are (`member::relative_to_target`, `lockfile::resolve`), so
+    // both sides are named one way.
     let accepted_now: Vec<MemberRef> = opts
         .accept
         .iter()
         .map(|a| {
-            let a = a.strip_prefix(&dir).unwrap_or(a);
-            let text = a.to_string_lossy().replace('\\', "/");
+            let text = crate::member::relative_to_target(&a.to_string_lossy(), &dir);
             match MemberRef::resolve(&text, |m| units.iter().any(|u| &u.member == m)) {
                 Ok(Some(m)) => Ok(m),
                 Ok(None) => Err(anyhow::anyhow!(
@@ -789,7 +895,7 @@ pub async fn fit_pile(
         // the one fact a sidecar cannot be trusted about — but doing it in
         // silence leaves the member reading exactly as it did before, with
         // nothing to say why the edit had no effect.
-        let refused: Option<String> = loaded
+        let mut refused: Option<String> = loaded
             .as_ref()
             .err()
             .map(|e| {
@@ -799,7 +905,23 @@ pub async fn fit_pile(
         if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = loaded {
             let manual = sc.provenance.method == InferenceMethod::Manual;
             let conforming = crate::conform::conforms(&sc.spec, &target).is_ok();
-            if manual || conforming {
+            // The sidecar names an ordinal (`load_member` proved that); only
+            // the split knows which rows that block actually is. Blocks are
+            // numbered among those that pass the gates, so a declaration
+            // that lets one more through renumbers the rest and the sidecar
+            // written for `#1` now reads `#2`'s rows: reused, one block is
+            // read twice and another lost. Costs no I/O for text (the true
+            // window is in hand) and one workbook open for a sheet block.
+            let disagreement = window.and_then(|w| {
+                window_disagreement(&sc.spec, w, || {
+                    crate::fit::region_a1(&p, u.region_sheet.as_deref()?, w, limits).ok()
+                })
+            });
+            // tdy's own sidecar is re-planned, saying so; a person's
+            // (`manual`) is a contradiction they have to settle.
+            if let (Some((was, now)), false) = (&disagreement, manual) {
+                refused = Some(format!("sidecar window was {was}, the split now gives {now}; re-planned"));
+            } else if manual || conforming {
                 let mut spec = sc.spec;
                 // The expansion note is a fact about *this* fit's discovery,
                 // not about the fit the sidecar was written in: a reused
@@ -810,6 +932,7 @@ pub async fn fit_pile(
                 spec.notes.retain(|n| !(n.starts_with("table ") && n.ends_with("split at blank rows")));
                 spec.notes.retain(|n| !n.starts_with("one proper block in this file"));
                 spec.notes.retain(|n| !is_dropped_note(n));
+                spec.notes.retain(|n| !n.starts_with(LIKE_DATA_PREFIX));
                 spec.notes.retain(|n| !is_read_anyway_note(n));
                 // The split's notes and its review reason are true of a spec
                 // that reads one block. A plain member may legitimately reuse
@@ -835,49 +958,42 @@ pub async fn fit_pile(
                     InferenceMethod::Llm => "llm",
                     InferenceMethod::Heuristic => "existing",
                 };
-                // The sidecar names an ordinal (`load_member` proved that);
-                // only the split knows which lines that block actually is.
                 // A hand-edited window that still names its own ordinal
                 // passes every check a sidecar can make on itself, and
                 // reusing it makes two members read one block and total a
-                // plausible wrong number. Costs no I/O: the true window is
-                // already in hand.
-                if let Extraction::Delimited { region: declared, .. } = &spec.extraction {
-                    if declared.is_some() && declared != window {
-                        failed += 1;
-                        reports.push(MemberReport {
-                            path: rel.clone(),
-                            sheet: unit.sheet.clone(),
-                            region,
-                            window: *declared,
-                            status: MemberStatus::Contradicts,
-                            via: Some(via.into()),
-                            sources: Vec::new(),
-                            review: None,
-                            accepted: false,
-                            notes: Vec::new(),
-                            problems: vec![Problem {
-                                kind: "contradicts".into(),
-                                column: None,
-                                message: format!(
-                                    "the sidecar reads {}, but the blank-row split puts this \
-                                     member's block at {}. A region member's spec must read its \
-                                     own block: correct the window, or delete the sidecar and \
-                                     re-run `tdy fit`.",
-                                    lines_of(*declared),
-                                    lines_of(*window),
-                                ),
-                                want: None,
-                                tried: Vec::new(),
-                                header: Vec::new(),
-                                choices: Vec::new(),
-                                field: None,
-                                long_form: None,
-                            }],
-                            proposals: Vec::new(),
-                        });
-                        break 'member;
-                    }
+                // plausible wrong number.
+                if let Some((was, now)) = &disagreement {
+                    failed += 1;
+                    reports.push(MemberReport {
+                        path: rel.clone(),
+                        sheet: unit.sheet.clone(),
+                        region,
+                        window: spec_window(&spec),
+                        status: MemberStatus::Contradicts,
+                        via: Some(via.into()),
+                        sources: Vec::new(),
+                        review: None,
+                        accepted: false,
+                        notes: Vec::new(),
+                        problems: vec![Problem {
+                            kind: "contradicts".into(),
+                            column: None,
+                            message: format!(
+                                "the sidecar reads {was}, but in the blank-row split this \
+                                 member is {now}. A region member's spec must read its \
+                                 own block: correct the window, or delete the sidecar and \
+                                 re-run `tdy fit`."
+                            ),
+                            want: None,
+                            tried: Vec::new(),
+                            header: Vec::new(),
+                            choices: Vec::new(),
+                            field: None,
+                            long_form: None,
+                        }],
+                        proposals: Vec::new(),
+                    });
+                    break 'member;
                 }
                 if let Err(m) = crate::conform::conforms(&spec, &target) {
                     failed += 1;
@@ -1004,8 +1120,7 @@ pub async fn fit_pile(
         }
         let planned = match window {
             Some(w) => {
-                let region_sheet = crate::fit::region_read_hint(&p, sheet, limits).flatten();
-                crate::fit::fit_region(&p, region_sheet.as_deref(), *w, &target, limits).map(|fitted| {
+                crate::fit::fit_region(&p, u.region_sheet.as_deref(), *w, &target, limits).map(|fitted| {
                     crate::fit::Planned { fitted, method: InferenceMethod::Heuristic, model: None }
                 })
             }

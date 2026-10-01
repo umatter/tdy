@@ -119,6 +119,16 @@ are the whole point:
 fit**. A partial lock would make "a dataset silently missing a month" the default outcome of a
 bad afternoon.
 
+A member is named relative to the target however its glob is spelled: `lockfile::member_dir`
+rewrites an absolute or `./` glob directory that lies inside the target's directory (a plain
+`exports/` keeps its spelling), and `--accept`/`.accept` name the argument the same way
+(`member::relative_to_target`) before resolving it. An absolute glob used to make the lock's
+members absolute paths, and `--accept` could then name them by neither spelling. `tdy draft`
+writes an absolute path's glob relative to the current directory (the MCP server's: its root).
+A lock written before this, holding absolute member paths, is drift once: `dataset()` refuses
+it, naming each member as not in the lock, and the next fit re-plans the members under their
+relative names and asks for their acceptances again.
+
 The union is one partition read in lock order: conformance already proved every member has an
 identical schema, so it is a concatenation with nothing to coerce (an ordinary `UNION ALL`
 would let DataFusion widen Int64+Utf8 to Utf8 in silence), and a single partition keeps row
@@ -159,7 +169,11 @@ presence, and hints `date_order`. It deliberately does NOT merge synonyms (`datu
 stay two visible columns) — the declaration is where a human states intent, so the draft
 makes each remaining judgement a one-line edit instead of making it. The emitted SQL always
 parses (`Target::parse`), and `tests/draft.rs` pins the round trip: over a pile with one
-vocabulary, the *unedited* draft fits every file it was drawn from.
+vocabulary, the *unedited* draft fits every file it was drawn from. A drafted DECIMAL whose
+scale is above 6 (the sniffer's cap for money it knows by shape, so the scale came from a
+currency-formatted cell holding a float) also declares `round = 'half_away'`, with a comment
+calling the scale float noise and naming DOUBLE as the other edit — a later row one place
+longer would otherwise refuse the unedited draft (`draft_float_money.xlsx`, generator 18).
 
 Swept against the real corpus (draft → fit, scratch copies, 170 CSV piles + 31 multi-sheet
 workbooks): every identical-header pile fit unedited (6/6); every overlapping-header pile
@@ -439,6 +453,13 @@ console's `.accept` reads both places. Medians, not totals, so a partial month i
 (`scripts/sweep_workbooks.py`, 2026-09-07): of 34 multi-sheet xlsx/xlsm workbooks, 18 stay a
 plain member and 16 expand into sheet members — the sixteen the draft slice had refused as
 `AmbiguousFrame` — with no refusal, error or timeout. Re-run it after touching discovery.
+Re-swept 2026-10-01: 19 plain, 15 expanded, none refused. The solar workbook the
+declared-rounding merge (0f81fd3) had refused — a drafted `DECIMAL(38,15)` the fit then refused
+for a value's sixteenth place — fits, since the draft now declares that rounding. The
+expansion that merge lost stays lost, and rightly: `AssetSubsidies`' second sheet holds 16-place
+floats under a `DECIMAL(38,1)` drafted from the first, which the 2026-09-07 sweep expanded by
+rounding them to one place in silence (and by unioning a percentages sheet with a dollars
+one); declaring the rounding by hand expands it again.
 
 **Regions are in (2026-09-08).** `docs/design/2026-09-08-regions.md`. A member
 is now `(path, sheet, region)` — `MemberRef` in `src/member.rs` gains a third
@@ -468,16 +489,56 @@ before anything else — `skip_rows`, `promote_header` and every transform act
 inside the block, exactly as they act on a whole file). A sheet has no
 row-window field at all — `range` already says which rows — so a sheet region
 carries only `region_ordinal: Option<u32>` beside the `range` `fit::fit_region`
-writes. Detection is `engine::regions_of(path, sheet, limits) -> Vec<RowWindow>`:
+writes. Detection is `engine::regions_of(path, sheet, limits) -> Result<Regions>`:
 it splits at runs of blank lines or rows, keeps blocks of at least three rows,
 and returns nothing when the file has exactly one run at all — a table with
 blank padding above or below it is not split. It returns what it *dropped*
-alongside what it kept (`Regions { windows, dropped, block_width }`): with a
+alongside what it kept (`Regions { windows, dropped, block_width, window_widths, window_widest }`): with a
 window applied nothing reads a run below the minimum, so every member of the
-file names those lines in a note the CLI prints, and a dropped run whose
-first row is as wide as the kept blocks' (`Regions::table_shaped`) is a
-review reason — the `>= 3` rule says a `Total;;1500` line is not a table, and
-a person rules on whether it was data. It streams the text
+file names those lines in a note the CLI prints, and a dropped run is a review
+reason (`Regions::table_shaped`) by either of two rules — any of its rows holds
+two or more non-empty fields, or its first row is as wide as the first kept
+block's; the `>= 3` rule says a `Total;;1500` line is not a table, and a person
+rules on whether it was data, while one cell per row over a wider table (a
+banner, footnotes) asks nothing. Each rule alone was tried and missed data:
+same width alone missed a recap block and a 72-cell "US population" row under
+a block that opens with a one-cell title; two-fields alone missed a one-column
+table's own continuation. Text fields are counted by `nonempty_fields`, which
+opens a quote only at a field's first byte — `Rohr 12";5;60.00` is three
+fields, not one. Those blocks are *candidates*: `fit::gate_regions`
+tries each against the target with the cheap gates, in the frame `fit_region` will fit, and
+only the blocks that pass are members — got wrong first, when every run of three rows became
+one, so a title banner was a member that fit nothing and the workbook sweep refused 15 of 16
+workbooks; a failing block now joins the dropped runs (survivors renumbered), and none passing is the file read whole with no
+region notes. A block whose own frame promoted no header is not a candidate
+either (`fit::promotes_header`): a blank row proves a boundary, a header is what
+tells one block from the next, and a headerless banner or two-cell footnote block
+passed a positional `col_N` target's gates by position alone and stood in for the
+sheet — the corpus's ttb workbook, which is now read whole as before regions. Nor is
+a block that binds none of the declared columns, which under an all-`if_missing`
+target "fit" as rows of NULLs. When no block passes, the file is read whole — and
+if the split saw a block with its own header there and the target binds by name
+(`Target::names_a_column`: a column not named `col_N`, or one with `matches`), that
+member carries a review (`the split found a table with its own header at lines a–b
+that does not fit …`), since a by-name target missing a headed table is evidence
+the whole-file reading is wrong. A purely positional target binds by position by
+construction, so the same failure is no such evidence — and asking on every such
+sheet (15→33 reviews in the corpus sweep, first cut) is a question always answered
+yes, which trains people to answer without reading. And only when the missed
+block's promoted header is plausible (`fit::header_is_plausible`: no cell parses as a
+number over a numeric column) — the block sniffer promoted `Alabama | 88165 | 0 | n/a`
+in the corpus's ADP-31 state tables, a data row, and asked a false question on 13
+sheets; such a block gets a note (`the split found a block at lines … whose header
+reads like data`) instead. The test decides only whether to ask, never which blocks
+are candidates. Its cost: a by-name target that misses a year-headed block
+(`STATE;2008;…` over numbers) gets the note, not a review. All-headerless or
+all-banner files stay unreviewed. A one-row run as wide as the block directly below
+it, blank lines between, is that block's header cut off by a blank row — but only
+for a block whose own frame promoted no header (`Regions::severed_header`,
+adopted by `fit::frame_blocks`, which `draft` shares; both executors skip the
+blank row inside the window). Adopting on width alone made `Meier;Bern` the
+header of a headed `Name;City` table and `Name|City` a data row, silently;
+not adopting at all left a headerless block bound as `col_N`. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
 (`tests/regions.rs::regions_of_streams_a_large_file`, `#[ignore]`, run by hand
@@ -485,8 +546,11 @@ under `/usr/bin/time`, since a peak-RSS claim is not a `cargo test` assertion).
 `draft_target` pays this same streamed pass once per text file, on top of the
 sniff's own whole-file type verification: measured on a debug build over a
 50 MB single-block CSV, `tdy draft` wall time moved from ~37.6 s with the
-regions pass skipped to ~39.2 s with it in, a ~4% cost — well under the ~25%
-that would have called for optimising it, so it is left as is.
+regions pass skipped to ~39.2 s with it in, a ~4% cost. Counting every line's
+non-empty fields for `table_shaped` (2026-10-01) took it to ~49.0 s against
+~37.3 s (+31%, three runs each); one `match` per byte in `nonempty_fields`
+brought it to ~44.1 s against ~37.7 s, ~17% — under the ~25% that would call
+for more, so it is left there.
 
 The review line: several blocks means `report::expand_units` gives each its
 own member, each carrying `report::region_review_reason`'s text — "table `i`
@@ -499,9 +563,14 @@ proves the block is the only *reading*, never that the lines outside it were
 not data. A region sidecar is trusted for exactly one block and both places
 that say which are hand-editable, so `load_member` requires `source.region`
 and the ordinal the spec's own window carries to agree, and `fit_pile`
-refuses to reuse a spec whose window is not the block the split found
-(`CONTRADICTS`, no I/O — the true window is already in hand); without those
-two, an edited window made two members total one block twice. A sidecar the
+refuses to reuse a spec whose window is not the block the split found — a
+text window by its lines, a sheet block by the A1 `range` and ordinal that
+`fit::block_a1` computes for the frame too; without those two, an edited window
+made two members total one block twice, and a sheet block renumbered when one
+more block passed the gates was read twice (3300.00 where the file held
+2406.00). tdy's own sidecar that disagrees is re-planned with a note naming
+both windows (`sidecar window was …; re-planned`), acceptance not carried; a
+`manual` one is `CONTRADICTS`, a person's to settle. A sidecar the
 loader *refuses* is still re-planned, never a hard failure, but the refusal is
 now a note on the member (`sidecar refused: …; re-planned`) — discarding a
 person's edit in silence left the member reading exactly as before with
@@ -518,15 +587,26 @@ member pass walking the directory again. And when a
 plain member reuses a hand-written *whole-file* spec, the split's dropped-run
 note and review reason are reworded rather than attached — that spec reads
 those lines, so the question becomes whether reading the whole file is
-intended, and the gate stays. `fit::fit_region`
-was got wrong twice: a text block must drop any `SkipRows` transform the
-whole-file sniff proposed, since a title block belongs to the file and would
-delete rows the block does not have; a sheet block's A1 `range` has to be
+intended, and the gate stays. `fit::region_frame`
+frames a block from the block's own rows — a text block sniffed as its own file
+(`sniff::sniff_text_block`), a sheet block as a sheet of its own
+(`sniff::frame_excel_block`) — because the whole file's frame let a banner
+choose the separator and count itself into a `skip_rows` that, inside the
+block, deleted rows the block does have; a sheet block's A1 `range` has to be
 offset by the used range's own start (`col_letter`), since `regions_of` counts
 rows of the used range, not of the sheet, and the naive address read a sheet
-whose data starts at C5 against blank margin instead. `tdy draft` gains the
-same split (`draft::sniff_block`, via a scratch file), drafting each block's
-columns separately and naming which block each column came from; presence and
+whose data starts at C5 against blank margin instead. A sheet passes
+`discover_sheets` through its blocks too, but only when exactly one passes and
+nothing table-shaped was discarded: sheet expansion asks nobody. `tdy draft` gains the
+same split (`sniff::sniff_text_block`, via a scratch file), skipping a block with one
+field per line (named in a `NOTE`, so the unedited draft of a banner-topped export fits),
+drafting from the block whenever the split separated anything (one block with a dropped
+line above it used to fall through to a whole-file draft that declared the title line's
+values as columns, and the fit then read the real header as a data row, silently). The
+known limit: `draft` does not split workbook *sheets*, so a sheet under a banner still
+drafts positionally (`col_N`) from the whole-sheet sniff; the follow-up is for draft to
+split sheets as it splits text
+and drafting each other block's columns separately and naming which block each column came from; presence and
 heterogeneity notes count physical files, not blocks — got wrong first, when
 the grouping note fired across one file's own blocks as though they were
 unrelated files. `source_name` gains `from = "region"` (`SourcePart::Region`),
@@ -568,7 +648,8 @@ own metrics, so the numbers compare with the paper. Last run (2026-09-07, after 
 compression guard and the long-form change; identical to the run before them):
 2,287 of 2,290 load, record F1 0.991 (tying duckdbparse), cell precision 0.996
 against recall 0.942 — tdy emits more cells than the source and almost never a
-wrong one, which is `PadNulls` widening rather than dropping. It found two defects nothing else
+wrong one, which is `PadNulls` widening rather than dropping. Re-run 2026-09-30 after
+regions, on the rebuilt binary: the summary is byte-identical to the 2026-09-07 run. It found two defects nothing else
 had, so re-run it after touching extraction or framing.
 
 ## Real data
@@ -650,7 +731,15 @@ Things that only become clear from reading several modules:
 - **Engine pipeline order matters:** extract (all strings) → transforms in spec order →
   projection + typed cast last. Rectangularization is lazy so `skip_rows` can remove title
   rows before the ragged policy applies. `promote_header` fills right only on rows *above*
-  the last header row.
+  the last header row. A sheet's blank body rows are skipped where the framing ends
+  (`engine::apply_spec_transforms`, just past the *last* `transpose`/`skip_rows`/`promote_header`
+  in the spec, wherever it sits) — kept, they were all-NULL records `count(*)` counted, 12 for
+  the ten states of `regions_statetable.xlsx`. Not at extraction, and not at the end of the
+  leading run either: every row count a spec states (a title block's `skip_rows`, a tail placed
+  after a `drop_rows_matching`) was written against rows that included the blanks, and the
+  first cut, which skipped them after the leading run, made such a tail eat a data row in
+  silence (`tests/regression.rs::a_skip_rows_tail_after_a_body_transform_counts_the_blank_row`).
+  A body transform before that last framing transform still sees blank rows, as on main.
 - **Deliberate omissions:** no drop/rename transforms (the `columns` list is the only
   projection), no locale tables (literal `replace` pairs in the sidecar), no named timezones
   (fixed offsets only — DST cannot be guessed from a value).

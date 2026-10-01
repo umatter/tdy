@@ -224,6 +224,12 @@ pub struct RawTable {
     /// extraction, and passing it separately would be a second thing that
     /// could disagree with the rows.
     pub source: SourceRef,
+    /// True for a sheet read: a blank row in its body is a gap between
+    /// records, not one, and [`apply_spec_transforms`] skips it where the
+    /// framing ends. Not at extraction, because a title block's `skip_rows`
+    /// counts the blank rows inside it — every sidecar written so far does
+    /// — and skipping them there would shift that count onto the header.
+    blank_rows_are_gaps: bool,
 }
 
 /// The file (and sheet) a `RawTable` was read from.
@@ -246,6 +252,7 @@ impl RawTable {
             truncated,
             col_offset: 0,
             source: SourceRef::default(),
+            blank_rows_are_gaps: false,
         }
     }
 
@@ -258,6 +265,7 @@ impl RawTable {
             truncated,
             col_offset: 0,
             source: SourceRef::default(),
+            blank_rows_are_gaps: false,
         }
     }
 
@@ -451,9 +459,14 @@ pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Resu
             *region,
             opts,
         ),
-        Extraction::Excel { sheet_name, sheet_index, range, .. } => {
-            extract_excel(path, sheet_name.as_deref(), *sheet_index, range.as_deref(), opts)
-        }
+        Extraction::Excel { sheet_name, sheet_index, range, region_ordinal } => extract_excel(
+            path,
+            sheet_name.as_deref(),
+            *sheet_index,
+            range.as_deref(),
+            region_ordinal.is_some(),
+            opts,
+        ),
         Extraction::FixedWidth { encoding, fields } => {
             extract_fixed_width(path, encoding.as_deref(), fields, opts)
         }
@@ -703,6 +716,7 @@ fn extract_excel(
     sheet_name: Option<&str>,
     sheet_index: Option<u32>,
     a1_range: Option<&str>,
+    region: bool,
     opts: &ExtractOpts,
 ) -> Result<RawTable> {
     // Bound the container before anything reads it: for .ods, opening the
@@ -725,7 +739,20 @@ fn extract_excel(
             .ok_or_else(|| anyhow!("workbook has no sheets"))?,
     };
     let full = checked_worksheet_range(&mut wb, &name, &opts.limits)?;
+    excel_table_from(&full, &name, a1_range, region, opts)
+}
 
+/// [`extract_excel`]'s reading of one sheet already open as `full` (its
+/// used range): narrowed to `a1_range` when given, with a region read's
+/// blank rows skipped. Split out so a sheet opened once can be framed block
+/// by block without reopening the workbook for each.
+pub(crate) fn excel_table_from(
+    full: &Range<Data>,
+    name: &str,
+    a1_range: Option<&str>,
+    region: bool,
+    opts: &ExtractOpts,
+) -> Result<RawTable> {
     let range = match a1_range {
         Some(spec_str) => {
             // validate() has already rejected malformed and backwards ranges;
@@ -749,7 +776,7 @@ fn extract_excel(
             let c1 = c1.min(start_col + w - 1);
             full.range((r0, c0), (r1, c1))
         }
-        None => full,
+        None => full.clone(),
     };
     // Table column 0 is sheet column `col_offset`, not sheet column A,
     // whenever the used range (or a declared `range`) does not start at the
@@ -767,13 +794,25 @@ fn extract_excel(
             truncated = true;
             break;
         }
-        rows.push(row.iter().map(render_cell).collect());
+        let cells: Vec<String> = row.iter().map(render_cell).collect();
+        // A region's window holds a blank row only where a header cut off
+        // by one was adopted (`windows_from_runs`): skipped, as the text
+        // executor's CSV reader skips a blank line, so the header sits on
+        // its data and the two formats read a block the same way.
+        if region && is_blank_row(&cells) {
+            continue;
+        }
+        rows.push(cells);
     }
     // Trailing all-empty rows are an artefact of the used range, not data.
     while rows.last().map(|r| r.iter().all(|c| c.trim().is_empty())).unwrap_or(false) {
         rows.pop();
     }
-    Ok(RawTable { col_offset, ..RawTable::new(rows, RaggedPolicy::PadNulls, truncated) })
+    Ok(RawTable {
+        col_offset,
+        blank_rows_are_gaps: true,
+        ..RawTable::new(rows, RaggedPolicy::PadNulls, truncated)
+    })
 }
 
 fn extract_fixed_width(
@@ -1038,6 +1077,41 @@ pub(crate) fn promote_header_recording(
     let origin = header.clone();
     dedupe_names(&mut header);
     (header, origin)
+}
+
+/// A row whose every cell is empty or whitespace.
+fn is_blank_row(cells: &[String]) -> bool {
+    cells.iter().all(|c| c.trim().is_empty())
+}
+
+/// A spec's transforms over its extracted table, as every executor path
+/// runs them: in spec order, with a sheet's blank body rows skipped where
+/// the framing ends — just past the *last* `transpose`/`skip_rows`/
+/// `promote_header` in the list, wherever it sits (position 0 when there is
+/// none). Every row count a spec states is then taken against the rows it
+/// was written against, blank rows included: a `skip_rows` tail placed
+/// after a `drop_rows_matching` still removes the blank row it counted,
+/// where a skip at the end of the leading run had removed a data row in its
+/// place. A body transform that sits before that last framing transform
+/// still sees blank rows, as every transform did before the skip existed.
+/// Kept, a blank row became an all-NULL record that `count(*)` counted, or
+/// a copy of the row above it under `fill_down`; a text file's blank lines
+/// never reach a table at all, and a region read skips the one inside its
+/// window at extraction. A blank row has nothing for `fill_down` to carry
+/// into the rows below it, and `drop_rows_matching` judges each row alone,
+/// so skipping it before either changes no other row.
+pub fn apply_spec_transforms(table: &mut RawTable, transforms: &[Transform]) -> Result<()> {
+    let framing = transforms
+        .iter()
+        .rposition(|t| {
+            matches!(t, Transform::Transpose | Transform::SkipRows { .. } | Transform::PromoteHeader { .. })
+        })
+        .map_or(0, |i| i + 1);
+    apply_transforms(table, &transforms[..framing])?;
+    if table.blank_rows_are_gaps {
+        table.rows.retain(|r| !is_blank_row(r));
+    }
+    apply_transforms(table, &transforms[framing..])
 }
 
 pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Result<()> {
@@ -1950,7 +2024,7 @@ pub fn execute_batches(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<
     let opts = ExtractOpts::full(limits);
     let mut table = extract(&spec.extraction, path, &opts)
         .with_context(|| format!("extracting {}", path.display()))?;
-    apply_transforms(&mut table, &spec.transforms)?;
+    apply_spec_transforms(&mut table, &spec.transforms)?;
     to_record_batches(spec, &mut table)
 }
 
@@ -2064,9 +2138,13 @@ pub struct DroppedRun {
     pub end: u64,
     /// Fields on its first row, counted the way the kept blocks' own first
     /// rows were counted (one shared delimiter for a text file, non-empty
-    /// cells for a sheet). Equal counts is what makes a dropped run look
-    /// like a table rather than a banner.
+    /// cells for a sheet). Equal to [`Regions::block_width`] is one of the
+    /// two rules that make it data-like ([`Regions::table_shaped`]).
     pub width: usize,
+    /// The most non-empty fields on any one of its rows (non-empty cells
+    /// for a sheet, non-empty fields under the blocks' delimiter for text).
+    /// Two or more is data-like — see [`Regions::table_shaped`].
+    pub widest: usize,
 }
 
 /// What [`regions_of`] found: the blocks it kept, and the runs it did not.
@@ -2079,20 +2157,103 @@ pub struct Regions {
     /// read, because the file is read whole.
     pub dropped: Vec<DroppedRun>,
     /// The first kept block's first-row width — what a `dropped` run's own
-    /// width is compared against.
+    /// first-row width is compared against, the same-width half of
+    /// [`Regions::table_shaped`].
     pub block_width: usize,
+    /// Each window's own first-row width, beside `windows`: what a block
+    /// that [`Regions::gated`] turns into a dropped run is measured by.
+    pub window_widths: Vec<usize>,
+    /// Each window's widest row, in non-empty fields, beside `windows`.
+    pub window_widest: Vec<usize>,
 }
 
 impl Regions {
-    /// The dropped runs shaped like the blocks that were kept: the same
-    /// field count on their first row. A two-line banner over a three-field
-    /// table is one field wide and is not one of these; a `Total;;1500`
-    /// footer is three fields wide and is, which is correct — the 3-row
-    /// minimum says a total line is not a *table*, and a person rules on
-    /// whether those rows were data.
+    /// The dropped runs that look like data rather than a banner, by either
+    /// of two rules: any row of the run holds two or more non-empty fields,
+    /// or its first row is as wide as the first kept block's. A title
+    /// banner and a footnote block over a wider table have one cell per row
+    /// and are neither; a `Total;;1500` footer, a two-column recap under a
+    /// three-column table, a wide "US population" row under a one-cell
+    /// title, and the continuation of a one-column table all are — the
+    /// 3-row minimum and the gates say they are not *the table*, and a
+    /// person rules on whether those rows were data.
+    ///
+    /// Each rule alone misses something. Same width alone missed a recap (a
+    /// different width by construction) and a wide row under a block that
+    /// opens with a one-cell title; two-fields alone missed a one-column
+    /// table's own rows, which are one field wide exactly as a banner is.
     pub fn table_shaped(&self) -> impl Iterator<Item = &DroppedRun> {
         let w = self.block_width;
-        self.dropped.iter().filter(move |d| w > 0 && d.width == w)
+        self.dropped.iter().filter(move |d| d.widest >= 2 || (w > 0 && d.width == w))
+    }
+
+    /// The dropped run that may be window `i`'s header, cut off by a blank
+    /// row: the run directly above it (blank lines only between), exactly
+    /// one row, as wide as the window's first row. Its index in `dropped`.
+    /// Whether it *is* the header is the framing step's question: only a
+    /// block with no header of its own adopts one (`fit::frame_blocks`) —
+    /// adopting above a headed block made a same-width data line the header
+    /// and the real header a data row, silently.
+    pub fn severed_header(&self, i: usize) -> Option<usize> {
+        let w = self.windows.get(i)?;
+        let after = if i == 0 { 0 } else { self.windows[i - 1].end };
+        let width = *self.window_widths.get(i)?;
+        self.dropped
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.end <= w.start && d.start >= after)
+            .max_by_key(|(_, d)| d.end)
+            .filter(|(_, d)| d.end - d.start == 1 && d.width > 0 && d.width == width)
+            .map(|(k, _)| k)
+    }
+
+    /// Take dropped run `k` into window `i` as its header: the window starts
+    /// at the run's line, the blank lines between inside it (both executors
+    /// skip a blank row inside a window), and the run is no longer dropped.
+    pub fn adopt(&mut self, i: usize, k: usize) {
+        let d = self.dropped.remove(k);
+        self.windows[i].start = d.start;
+        self.window_widest[i] = self.window_widest[i].max(d.widest);
+    }
+
+    /// Keep only the blocks that passed the gates (`passed[i]` for
+    /// `windows[i]`). The split's blocks are candidates, not members: a
+    /// title banner is a run of three rows or more and fits nothing, and
+    /// making it a member is how a sheet with one table under a banner came
+    /// back as three members, two of them gaps. A block that fails is one
+    /// more run nothing reads, so it joins `dropped`; "table-shaped" is then
+    /// measured against the blocks that passed; and the survivors are
+    /// renumbered, because `#2` names the second *table*, not the second
+    /// run of rows. None passing is no regions at all — the file is read
+    /// whole and gets the ordinary answer, so nothing is dropped either.
+    pub fn gated(&self, passed: &[bool]) -> Regions {
+        let all: Vec<(RowWindow, DroppedRun, bool)> = self
+            .windows
+            .iter()
+            .zip(self.window_widths.iter().zip(&self.window_widest))
+            .zip(passed)
+            .map(|((w, (width, widest)), ok)| {
+                (*w, DroppedRun { start: w.start, end: w.end, width: *width, widest: *widest }, *ok)
+            })
+            .collect();
+        let kept: Vec<&(RowWindow, DroppedRun, bool)> = all.iter().filter(|x| x.2).collect();
+        if kept.is_empty() {
+            return Regions::default();
+        }
+        let mut dropped = self.dropped.clone();
+        dropped.extend(all.iter().filter(|x| !x.2).map(|x| x.1));
+        dropped.sort_by_key(|d| d.start);
+        Regions {
+            block_width: kept[0].1.width,
+            window_widths: kept.iter().map(|x| x.1.width).collect(),
+            window_widest: kept.iter().map(|x| x.1.widest).collect(),
+            windows: kept
+                .iter()
+                .enumerate()
+                .map(|(i, x)| RowWindow { ordinal: (i + 1) as u32, ..x.0 })
+                .collect(),
+            dropped,
+        }
     }
 }
 
@@ -2128,18 +2289,7 @@ pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Re
             // nothing to stream here — the whole grid already exists.
             let mut wb = open_workbook(path, &limits)?;
             let range = checked_worksheet_range(&mut wb, name, &limits)?;
-            let blanks: Vec<bool> = range
-                .rows()
-                .map(|row| row.iter().all(|c| render_cell(c).trim().is_empty()))
-                .collect();
-            // A sheet row's width is its count of non-empty cells: the
-            // grid is rectangular, so its own arity says nothing about
-            // whether a row is a table's header or a one-line banner.
-            let widths: Vec<usize> = range
-                .rows()
-                .map(|row| row.iter().filter(|c| !render_cell(c).trim().is_empty()).count())
-                .collect();
-            Ok(blocks_from(&blanks, |row| widths.get(row as usize).copied().unwrap_or(0)))
+            Ok(regions_of_range(&range))
         }
         // A text file is read line by line instead: `expand_units` calls
         // this on every plain member on every fit (including the
@@ -2150,6 +2300,21 @@ pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Re
         // not O(file).
         None => regions_of_lines(path, limits),
     }
+}
+
+/// [`regions_of`] for a sheet already open: its used range's rows, a row
+/// blank when every cell renders empty.
+pub(crate) fn regions_of_range(range: &Range<Data>) -> Regions {
+    let blanks: Vec<bool> =
+        range.rows().map(|row| row.iter().all(|c| render_cell(c).trim().is_empty())).collect();
+    // A sheet row's width is its count of non-empty cells: the grid is
+    // rectangular, so its own arity says nothing about whether a row is a
+    // table's header or a one-line banner.
+    let widths: Vec<usize> = range
+        .rows()
+        .map(|row| row.iter().filter(|c| !render_cell(c).trim().is_empty()).count())
+        .collect();
+    blocks_from(&blanks, &widths)
 }
 
 /// [`regions_of`]'s text-file path: streams raw lines through a `BufReader`
@@ -2175,6 +2340,10 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     // the delimiter is known — which is only after the split has said which
     // runs are blocks. O(runs), not O(file).
     let mut heads: Vec<String> = Vec::new();
+    // Per run, the most non-empty fields on any of its rows under each
+    // candidate delimiter — one scan of the line answers all four, and the
+    // delimiter is chosen only once the runs are known. O(runs).
+    let mut widest: Vec<[usize; 4]> = Vec::new();
     let mut run_start: Option<u64> = None;
     let mut index: u64 = 0;
     let mut buf: Vec<u8> = Vec::new();
@@ -2197,12 +2366,21 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
             (false, None) => {
                 run_start = Some(index);
                 heads.push(String::from_utf8_lossy(line).into_owned());
+                widest.push([0; 4]);
             }
             (true, Some(s)) => {
                 runs.push((s, index));
                 run_start = None;
             }
             _ => {}
+        }
+        if !blank {
+            if let Some(w) = widest.last_mut() {
+                let counts = nonempty_fields(line);
+                for (m, c) in w.iter_mut().zip(counts) {
+                    *m = (*m).max(c);
+                }
+            }
         }
         index += 1;
     }
@@ -2212,38 +2390,112 @@ fn regions_of_lines(path: &Path, limits: Limits) -> Result<Regions> {
     // The delimiter is the one the blocks that survived the minimum are best
     // read with — never one guessed from the dropped runs themselves, or a
     // banner would get to choose how it is counted.
-    let kept: Vec<&str> = runs
+    let kept: Vec<(&str, [usize; 4])> = runs
         .iter()
-        .zip(&heads)
+        .zip(heads.iter().zip(&widest))
         .filter(|((s, e), _)| e - s >= 3)
-        .map(|(_, h)| h.as_str())
+        .map(|(_, (h, w))| (h.as_str(), *w))
         .collect();
-    let delim = pick_block_delimiter(&kept);
-    let measured: Vec<(u64, u64, usize)> = runs
+    let (delim, at) = pick_block_delimiter(&kept);
+    let measured: Vec<Run> = runs
         .iter()
-        .zip(&heads)
-        .map(|(&(s, e), h)| (s, e, field_count(h, delim)))
+        .zip(heads.iter().zip(&widest))
+        .map(|(&(start, end), (h, w))| Run { start, end, width: field_count(h, delim), widest: w[at] })
         .collect();
     Ok(windows_from_runs(measured))
 }
 
-/// The delimiter a set of block headers is best read with: whichever
-/// candidate gives the most fields on most of them. Only the *relative*
-/// answer matters — the same delimiter counts the kept blocks and the
-/// dropped runs, so a comparison of the two is meaningful whatever it
-/// picks; guessing per run is what would let a one-line banner claim a
-/// block's shape.
-fn pick_block_delimiter(heads: &[&str]) -> char {
-    let mut best = (0usize, ',');
-    for cand in [',', ';', '\t', '|'] {
-        let mut counts: Vec<usize> = heads.iter().map(|h| field_count(h, cand)).collect();
-        counts.sort_unstable();
-        let modal = counts.get(counts.len() / 2).copied().unwrap_or(0);
-        if modal > best.0 {
-            best = (modal, cand);
+/// The candidate delimiters of a stacked text file, in the order
+/// [`nonempty_fields`] reports them.
+const BLOCK_DELIMITERS: [char; 4] = [',', ';', '\t', '|'];
+
+/// Non-empty fields on one raw line under each of [`BLOCK_DELIMITERS`], in
+/// one pass. A field is non-empty when it holds anything but whitespace and
+/// its own quote marks. Quoting is tracked per candidate, the way a CSV
+/// reader does it: a `"` opens a quoted field only as the field's first
+/// byte (a `"` mid-field — `Rohr 12"` — is a character, and treating it as
+/// an opening quote swallowed the rest of the row into one field), `""`
+/// inside quotes is an escaped quote, and a delimiter inside quotes is
+/// content. Cheap by design — one `match` per byte — because it runs on
+/// every line of the file.
+fn nonempty_fields(line: &[u8]) -> [usize; 4] {
+    // Per candidate: 0 = at a field's start, 1 = in an unquoted field,
+    // 2 = inside quotes, 3 = just after a quote inside quotes.
+    let mut state = [0u8; 4];
+    let mut filled = [false; 4];
+    let mut counts = [0usize; 4];
+    for &b in line {
+        let at = match b {
+            b',' => 0,
+            b';' => 1,
+            b'\t' => 2,
+            b'|' => 3,
+            b'"' => 4,
+            _ => 5,
+        };
+        for i in 0..4 {
+            let st = &mut state[i];
+            if at == i && *st != 2 {
+                // A boundary for this candidate.
+                if filled[i] {
+                    counts[i] += 1;
+                }
+                filled[i] = false;
+                *st = 0;
+            } else if at == 4 {
+                match *st {
+                    0 => *st = 2,
+                    2 => *st = 3,
+                    3 => {
+                        *st = 2;
+                        filled[i] = true;
+                    }
+                    _ => filled[i] = true,
+                }
+            } else if b.is_ascii_whitespace() {
+                if *st != 2 {
+                    *st = 1;
+                }
+            } else {
+                filled[i] = true;
+                if *st != 2 {
+                    *st = 1;
+                }
+            }
         }
     }
-    best.1
+    for (c, f) in counts.iter_mut().zip(filled) {
+        if f {
+            *c += 1;
+        }
+    }
+    counts
+}
+
+/// The delimiter the kept blocks are best read with, and its index in
+/// [`BLOCK_DELIMITERS`]: whichever gives the most non-empty fields on any
+/// row of any kept block, ties going to the one that gives the most fields
+/// on most of their first lines. Only the *relative* answer matters — the
+/// same delimiter counts the kept blocks and the dropped runs, so a
+/// comparison of the two is meaningful whatever it picks; guessing per run
+/// is what would let a one-line banner claim a block's shape.
+///
+/// The widest row leads, not the median head: a banner and a footnote
+/// block are runs of three rows too, one field wide under every delimiter,
+/// and two of them outvoted the one table between them; and a block whose
+/// first line is a one-cell title says nothing about its separator at all.
+fn pick_block_delimiter(kept: &[(&str, [usize; 4])]) -> (char, usize) {
+    let mut best = ((0usize, 0usize), 0usize);
+    for (i, cand) in BLOCK_DELIMITERS.iter().enumerate() {
+        let widest = kept.iter().map(|(_, w)| w[i]).max().unwrap_or(0);
+        let mut counts: Vec<usize> = kept.iter().map(|(h, _)| field_count(h, *cand)).collect();
+        counts.sort_unstable();
+        let modal = counts.get(counts.len() / 2).copied().unwrap_or(0);
+        if (widest, modal) > best.0 {
+            best = ((widest, modal), i);
+        }
+    }
+    (BLOCK_DELIMITERS[best.1], best.1)
 }
 
 /// Fields on one line under one delimiter, quoting honoured (a `;` inside
@@ -2281,14 +2533,29 @@ fn raw_runs(blanks: &[bool]) -> Vec<(usize, usize)> {
     runs
 }
 
-/// The runs from [`raw_runs`], measured by `width_of` (the first row's
-/// field count) and handed to [`windows_from_runs`].
-fn blocks_from(blanks: &[bool], width_of: impl Fn(u64) -> usize) -> Regions {
+/// The runs from [`raw_runs`], measured by `widths` (each row's non-empty
+/// cells): the first row's for `width`, the widest row's for `widest`.
+fn blocks_from(blanks: &[bool], widths: &[usize]) -> Regions {
     let runs = raw_runs(blanks)
         .into_iter()
-        .map(|(s, e)| (s as u64, e as u64, width_of(s as u64)))
+        .map(|(s, e)| Run {
+            start: s as u64,
+            end: e as u64,
+            width: widths.get(s).copied().unwrap_or(0),
+            widest: widths.get(s..e).and_then(|w| w.iter().max().copied()).unwrap_or(0),
+        })
         .collect();
     windows_from_runs(runs)
+}
+
+/// One non-blank run, measured: its first row's field count (`width`) and
+/// the most non-empty fields on any of its rows (`widest`).
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    start: u64,
+    end: u64,
+    width: usize,
+    widest: usize,
 }
 
 /// The filtering rule, shared by the text path (which finds its runs by
@@ -2310,24 +2577,32 @@ fn blocks_from(blanks: &[bool], width_of: impl Fn(u64) -> usize) -> Regions {
 /// a member that quietly answers for part of a file is the wrong value this
 /// tool refuses. When no window is kept there is nothing dropped either:
 /// the file is then read whole, so every line is read.
-fn windows_from_runs(runs: Vec<(u64, u64, usize)>) -> Regions {
+///
+/// A one-row run directly above a block, as wide as the block's first row,
+/// may be that block's header cut off by a blank row; whether it is depends
+/// on whether the block has a header of its own, which only a frame can
+/// say, so adoption is the framing step's (`Regions::severed_header`,
+/// `fit::frame_blocks`), not this one's. Here it is an ordinary dropped run.
+fn windows_from_runs(runs: Vec<Run>) -> Regions {
     if runs.len() == 1 {
         return Regions::default();
     }
-    let (kept, short): (Vec<_>, Vec<_>) = runs.into_iter().partition(|(s, e, _)| e - s >= 3);
+    let (kept, short): (Vec<_>, Vec<_>) = runs.into_iter().partition(|r| r.end - r.start >= 3);
     if kept.is_empty() {
         return Regions::default();
     }
     Regions {
-        block_width: kept[0].2,
+        block_width: kept[0].width,
+        window_widths: kept.iter().map(|r| r.width).collect(),
+        window_widest: kept.iter().map(|r| r.widest).collect(),
         windows: kept
             .into_iter()
             .enumerate()
-            .map(|(i, (s, e, _))| RowWindow { start: s, end: e, ordinal: (i + 1) as u32 })
+            .map(|(i, r)| RowWindow { start: r.start, end: r.end, ordinal: (i + 1) as u32 })
             .collect(),
         dropped: short
             .into_iter()
-            .map(|(start, end, width)| DroppedRun { start, end, width })
+            .map(|r| DroppedRun { start: r.start, end: r.end, width: r.width, widest: r.widest })
             .collect(),
     }
 }
@@ -2360,7 +2635,7 @@ pub fn preview(
     let opts = ExtractOpts::capped(limits, extract_rows);
     let mut table = extract(&spec.extraction, path, &opts)
         .with_context(|| format!("extracting {}", path.display()))?;
-    apply_transforms(&mut table, &spec.transforms)?;
+    apply_spec_transforms(&mut table, &spec.transforms)?;
     table.rows.truncate(max_rows);
     to_record_batch(spec, &mut table)
 }
@@ -2368,7 +2643,7 @@ pub fn preview(
 fn run(spec: &ParseSpec, path: &Path, opts: &ExtractOpts) -> Result<RecordBatch> {
     let mut table = extract(&spec.extraction, path, opts)
         .with_context(|| format!("extracting {}", path.display()))?;
-    apply_transforms(&mut table, &spec.transforms)?;
+    apply_spec_transforms(&mut table, &spec.transforms)?;
     to_record_batch(spec, &mut table)
 }
 
@@ -2523,5 +2798,26 @@ mod shift_tests {
     fn a_shift_past_the_leading_digit_keeps_a_zero() {
         assert_eq!(sh("5", -1), "0.5");
         assert_eq!(sh("5", -3), "0.005");
+    }
+}
+
+#[cfg(test)]
+mod field_count_tests {
+    use super::nonempty_fields as nf;
+
+    /// Order: `,` `;` tab `|`. Empty fields do not count, a delimiter in
+    /// quotes is content, and another candidate's delimiter is content too.
+    #[test]
+    fn nonempty_fields_counts_every_candidate_in_one_pass() {
+        assert_eq!(nf(b"State;2008;2009;2010"), [1, 4, 1, 1]);
+        assert_eq!(nf(b"Total;;1500"), [1, 2, 1, 1]);
+        assert_eq!(nf(b"Barrels, all premises"), [2, 1, 1, 1]);
+        assert_eq!(nf(b"\"a;b\";c"), [1, 2, 1, 1]);
+        assert_eq!(nf(b"a\tb\t\tc"), [1, 1, 3, 1]);
+        assert_eq!(nf(b"   "), [0, 0, 0, 0]);
+        assert_eq!(nf(b";;;"), [1, 0, 1, 1]);
+        // A quote mid-field is a character; one at a field's start opens.
+        assert_eq!(nf(b"Rohr 12\";5;60.00"), [1, 3, 1, 1]);
+        assert_eq!(nf(b"\"a\"\"b;c\";d"), [1, 2, 1, 1]);
     }
 }

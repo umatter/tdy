@@ -15,11 +15,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::config::Limits;
 use crate::sample::FormatGuess;
-use crate::spec::{DType, RowWindow};
+use crate::spec::DType;
 
 /// One declared-column-to-be, merged across the pile.
 struct DraftColumn {
@@ -43,9 +43,39 @@ struct DraftColumn {
     /// a split file, which `files` above (physical-file presence only)
     /// cannot express by itself.
     block_sightings: Vec<(String, u32, usize)>,
+    /// The physical files whose own sniff typed this column at a DECIMAL
+    /// scale above `MONEY_PLACES` — what lets the rounding comment say
+    /// which file the noisy scale came from when not every file did.
+    noisy_files: Vec<String>,
 }
 
+/// The widest scale the sniffer gives money it recognises by shape alone
+/// (`sniff::guess_type`'s non-currency branch caps there). A DECIMAL wider
+/// than this came from a currency-formatted cell holding a computed float:
+/// its scale is the sample's IEEE-754 noise, and a later row can carry one
+/// place more, which the fit refuses unless rounding is declared.
+const MONEY_PLACES: i8 = 6;
+
+fn noisy_scale(d: &DType) -> Option<i8> {
+    match d {
+        DType::Decimal { scale, .. } if *scale > MONEY_PLACES => Some(*scale),
+        _ => None,
+    }
+}
+
+/// [`draft_target_in`] for a target written in the current directory —
+/// the CLI's stdout and the console's `--to` alike.
 pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
+    let cwd = std::env::current_dir().ok();
+    draft_target_in(files, cwd.as_deref(), limits)
+}
+
+/// The draft, its `files` globs relative to `base`, the directory the
+/// target is to be written in. A relative path is taken to be relative to
+/// it already; an absolute one is rewritten relative to it, because a lock
+/// names its members relative to the target and an absolute glob made them
+/// absolute paths `--accept` could not name.
+pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -> Result<String> {
     if files.is_empty() {
         anyhow::bail!("nothing to draft from: pass the files the dataset should cover");
     }
@@ -78,11 +108,67 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
         // regions". Splitting a *sheet* is `report.rs::expand_units`'s job,
         // which has a sheet name to ask `regions_of` with; a draft never
         // does.
-        let windows = if crate::sample::guess_format(f) == FormatGuess::Excel {
-            Vec::new()
+        let regions = if crate::sample::guess_format(f) == FormatGuess::Excel {
+            Default::default()
         } else {
-            crate::engine::regions_of(f, None, limits).unwrap_or_default().windows
+            let found = crate::engine::regions_of(f, None, limits).unwrap_or_default();
+            // A block with no header of its own takes the one-line header a
+            // blank row cut off, exactly as `fit` frames it. The options are
+            // the ones draft sniffs with; adoption cannot differ from fit's,
+            // since `verify` only widens column types and adoption asks
+            // whether the frame promoted a header.
+            crate::fit::frame_blocks(f, None, &found, crate::sniff::SniffOpts::default(), limits).0
         };
+        // A block none of whose rows holds two fields is a banner or a
+        // footnote block, not a table: drafting it declared a column no
+        // table has, and the unedited draft then fit nothing. It is the
+        // same criterion `Regions::table_shaped` uses to decide what is not
+        // data-like, and the note says which block was skipped and why —
+        // unless every block is one field wide, which is a one-column file
+        // with blank lines in it, drafted whole.
+        let mut windows = Vec::new();
+        let mut skipped = Vec::new();
+        for (w, widest) in regions.windows.iter().zip(&regions.window_widest) {
+            if *widest < 2 {
+                skipped.push(format!(
+                    "{label}: block {} (lines {}–{}) skipped: one field per line",
+                    w.ordinal,
+                    w.start + 1,
+                    w.end
+                ));
+            } else {
+                windows.push(*w);
+            }
+        }
+        if windows.is_empty() && !skipped.is_empty() {
+            split_files.push(format!("{label}: all blocks one field wide; drafted whole"));
+        } else {
+            split_files.extend(skipped);
+        }
+        // One table left among banners, or one block with lines the split
+        // dropped around it: it is the file's table, drafted from its own
+        // rows and not commented as "only in" a block. Drafting the whole
+        // file instead declared a title line's values as the columns, and
+        // the fit then read the real header as a data row, silently.
+        let separated = regions.windows.len() > 1 || !regions.dropped.is_empty();
+        if let ([w], true) = (windows.as_slice(), separated) {
+            match crate::sniff::sniff_text_block(f, *w, limits, crate::sniff::SniffOpts::default()) {
+                Ok(spec) => {
+                    file_sets.push((label.clone(), spec.columns.iter().map(|c| c.name.clone()).collect()));
+                    record_columns(
+                        &mut columns,
+                        &mut day_first,
+                        &mut month_first,
+                        &mut sniffed,
+                        &mut files_ok,
+                        ColumnSighting { physical_file: &label, block: None },
+                        &spec,
+                    );
+                }
+                Err(e) => failures.push((format!("{label}#{}", w.ordinal), format!("{e:#}"))),
+            }
+            continue;
+        }
         if windows.len() >= 2 {
             split_files.push(format!(
                 "{label} holds {} stacked tables; each is drafted as {label}#i",
@@ -96,7 +182,7 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
             // answer instead).
             let mut file_columns: BTreeSet<String> = BTreeSet::new();
             for w in &windows {
-                match sniff_block(f, *w, limits) {
+                match crate::sniff::sniff_text_block(f, *w, limits, crate::sniff::SniffOpts::default()) {
                     Ok(spec) => {
                         file_columns.extend(spec.columns.iter().map(|c| c.name.clone()));
                         record_columns(
@@ -151,7 +237,7 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
     let files_seen = files_ok.len();
 
     let name = table_name(files);
-    let globs = file_globs(files);
+    let globs = file_globs(files, base);
 
     let mut out = String::new();
     out.push_str(&format!(
@@ -206,9 +292,19 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
                 format!("  {:<width$} {:<twidth$}", c.name, sql_type(&c.dtype));
             let extra_spellings: Vec<&String> =
                 c.origins.iter().filter(|o| o.as_str() != c.name).collect();
+            let mut options: Vec<String> = Vec::new();
             if !extra_spellings.is_empty() {
                 let m: Vec<String> = extra_spellings.iter().map(|s| s.to_string()).collect();
-                line.push_str(&format!(" OPTIONS(matches = '{}')", m.join(", ")));
+                options.push(format!("matches = '{}'", m.join(", ")));
+            }
+            // The sniffer's scale is reproduced, not second-guessed; the
+            // rounding a longer later value needs is declared beside it, in
+            // the reviewed target, which is where a rounding is authorised.
+            if noisy_scale(&c.dtype).is_some() {
+                options.push("round = 'half_away'".into());
+            }
+            if !options.is_empty() {
+                line.push_str(&format!(" OPTIONS({})", options.join(", ")));
             }
             line
         })
@@ -237,6 +333,18 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
                 let labels: Vec<String> = ordinals.iter().map(|o| format!("{file}#{o}")).collect();
                 notes.push(format!("only in {}", labels.join(", ")));
             }
+        }
+        if let Some(scale) = noisy_scale(&c.dtype) {
+            let from = if c.noisy_files.len() < c.files.len() {
+                format!(" (from {})", c.noisy_files.join(", "))
+            } else {
+                String::new()
+            };
+            notes.push(format!(
+                "scale {scale}{from} is float noise in a currency-formatted cell, not money's \
+                 places; rounding is declared so a longer value does not refuse the file — or \
+                 declare DOUBLE"
+            ));
         }
         if let Some(cv) = &c.caveat {
             notes.push(cv.clone());
@@ -312,6 +420,9 @@ fn record_columns(
                 if let Some((ordinal, total)) = sighting.block {
                     d.block_sightings.push((sighting.physical_file.to_string(), ordinal, total));
                 }
+                if noisy_scale(&c.dtype).is_some() && !d.noisy_files.iter().any(|f| f.as_str() == sighting.physical_file) {
+                    d.noisy_files.push(sighting.physical_file.to_string());
+                }
                 let (merged, caveat) = merge(&d.dtype, &c.dtype, sighting.physical_file);
                 d.dtype = merged;
                 if d.caveat.is_none() {
@@ -328,70 +439,13 @@ fn record_columns(
                     Some((ordinal, total)) => vec![(sighting.physical_file.to_string(), ordinal, total)],
                     None => Vec::new(),
                 },
+                noisy_files: match noisy_scale(&c.dtype) {
+                    Some(_) => vec![sighting.physical_file.to_string()],
+                    None => Vec::new(),
+                },
             }),
         }
     }
-}
-
-/// Sniff one stacked block of `path` as if it were its own file: copy the
-/// block's own raw lines out to a scratch file with the same extension (so
-/// format guessing — which reads the extension, not the bytes — sees a
-/// `.csv` for a `.csv`), then run the ordinary sniffer over that. This is
-/// the whole reason a block gets the sniffer's full machinery — title rows,
-/// separator/date inference, type widening — rather than a cut-down pass of
-/// its own that could disagree with what a plain file gets.
-///
-/// The scratch file lives in `fileio`'s own process-lifetime cache
-/// (`$TMPDIR/tdy-<pid>/scratch/`), removed here and, whatever happens, by
-/// `fileio::clear_cache()` at exit — so the one production path that needs
-/// a temporary file costs the published crate no dependency.
-fn sniff_block(path: &Path, window: RowWindow, limits: Limits) -> Result<crate::spec::ParseSpec> {
-    let bytes = block_bytes(path, window, limits)
-        .with_context(|| format!("reading block {} of {}", window.ordinal, path.display()))?;
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("csv");
-    let tmp = crate::fileio::scratch_file(&format!("block.{ext}"))
-        .context("creating a scratch file for the block")?;
-    std::fs::write(&tmp, &bytes).with_context(|| {
-        format!("writing block {} of {} to a scratch file", window.ordinal, path.display())
-    })?;
-    let sniffed = (|| {
-        let sample = crate::sample::build(&tmp, 16 * 1024, limits)
-            .with_context(|| format!("sampling block {} of {}", window.ordinal, path.display()))?;
-        crate::sniff::sniff(&tmp, &sample, limits)
-            .map(|r| r.spec)
-            .with_context(|| format!("sniffing block {} of {}", window.ordinal, path.display()))
-    })();
-    let _ = std::fs::remove_file(&tmp);
-    sniffed
-}
-
-/// The raw bytes of one stacked block, by physical line number — the same
-/// indexing `regions_of` counted `window` against, so a window it returned
-/// names exactly these lines and no others.
-fn block_bytes(path: &Path, window: RowWindow, limits: Limits) -> Result<Vec<u8>> {
-    let real = crate::fileio::materialize(path, limits.max_decompressed_bytes)?;
-    let file = std::fs::File::open(real.as_ref())
-        .with_context(|| format!("cannot open {}", path.display()))?;
-    let mut reader = std::io::BufReader::new(file);
-    let mut out = Vec::new();
-    let mut index: u64 = 0;
-    let mut buf: Vec<u8> = Vec::new();
-    loop {
-        if index >= window.end {
-            break;
-        }
-        buf.clear();
-        let n = std::io::BufRead::read_until(&mut reader, b'\n', &mut buf)
-            .with_context(|| format!("reading {}", path.display()))?;
-        if n == 0 {
-            break;
-        }
-        if index >= window.start {
-            out.extend_from_slice(&buf);
-        }
-        index += 1;
-    }
-    Ok(out)
 }
 
 /// Files clustered by column-name overlap (Jaccard >= 0.5, greedy, in input
@@ -483,11 +537,18 @@ fn sql_type(d: &DType) -> String {
     }
 }
 
-/// `exports/*.csv, exports/*.xlsx` from the actual paths, deduplicated.
-fn file_globs(files: &[PathBuf]) -> Vec<String> {
+/// `exports/*.csv, exports/*.xlsx` from the actual paths, deduplicated,
+/// with an absolute directory made relative to `base`.
+fn file_globs(files: &[PathBuf], base: Option<&Path>) -> Vec<String> {
     let mut globs: BTreeSet<String> = BTreeSet::new();
     for f in files {
-        let dir = f.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        let dir = match f.parent() {
+            Some(p) if p.is_absolute() => {
+                base.and_then(|b| relative_dir(p, b)).unwrap_or_else(|| p.to_string_lossy().to_string())
+            }
+            Some(p) => p.to_string_lossy().to_string(),
+            None => String::new(),
+        };
         let ext = f
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -499,6 +560,22 @@ fn file_globs(files: &[PathBuf]) -> Vec<String> {
         }
     }
     globs.into_iter().collect()
+}
+
+/// `dir` relative to `base`, both canonicalised, climbing with `..` where
+/// it must — `None` when they share nothing below the filesystem root,
+/// where an absolute path says more than a ladder of `..` would.
+fn relative_dir(dir: &Path, base: &Path) -> Option<String> {
+    let (dir, base) = (dir.canonicalize().ok()?, base.canonicalize().ok()?);
+    let d: Vec<_> = dir.components().collect();
+    let b: Vec<_> = base.components().collect();
+    let common = d.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    if common <= 1 {
+        return None;
+    }
+    let mut parts: Vec<String> = vec!["..".to_string(); b.len() - common];
+    parts.extend(d[common..].iter().map(|c| c.as_os_str().to_string_lossy().to_string()));
+    Some(parts.join("/"))
 }
 
 fn table_name(files: &[PathBuf]) -> String {

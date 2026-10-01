@@ -153,3 +153,108 @@ fn a_file_with_stacked_blocks_drafts_each_blocks_columns_and_names_the_block() {
     assert!(total_line.contains("#2"), "`total` is attributed to its block by its own comment: {total_line}");
     assert!(Target::parse(&ddl).is_ok(), "{ddl}");
 }
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join(name)
+}
+
+fn column_line<'a>(ddl: &'a str, name: &str) -> &'a str {
+    ddl.lines()
+        .find(|l| l.trim_start().starts_with(&format!("{name} ")))
+        .unwrap_or_else(|| panic!("no `{name}` column line:\n{ddl}"))
+}
+
+/// A currency-formatted cell holding a computed float types as a DECIMAL
+/// whose scale is the sample's widest noise (15 here), and a later row can
+/// carry one place more. The fit refuses that value unless rounding is
+/// declared — correctly — so the draft, which reproduces the sniffer's
+/// scale, must declare the rounding with it, and say why. Scale 2 money in
+/// the same file is left alone.
+#[test]
+fn a_currency_formatted_float_column_drafts_with_rounding_declared() {
+    let ddl = tdy::draft::draft_target(&[fixture("draft_float_money.xlsx")], Limits::default()).unwrap();
+    Target::parse(&ddl).unwrap_or_else(|e| panic!("draft must parse:\n{ddl}\n{e:#}"));
+    let energy = column_line(&ddl, "energy_value_2020_mwh");
+    assert!(energy.contains("DECIMAL(38,15)"), "{energy}");
+    assert!(energy.contains("round = 'half_away'"), "{energy}");
+    assert!(energy.contains("float noise"), "the comment says why: {energy}");
+    assert!(energy.contains("DOUBLE"), "the comment names the other edit: {energy}");
+    let capacity = column_line(&ddl, "capacity_value_2020_mwh");
+    assert!(capacity.contains("DECIMAL(38,2)"), "{capacity}");
+    assert!(!capacity.contains("round ="), "money's own places declare nothing: {capacity}");
+}
+
+/// The draft's promise on that file: unedited, it fits, the lock is
+/// written, and the one 16-place value is rounded half away at scale 15 —
+/// the sum is the generator's exact ground truth.
+#[test]
+fn the_unedited_draft_fits_a_currency_formatted_float_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::copy(fixture("draft_float_money.xlsx"), dir.path().join("draft_float_money.xlsx")).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_tdy"))
+            .args(args)
+            .current_dir(dir.path())
+            .env("TDY_BACKEND", "none")
+            .output()
+            .expect("run tdy")
+    };
+    let out = run(&["draft", "draft_float_money.xlsx"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.path().join("d.tdy.sql"), &out.stdout).unwrap();
+
+    let out = run(&["fit", "d.tdy.sql"]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "the unedited draft must fit:\n{text}");
+    assert!(!text.contains("GAP"), "{text}");
+    assert!(dir.path().join("d.tdy.lock").exists(), "no lock written:\n{text}");
+
+    let out = run(&["query", "SELECT sum(energy_value_2020_mwh) AS e, sum(capacity_value_2020_mwh) AS c FROM dataset('d.tdy.sql')"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("23357.561107253265903"), "ground truth at scale 15:\n{text}");
+    assert!(text.contains("1040.00"), "{text}");
+}
+
+/// The control: money at its own few places (scale <= 6, the sniffer's
+/// non-currency cap) drafts exactly as before, with no rounding declared.
+/// `xl_money_siblings.xlsx` carries both kinds side by side: `added` is
+/// money at 2 places, the `amount_*` columns carry the source file's baked-in
+/// noise at 8-9 places — the rule is per column, by scale.
+#[test]
+fn small_scale_money_drafts_without_rounding() {
+    let ddl = tdy::draft::draft_target(&[fixture("xl_money_offset_a.xlsx")], Limits::default()).unwrap();
+    assert!(ddl.contains("DECIMAL(38,2)"), "{ddl}");
+    assert!(!ddl.contains("round ="), "{ddl}");
+
+    let ddl = tdy::draft::draft_target(&[fixture("xl_money_siblings.xlsx")], Limits::default()).unwrap();
+    Target::parse(&ddl).unwrap_or_else(|e| panic!("draft must parse:\n{ddl}\n{e:#}"));
+    assert!(!column_line(&ddl, "added").contains("round ="), "{ddl}");
+    for c in ["amount_a", "amount_b", "amount_c"] {
+        assert!(column_line(&ddl, c).contains("round = 'half_away'"), "{ddl}");
+    }
+}
+
+/// Types merge to the widest scale, so one noisy file makes the merged
+/// column declare the rounding; the comment then names the file the scale
+/// came from, since the others carry money's own places.
+#[test]
+fn a_noisy_scale_from_one_file_of_several_is_attributed() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("other.csv");
+    std::fs::write(
+        &csv,
+        "Site,Energy Value 2020$/MWh,Capacity Value 2020$/MWh\nA,12.50,1.25\nB,13.75,2.00\nC,14.10,1.50\n",
+    )
+    .unwrap();
+    let ddl = tdy::draft::draft_target(&[fixture("draft_float_money.xlsx"), csv], Limits::default()).unwrap();
+    Target::parse(&ddl).unwrap_or_else(|e| panic!("draft must parse:\n{ddl}\n{e:#}"));
+    let energy = column_line(&ddl, "energy_value_2020_mwh");
+    assert!(energy.contains("DECIMAL(38,15)") && energy.contains("round = 'half_away'"), "{energy}");
+    assert!(energy.contains("scale 15 (from draft_float_money.xlsx)"), "{energy}");
+    let capacity = column_line(&ddl, "capacity_value_2020_mwh");
+    assert!(!capacity.contains("round ="), "{capacity}");
+    // A scale every file carries names no file.
+    let ddl = tdy::draft::draft_target(&[fixture("draft_float_money.xlsx")], Limits::default()).unwrap();
+    assert!(!column_line(&ddl, "energy_value_2020_mwh").contains("(from "), "{ddl}");
+}

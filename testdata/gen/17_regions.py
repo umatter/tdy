@@ -75,10 +75,78 @@ FIXTURES  (all in testdata/, named regions_*)
    waits on a person. Ground truth: one window {3,7}; one dropped run
    {0,2} of width 3; the file's own total 1600.00.
 
+7. regions_banner.csv
+   The layout of a government statistics export (the corpus's
+   `ttb_brewery_state_*.xlsx`, as text): a 6-line banner of one field
+   each, a blank line, the header `State;2008;2009;2010`, a blank line
+   *between the header and its data*, five data rows, a blank line, and
+   three one-field footnotes. The split sees four runs: banner (6 lines),
+   header (1 line), data (5 lines), footnotes (3 lines). Two rulings are
+   pinned by it: a block that fails the gates (banner, footnotes) is not a
+   member but a run nothing read; and a one-row run as wide as the block
+   directly below it, with only blank lines between, is that block's
+   header and is adopted into its window — otherwise the data binds
+   positionally as `col_N`. Ground truth: one window {7,14} (header, blank,
+   data); sums 2008 = 1500, 2009 = 1550, 2010 = 1600 (4650 in all).
+
+8. regions_banner.xlsx
+   The same layout on two sheets of identical shape ("Premise",
+   "Bottles"), the banner and footnote cells in column D, the table in
+   A-D. Both sheets pass the gates, so sheet discovery expands the
+   workbook into two sheet members, each one table under a banner. Ground
+   truth: "Premise" as #7; "Bottles" doubles every value, sums 3000 /
+   3100 / 3200 (9300 in all).
+
+9. regions_footnoted.xlsx
+   The corpus's `ttb_brewery_state_*.xlsx` sheet reduced to one sheet
+   ("Data"): the banner of #7 in column A, a blank row, the header
+   `State;2008;2009;2010`, a blank row, the five rows of #7, a blank row,
+   then a 3-row footnote block of TWO cells per row (a form number and its
+   text). The footnote block has no header, so against a positional
+   `col_N` target it would bind and pass the gates by position alone; it
+   must not be a candidate, and the sheet is read whole, as before regions.
+   Against a by-name target only the table passes and the footnote block
+   is a data-like run nothing read. Ground truth: the table's sums are
+   #7's, 1500 / 1550 / 1600.
+
+10. regions_renumber.csv / regions_renumber.xlsx (sheet "Data")
+   Three stacked tables: A (`Datum;Region;Menge`, quantities 1/2/3), B and
+   C (`Datum;Region;Betrag`, B = block 2 of #1, C = block 3 of #1). Against
+   `matches='Betrag'` only B and C pass the gates and are numbered #1 and
+   #2; once the declaration also matches `Menge`, A passes too and the
+   blocks are renumbered #1..#3 — so the sidecar written for #1 (B) now
+   belongs to #2. Reusing it reads B twice and loses A. Ground truth: B+C =
+   2400.00; A+B+C = 2406.00.
+
+11. regions_banner_notes.xlsx
+   A "Notes" sheet (three one-cell lines) first, then sheet "Data" laid out
+   as one sheet of #8 ("Premise", banner and footnotes in column A). Only
+   "Data" holds the table, so sheet discovery finds one fitting sheet: the
+   member is plain, and its region split must still read "Data" — not give
+   up because the workbook has two sheets. Ground truth: 1500/1550/1600.
+
+12. regions_statetable.xlsx
+   The corpus's ADP-31 StateTables sheet, reduced (one sheet, "Hispanic"):
+   two title rows, a blank row, the header on row 4 (State / All workers /
+   Number of actors / Share / Location quotient), a "United States" total
+   row, a blank row, eight state rows (some cells `n/a`), a blank row, and
+   a "Puerto Rico" row. The split's state block has no header of its own,
+   but the block sniffer promotes its first row (`Alabama | 88165 | 0 |
+   n/a | n/a`) as one; that "header" is a number over a numeric column, so
+   it is data, and the sheet read whole against the by-name draft asks no
+   question. Ground truth: the whole sheet reads 10 rows; all-workers sum
+   28391970 + 3215390 (states) + 1208905 = 32816265.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
-regions_short_block.csv -> [{3,7}] plus a dropped table-shaped run {0,2}.
+regions_short_block.csv -> [{3,7}] plus a dropped table-shaped run {0,2};
+regions_banner.csv -> one member, window {7,14}, sums 1500/1550/1600;
+regions_banner.xlsx -> two sheet members, sums 1500/1550/1600 and 3000/3100/3200;
+regions_footnoted.xlsx -> read whole positionally, or one by-name member, 1500/1550/1600;
+regions_renumber.{csv,xlsx} -> 2400.00 (Betrag), 2406.00 (Betrag, Menge);
+regions_banner_notes.xlsx -> one plain member, 1500/1550/1600;
+regions_statetable.xlsx -> one plain member read whole, 10 rows, 32816265.
 """
 import os
 import re
@@ -246,6 +314,214 @@ def build_regions_short_block_csv():
     )
 
 
+BANNER = [
+    "Beer production by state",
+    "Barrels, all premises",
+    "Source: TTB statistical release",
+    "Prepared 31.03.2020",
+    "Unit: barrels",
+    "Preliminary figures",
+]
+BANNER_HEADER = ["State", "2008", "2009", "2010"]
+BANNER_ROWS = [
+    ("Alabama", 100, 110, 120),
+    ("Alaska", 200, 210, 220),
+    ("Arizona", 300, 310, 320),
+    ("Arkansas", 400, 410, 420),
+    ("California", 500, 510, 520),
+]
+FOOTNOTES = [
+    "1 Includes contract brewers.",
+    "2 Figures are rounded.",
+    "3 See the release notes for revisions.",
+]
+
+
+def build_regions_banner_csv():
+    lines = (
+        BANNER
+        + [""]
+        + [";".join(BANNER_HEADER)]
+        + [""]
+        + [f"{s};{a};{b};{c}" for s, a, b, c in BANNER_ROWS]
+        + [""]
+        + FOOTNOTES
+    )
+    write_csv(
+        "regions_banner.csv",
+        lines,
+        "6-line banner, header, blank, 5 rows, footnotes; window {7,14}, "
+        "sums 1500/1550/1600",
+    )
+
+
+def build_regions_banner_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    for i, (title, factor) in enumerate((("Premise", 1), ("Bottles", 2))):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = title
+        row = 1
+        for text in BANNER:
+            ws.cell(row=row, column=4, value=text)
+            row += 1
+        row += 1  # blank
+        for j, h in enumerate(BANNER_HEADER):
+            ws.cell(row=row, column=1 + j, value=h)
+        row += 2  # header, then a blank row before the data
+        for s_, a, b, c in BANNER_ROWS:
+            for j, v in enumerate((s_, a * factor, b * factor, c * factor)):
+                ws.cell(row=row, column=1 + j, value=v)
+            row += 1
+        row += 1  # blank
+        for text in FOOTNOTES:
+            ws.cell(row=row, column=4, value=text)
+            row += 1
+    save_workbook(
+        wb,
+        "regions_banner.xlsx",
+        "two sheets, each banner / header / blank / 5 rows / footnotes; "
+        "sums 1500/1550/1600 and 3000/3100/3200",
+    )
+
+
+FORM_NOTES = [
+    (5130.9, "Line 15: Removed for consumption or sale"),
+    (5130.26, "Line 10: Beer tax-determined for use in the tavern"),
+    ("**", "Increases due to the growth of new breweries"),
+]
+
+
+def build_regions_footnoted_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    row = 1
+    for text in BANNER:
+        ws.cell(row=row, column=1, value=text)
+        row += 1
+    row += 1  # blank
+    for j, h in enumerate(BANNER_HEADER):
+        ws.cell(row=row, column=1 + j, value=h)
+    row += 2  # header, then a blank row before the data
+    for vals in BANNER_ROWS:
+        for j, v in enumerate(vals):
+            ws.cell(row=row, column=1 + j, value=v)
+        row += 1
+    row += 1  # blank
+    for code, text in FORM_NOTES:
+        ws.cell(row=row, column=1, value=code)
+        ws.cell(row=row, column=2, value=text)
+        row += 1
+    save_workbook(
+        wb,
+        "regions_footnoted.xlsx",
+        "banner / header / blank / 5 rows / a headerless 2-cell footnote block; "
+        "sums 1500/1550/1600",
+    )
+
+
+RENUMBER_A = [("05.01.2025", "Ost", "1"), ("12.01.2025", "West", "2"), ("19.01.2025", "Nord", "3")]
+
+
+def renumber_rows():
+    rows = [("Datum", "Region", "Menge")] + RENUMBER_A + [None]
+    rows += [tuple(HEADER.split(";"))] + BLOCK2 + [None]
+    rows += [tuple(HEADER.split(";"))] + BLOCK3
+    return rows
+
+
+def build_regions_renumber():
+    from openpyxl import Workbook
+
+    rows = renumber_rows()
+    write_csv(
+        "regions_renumber.csv",
+        ["" if r is None else ";".join(r) for r in rows],
+        "blocks A (Menge), B, C (Betrag); 2400.00 by Betrag, 2406.00 with Menge",
+    )
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for i, r in enumerate(rows, 1):
+        if r is None:
+            continue
+        for j, v in enumerate(r, 1):
+            ws.cell(row=i, column=j, value=v)
+    save_workbook(wb, "regions_renumber.xlsx", "regions_renumber.csv as sheet \"Data\"")
+
+
+def build_regions_banner_notes_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    notes = wb.active
+    notes.title = "Notes"
+    for i, text in enumerate(["About this workbook", "Source: somewhere", "Contact: nobody"], 1):
+        notes.cell(row=i, column=1, value=text)
+    ws = wb.create_sheet("Data")
+    row = 1
+    for text in BANNER:
+        ws.cell(row=row, column=1, value=text)
+        row += 1
+    row += 1
+    for j, h in enumerate(BANNER_HEADER):
+        ws.cell(row=row, column=1 + j, value=h)
+    row += 2
+    for vals in BANNER_ROWS:
+        for j, v in enumerate(vals):
+            ws.cell(row=row, column=1 + j, value=v)
+        row += 1
+    row += 1
+    for text in FOOTNOTES:
+        ws.cell(row=row, column=1, value=text)
+        row += 1
+    save_workbook(
+        wb,
+        "regions_banner_notes.xlsx",
+        "a Notes sheet, then one banner/table/footnotes sheet; one fitting sheet",
+    )
+
+
+STATE_ROWS = [
+    ("Alabama", 88165, 0, "n/a", "n/a"),
+    ("Alaska", 26875, 0, "n/a", "n/a"),
+    ("Arizona", 1033370, 45, 4.35e-05, 0.17),
+    ("Arkansas", 64230, 10, 0.000156, 0.62),
+    ("California", 1800000, 900, 0.0005, 1.99),
+    ("Colorado", 101250, 15, 0.000148, 0.59),
+    ("Connecticut", 50500, 5, 9.9e-05, 0.39),
+    ("Delaware", 51000, 0, "n/a", "n/a"),
+]
+
+
+def build_regions_statetable_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hispanic"
+    ws.append(["Number of actors in the U.S. labor force, for all the states and Puerto Rico: 2015-2019"])
+    ws.append(["Hispanic"])
+    ws.append([])
+    ws.append(["State", "All workers in the labor force", "Number of actors in the labor force",
+               "Actors as a share of labor force", "Location quotient"])
+    ws.append(["United States", 28391970, 7115, 0.00025, 1])
+    ws.append([])
+    for r in STATE_ROWS:
+        ws.append(list(r))
+    ws.append([])
+    ws.append(["Puerto Rico", 1208905, 175, 0.000145, "n/a"])
+    save_workbook(
+        wb,
+        "regions_statetable.xlsx",
+        "ADP-31 StateTables shape: title, header row 4, total, a headerless state block",
+    )
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -254,6 +530,12 @@ def main():
     build_regions_summary_csv()
     build_regions_titled_csv()
     build_regions_short_block_csv()
+    build_regions_banner_csv()
+    build_regions_banner_xlsx()
+    build_regions_footnoted_xlsx()
+    build_regions_renumber()
+    build_regions_banner_notes_xlsx()
+    build_regions_statetable_xlsx()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "

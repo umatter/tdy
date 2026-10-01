@@ -18,6 +18,36 @@ pub struct MemberRef {
     pub region: Option<u32>,
 }
 
+/// A member as a person typed it, named the way lock members are: relative
+/// to the target's directory `dir`. A relative reference already is — the
+/// target's directory spelled in front of it is dropped, as before. An
+/// absolute one is canonicalised and made relative to the canonical `dir`,
+/// trying the whole text as a path first and then each cut before a `#`
+/// (`/abs/book.xlsx#Q1#2` is a file plus a sheet and a region), so it meets
+/// the members whatever way the target and its glob were spelled. Text that
+/// names nothing inside `dir` is returned as typed, for the caller's own
+/// "not a member" error.
+pub fn relative_to_target(text: &str, dir: &std::path::Path) -> String {
+    let text = text.replace('\\', "/");
+    let p = std::path::Path::new(&text);
+    if p.is_absolute() {
+        if let Ok(d) = dir.canonicalize() {
+            let cuts = std::iter::once(text.len()).chain(text.rmatch_indices('#').map(|(i, _)| i));
+            for cut in cuts {
+                let (path, rest) = text.split_at(cut);
+                let Ok(f) = std::path::Path::new(path).canonicalize() else { continue };
+                if let Ok(rel) = f.strip_prefix(&d) {
+                    return format!("{}{rest}", rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    if let Ok(r) = p.strip_prefix(dir) {
+        return r.to_string_lossy().replace('\\', "/");
+    }
+    text
+}
+
 impl MemberRef {
     pub fn file(path: impl Into<String>) -> MemberRef {
         MemberRef { path: path.into(), sheet: None, region: None }

@@ -426,6 +426,7 @@ pub fn resolve_excluded(
     for pat in &target.files {
         let (sub, name_pat) = split_pattern(pat);
         let search = if sub.is_empty() { dir.clone() } else { dir.join(&sub) };
+        let msub = member_dir(&dir, &sub);
         let Ok(rd) = std::fs::read_dir(&search) else { continue };
         for e in rd.flatten() {
             if !e.path().is_file() {
@@ -439,7 +440,7 @@ pub fn resolve_excluded(
             if name.ends_with(".tdy.toml") || name.ends_with(".tdy.lock") || name.ends_with(".tdy.sql") {
                 continue;
             }
-            let rel = if sub.is_empty() { name.clone() } else { format!("{sub}/{name}") };
+            let rel = if msub.is_empty() { name.clone() } else { format!("{msub}/{name}") };
             out.insert(rel);
         }
     }
@@ -447,6 +448,7 @@ pub fn resolve_excluded(
     let mut removed: Vec<(String, String)> = Vec::new();
     for pat in &target.exclude {
         let (sub, name_pat) = split_pattern(pat);
+        let sub = member_dir(&dir, &sub);
         out.retain(|rel| {
             let (rsub, rname) = split_pattern(rel);
             // An exclude naming no directory applies to every directory —
@@ -499,6 +501,27 @@ pub fn expand_glob(dir: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
 }
 
 /// `exports/2025-*.csv` -> ("exports", "2025-*.csv")
+/// A glob's directory as member paths spell it: relative to the target's
+/// directory `dir` whenever it lies inside it, however the glob spelled it
+/// (`/abs/acc/*.csv` beside a target in `/abs/acc`, or `./*.csv`). Members
+/// are named relative to the target — that is what `--accept`, `exclude`
+/// and the report name them by — and an absolute glob made them absolute
+/// paths nothing typed could meet. A plain relative directory (`exports`)
+/// keeps its spelling, as does one outside the target's or one that does
+/// not exist.
+fn member_dir(dir: &Path, sub: &str) -> String {
+    use std::path::Component;
+    if Path::new(sub).components().all(|c| matches!(c, Component::Normal(_))) {
+        return sub.to_string();
+    }
+    if let (Ok(s), Ok(d)) = (dir.join(sub).canonicalize(), dir.canonicalize()) {
+        if let Ok(rel) = s.strip_prefix(&d) {
+            return rel.to_string_lossy().replace('\\', "/");
+        }
+    }
+    sub.to_string()
+}
+
 fn split_pattern(p: &str) -> (String, String) {
     match p.rsplit_once('/') {
         Some((dir, name)) => (dir.to_string(), name.to_string()),

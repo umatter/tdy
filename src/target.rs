@@ -239,6 +239,20 @@ pub struct Target {
 }
 
 impl Target {
+    /// Whether this target binds any column by name: a column named other
+    /// than a synthetic positional `col_N`, or one that says which header
+    /// cells it reads (`matches`). A target of `col_N` alone — the draft of
+    /// a headerless frame — binds by position by construction, so a headed
+    /// block failing it is no evidence that reading the file another way is
+    /// wrong; `report::expand_units` asks its "this file is read whole"
+    /// question only of a target that does name something.
+    pub fn names_a_column(&self) -> bool {
+        let positional = |n: &str| {
+            n.strip_prefix("col_").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+        };
+        self.columns.iter().any(|c| !c.matches.is_empty() || !positional(&c.name))
+    }
+
     /// Parse a target from SQL text.
     ///
     /// Accepts exactly one `CREATE TABLE` statement. Anything else is refused
@@ -838,6 +852,19 @@ mod tests {
     }
 
     const MIN: &str = "CREATE TABLE s (a TEXT) WITH (files = 'x.csv')";
+
+    /// A target binds by name when any column is named other than `col_N`,
+    /// or says which header cells it reads (`matches`). A draft of a
+    /// headerless frame is all `col_N` and binds by position only.
+    #[test]
+    fn names_a_column_tells_by_name_from_positional() {
+        let pos = "CREATE TABLE s (col_1 TEXT, col_2 BIGINT, col_13 DOUBLE) WITH (files = 'x.csv')";
+        assert!(!t(pos).names_a_column());
+        assert!(t(MIN).names_a_column());
+        assert!(t("CREATE TABLE s (col_1 TEXT OPTIONS(matches = 'State')) WITH (files = 'x.csv')").names_a_column());
+        assert!(t("CREATE TABLE s (col_1 TEXT, col_x TEXT) WITH (files = 'x.csv')").names_a_column());
+        assert!(t("CREATE TABLE s (col_1 TEXT, col_ TEXT) WITH (files = 'x.csv')").names_a_column());
+    }
 
     #[test]
     fn a_minimal_target_parses() {

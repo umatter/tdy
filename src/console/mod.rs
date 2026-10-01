@@ -809,9 +809,13 @@ impl Session {
                     let f = dir.join(&m.path);
                     f.is_file() && crate::sidecar::declares_member(&f, m.sheet.as_deref(), m.region)
                 };
-                let mref = match crate::member::MemberRef::resolve(&member, exists) {
+                // Named as lock members are — relative to the target, an
+                // absolute path included — before it is resolved, exactly
+                // as `fit_pile` names a `--accept`.
+                let named = crate::member::relative_to_target(&member, &dir);
+                let mref = match crate::member::MemberRef::resolve(&named, exists) {
                     Ok(Some(m)) => m,
-                    Ok(None) => crate::member::MemberRef::file(member.clone()),
+                    Ok(None) => crate::member::MemberRef::file(named),
                     Err(several) => bail!(
                         "{member} could mean {} — name the file and the sheet unambiguously",
                         crate::member::MemberRef::names(&several)
