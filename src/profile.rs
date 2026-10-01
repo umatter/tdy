@@ -126,31 +126,44 @@ pub fn parse_rows(s: &str) -> Result<(u64, u64)> {
 /// resolved the way every single-file tool resolves one
 /// (`sidecar::resolve_ref`).
 pub fn profile_file(path: &Path, req: &Request, limits: Limits) -> Result<Profile> {
-    let (file, ref_sheet, ref_region) = crate::sidecar::resolve_ref(path)?;
+    let (file, sheet, region) = crate::sidecar::resolve_ref(path)?;
+    let mut p = profile_member(&file, sheet, region, req, limits)?;
+    p.path = path.display().to_string();
+    Ok(p)
+}
+
+/// [`profile_file`] for a member already resolved: the data file, the
+/// sheet and the region its reference named.
+pub fn profile_member(
+    file: &Path,
+    ref_sheet: Option<String>,
+    ref_region: Option<u32>,
+    req: &Request,
+    limits: Limits,
+) -> Result<Profile> {
     let sheet = match (ref_sheet, req.sheet.clone()) {
         (Some(a), Some(b)) if a != b => {
-            bail!("{} names sheet {a:?} but --sheet says {b:?}", path.display())
+            bail!("{} names sheet {a:?} but --sheet says {b:?}", file.display())
         }
         (a, b) => a.or(b),
     };
     let (frame, source) = match ref_region {
         Some(r) => {
             if req.rows.is_some() {
-                bail!("{} already names a block; drop --rows", path.display());
+                bail!("a member reference already names its block; drop --rows");
             }
-            match crate::sidecar::load_member(&file, sheet.as_deref(), Some(r))? {
+            match crate::sidecar::load_member(file, sheet.as_deref(), Some(r))? {
                 crate::sidecar::SidecarStatus::Fresh(sc) => (sc.spec, "sidecar".to_string()),
                 _ => bail!(
-                    "{} has no fresh sidecar to say which rows it is; name the block with \
-                     --rows START-END (what its title shows), or re-run `tdy fit`",
-                    path.display()
+                    "region {r} of {} has no fresh sidecar to say which rows it is; name the \
+                     block with --rows START-END (what its title shows), or re-run `tdy fit`",
+                    file.display()
                 ),
             }
         }
-        None => frame_for(&file, sheet.as_deref(), req.rows, limits)?,
+        None => frame_for(file, sheet.as_deref(), req.rows, limits)?,
     };
-    let mut p = profile(&file, &frame, limits, ProfileOpts { head: req.head })?;
-    p.path = path.display().to_string();
+    let mut p = profile(file, &frame, limits, ProfileOpts { head: req.head })?;
     p.frame = source;
     Ok(p)
 }

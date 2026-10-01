@@ -1131,3 +1131,45 @@ async fn accept_names_a_member_by_absolute_path_under_an_absolute_glob() {
     let Payload::Fitted(r) = &o.payload else { panic!("{}", o.text) };
     assert!(r.members[0].accepted, "{}", o.text);
 }
+
+/// `.profile` prints exactly what `tdy profile` prints — the whole table,
+/// and one column's detail under `--head` — carries the profile as its
+/// payload, and writes nothing beside the file.
+#[tokio::test]
+async fn profile_text_equals_the_binary() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/profile_mixed_dates.csv"),
+        d.path().join("mixed.csv"),
+    )
+    .unwrap();
+    let mut s = session(d.path()).await;
+    for args in [
+        vec!["mixed.csv"],
+        vec!["mixed.csv", "--column", "Datum", "--head", "10"],
+        vec!["mixed.csv", "--column", "Datum"],
+    ] {
+        let cli = tdy(d.path(), &[&["profile"], args.as_slice()].concat());
+        assert!(cli.status.success(), "{}", String::from_utf8_lossy(&cli.stderr));
+        let o = s.run(&format!(".profile {}", args.join(" ")), None).await;
+        assert!(o.ok, "{}", o.text);
+        assert_eq!(o.text, String::from_utf8_lossy(&cli.stdout), "{args:?}");
+        let Payload::Profile(p) = o.payload else { panic!("{:?}", o.payload) };
+        assert_eq!(p.columns.len(), 3);
+    }
+    let o = s.run(".profile mixed.csv --column Nope", None).await;
+    assert!(!o.ok && o.text.contains("no column `Nope`"), "{}", o.text);
+    let left: Vec<String> =
+        std::fs::read_dir(d.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into()).collect();
+    assert_eq!(left, ["mixed.csv"], "a profile writes nothing");
+}
+
+/// `.profile` is confined like every other command that names a path.
+#[tokio::test]
+async fn profile_refuses_a_path_outside_the_root() {
+    let d = pile();
+    let mut s = session(d.path()).await;
+    let o = s.run(".profile ../../etc/passwd", None).await;
+    assert!(!o.ok, "{}", o.text);
+    assert!(o.text.contains("outside") || o.text.contains("does not exist"), "{}", o.text);
+}

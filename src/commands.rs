@@ -394,7 +394,7 @@ pub fn profile_text(shown: &str, p: &crate::profile::Profile, column: Option<&st
     let extent = if p.complete {
         format!("{} rows, the whole table", p.rows)
     } else {
-        format!("first {} rows only (--head) — NOT the whole file", p.rows)
+        format!("first {} rows only (--head) — NOT the whole table", p.rows)
     };
     writeln!(text, "{what}: {extent}; {} column(s); frame: {}", p.columns.len(), p.frame)?;
     let distinct = |d: &Distinct| match d {
@@ -429,15 +429,15 @@ pub fn profile_text(shown: &str, p: &crate::profile::Profile, column: Option<&st
             .map(|i| rows.iter().map(|r| r[i].chars().count()).chain([head[i].chars().count()]).max().unwrap_or(0))
             .collect();
         let line = |cells: &[String]| -> String {
-            let mut l = String::from(" ");
+            let mut l = String::new();
             for (i, c) in cells.iter().enumerate() {
                 let pad = widths[i].saturating_sub(c.chars().count());
                 if right[i] {
-                    l.push_str(&format!(" {}{c}", " ".repeat(pad)));
+                    l.push_str(&format!("  {}{c}", " ".repeat(pad)));
                 } else if i + 1 == cells.len() {
-                    l.push_str(&format!(" {c}"));
+                    l.push_str(&format!("  {c}"));
                 } else {
-                    l.push_str(&format!(" {c}{}", " ".repeat(pad)));
+                    l.push_str(&format!("  {c}{}", " ".repeat(pad)));
                 }
             }
             l.trim_end().to_string()
@@ -498,7 +498,7 @@ pub fn profile_text(shown: &str, p: &crate::profile::Profile, column: Option<&st
 /// The column `--column` names: by the file's own spelling, or `#N` by
 /// position. Two columns with one name are refused, naming both positions
 /// — picking one would be a guess.
-fn pick_column<'a>(p: &'a crate::profile::Profile, want: &str) -> Result<&'a crate::profile::ColumnProfile> {
+pub fn pick_column<'a>(p: &'a crate::profile::Profile, want: &str) -> Result<&'a crate::profile::ColumnProfile> {
     if let Some(n) = want.strip_prefix('#').and_then(|n| n.parse::<usize>().ok()) {
         if let Some(c) = p.columns.iter().find(|c| c.position == n) {
             return Ok(c);
