@@ -197,9 +197,14 @@ pub fn frame_for(
             if workbook {
                 bail!("--rows on a workbook needs --sheet: rows are counted within one sheet");
             }
-            for r in crate::sidecar::region_sidecars(path, None) {
+            // A fresh sidecar that reads exactly this block: a region
+            // member's, or a plain one whose file is one block with
+            // padding around it.
+            let plain = std::iter::once(None);
+            let regions = crate::sidecar::region_sidecars(path, None).into_iter().map(Some);
+            for r in plain.chain(regions) {
                 if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) =
-                    crate::sidecar::load_member(path, None, Some(r))
+                    crate::sidecar::load_member(path, None, r)
                 {
                     if let Extraction::Delimited { region: Some(w), .. } = &sc.spec.extraction {
                         if (w.start, w.end) == (window.start, window.end) {

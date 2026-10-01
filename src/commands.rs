@@ -384,19 +384,7 @@ pub fn describe_dtype(d: &DType) -> String {
 pub fn profile_text(shown: &str, p: &crate::profile::Profile, column: Option<&str>) -> Result<String> {
     use crate::profile::Distinct;
     let mut text = String::new();
-    let mut what = shown.to_string();
-    if let Some(s) = &p.sheet {
-        write!(what, ", sheet {s:?}")?;
-    }
-    if let Some(w) = &p.window {
-        write!(what, ", rows {}\u{2013}{}", w.start + 1, w.end)?;
-    }
-    let extent = if p.complete {
-        format!("{} rows, the whole table", p.rows)
-    } else {
-        format!("first {} rows only (--head) — NOT the whole table", p.rows)
-    };
-    writeln!(text, "{what}: {extent}; {} column(s); frame: {}", p.columns.len(), p.frame)?;
+    writeln!(text, "{}", profile_heading(shown, p))?;
     let distinct = |d: &Distinct| match d {
         Distinct::Exact(n) => n.to_string(),
         Distinct::AtLeast(n) => format!("{n}+"),
@@ -493,6 +481,25 @@ pub fn profile_text(shown: &str, p: &crate::profile::Profile, column: Option<&st
         }
     }
     Ok(text)
+}
+
+/// The first line of a profile: what was read, how much of it — under
+/// `--head`, that it was NOT the whole table, before anything else is
+/// said — and in which frame. Shared with the workbench's Profile view.
+pub fn profile_heading(shown: &str, p: &crate::profile::Profile) -> String {
+    let mut what = shown.to_string();
+    if let Some(s) = &p.sheet {
+        what.push_str(&format!(", sheet {s:?}"));
+    }
+    if let Some(w) = &p.window {
+        what.push_str(&format!(", rows {}\u{2013}{}", w.start + 1, w.end));
+    }
+    let extent = if p.complete {
+        format!("{} rows, the whole table", p.rows)
+    } else {
+        format!("first {} rows only (--head) — NOT the whole table", p.rows)
+    };
+    format!("{what}: {extent}; {} column(s); frame: {}", p.columns.len(), p.frame)
 }
 
 /// The column `--column` names: by the file's own spelling, or `#N` by
