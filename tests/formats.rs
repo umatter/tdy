@@ -1426,7 +1426,7 @@ fn a_year_pivot_decides_the_century_of_a_two_digit_year() {
     assert_eq!(read(None), vec!["2029-02-01", "2030-02-01"]);
 }
 
-/// Only on a date or timestamp read with `%y`, and only 0..=99; anything
+/// Only on a date or timestamp read with `%y`, and only 0..=100; anything
 /// else is refused with a message rather than ignored.
 #[test]
 fn year_pivot_is_refused_where_it_means_nothing() {
@@ -1441,7 +1441,13 @@ fn year_pivot_is_refused_where_it_means_nothing() {
     let mut text = col("d", DType::Utf8);
     text.parse.year_pivot = Some(30);
     refuse(text, "date");
-    refuse(yy_col(Some(100)), "0..=99");
+    refuse(yy_col(Some(101)), "0..=100");
+    // 100 is the top: every two-digit year is 20xx.
+    assert!(spec(delim(',', RaggedPolicy::PadNulls), vec![], vec![yy_col(Some(100))]).validate().is_ok());
+    assert_eq!(
+        two_digit_year_note(&yy_col(Some(100))).as_deref(),
+        Some("column `d`: two-digit years are read as 2000–2099; set `year_pivot` to change")
+    );
     let mut ts = col("t", DType::Timestamp { format: "%d.%m.%y %H:%M".into(), timezone: None });
     ts.parse.year_pivot = Some(30);
     assert!(spec(delim(',', RaggedPolicy::PadNulls), vec![], vec![ts, yy_col(Some(0))]).validate().is_ok());

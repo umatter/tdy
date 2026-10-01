@@ -705,7 +705,8 @@ pub struct ValueParsing {
     /// knows which window is meant, so it is declared and never inferred.
     ///
     /// Only on a `date` or `timestamp` column whose format contains `%y`,
-    /// and only 0..=99. The year is re-centred from its last two digits
+    /// and only 0..=100 — 100 reads every two-digit year as 20xx (2000–2099),
+    /// 0 every one as 19xx. The year is re-centred from its last two digits
     /// after chrono parses it; the value itself is never rewritten.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub year_pivot: Option<u8>,
@@ -946,10 +947,11 @@ impl ParseSpec {
                         dtype_name(&c.dtype)
                     )),
                 }
-                if pivot > 99 {
+                if pivot > 100 {
                     errs.push(format!(
-                        "column `{}`: year_pivot {pivot} is out of range (0..=99); it is \
-                         the two-digit year from which 19xx begins",
+                        "column `{}`: year_pivot {pivot} is out of range (0..=100); it is \
+                         the two-digit year from which 19xx begins, and 100 reads every one \
+                         as 20xx",
                         c.name
                     ));
                 }

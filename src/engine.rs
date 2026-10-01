@@ -2848,6 +2848,9 @@ mod tests {
             let v = format!("01/02/{yy:02}");
             assert_eq!(year(&v, None), year(&v, Some(crate::spec::DEFAULT_YEAR_PIVOT)), "{v}");
         }
+        // 100: every two-digit year is 20xx.
+        assert_eq!(year("01/02/99", Some(100)), 2099);
+        assert_eq!(year("01/02/00", Some(100)), 2000);
         // 1900 had no 29th of February: an error, never the 1st of March.
         assert!(parse_date_days("29/02/00", "%d/%m/%y", Some(0)).is_err());
         assert!(parse_date_days("29/02/00", "%d/%m/%y", None).is_ok());
