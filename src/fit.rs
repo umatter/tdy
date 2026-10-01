@@ -685,8 +685,8 @@ fn region_frame(
 /// (`Rigour::Gates`, as [`discover_sheets`] asks of a sheet), in the frame
 /// [`fit_region`] will later fit: only those are members. The design's
 /// table is keyed on "blocks that pass the gates"; every other run of three
-/// rows — a title banner, a footnote block, a recap — is a run nothing
-/// reads, named on the members that remain, and a person's question only
+/// rows — a title banner, a footnote block, a recap, any block whose frame
+/// promoted no header — is a run nothing reads, named on the members that remain, and a person's question only
 /// when it is shaped like the table ([`engine::Regions::gated`]).
 pub fn gate_regions(
     path: &Path,
@@ -703,11 +703,24 @@ pub fn gate_regions(
         .iter()
         .map(|w| {
             region_frame(path, sheet, *w, target, limits)
-                .and_then(|d| fit_framed(path, target, limits, d, Rigour::Gates))
-                .is_ok()
+                .ok()
+                .filter(promotes_header)
+                .map(|d| fit_framed(path, target, limits, d, Rigour::Gates).is_ok())
+                .unwrap_or(false)
         })
         .collect();
     regions.gated(&passed)
+}
+
+/// Whether a block's frame found a header of its own. Only such a block is
+/// a candidate: a blank row proves a boundary, but a header is what tells
+/// one block from its neighbours, and a headerless run of rows is
+/// indistinguishable from more rows of the table above it. Bound by
+/// position alone (`col_N`), a banner or a two-cell footnote block passed
+/// a positional target's gates and stood in for the sheet; the honest
+/// reading of a file with no headed block is the file whole.
+fn promotes_header(frame: &ParseSpec) -> bool {
+    frame.transforms.iter().any(|t| matches!(t, Transform::PromoteHeader { .. }))
 }
 
 /// A 0-based column index as A1 letters ("A", "Z", "AA", ...).

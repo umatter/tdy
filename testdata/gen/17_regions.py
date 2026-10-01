@@ -97,12 +97,25 @@ FIXTURES  (all in testdata/, named regions_*)
    truth: "Premise" as #7; "Bottles" doubles every value, sums 3000 /
    3100 / 3200 (9300 in all).
 
+9. regions_footnoted.xlsx
+   The corpus's `ttb_brewery_state_*.xlsx` sheet reduced to one sheet
+   ("Data"): the banner of #7 in column A, a blank row, the header
+   `State;2008;2009;2010`, a blank row, the five rows of #7, a blank row,
+   then a 3-row footnote block of TWO cells per row (a form number and its
+   text). The footnote block has no header, so against a positional
+   `col_N` target it would bind and pass the gates by position alone; it
+   must not be a candidate, and the sheet is read whole, as before regions.
+   Against a by-name target only the table passes and the footnote block
+   is a data-like run nothing read. Ground truth: the table's sums are
+   #7's, 1500 / 1550 / 1600.
+
 Ground truth summary: regions_three.csv/.xlsx -> [{0,4},{5,9},{10,14}],
 sums 600.00 / 1500.00 / 900.00; regions_titled.csv -> [{3,7}];
 regions_three_offset.xlsx -> same windows and sums as regions_three.xlsx;
 regions_short_block.csv -> [{3,7}] plus a dropped table-shaped run {0,2};
 regions_banner.csv -> one member, window {7,14}, sums 1500/1550/1600;
-regions_banner.xlsx -> two sheet members, sums 1500/1550/1600 and 3000/3100/3200.
+regions_banner.xlsx -> two sheet members, sums 1500/1550/1600 and 3000/3100/3200;
+regions_footnoted.xlsx -> read whole positionally, or one by-name member, 1500/1550/1600.
 """
 import os
 import re
@@ -342,6 +355,44 @@ def build_regions_banner_xlsx():
     )
 
 
+FORM_NOTES = [
+    (5130.9, "Line 15: Removed for consumption or sale"),
+    (5130.26, "Line 10: Beer tax-determined for use in the tavern"),
+    ("**", "Increases due to the growth of new breweries"),
+]
+
+
+def build_regions_footnoted_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    row = 1
+    for text in BANNER:
+        ws.cell(row=row, column=1, value=text)
+        row += 1
+    row += 1  # blank
+    for j, h in enumerate(BANNER_HEADER):
+        ws.cell(row=row, column=1 + j, value=h)
+    row += 2  # header, then a blank row before the data
+    for vals in BANNER_ROWS:
+        for j, v in enumerate(vals):
+            ws.cell(row=row, column=1 + j, value=v)
+        row += 1
+    row += 1  # blank
+    for code, text in FORM_NOTES:
+        ws.cell(row=row, column=1, value=code)
+        ws.cell(row=row, column=2, value=text)
+        row += 1
+    save_workbook(
+        wb,
+        "regions_footnoted.xlsx",
+        "banner / header / blank / 5 rows / a headerless 2-cell footnote block; "
+        "sums 1500/1550/1600",
+    )
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     build_regions_three_csv()
@@ -352,6 +403,7 @@ def main():
     build_regions_short_block_csv()
     build_regions_banner_csv()
     build_regions_banner_xlsx()
+    build_regions_footnoted_xlsx()
     print("\nground truth: regions_three.{csv,xlsx} -> [{0,4},{5,9},{10,14}], "
           "sums 600.00/1500.00/900.00; regions_titled.csv -> [{3,7}]; "
           "regions_three_offset.xlsx -> same sums, used range starts at C5; "

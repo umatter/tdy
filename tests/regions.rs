@@ -1017,3 +1017,59 @@ fn an_adopted_data_row_makes_a_loud_refusal() {
     assert!(text.contains("GAP"), "{text}");
     assert!(!dir.path().join("q.tdy.lock").exists(), "no lock: {text}");
 }
+
+/// A blank row proves a boundary; only a header tells one block from the
+/// next. Three headerless blocks of one width are indistinguishable from
+/// one table with blank lines in it, so the file is read whole — one plain
+/// member, no `#N`, no region notes — exactly as before regions.
+#[test]
+fn headerless_blocks_are_not_candidates_and_the_file_is_read_whole() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let rows = |m: &str| format!("05.{m}.2025;Ost;190.00\n12.{m}.2025;West;200.00\n19.{m}.2025;Nord;210.00\n");
+    std::fs::write(dir.path().join("report.csv"), format!("{}\n{}\n{}", rows("01"), rows("02"), rows("03"))).unwrap();
+    let t = dir.path().join("q.tdy.sql");
+    std::fs::write(&t, "CREATE TABLE q (col_1 TEXT, col_2 TEXT, col_3 TEXT) WITH (files = '*.csv', provenance = 'true');").unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("report.csv#") && !text.contains("REVIEW"), "{text}");
+    assert!(!text.contains("split at blank rows") && !text.contains("not read"), "no region notes: {text}");
+    let q = query(&t, "SELECT count(*) AS n FROM DS");
+    assert!(q.contains("| 9 "), "the whole file: {q}");
+}
+
+/// The corpus's ttb sheet, reduced. Against the drafted positional target
+/// the banner and the two-cell footnote block used to pass by position
+/// alone; neither has a header, so neither is a candidate, no block passes,
+/// and the sheet is read whole through the frame the draft came from — the
+/// pre-regions reading, no review. Against a by-name target the table is
+/// the one block that passes, bound by name, and the footnote block is a
+/// data-like run nothing read, so it waits on a person.
+#[test]
+fn a_headerless_footnote_block_cannot_stand_in_for_the_sheet() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_footnoted.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let out = tdy(&["draft", dir.path().join("book.xlsx").to_str().unwrap()]);
+    let t = dir.path().join("d.tdy.sql");
+    std::fs::write(&t, out.stdout).unwrap();
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("book.xlsx#") && !text.contains("REVIEW"), "{text}");
+    assert!(!text.contains("not read") && !text.contains("split at blank rows"), "read whole: {text}");
+
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::copy(fixture("regions_footnoted.xlsx"), dir.path().join("book.xlsx")).unwrap();
+    let t = banner_target(dir.path(), "*.xlsx");
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("book.xlsx#"), "one member: {text}");
+    assert!(text.contains("state<-\"State\""), "bound by name: {text}");
+    assert!(text.contains("lines 16–18 was not read"), "the footnote block is named: {text}");
+    assert!(text.contains("REVIEW"), "two cells a row is data-like: {text}");
+    let out = tdy(&["fit", t.to_str().unwrap(), "--accept", "book.xlsx"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let q = query(&t, "SELECT count(*) AS n, sum(y2008) AS a, sum(y2009) AS b, sum(y2010) AS c FROM DS");
+    for want in ["| 5 ", "1500", "1550", "1600"] { assert!(q.contains(want), "{want}: {q}"); }
+}
