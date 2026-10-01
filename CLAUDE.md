@@ -166,7 +166,11 @@ presence, and hints `date_order`. It deliberately does NOT merge synonyms (`datu
 stay two visible columns) — the declaration is where a human states intent, so the draft
 makes each remaining judgement a one-line edit instead of making it. The emitted SQL always
 parses (`Target::parse`), and `tests/draft.rs` pins the round trip: over a pile with one
-vocabulary, the *unedited* draft fits every file it was drawn from.
+vocabulary, the *unedited* draft fits every file it was drawn from. A drafted DECIMAL whose
+scale is above 6 (the sniffer's cap for money it knows by shape, so the scale came from a
+currency-formatted cell holding a float) also declares `round = 'half_away'`, with a comment
+calling the scale float noise and naming DOUBLE as the other edit — a later row one place
+longer would otherwise refuse the unedited draft (`draft_float_money.xlsx`, generator 18).
 
 Swept against the real corpus (draft → fit, scratch copies, 170 CSV piles + 31 multi-sheet
 workbooks): every identical-header pile fit unedited (6/6); every overlapping-header pile
@@ -446,10 +450,13 @@ console's `.accept` reads both places. Medians, not totals, so a partial month i
 (`scripts/sweep_workbooks.py`, 2026-09-07): of 34 multi-sheet xlsx/xlsm workbooks, 18 stay a
 plain member and 16 expand into sheet members — the sixteen the draft slice had refused as
 `AmbiguousFrame` — with no refusal, error or timeout. Re-run it after touching discovery.
-Re-swept 2026-09-30 after region gating: 18 plain, 15 expanded, 1 refused — the same as the
-last commit before regions (0b919d0); the one refusal and the one lost expansion arrived with
-the declared-rounding merge (0f81fd3: a drafted `DECIMAL(38,15)` the fit then refuses for its
-extra digits), not with regions.
+Re-swept 2026-10-01: 19 plain, 15 expanded, none refused. The solar workbook the
+declared-rounding merge (0f81fd3) had refused — a drafted `DECIMAL(38,15)` the fit then refused
+for a value's sixteenth place — fits, since the draft now declares that rounding. The
+expansion that merge lost stays lost, and rightly: `AssetSubsidies`' second sheet holds 16-place
+floats under a `DECIMAL(38,1)` drafted from the first, which the 2026-09-07 sweep expanded by
+rounding them to one place in silence (and by unioning a percentages sheet with a dollars
+one); declaring the rounding by hand expands it again.
 
 **Regions are in (2026-09-08).** `docs/design/2026-09-08-regions.md`. A member
 is now `(path, sheet, region)` — `MemberRef` in `src/member.rs` gains a third
@@ -638,7 +645,8 @@ own metrics, so the numbers compare with the paper. Last run (2026-09-07, after 
 compression guard and the long-form change; identical to the run before them):
 2,287 of 2,290 load, record F1 0.991 (tying duckdbparse), cell precision 0.996
 against recall 0.942 — tdy emits more cells than the source and almost never a
-wrong one, which is `PadNulls` widening rather than dropping. It found two defects nothing else
+wrong one, which is `PadNulls` widening rather than dropping. Re-run 2026-09-30 after
+regions, on the rebuilt binary: the summary is byte-identical to the 2026-09-07 run. It found two defects nothing else
 had, so re-run it after touching extraction or framing.
 
 ## Real data

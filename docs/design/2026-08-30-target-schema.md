@@ -514,7 +514,9 @@ exists and is tested before the model is allowed near it.
    and a sniffed sidecar keeps rounding half away from zero with its note. The
    acceptance gate this page proposed was never wired; a declaration in the
    reviewed target is authorisation, an acceptance per file would have been a
-   question asked every month.
+   question asked every month. `tdy draft` declares it itself on a DECIMAL whose
+   scale (above 6) is float noise in a currency-formatted cell, with a comment
+   saying so, since a later value one place longer would refuse the draft.
 3. ~~**Positional disambiguation.**~~ **Settled: no new syntax.** The sidecar can
    already address the second `Betrag` as `Betrag_2` (`dedupe_names` exists so a
    spec can name a duplicate), and the worry that "second column named Betrag"
