@@ -1206,3 +1206,38 @@ fn a_year_pivot_reads_the_same_on_both_executors() {
     let text = render(&stream::execute_batches(&s, &p, Limits::default()).unwrap());
     assert!(text.contains("1930-02-01") && text.contains("2029-02-01") && text.contains("1999-12-31"), "{text}");
 }
+
+/// A spec naming a generated column past the modal width under `ragged =
+/// "truncate_extra"` is refused by both executors with one sentence, and the
+/// sentence names the policy that cut the rows — not `quote`, which is the
+/// cure only when two reads of the file disagreed about its width.
+#[test]
+fn a_column_past_a_truncated_width_names_the_ragged_policy_on_both_paths() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "trunc.csv", "#;#;#\n#;#;#\n#;#;#\na;1;2;3\nb;4;5;6\n");
+    let s = ParseSpec {
+        extraction: Extraction::Delimited {
+            delimiter: ';',
+            quote: Some('"'),
+            escape: None,
+            encoding: None,
+            comment: None,
+            ragged: RaggedPolicy::TruncateExtra,
+            region: None,
+        },
+        transforms: vec![Transform::DropRowsMatching { pattern: "^#".into(), column: None }],
+        columns: (1..=4).map(|i| col(&format!("col_{i}"), DType::Utf8)).collect(),
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    let want = "resolving output column `col_4`: the spec names `col_4`, but under \
+                `ragged = \"truncate_extra\"` this file's rows were truncated to their modal \
+                width of 3 column(s), so the spec names a column beyond it; \
+                `ragged = \"pad_nulls\"` keeps the wider rows";
+    let engine = engine::execute_batches(&s, &p, Limits::default())
+        .expect_err("the engine read a column that truncation removed");
+    let streamed = stream::execute_batches(&s, &p, Limits::default())
+        .expect_err("the stream read a column that truncation removed");
+    assert_eq!(format!("{engine:#}"), want);
+    assert_eq!(format!("{streamed:#}"), want);
+}

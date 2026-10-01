@@ -737,9 +737,15 @@ fixture in `testdata/` — that is what `12_late_surprises.py` is. The 2026-09-0
 findings live in `gap_reports/AUDIT_FINDINGS.md` (gitignored, like every `gap_reports/`
 report); its fixtures are `15_audit_defects.py` (below).
 
-Current state (re-swept after the calamine 0.26→0.36 upgrade — no regressions, and the
-only "declined" xlsx are Office `~$` owner-lock stubs, which is correct):
-**0 of 1,374 real CSVs declined** (15 before the type-verification work);
+Current state (re-swept 2026-10-01 in release, at 46436b3: 3 tests passed in 796 s, no
+panic or hang): of 9,881 files, 4,019 are read confidently (41%), 4,868 read unsure (49%)
+and 994 declined (10%); the four declined xlsx are still Office `~$` owner-lock stubs,
+which is correct. **0 of 1,374 real CSVs declined** (15 before the type-verification work).
+The rise from the 2026-09-04 survey's 3,868 confident files has one cause, traced per file
+over all 1,385 csv/tsv files: all 138 that rose did so between 2026-09-04 and 2026-09-08,
+each losing exactly the doubt "nearly every column typed as text", which the September
+audit restricted to files whose column names tdy had to invent (`!named_by_file`), and no
+file's confidence has moved since.
 `OxfordIHTM/messy-data`, which is purpose-built to be hard, lands at 50-75% confidence with
 accurate notes, which is the documented tier-2 boundary rather than a defect.
 
