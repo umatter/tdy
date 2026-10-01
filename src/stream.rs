@@ -113,7 +113,9 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
         let next = match t {
             Transform::SkipRows { .. } => Stage::Header,
             Transform::PromoteHeader { .. } => Stage::RowLocal,
-            Transform::DropRowsMatching { .. } | Transform::FillDown { .. } => Stage::RowLocal,
+            Transform::DropRowsMatching { .. }
+            | Transform::FillDown { .. }
+            | Transform::RemoveEmpty {} => Stage::RowLocal,
             Transform::Unpivot { .. } => Stage::Done,
             // Streamable in principle (it is row-local), but rare enough that
             // the fallback executor is the simpler home for it.
@@ -140,9 +142,9 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
         let allowed = match t {
             Transform::SkipRows { .. } => stage == Stage::Skip,
             Transform::PromoteHeader { .. } => stage <= Stage::Header,
-            Transform::DropRowsMatching { .. } | Transform::FillDown { .. } => {
-                stage <= Stage::RowLocal
-            }
+            Transform::DropRowsMatching { .. }
+            | Transform::FillDown { .. }
+            | Transform::RemoveEmpty {} => stage <= Stage::RowLocal,
             Transform::Unpivot { .. } => stage <= Stage::RowLocal,
             Transform::Constant { .. }
             | Transform::SplitColumn { .. }
@@ -1646,6 +1648,8 @@ enum RowOp {
     /// Unresolved until the header exists; then `idx` is Some.
     Fill { column: String, idx: usize, carry: String },
     Drop { re: regex::Regex, column: Option<String>, idx: Option<usize> },
+    /// `remove_empty`: drop a row whose every cell is empty after trimming.
+    RemoveEmpty,
 }
 
 struct UnpivotPlan {
@@ -1685,6 +1689,7 @@ impl Plan {
                     column: column.clone(),
                     idx: None,
                 }),
+                Transform::RemoveEmpty {} => p.ops.push(RowOp::RemoveEmpty),
                 Transform::FillDown { columns, .. } => p.ops.extend(columns.iter().map(|c| {
                     RowOp::Fill { column: c.clone(), idx: 0, carry: String::new() }
                 })),
@@ -1735,6 +1740,7 @@ impl Plan {
                         None => None,
                     };
                 }
+                RowOp::RemoveEmpty => {}
             }
         }
 
@@ -1793,6 +1799,11 @@ impl Plan {
                         None => re.is_match(&row.join("\t")),
                     };
                     if hit {
+                        return;
+                    }
+                }
+                RowOp::RemoveEmpty => {
+                    if row.iter().all(|c| c.trim().is_empty()) {
                         return;
                     }
                 }

@@ -410,6 +410,25 @@ pub enum Transform {
         #[serde(default)]
         on_short: ShortSplit,
     },
+    /// Drop every row whose cells are all empty after trimming: the `;;;`
+    /// spacer a CSV export writes between groups, which otherwise becomes a
+    /// record of nulls that `count(*)` counts.
+    ///
+    /// Rows only. There is no column counterpart, deliberately: `columns` is
+    /// the only projection, and an all-empty column is dropped by leaving it
+    /// out of that list (the sniffer says which ones are). A text file's
+    /// truly blank lines and a sheet's blank rows never reach a table, so
+    /// this is for rows that carry delimiters and nothing else.
+    ///
+    /// Must come after the framing transforms (`skip_rows`,
+    /// `promote_header`, `transpose`): before them it would change what they
+    /// count. Never inferred.
+    ///
+    /// Written as a struct with no fields rather than a unit variant so that
+    /// `deny_unknown_fields` holds: `op = "remove_empty"` beside a
+    /// `columns = [...]` (somebody hoping it drops columns) is refused, not
+    /// silently ignored.
+    RemoveEmpty {},
     /// Wide -> long.
     Unpivot {
         id_columns: Vec<String>,
@@ -1238,6 +1257,30 @@ impl ParseSpec {
                         .count();
                     if dup > 1 {
                         errs.push(format!("constant: `{name}` is declared twice"));
+                    }
+                }
+                Transform::RemoveEmpty {} => {
+                    // Before a framing transform it changes what that
+                    // transform counts: a `skip_rows` head of 3 would skip
+                    // three non-empty rows, and `promote_header` would take
+                    // its names from a row below a spacer.
+                    let later_framing = self
+                        .transforms
+                        .iter()
+                        .skip_while(|o| !std::ptr::eq(*o, t))
+                        .skip(1)
+                        .find_map(|o| match o {
+                            Transform::SkipRows { .. } => Some("skip_rows"),
+                            Transform::PromoteHeader { .. } => Some("promote_header"),
+                            Transform::Transpose => Some("transpose"),
+                            _ => None,
+                        });
+                    if let Some(f) = later_framing {
+                        errs.push(format!(
+                            "remove_empty must come after {f}: before it, dropping empty rows \
+                             changes the rows that transform counts. Put remove_empty after \
+                             the last skip_rows, promote_header or transpose"
+                        ));
                     }
                 }
                 Transform::SkipRows { .. } => {}

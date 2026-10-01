@@ -1059,7 +1059,7 @@ sheet_name = "Umsatz"
 
 [[spec.transforms]]         # applied in order, on raw strings
 op = "skip_rows"            # skip_rows | promote_header | drop_rows_matching
-head = 3                    # | fill_down | unpivot
+head = 3                    # | fill_down | remove_empty | unpivot
 tail = 1
 
 [[spec.transforms]]
@@ -1187,6 +1187,14 @@ Details worth knowing:
   written at the *bottom* of its group. Both readings are valid for a file
   with blanks in a category column, which is why the direction is declared and
   never inferred.
+- **`remove_empty` drops rows that hold nothing.** A row whose every cell is
+  empty after trimming — the `;;;` spacer an export writes between groups —
+  is otherwise a record of nulls that `count(*)` counts. It takes no options,
+  it drops rows only, and it must come after `skip_rows`, `promote_header` and
+  `transpose`, since before them it would change what they count. Its order
+  against `fill_down` matters: filling first puts the label into a spacer row,
+  which then survives as a record with no amount. Never inferred; for an
+  all-empty *column*, the sniffer's note says to leave it out of `columns`.
 - **`columns` is a projection.** There is no drop or rename op; `source` →
   `name` is the only renaming, and unlisted columns do not appear.
 

@@ -1066,3 +1066,35 @@ fn a_window_on_blank_lines_inside_the_file_is_empty_on_both_executors() {
         );
     }
 }
+
+/// `remove_empty` is a row-local op in spec order on both executors, and
+/// its order against `fill_down` means something: filling first puts the
+/// label into the spacer row, which then has a value and survives as a
+/// record with no amount; removing first drops the spacer before the carry
+/// could reach it.
+#[test]
+fn remove_empty_streams_and_its_order_against_fill_down_is_kept() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "spacers.csv", "grp,val\nOst,1\n,\n,2\n,,\nWest,3\n , \n");
+
+    let head = Transform::PromoteHeader { rows: 1, join: " ".into() };
+    let fill = Transform::FillDown { columns: vec!["grp".into()], direction: Default::default() };
+    let cols = || vec![col("grp", DType::Utf8), col("val", DType::Int64)];
+
+    let alone = spec(vec![head.clone(), Transform::RemoveEmpty {}], cols());
+    assert_paths_agree(&alone, &p, "remove_empty alone");
+    let text = render(&stream::execute_batches(&alone, &p, Limits::default()).unwrap());
+    assert_eq!(text.lines().count(), 4 + 3, "three records survive:\n{text}");
+
+    let fill_first = spec(vec![head.clone(), fill.clone(), Transform::RemoveEmpty {}], cols());
+    let remove_first = spec(vec![head, Transform::RemoveEmpty {}, fill], cols());
+    assert_paths_agree(&fill_first, &p, "fill then remove_empty");
+    assert_paths_agree(&remove_first, &p, "remove_empty then fill");
+
+    let a = render(&stream::execute_batches(&fill_first, &p, Limits::default()).unwrap());
+    let b = render(&stream::execute_batches(&remove_first, &p, Limits::default()).unwrap());
+    assert_eq!(a.matches("Ost").count(), 4, "fill-then-remove keeps the filled spacers:\n{a}");
+    assert_eq!(a.matches("West").count(), 2, "{a}");
+    assert_eq!(b.matches("Ost").count(), 2, "remove-then-fill drops them first:\n{b}");
+    assert_eq!(b.matches("West").count(), 1, "{b}");
+}

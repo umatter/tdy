@@ -2231,3 +2231,29 @@ async fn the_serial_date_notes_query_runs_and_agrees() {
     let d = a.as_any().downcast_ref::<datafusion::arrow::array::Date32Array>().unwrap();
     assert_eq!(d.value_as_date(0).unwrap().to_string(), "2023-03-15");
 }
+
+/// A column empty in every sampled row is said out loud, by position and by
+/// name, with the projection that drops it — and still emitted, so nothing a
+/// person relied on moves.
+#[test]
+fn an_all_empty_column_is_noted_and_still_emitted() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "e.csv", "a,b,c,d,e,f,g\n1,2,3,4,5,6,\n7,8,9,10,11,12,\n");
+    let r = sniffed(&p);
+    assert!(r.spec.columns.iter().any(|c| c.name == "g"), "the column is still emitted");
+    assert!(
+        r.spec.notes.iter().any(|n| n
+            == "column 7 (`g`) is empty in every sampled row; omit it from `columns` to drop it"),
+        "{:?}",
+        r.spec.notes
+    );
+    // A header with a blank seventh name is how `col_7` happens.
+    let p = write(&dir, "f.csv", "a,b,c,d,e,f,\n1,2,3,4,5,6,\n7,8,9,10,11,12,\n");
+    let r = sniffed(&p);
+    assert!(
+        r.spec.notes.iter().any(|n| n
+            == "column 7 (`col_7`) is empty in every sampled row; omit it from `columns` to drop it"),
+        "{:?}",
+        r.spec.notes
+    );
+}

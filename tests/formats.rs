@@ -1338,3 +1338,63 @@ fn a_fractional_epoch_is_an_error_not_a_rounding() {
     let e = format!("{:#}", spec_to_batch(&s, &p).expect_err("not a whole number"));
     assert!(e.contains("whole number"), "{e}");
 }
+
+// ---------------------------------------------------------------------------
+// remove_empty
+// ---------------------------------------------------------------------------
+
+/// `remove_empty` drops a row whose every cell is empty after trimming — the
+/// `;;;` spacer an export writes between groups — and nothing else: a row
+/// with one value left in it is a record, however sparse.
+#[test]
+fn remove_empty_drops_all_empty_rows_and_only_those() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "e.csv", "a;b;c\n1;x;2\n;;\n ; ;\n;y;\n3;z;4\n");
+    let s = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }, Transform::RemoveEmpty {}],
+        vec![col("a", DType::Int64), col("b", DType::Utf8)],
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(ints(&b, 0), vec![Some(1), None, Some(3)]);
+    assert_eq!(strings(&b, 1), vec!["x", "y", "z"]);
+
+    // Without it the spacers are records of nulls, which `count(*)` counts.
+    let without = spec(
+        delim(';', RaggedPolicy::PadNulls),
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![col("a", DType::Int64)],
+    );
+    assert_eq!(spec_to_batch(&without, &p).unwrap().num_rows(), 5);
+}
+
+/// The TOML spelling is `op = "remove_empty"`, with no options.
+#[test]
+fn remove_empty_is_spelled_as_an_op_with_no_options() {
+    let t: Transform = toml::from_str("op = \"remove_empty\"").unwrap();
+    assert!(matches!(t, Transform::RemoveEmpty {}));
+    assert!(toml::from_str::<Transform>("op = \"remove_empty\"\ncolumns = [\"a\"]").is_err());
+}
+
+/// Before a framing transform it would change what that transform counts —
+/// a `skip_rows` head of 3 would skip three *non-empty* rows — so `validate`
+/// refuses it there and says where it belongs.
+#[test]
+fn remove_empty_before_framing_is_refused_with_where_to_put_it() {
+    for framing in [
+        Transform::PromoteHeader { rows: 1, join: " ".into() },
+        Transform::SkipRows { head: 1, tail: 0 },
+        Transform::Transpose,
+    ] {
+        let s = spec(
+            delim(';', RaggedPolicy::PadNulls),
+            vec![Transform::RemoveEmpty {}, framing],
+            vec![col("a", DType::Utf8)],
+        );
+        let errs = s.validate().unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.contains("remove_empty") && e.contains("after")),
+            "{errs:?}"
+        );
+    }
+}

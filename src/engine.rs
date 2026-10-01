@@ -1203,6 +1203,7 @@ pub fn apply_transforms(table: &mut RawTable, transforms: &[Transform]) -> Resul
                     }
                 }
             }
+            Transform::RemoveEmpty {} => table.rows.retain(|r| !is_blank_row(r)),
             Transform::Transpose => {
                 // A partial read has not seen every row, and every row it has
                 // not seen is a *column* of the result — not a few missing

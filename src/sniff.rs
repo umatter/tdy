@@ -1779,6 +1779,17 @@ fn guess_columns(
             if let Some(n) = shape_note {
                 doubts.note(n);
             }
+            // A spacer column — usually `col_7`, from a trailing delimiter or
+            // a blank sheet column inside the used range. Still emitted, so a
+            // spec nobody edited reads exactly as before; the note says how
+            // to drop it, since `columns` is the only projection.
+            if !body.is_empty() && values.iter().all(|v| v.trim().is_empty()) {
+                doubts.note(format!(
+                    "column {} (`{name}`) is empty in every sampled row; omit it from \
+                     `columns` to drop it",
+                    i + 1
+                ));
+            }
             ColumnSpec {
                 // `source` is the post-transform header name, verbatim: this
                 // is the guarantee that it resolves.

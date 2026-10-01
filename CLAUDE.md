@@ -804,7 +804,8 @@ Things that only become clear from reading several modules:
   except `fill_down`, which leaves a sheet's all-blank row blank (the carry runs on past it)
   so the drop point still removes it, rather than filling it into a label-only record.
 - **Deliberate omissions:** no drop/rename transforms (the `columns` list is the only
-  projection), no locale tables (literal `replace` pairs in the sidecar), no named timezones
+  projection — `remove_empty` drops *rows* whose every cell is empty and nothing else; an
+  all-empty column gets a sniffer note telling you to leave it out of `columns`), no locale tables (literal `replace` pairs in the sidecar), no named timezones
   (fixed offsets only — DST cannot be guessed from a value).
 - **`infer.rs`** puts the JSON Schema in the *prompt*, not only in
   `response_format`. Verified against OpenRouter: OpenAI's strict mode rejects a
@@ -838,7 +839,7 @@ Things that only become clear from reading several modules:
   is one document with no records until it is parsed whole. NDJSON's header is the union of
   every record's keys, so `discover_ndjson` makes a real pass rather than guessing from a
   prefix: a key appearing only in the last record still has to become a column. It accepts only
-  `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down)* [unpivot]?`;
+  `[skip_rows]? [promote_header]? (drop_rows_matching | fill_down | remove_empty)* [unpivot]?`;
   `can_stream` returns false for anything else and the caller falls back, so an unusual spec
   is never *refused*, only executed the old way. `TDY_NO_STREAM=1` forces `engine` — that is
   `stream::enabled()`, kept separate from `can_stream()` so turning streaming off cannot make

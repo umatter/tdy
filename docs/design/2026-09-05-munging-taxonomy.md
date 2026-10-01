@@ -532,12 +532,16 @@ gate exists for.
 `awk 'NF'`, `mlr remove-empty-columns` (Miller — the one tool surveyed with a
 verb dedicated to exactly this).
 
-**`partial`** — leading/trailing blanks are absorbed by framing; interior blank
-*rows* are skipped (a text reader skips blank lines; a sheet's are skipped where
-its framing ends, since 2026-10-01), but an all-blank *column* becomes a real
-column of nulls (usually named `col_7`). A `remove_empty` operator would be a small,
-uncontroversial addition; today the cure is projection (omit the column) and a
-`WHERE` clause.
+**`spec`** since 2026-10-01 — leading/trailing blanks are absorbed by framing;
+interior blank *rows* are skipped (a text reader skips blank lines; a sheet's are
+skipped where its framing ends), and a delimited row that carries only its
+delimiters (`;;;`) is dropped by `op = "remove_empty"`, a row-local transform on
+both executors that must sit after the framing transforms and is never inferred.
+It drops rows only — `columns` stays the only projection — so an all-blank
+*column* (usually `col_7`) is still emitted, and the sniffer now notes it:
+*column 7 (`col_7`) is empty in every sampled row; omit it from `columns` to drop
+it*. Omitting it is the cure, and it was always declarable; the verdict was
+`partial` for the rows.
 
 ### C8 · Transposition
 **Also called:** `t()` (R), `.T` / `transpose()` (pandas), `Table.Transpose`
@@ -2135,8 +2139,9 @@ would mean producing a value the file does not contain.
     a silent conversion.
 12. **B7 · Multi-character delimiters** — *moved up from "trivial, rare":* 2.7%
     of real CSVs use comma-plus-whitespace, the third most common dialect.
-13. **E17 · Duration type**, **F3 · ordered categoricals**, **C7 · blank-column
-    removal**, **A5 · Unicode normalisation** — all real, all minor.
+13. **E17 · Duration type**, **F3 · ordered categoricals**, ~~**C7 · blank-column
+    removal**~~ (done: `remove_empty` for rows, a sniffer note for columns),
+    **A5 · Unicode normalisation** — all real, all minor.
 
 **Worth deciding explicitly rather than leaving implicit:**
 
