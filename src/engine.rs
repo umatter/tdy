@@ -2322,24 +2322,40 @@ fn nonempty_fields(line: &[u8]) -> [usize; 4] {
     let mut filled = [false; 4];
     let mut quoted = false;
     for &b in line {
-        if b == b'"' {
-            quoted = !quoted;
+        let at = match b {
+            b'"' => {
+                quoted = !quoted;
+                continue;
+            }
+            b',' => 0,
+            b';' => 1,
+            b'\t' => 2,
+            b'|' => 3,
+            _ => {
+                if !b.is_ascii_whitespace() {
+                    filled = [true; 4];
+                }
+                continue;
+            }
+        };
+        if quoted {
+            // A delimiter inside quotes is content for every candidate,
+            // except a tab, which is whitespace.
+            if b != b'\t' {
+                filled = [true; 4];
+            }
             continue;
         }
-        let mut boundary = false;
-        for (i, d) in BLOCK_DELIMITERS.iter().enumerate() {
-            if !quoted && b == *d as u8 {
-                if filled[i] {
-                    counts[i] += 1;
-                }
-                filled[i] = false;
-                boundary = true;
-            }
+        if filled[at] {
+            counts[at] += 1;
         }
-        if !b.is_ascii_whitespace() {
-            for (i, d) in BLOCK_DELIMITERS.iter().enumerate() {
-                if !(boundary && b == *d as u8) {
-                    filled[i] = true;
+        filled[at] = false;
+        // Any other candidate's delimiter is content for this one (a tab
+        // is whitespace, so it fills nothing).
+        if b != b'\t' {
+            for (i, f) in filled.iter_mut().enumerate() {
+                if i != at {
+                    *f = true;
                 }
             }
         }
@@ -2706,5 +2722,23 @@ mod shift_tests {
     fn a_shift_past_the_leading_digit_keeps_a_zero() {
         assert_eq!(sh("5", -1), "0.5");
         assert_eq!(sh("5", -3), "0.005");
+    }
+}
+
+#[cfg(test)]
+mod field_count_tests {
+    use super::nonempty_fields as nf;
+
+    /// Order: `,` `;` tab `|`. Empty fields do not count, a delimiter in
+    /// quotes is content, and another candidate's delimiter is content too.
+    #[test]
+    fn nonempty_fields_counts_every_candidate_in_one_pass() {
+        assert_eq!(nf(b"State;2008;2009;2010"), [1, 4, 1, 1]);
+        assert_eq!(nf(b"Total;;1500"), [1, 2, 1, 1]);
+        assert_eq!(nf(b"Barrels, all premises"), [2, 1, 1, 1]);
+        assert_eq!(nf(b"\"a;b\";c"), [1, 2, 1, 1]);
+        assert_eq!(nf(b"a\tb\t\tc"), [1, 1, 3, 1]);
+        assert_eq!(nf(b"   "), [0, 0, 0, 0]);
+        assert_eq!(nf(b";;;"), [1, 0, 1, 1]);
     }
 }

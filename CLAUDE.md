@@ -490,7 +490,11 @@ tries each against the target with the cheap gates, in the frame `fit_region` wi
 only the blocks that pass are members — got wrong first, when every run of three rows became
 one, so a title banner was a member that fit nothing and the workbook sweep refused 15 of 16
 workbooks; a failing block now joins the dropped runs (survivors renumbered), and none passing is the file read whole with no
-region notes. A one-row run as wide as the block directly below it, blank lines between, is
+region notes. A block whose own frame promoted no header is not a candidate
+either (`fit::promotes_header`): a blank row proves a boundary, a header is what
+tells one block from the next, and a headerless banner or two-cell footnote block
+passed a positional `col_N` target's gates by position alone and stood in for the
+sheet — the corpus's ttb workbook, which is now read whole as before regions. A one-row run as wide as the block directly below it, blank lines between, is
 that block's header cut off by a blank row and is adopted into its window
 (`engine::adopt_severed_headers`; both executors skip the blank row inside it) — dropped, the
 block bound its columns as `col_N`. It streams the text
@@ -501,8 +505,11 @@ under `/usr/bin/time`, since a peak-RSS claim is not a `cargo test` assertion).
 `draft_target` pays this same streamed pass once per text file, on top of the
 sniff's own whole-file type verification: measured on a debug build over a
 50 MB single-block CSV, `tdy draft` wall time moved from ~37.6 s with the
-regions pass skipped to ~39.2 s with it in, a ~4% cost — well under the ~25%
-that would have called for optimising it, so it is left as is.
+regions pass skipped to ~39.2 s with it in, a ~4% cost. Counting every line's
+non-empty fields for `table_shaped` (2026-10-01) took it to ~49.0 s against
+~37.3 s (+31%, three runs each); one `match` per byte in `nonempty_fields`
+brought it to ~44.1 s against ~37.7 s, ~17% — under the ~25% that would call
+for more, so it is left there.
 
 The review line: several blocks means `report::expand_units` gives each its
 own member, each carrying `report::region_review_reason`'s text — "table `i`
