@@ -29,25 +29,17 @@ use crate::target::Target;
 /// of a sheet, whose window counts rows of the used range — and the sheet
 /// they are counted in when the member's name does not carry it. `None`
 /// for a member the split did not make.
-fn unit_rows(path: &Path, u: &Unit, limits: crate::config::Limits) -> (Option<(u64, u64)>, Option<String>) {
+fn unit_rows(u: &Unit) -> (Option<(u64, u64)>, Option<String>) {
     let Some(w) = u.window else { return (None, None) };
-    match &u.region_sheet {
-        None => (Some((w.start + 1, w.end)), None),
-        Some(s) => {
-            let r0 = crate::engine::open_workbook(path, &limits)
-                .ok()
-                .and_then(|mut wb| crate::engine::checked_worksheet_range(&mut wb, s, &limits).ok())
-                .map(|r| r.start().map_or(0, |(row, _)| u64::from(row)));
-            match r0 {
-                Some(r0) => (
-                    Some((r0 + w.start + 1, r0 + w.end)),
-                    if u.member.sheet.is_none() { Some(s.clone()) } else { None },
-                ),
-                // Unreadable now: say no rows rather than rows of the wrong
-                // origin.
-                None => (None, None),
-            }
-        }
+    match (&u.region_sheet, u.used_start_row) {
+        (None, _) => (Some((w.start + 1, w.end)), None),
+        (Some(s), Some(r0)) => (
+            Some((r0 + w.start + 1, r0 + w.end)),
+            if u.member.sheet.is_none() { Some(s.clone()) } else { None },
+        ),
+        // A sheet block whose used range the split did not report: no rows
+        // rather than rows of the wrong origin.
+        (Some(_), None) => (None, None),
     }
 }
 
@@ -367,6 +359,9 @@ pub struct Unit {
     /// several that fits. `fit_region` and the reused-sidecar check read
     /// the same sheet the split did.
     pub region_sheet: Option<String>,
+    /// The 0-based sheet row `region_sheet`'s used range starts at, from
+    /// the split itself: what turns a window into the sheet's own A1 rows.
+    pub used_start_row: Option<u64>,
 }
 
 impl Unit {
@@ -452,7 +447,7 @@ pub fn expand_units(
             None => crate::fit::region_read_hint(&p, member.sheet.as_deref(), limits),
         };
         let region_sheet = hint.clone().flatten();
-        let crate::fit::GatedRegions { regions, headed_unfit, header_like_data, adopted_over_data } = match hint {
+        let crate::fit::GatedRegions { regions, headed_unfit, header_like_data, adopted_over_data, used_start_row } = match hint {
             // The split proposes blocks; only those that pass the gates
             // against the target are members (the design's table is keyed
             // on exactly that). The rest are runs nothing reads.
@@ -517,6 +512,7 @@ pub fn expand_units(
                 dropped: Vec::new(),
                 shaped: Vec::new(),
                 region_sheet: region_sheet.clone(),
+                used_start_row,
             }),
             1 => {
                 let w = regions.windows[0];
@@ -535,6 +531,7 @@ pub fn expand_units(
                     dropped: regions.dropped.clone(),
                     shaped: shaped.clone(),
                     region_sheet: region_sheet.clone(),
+                    used_start_row,
                 });
             }
             _ => {
@@ -563,6 +560,7 @@ pub fn expand_units(
                         dropped: regions.dropped.clone(),
                         shaped: shaped.clone(),
                         region_sheet: region_sheet.clone(),
+                        used_start_row,
                     });
                 }
             }
@@ -920,7 +918,7 @@ pub async fn fit_pile(
         let region = unit.region;
         let name = unit.name();
         let p = dir.join(rel);
-        let (rows, rows_sheet) = unit_rows(&p, u, limits);
+        let (rows, rows_sheet) = unit_rows(u);
         crate::progress::emit(
             opts.progress.as_ref(),
             crate::progress::Event::MemberStarted {
@@ -1023,7 +1021,7 @@ pub async fn fit_pile(
                         region,
                         window: spec_window(&spec),
                         rows,
-                    rows_sheet: rows_sheet.clone(),
+                        rows_sheet: rows_sheet.clone(),
                         status: MemberStatus::Contradicts,
                         via: Some(via.into()),
                         sources: Vec::new(),
@@ -1058,7 +1056,7 @@ pub async fn fit_pile(
                         region,
                         window: spec_window(&spec),
                         rows,
-                    rows_sheet: rows_sheet.clone(),
+                        rows_sheet: rows_sheet.clone(),
                         status: MemberStatus::Contradicts,
                         via: Some(via.into()),
                         sources: Vec::new(),
@@ -1091,7 +1089,7 @@ pub async fn fit_pile(
                         region,
                         window: spec_window(&spec),
                         rows,
-                    rows_sheet: rows_sheet.clone(),
+                        rows_sheet: rows_sheet.clone(),
                         status: MemberStatus::Error,
                         via: Some(via.into()),
                         sources: Vec::new(),

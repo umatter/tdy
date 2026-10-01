@@ -927,7 +927,7 @@ fn gate_regions(
             ok
         })
         .collect();
-    GatedRegions { regions: framed.gated(&passed), headed_unfit, header_like_data, adopted_over_data }
+    GatedRegions { regions: framed.gated(&passed), headed_unfit, header_like_data, adopted_over_data, used_start_row: None }
 }
 
 /// Whether a block's promoted header is plausible as a header: none of its
@@ -968,6 +968,10 @@ pub struct GatedRegions {
     /// gating leaves unchanged) and the review reason saying that row is
     /// read as data.
     pub adopted_over_data: Vec<(u64, String)>,
+    /// For a sheet: the 0-based sheet row its used range starts at, which
+    /// every window above counts from — so a caller can say a block's rows
+    /// as the sheet's own A1 rows without reopening the workbook.
+    pub used_start_row: Option<u64>,
 }
 
 /// [`gate_regions`] over a sheet already open.
@@ -982,7 +986,10 @@ fn gate_sheet(path: &Path, open: &sniff::OpenSheet, target: &Target, limits: Lim
 pub fn gated_regions(path: &Path, sheet: Option<&str>, target: &Target, limits: Limits) -> GatedRegions {
     match sheet {
         Some(s) => sniff::OpenSheet::open(path, s, limits)
-            .map(|open| gate_sheet(path, &open, target, limits))
+            .map(|open| GatedRegions {
+                used_start_row: Some(open.range.start().map_or(0, |(row, _)| u64::from(row))),
+                ..gate_sheet(path, &open, target, limits)
+            })
             .unwrap_or_default(),
         None => engine::regions_of(path, None, limits)
             .map(|r| gate_regions(path, None, &r, target, limits))
