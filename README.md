@@ -734,7 +734,8 @@ one-field title banner over a three-field table is not one of those, and
 still asks nothing.
 
 A member is named by its path relative to the target — `exports/2025-07.csv`,
-not `2025-07.csv` — and that is the name `--accept` takes.
+not `2025-07.csv` — and that is the name `--accept` takes; an absolute path to
+the same file names it too.
 
 Membership lives in the lock, and `dataset()` never expands a glob. That is
 the difference between a reproducible dataset and a directory listing: if the

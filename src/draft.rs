@@ -63,7 +63,19 @@ fn noisy_scale(d: &DType) -> Option<i8> {
     }
 }
 
+/// [`draft_target_in`] for a target written in the current directory —
+/// the CLI's stdout and the console's `--to` alike.
 pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
+    let cwd = std::env::current_dir().ok();
+    draft_target_in(files, cwd.as_deref(), limits)
+}
+
+/// The draft, its `files` globs relative to `base`, the directory the
+/// target is to be written in. A relative path is taken to be relative to
+/// it already; an absolute one is rewritten relative to it, because a lock
+/// names its members relative to the target and an absolute glob made them
+/// absolute paths `--accept` could not name.
+pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -> Result<String> {
     if files.is_empty() {
         anyhow::bail!("nothing to draft from: pass the files the dataset should cover");
     }
@@ -225,7 +237,7 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
     let files_seen = files_ok.len();
 
     let name = table_name(files);
-    let globs = file_globs(files);
+    let globs = file_globs(files, base);
 
     let mut out = String::new();
     out.push_str(&format!(
@@ -525,11 +537,18 @@ fn sql_type(d: &DType) -> String {
     }
 }
 
-/// `exports/*.csv, exports/*.xlsx` from the actual paths, deduplicated.
-fn file_globs(files: &[PathBuf]) -> Vec<String> {
+/// `exports/*.csv, exports/*.xlsx` from the actual paths, deduplicated,
+/// with an absolute directory made relative to `base`.
+fn file_globs(files: &[PathBuf], base: Option<&Path>) -> Vec<String> {
     let mut globs: BTreeSet<String> = BTreeSet::new();
     for f in files {
-        let dir = f.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        let dir = match f.parent() {
+            Some(p) if p.is_absolute() => {
+                base.and_then(|b| relative_dir(p, b)).unwrap_or_else(|| p.to_string_lossy().to_string())
+            }
+            Some(p) => p.to_string_lossy().to_string(),
+            None => String::new(),
+        };
         let ext = f
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -541,6 +560,22 @@ fn file_globs(files: &[PathBuf]) -> Vec<String> {
         }
     }
     globs.into_iter().collect()
+}
+
+/// `dir` relative to `base`, both canonicalised, climbing with `..` where
+/// it must — `None` when they share nothing below the filesystem root,
+/// where an absolute path says more than a ladder of `..` would.
+fn relative_dir(dir: &Path, base: &Path) -> Option<String> {
+    let (dir, base) = (dir.canonicalize().ok()?, base.canonicalize().ok()?);
+    let d: Vec<_> = dir.components().collect();
+    let b: Vec<_> = base.components().collect();
+    let common = d.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    if common <= 1 {
+        return None;
+    }
+    let mut parts: Vec<String> = vec!["..".to_string(); b.len() - common];
+    parts.extend(d[common..].iter().map(|c| c.as_os_str().to_string_lossy().to_string()));
+    Some(parts.join("/"))
 }
 
 fn table_name(files: &[PathBuf]) -> String {

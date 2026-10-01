@@ -827,13 +827,15 @@ pub async fn fit_pile(
     // identified by its path *relative to the target* (plus an optional
     // sheet), so that is what --accept must name. Matching on the basename
     // accepted the wrong file when two directories held the same name, and
-    // could never accept a member in a subdirectory at all.
+    // could never accept a member in a subdirectory at all. An absolute
+    // argument is made relative to the target exactly as the lock's member
+    // paths are (`member::relative_to_target`, `lockfile::resolve`), so
+    // both sides are named one way.
     let accepted_now: Vec<MemberRef> = opts
         .accept
         .iter()
         .map(|a| {
-            let a = a.strip_prefix(&dir).unwrap_or(a);
-            let text = a.to_string_lossy().replace('\\', "/");
+            let text = crate::member::relative_to_target(&a.to_string_lossy(), &dir);
             match MemberRef::resolve(&text, |m| units.iter().any(|u| &u.member == m)) {
                 Ok(Some(m)) => Ok(m),
                 Ok(None) => Err(anyhow::anyhow!(

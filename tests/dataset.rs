@@ -1374,3 +1374,68 @@ fn a_pile_of_two_is_not_judged_for_magnitude() {
     assert!(out.status.success(), "{text}");
     assert!(!text.contains("REVIEW"), "{text}");
 }
+
+/// The two-line title over a table, which asks a person: a dropped run.
+const TITLED: &str = "Meier;Bern\n\nName;City\nMuster;Zürich\nHuber;Genf\nKeller;Basel\n";
+
+/// A member is named relative to its target however the target, its glob
+/// and the `--accept` argument are spelled. `tdy draft /abs/report.csv`
+/// wrote an absolute glob, the lock then named the member by its absolute
+/// path, and `--accept` stripped its argument to a file name — so neither
+/// `report.csv` nor the absolute path could name the one member there was.
+#[test]
+fn accept_names_a_member_when_the_target_and_its_glob_are_absolute() {
+    let root = TempDir::new().unwrap();
+    let acc = root.path().join("acc");
+    std::fs::create_dir(&acc).unwrap();
+    std::fs::write(acc.join("report.csv"), TITLED).unwrap();
+    let file = acc.join("report.csv");
+    let run = |cwd: &Path, args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_tdy"))
+            .args(args)
+            .current_dir(cwd)
+            .env("TDY_BACKEND", "none")
+            .output()
+            .expect("run tdy")
+    };
+
+    // The draft's glob is relative to where it is run — the directory the
+    // target is written in — whether its argument was spelled absolute or not.
+    let out = run(&acc, &["draft", file.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let ddl = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(ddl.contains("files = '*.csv'"), "{ddl}");
+    let out = run(root.path(), &["draft", file.to_str().unwrap()]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("files = 'acc/*.csv'"), "{}", String::from_utf8_lossy(&out.stdout));
+
+    let t = acc.join("d.tdy.sql");
+    std::fs::write(&t, &ddl).unwrap();
+    let ts = t.to_str().unwrap();
+    let out = run(root.path(), &["fit", ts]);
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let lock = tdy::lockfile::Lock::load(&t).unwrap().unwrap();
+    assert_eq!(lock.members.iter().map(|m| m.path.as_str()).collect::<Vec<_>>(), ["report.csv"]);
+    assert!(lock.members[0].review.is_some() && !lock.members[0].accepted);
+    let out = run(root.path(), &["fit", ts, "--accept", "report.csv"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(tdy::lockfile::Lock::load(&t).unwrap().unwrap().members[0].accepted);
+
+    // A hand-written absolute glob names its members relative to the target
+    // too, and an absolute `--accept` meets them.
+    let h = acc.join("h.tdy.sql");
+    std::fs::write(&h, ddl.replace("files = '*.csv'", &format!("files = '{}/*.csv'", acc.display()))).unwrap();
+    let hs = h.to_str().unwrap();
+    let out = run(root.path(), &["fit", hs]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = tdy::lockfile::Lock::load(&h).unwrap().unwrap();
+    assert_eq!(lock.members.iter().map(|m| m.path.as_str()).collect::<Vec<_>>(), ["report.csv"]);
+    let out = run(root.path(), &["fit", hs, "--accept", file.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(tdy::lockfile::Lock::load(&h).unwrap().unwrap().members[0].accepted);
+    // And a relative target with an absolute argument, from the data's own directory.
+    std::fs::remove_file(acc.join("h.tdy.lock")).unwrap();
+    assert!(run(&acc, &["fit", "h.tdy.sql"]).status.success());
+    let out = run(&acc, &["fit", "h.tdy.sql", "--accept", file.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(tdy::lockfile::Lock::load(&h).unwrap().unwrap().members[0].accepted);
+}

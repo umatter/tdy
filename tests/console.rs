@@ -1101,3 +1101,33 @@ async fn accept_resolves_a_region_member_reference() {
     let o = s.run(".accept q.tdy.sql report.csv#2", None).await;
     assert!(o.ok && o.text.contains("accepted report.csv#2"), "{}", o.text);
 }
+
+/// `.accept`'s twin of `tests/dataset.rs::accept_names_a_member_when_the_target_and_its_glob_are_absolute`:
+/// a target whose `files` glob is absolute (as `tdy draft /abs/report.csv`
+/// used to write it) still names its member `report.csv`, and an absolute
+/// target with an absolute member reference meets it.
+#[tokio::test]
+async fn accept_names_a_member_by_absolute_path_under_an_absolute_glob() {
+    let d = tempfile::TempDir::new().unwrap();
+    let acc = d.path().join("acc");
+    std::fs::create_dir(&acc).unwrap();
+    let file = acc.join("report.csv");
+    std::fs::write(&file, "Meier;Bern\n\nName;City\nMuster;Zürich\nHuber;Genf\nKeller;Basel\n").unwrap();
+    let ddl = tdy::draft::draft_target_in(std::slice::from_ref(&file), None, no_llm().limits).unwrap();
+    assert!(ddl.contains(&format!("files = '{}/*.csv'", acc.display())), "{ddl}");
+    let t = acc.join("d.tdy.sql");
+    std::fs::write(&t, &ddl).unwrap();
+
+    let mut s = session(d.path()).await;
+    let o = s.run(&format!(".fit {}", t.display()), None).await;
+    let Payload::Fitted(r) = &o.payload else { panic!("{}", o.text) };
+    assert_eq!(r.members.iter().map(|m| m.path.as_str()).collect::<Vec<_>>(), ["report.csv"]);
+    assert!(r.members[0].review.is_some() && !r.members[0].accepted);
+
+    let line = format!(".accept {} {}", t.display(), file.display());
+    let o = s.run(&line, None).await;
+    assert!(matches!(o.payload, Payload::Evidence { .. }), "{}", o.text);
+    let o = s.run(&line, None).await;
+    let Payload::Fitted(r) = &o.payload else { panic!("{}", o.text) };
+    assert!(r.members[0].accepted, "{}", o.text);
+}

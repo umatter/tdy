@@ -267,7 +267,8 @@ impl McpServer {
                 self.scoped(f.as_str().ok_or_else(|| anyhow!("`files` entries must be strings"))?)
             })
             .collect::<Result<Vec<_>>>()?;
-        let sql = crate::draft::draft_target(&files, self.cfg.limits)?;
+        // Relative to the served root, where the agent names every path.
+        let sql = crate::draft::draft_target_in(&files, Some(&self.root), self.cfg.limits)?;
         Ok(json!({"sql": sql}))
     }
 

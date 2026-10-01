@@ -119,6 +119,13 @@ are the whole point:
 fit**. A partial lock would make "a dataset silently missing a month" the default outcome of a
 bad afternoon.
 
+A member is named relative to the target however its glob is spelled: `lockfile::member_dir`
+rewrites an absolute or `./` glob directory that lies inside the target's directory (a plain
+`exports/` keeps its spelling), and `--accept`/`.accept` name the argument the same way
+(`member::relative_to_target`) before resolving it. An absolute glob used to make the lock's
+members absolute paths, and `--accept` could then name them by neither spelling. `tdy draft`
+writes an absolute path's glob relative to the current directory (the MCP server's: its root).
+
 The union is one partition read in lock order: conformance already proved every member has an
 identical schema, so it is a concatenation with nothing to coerce (an ordinary `UNION ALL`
 would let DataFusion widen Int64+Utf8 to Utf8 in silence), and a single partition keeps row
