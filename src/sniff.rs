@@ -975,7 +975,7 @@ fn block_bytes(path: &Path, window: crate::spec::RowWindow, limits: Limits) -> R
 ///
 /// One workbook open for all sheets: calamine re-parses the whole archive on
 /// every open, so asking sheet by sheet costs a full parse per sheet.
-fn pick_sheet(path: &Path, sample: &FileSample, limits: Limits) -> Option<String> {
+pub(crate) fn pick_sheet(path: &Path, sample: &FileSample, limits: Limits) -> Option<String> {
     let shapes = engine::excel_sheet_shapes(path, limits).ok()?;
     // A cover page is prose and a legend is a two-column glossary; the data
     // sheet is the one with quantities in it. Rank by "has numbers at all"

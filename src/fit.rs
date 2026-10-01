@@ -642,7 +642,7 @@ fn verify_opts(target: &Target) -> sniff::SniffOpts {
 /// the first cut — let a banner above the table choose the separator (a
 /// comma in a title) and count itself into a `skip_rows` that, inside the
 /// block, skipped the header and the data.
-fn region_frame(
+pub(crate) fn region_frame(
     path: &Path,
     sheet: Option<&sniff::OpenSheet>,
     window: crate::spec::RowWindow,
@@ -684,6 +684,24 @@ pub(crate) struct FramedBlocks {
     pub regions: engine::Regions,
     pub frames: Vec<Option<ParseSpec>>,
     pub over_data: Vec<Option<String>>,
+    /// Whether each window adopted a header run above it.
+    pub adopted: Vec<bool>,
+}
+
+impl FramedBlocks {
+    /// Whether block `i` is a table a draft may declare columns from: its
+    /// frame promoted a header, as a `fit` candidate's must, and that header
+    /// is either adopted from the run above or plausible on its own. A
+    /// promoted header that reads like data (`Alabama | 88165 | …`) over a
+    /// block that adopted nothing is a data row; drafting its cells declared
+    /// columns no file has. `fit` needs no such test — its gates refuse that
+    /// block against any target that names the real columns — but a draft
+    /// has no target to gate with.
+    pub(crate) fn is_table(&self, i: usize) -> bool {
+        self.frames[i]
+            .as_ref()
+            .is_some_and(|f| promotes_header(f) && (self.adopted[i] || header_is_plausible(f)))
+    }
 }
 
 /// Frame every block of `regions`, adopting the header run above a block
@@ -720,6 +738,7 @@ pub(crate) fn frame_blocks(
     let mut r = regions.clone();
     let mut frames: Vec<Option<ParseSpec>> = Vec::with_capacity(r.windows.len());
     let mut over_data: Vec<Option<String>> = Vec::with_capacity(r.windows.len());
+    let mut took: Vec<bool> = Vec::with_capacity(r.windows.len());
     let mut i = 0;
     while i < r.windows.len() {
         let own = region_frame(path, sheet, r.windows[i], opts, limits).ok();
@@ -743,8 +762,10 @@ pub(crate) fn frame_blocks(
                     let j = r.adopt(i, h);
                     frames.truncate(j);
                     over_data.truncate(j);
+                    took.truncate(j);
                     frames.push(Some(f));
                     over_data.push(note);
+                    took.push(true);
                     i = j + 1;
                     continue;
                 }
@@ -752,9 +773,10 @@ pub(crate) fn frame_blocks(
         }
         frames.push(own);
         over_data.push(None);
+        took.push(false);
         i += 1;
     }
-    FramedBlocks { regions: r, frames, over_data }
+    FramedBlocks { regions: r, frames, over_data, adopted: took }
 }
 
 /// Where a frame's header ends, in rows of the table it reads: the rows a
@@ -818,7 +840,7 @@ fn gate_regions(
             // filling each with NULL, a member of rows of nothing.
             .is_some_and(|f| f.spec.columns.iter().any(|c| c.source.is_some()))
     };
-    let FramedBlocks { regions: framed, frames, over_data } =
+    let FramedBlocks { regions: framed, frames, over_data, .. } =
         frame_blocks(path, sheet, regions, verify_opts(target), limits, &|f| gates(f.clone()));
     let mut headed_unfit = Vec::new();
     let mut header_like_data = Vec::new();

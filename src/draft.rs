@@ -101,24 +101,46 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
 
     for f in files {
         let label = short(f);
-        // Excel is out of scope here: `regions_of(_, None, _)` is the
-        // text-file path (it streams raw lines looking for blank-row
-        // boundaries), and an .xlsx/.xls/.xlsb/.ods is binary — reading it
-        // that way answers a question about the wrong bytes, not "no
-        // regions". Splitting a *sheet* is `report.rs::expand_units`'s job,
-        // which has a sheet name to ask `regions_of` with; a draft never
-        // does.
-        let regions = if crate::sample::guess_format(f) == FormatGuess::Excel {
-            Default::default()
-        } else {
-            let found = crate::engine::regions_of(f, None, limits).unwrap_or_default();
-            // A block with no plausible header of its own takes the header
-            // run a blank row cut off above it, exactly as `fit` frames it. The options are
-            // the ones draft sniffs with; adoption cannot differ from fit's,
-            // since `verify` only widens column types and adoption asks
-            // whether the frame promoted a header.
-            crate::fit::frame_blocks(f, None, &found, crate::sniff::SniffOpts::default(), limits, &|_| true)
-                .regions
+        // A workbook is split on the sheet the whole-file sniff reads (the
+        // one `sniff::pick_sheet` ranks first), with the same split and
+        // block framing `fit` uses for it; a text file on its raw lines.
+        // `regions_of(_, None, _)` over a workbook's bytes would answer a
+        // question about the wrong bytes, not "no regions".
+        let sample = crate::sample::build(f, 16 * 1024, limits);
+        let is_excel = crate::sample::guess_format(f) == FormatGuess::Excel;
+        let sheet = match (is_excel, &sample) {
+            (true, Ok(s)) => crate::sniff::pick_sheet(f, s, limits)
+                .and_then(|name| crate::sniff::OpenSheet::open(f, &name, limits).ok()),
+            _ => None,
+        };
+        // A block's label: `file#i` for text, `book.xlsx#Sheet#i` for a
+        // sheet — the member names `fit` would give them.
+        let prefix = match &sheet {
+            Some(open) => format!("{label}#{}", open.name),
+            None => label.clone(),
+        };
+        let found = match (&sheet, is_excel) {
+            (Some(open), _) => crate::engine::regions_of_range(&open.range),
+            (None, true) => Default::default(),
+            (None, false) => crate::engine::regions_of(f, None, limits).unwrap_or_default(),
+        };
+        // A block with no plausible header of its own takes the header run
+        // a blank row cut off above it, exactly as `fit` frames it. The
+        // options are the ones draft sniffs with; adoption cannot differ
+        // from fit's, since `verify` only widens column types and adoption
+        // asks where the frame's header ends — but draft has no target to
+        // gate the adopted frame against, so it takes every adoption.
+        let framed =
+            crate::fit::frame_blocks(f, sheet.as_ref(), &found, crate::sniff::SniffOpts::default(), limits, &|_| true);
+        let regions = &framed.regions;
+        let frame_block = |w: crate::spec::RowWindow| -> Result<crate::spec::ParseSpec> {
+            match &sheet {
+                Some(open) => {
+                    crate::fit::region_frame(f, Some(open), w, crate::sniff::SniffOpts::default(), limits)
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                }
+                None => crate::sniff::sniff_text_block(f, w, limits, crate::sniff::SniffOpts::default()),
+            }
         };
         // A block none of whose rows holds two fields is a banner or a
         // footnote block, not a table: drafting it declared a column no
@@ -126,25 +148,31 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
         // same criterion `Regions::table_shaped` uses to decide what is not
         // data-like, and the note says which block was skipped and why —
         // unless every block is one field wide, which is a one-column file
-        // with blank lines in it, drafted whole.
+        // with blank lines in it, drafted whole. A block with no header of
+        // its own (`FramedBlocks::is_table`) is skipped the same way, as it
+        // is no `fit` candidate: a two-cell footnote block drafted `col_N`
+        // columns no table has; and when no block is a table the file is
+        // drafted whole, as `fit` then reads it.
         let mut windows = Vec::new();
-        let mut skipped = Vec::new();
-        for (w, widest) in regions.windows.iter().zip(&regions.window_widest) {
+        let mut banners = Vec::new();
+        let mut headless = Vec::new();
+        for (i, (w, widest)) in regions.windows.iter().zip(&regions.window_widest).enumerate() {
+            let at = |why: &str| format!("{prefix}: block {} (lines {}–{}) skipped: {why}", w.ordinal, w.start + 1, w.end);
             if *widest < 2 {
-                skipped.push(format!(
-                    "{label}: block {} (lines {}–{}) skipped: one field per line",
-                    w.ordinal,
-                    w.start + 1,
-                    w.end
-                ));
+                banners.push(at("one field per line"));
+            } else if !framed.is_table(i) {
+                headless.push(at("no header of its own"));
             } else {
                 windows.push(*w);
             }
         }
-        if windows.is_empty() && !skipped.is_empty() {
-            split_files.push(format!("{label}: all blocks one field wide; drafted whole"));
-        } else {
-            split_files.extend(skipped);
+        match (windows.is_empty(), banners.is_empty(), headless.is_empty()) {
+            (true, false, true) => split_files.push(format!("{prefix}: all blocks one field wide; drafted whole")),
+            (true, _, false) => split_files.push(format!("{prefix}: no block has a header of its own; drafted whole")),
+            _ => {
+                split_files.extend(banners);
+                split_files.extend(headless);
+            }
         }
         // One table left among banners, or one block with lines the split
         // dropped around it: it is the file's table, drafted from its own
@@ -153,7 +181,7 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
         // the fit then read the real header as a data row, silently.
         let separated = regions.windows.len() > 1 || !regions.dropped.is_empty();
         if let ([w], true) = (windows.as_slice(), separated) {
-            match crate::sniff::sniff_text_block(f, *w, limits, crate::sniff::SniffOpts::default()) {
+            match frame_block(*w) {
                 Ok(spec) => {
                     file_sets.push((label.clone(), spec.columns.iter().map(|c| c.name.clone()).collect()));
                     record_columns(
@@ -166,13 +194,13 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
                         &spec,
                     );
                 }
-                Err(e) => failures.push((format!("{label}#{}", w.ordinal), format!("{e:#}"))),
+                Err(e) => failures.push((format!("{prefix}#{}", w.ordinal), format!("{e:#}"))),
             }
             continue;
         }
         if windows.len() >= 2 {
             split_files.push(format!(
-                "{label} holds {} stacked tables; each is drafted as {label}#i",
+                "{prefix} holds {} stacked tables; each is drafted as {prefix}#i",
                 windows.len()
             ));
             // One entry in `file_sets` for the whole file — the union of
@@ -183,7 +211,7 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
             // answer instead).
             let mut file_columns: BTreeSet<String> = BTreeSet::new();
             for w in &windows {
-                match crate::sniff::sniff_text_block(f, *w, limits, crate::sniff::SniffOpts::default()) {
+                match frame_block(*w) {
                     Ok(spec) => {
                         file_columns.extend(spec.columns.iter().map(|c| c.name.clone()));
                         record_columns(
@@ -194,12 +222,12 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
                             &mut files_ok,
                             ColumnSighting {
                                 physical_file: &label,
-                                block: Some((w.ordinal, windows.len())),
+                                block: Some((&prefix, w.ordinal, windows.len())),
                             },
                             &spec,
                         );
                     }
-                    Err(e) => failures.push((format!("{label}#{}", w.ordinal), format!("{e:#}"))),
+                    Err(e) => failures.push((format!("{prefix}#{}", w.ordinal), format!("{e:#}"))),
                 }
             }
             if !file_columns.is_empty() {
@@ -207,9 +235,7 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
             }
             continue;
         }
-        let spec = match crate::sample::build(f, 16 * 1024, limits)
-            .and_then(|s| crate::sniff::sniff(f, &s, limits))
-        {
+        let spec = match sample.and_then(|s| crate::sniff::sniff(f, &s, limits)) {
             Ok(r) => r.spec,
             Err(e) => {
                 failures.push((label, format!("{e:#}")));
@@ -376,7 +402,9 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
 /// and its file's total block count.
 struct ColumnSighting<'a> {
     physical_file: &'a str,
-    block: Option<(u32, usize)>,
+    /// The block's label prefix (`file` or `book.xlsx#Sheet`), its ordinal
+    /// and its file's total block count.
+    block: Option<(&'a str, u32, usize)>,
 }
 
 /// Fold one sniffed spec's columns into the merged `columns` tally, under
@@ -418,8 +446,8 @@ fn record_columns(
                 if !d.files.iter().any(|f| f == sighting.physical_file) {
                     d.files.push(sighting.physical_file.to_string());
                 }
-                if let Some((ordinal, total)) = sighting.block {
-                    d.block_sightings.push((sighting.physical_file.to_string(), ordinal, total));
+                if let Some((prefix, ordinal, total)) = sighting.block {
+                    d.block_sightings.push((prefix.to_string(), ordinal, total));
                 }
                 if noisy_scale(&c.dtype).is_some() && !d.noisy_files.iter().any(|f| f.as_str() == sighting.physical_file) {
                     d.noisy_files.push(sighting.physical_file.to_string());
@@ -437,7 +465,7 @@ fn record_columns(
                 caveat: None,
                 files: vec![sighting.physical_file.to_string()],
                 block_sightings: match sighting.block {
-                    Some((ordinal, total)) => vec![(sighting.physical_file.to_string(), ordinal, total)],
+                    Some((prefix, ordinal, total)) => vec![(prefix.to_string(), ordinal, total)],
                     None => Vec::new(),
                 },
                 noisy_files: match noisy_scale(&c.dtype) {
