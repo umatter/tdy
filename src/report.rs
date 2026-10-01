@@ -399,11 +399,7 @@ pub fn expand_units(
             // The split proposes blocks; only those that pass the gates
             // against the target are members (the design's table is keyed
             // on exactly that). The rest are runs nothing reads.
-            Some(sheet_hint) => {
-                let found =
-                    crate::engine::regions_of(&p, sheet_hint.as_deref(), limits).unwrap_or_default();
-                crate::fit::gate_regions(&p, sheet_hint.as_deref(), &found, target, limits)
-            }
+            Some(sheet_hint) => crate::fit::gated_regions(&p, sheet_hint.as_deref(), target, limits),
             // A workbook with several sheets whose member is not tied to
             // one of them: nothing here can say which sheet is meant, so no
             // region discovery runs for it.

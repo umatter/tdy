@@ -676,19 +676,79 @@ fn sniff_excel_extraction(
     path: &Path,
     extraction: Extraction,
     limits: Limits,
-    mut doubts: Doubts,
+    doubts: Doubts,
 ) -> Result<SniffResult> {
-    let sheet_for_money = match &extraction {
-        Extraction::Excel { sheet_name, .. } => sheet_name.clone(),
-        _ => None,
-    };
-
     // No row cap here, unlike the text formats: calamine materialises the
     // whole sheet to answer any question about it, so capping saves nothing
     // and would hide the last row — which is exactly where a "Total" line
     // lives. `limits.max_cells` is the real guard.
-    let mut table = engine::extract(&extraction, path, &ExtractOpts::full(limits))
+    let table = engine::extract(&extraction, path, &ExtractOpts::full(limits))
         .with_context(|| format!("probing {}", path.display()))?;
+    let money = match &extraction {
+        Extraction::Excel { sheet_name: Some(s), .. } => crate::xlmoney::money_columns(path, s),
+        _ => Default::default(),
+    };
+    sniff_excel_table(extraction, table, &money, doubts)
+}
+
+/// One sheet of a workbook, opened once: its used range and the money
+/// columns its number formats declare (sheet-absolute indices). Framing a
+/// sheet's blocks from this instead of from the path keeps it to one
+/// workbook open per sheet, however many blocks it has.
+pub(crate) struct OpenSheet {
+    pub name: String,
+    pub range: calamine::Range<calamine::Data>,
+    money: std::collections::HashSet<usize>,
+}
+
+impl OpenSheet {
+    pub(crate) fn open(path: &Path, sheet: &str, limits: Limits) -> Result<OpenSheet> {
+        let mut wb = engine::open_workbook(path, &limits)?;
+        let range = engine::checked_worksheet_range(&mut wb, sheet, &limits)?;
+        Ok(OpenSheet {
+            name: sheet.to_string(),
+            range,
+            money: crate::xlmoney::money_columns(path, sheet),
+        })
+    }
+
+    /// Frame the whole sheet, as [`frame_excel_sheet`] does from the path.
+    pub(crate) fn frame_whole(&self, limits: Limits) -> Result<crate::spec::ParseSpec> {
+        self.frame(None, None, limits)
+    }
+
+    /// Frame one block of it — `a1`, carrying the block's `ordinal` — as
+    /// [`frame_excel_block`] does from the path.
+    pub(crate) fn frame_block(&self, a1: String, ordinal: u32, limits: Limits) -> Result<crate::spec::ParseSpec> {
+        self.frame(Some(a1), Some(ordinal), limits)
+    }
+
+    fn frame(&self, a1: Option<String>, ordinal: Option<u32>, limits: Limits) -> Result<crate::spec::ParseSpec> {
+        let table = engine::excel_table_from(
+            &self.range,
+            &self.name,
+            a1.as_deref(),
+            ordinal.is_some(),
+            &ExtractOpts::full(limits),
+        )?;
+        let extraction = Extraction::Excel {
+            sheet_name: Some(self.name.clone()),
+            sheet_index: None,
+            range: a1,
+            region_ordinal: ordinal,
+        };
+        sniff_excel_table(extraction, table, &self.money, Doubts::default()).map(|r| r.spec)
+    }
+}
+
+/// The sheet sniffer over a table already extracted, with the sheet's money
+/// columns as sheet-absolute indices.
+fn sniff_excel_table(
+    extraction: Extraction,
+    mut table: RawTable,
+    money_abs: &std::collections::HashSet<usize>,
+    mut doubts: Doubts,
+) -> Result<SniffResult> {
     if table.rows.is_empty() {
         bail!("sheet appears to be empty");
     }
@@ -709,16 +769,10 @@ fn sniff_excel_extraction(
     // ever remove *rows*, never reorder or drop a column, so once shifted by
     // the offset a column index still matches the header's index by the
     // time `finish` builds column specs from it.
-    let money_columns: std::collections::HashSet<usize> = sheet_for_money
-        .as_deref()
-        .map(|s| {
-            let offset = table.col_offset as usize;
-            crate::xlmoney::money_columns(path, s)
-                .into_iter()
-                .filter_map(|c| c.checked_sub(offset))
-                .collect()
-        })
-        .unwrap_or_default();
+    let money_columns: std::collections::HashSet<usize> = {
+        let offset = table.col_offset as usize;
+        money_abs.iter().filter_map(|c| c.checked_sub(offset)).collect()
+    };
     let width = table.width();
     let non_empty = |r: &Vec<String>| r.iter().filter(|c| !c.trim().is_empty()).count();
 
@@ -845,28 +899,6 @@ pub(crate) fn frame_excel_sheet(
 ) -> Result<crate::spec::ParseSpec> {
     sniff_excel_sheet(path, Some(sheet.to_string()), limits, Doubts::default())
         .map(|r| r.spec)
-}
-
-/// Frame one block of a sheet — `range`, an A1 address, carrying the
-/// block's `region_ordinal` — as if it were the whole sheet. A block's
-/// title rows and header are facts about the block: the whole sheet's frame
-/// counts a banner above it into its `skip_rows`, which inside the block's
-/// own rows would skip data, and finds no header when a blank row
-/// separates it from the data (the region read skips that blank row).
-pub(crate) fn frame_excel_block(
-    path: &Path,
-    sheet: &str,
-    range: String,
-    ordinal: u32,
-    limits: Limits,
-) -> Result<crate::spec::ParseSpec> {
-    let extraction = Extraction::Excel {
-        sheet_name: Some(sheet.to_string()),
-        sheet_index: None,
-        range: Some(range),
-        region_ordinal: Some(ordinal),
-    };
-    sniff_excel_extraction(path, extraction, limits, Doubts::default()).map(|r| r.spec)
 }
 
 /// Sniff one stacked block of a text file as if it were its own file: copy

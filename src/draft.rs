@@ -81,17 +81,23 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
         let regions = if crate::sample::guess_format(f) == FormatGuess::Excel {
             Default::default()
         } else {
-            crate::engine::regions_of(f, None, limits).unwrap_or_default()
+            let found = crate::engine::regions_of(f, None, limits).unwrap_or_default();
+            // A block with no header of its own takes the one-line header a
+            // blank row cut off, exactly as `fit` frames it.
+            crate::fit::frame_blocks(f, None, &found, crate::sniff::SniffOpts::default(), limits).0
         };
         // A block none of whose rows holds two fields is a banner or a
         // footnote block, not a table: drafting it declared a column no
         // table has, and the unedited draft then fit nothing. It is the
         // same criterion `Regions::table_shaped` uses to decide what is not
-        // data-like, and the note says which block was skipped and why.
+        // data-like, and the note says which block was skipped and why —
+        // unless every block is one field wide, which is a one-column file
+        // with blank lines in it, drafted whole.
         let mut windows = Vec::new();
+        let mut skipped = Vec::new();
         for (w, widest) in regions.windows.iter().zip(&regions.window_widest) {
             if *widest < 2 {
-                split_files.push(format!(
+                skipped.push(format!(
                     "{label}: block {} (lines {}–{}) skipped: one field per line",
                     w.ordinal,
                     w.start + 1,
@@ -100,6 +106,11 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
             } else {
                 windows.push(*w);
             }
+        }
+        if windows.is_empty() && !skipped.is_empty() {
+            split_files.push(format!("{label}: all blocks one field wide; drafted whole"));
+        } else {
+            split_files.extend(skipped);
         }
         // One table left among banners: it is the file's table, drafted from
         // its own rows and not commented as "only in" a block.

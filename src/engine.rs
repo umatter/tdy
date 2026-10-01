@@ -731,7 +731,20 @@ fn extract_excel(
             .ok_or_else(|| anyhow!("workbook has no sheets"))?,
     };
     let full = checked_worksheet_range(&mut wb, &name, &opts.limits)?;
+    excel_table_from(&full, &name, a1_range, region, opts)
+}
 
+/// [`extract_excel`]'s reading of one sheet already open as `full` (its
+/// used range): narrowed to `a1_range` when given, with a region read's
+/// blank rows skipped. Split out so a sheet opened once can be framed block
+/// by block without reopening the workbook for each.
+pub(crate) fn excel_table_from(
+    full: &Range<Data>,
+    name: &str,
+    a1_range: Option<&str>,
+    region: bool,
+    opts: &ExtractOpts,
+) -> Result<RawTable> {
     let range = match a1_range {
         Some(spec_str) => {
             // validate() has already rejected malformed and backwards ranges;
@@ -755,7 +768,7 @@ fn extract_excel(
             let c1 = c1.min(start_col + w - 1);
             full.range((r0, c0), (r1, c1))
         }
-        None => full,
+        None => full.clone(),
     };
     // Table column 0 is sheet column `col_offset`, not sheet column A,
     // whenever the used range (or a declared `range`) does not start at the
@@ -2127,6 +2140,35 @@ impl Regions {
         self.dropped.iter().filter(move |d| d.widest >= 2 || (w > 0 && d.width == w))
     }
 
+    /// The dropped run that may be window `i`'s header, cut off by a blank
+    /// row: the run directly above it (blank lines only between), exactly
+    /// one row, as wide as the window's first row. Its index in `dropped`.
+    /// Whether it *is* the header is the framing step's question: only a
+    /// block with no header of its own adopts one (`fit::frame_blocks`) —
+    /// adopting above a headed block made a same-width data line the header
+    /// and the real header a data row, silently.
+    pub fn severed_header(&self, i: usize) -> Option<usize> {
+        let w = self.windows.get(i)?;
+        let after = if i == 0 { 0 } else { self.windows[i - 1].end };
+        let width = *self.window_widths.get(i)?;
+        self.dropped
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.end <= w.start && d.start >= after)
+            .max_by_key(|(_, d)| d.end)
+            .filter(|(_, d)| d.end - d.start == 1 && d.width > 0 && d.width == width)
+            .map(|(k, _)| k)
+    }
+
+    /// Take dropped run `k` into window `i` as its header: the window starts
+    /// at the run's line, the blank lines between inside it (both executors
+    /// skip a blank row inside a window), and the run is no longer dropped.
+    pub fn adopt(&mut self, i: usize, k: usize) {
+        let d = self.dropped.remove(k);
+        self.windows[i].start = d.start;
+        self.window_widest[i] = self.window_widest[i].max(d.widest);
+    }
+
     /// Keep only the blocks that passed the gates (`passed[i]` for
     /// `windows[i]`). The split's blocks are candidates, not members: a
     /// title banner is a run of three rows or more and fits nothing, and
@@ -2200,18 +2242,7 @@ pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Re
             // nothing to stream here — the whole grid already exists.
             let mut wb = open_workbook(path, &limits)?;
             let range = checked_worksheet_range(&mut wb, name, &limits)?;
-            let blanks: Vec<bool> = range
-                .rows()
-                .map(|row| row.iter().all(|c| render_cell(c).trim().is_empty()))
-                .collect();
-            // A sheet row's width is its count of non-empty cells: the
-            // grid is rectangular, so its own arity says nothing about
-            // whether a row is a table's header or a one-line banner.
-            let widths: Vec<usize> = range
-                .rows()
-                .map(|row| row.iter().filter(|c| !render_cell(c).trim().is_empty()).count())
-                .collect();
-            Ok(blocks_from(&blanks, &widths))
+            Ok(regions_of_range(&range))
         }
         // A text file is read line by line instead: `expand_units` calls
         // this on every plain member on every fit (including the
@@ -2222,6 +2253,21 @@ pub fn regions_of(path: &Path, sheet: Option<&str>, limits: Limits) -> Result<Re
         // not O(file).
         None => regions_of_lines(path, limits),
     }
+}
+
+/// [`regions_of`] for a sheet already open: its used range's rows, a row
+/// blank when every cell renders empty.
+pub(crate) fn regions_of_range(range: &Range<Data>) -> Regions {
+    let blanks: Vec<bool> =
+        range.rows().map(|row| row.iter().all(|c| render_cell(c).trim().is_empty())).collect();
+    // A sheet row's width is its count of non-empty cells: the grid is
+    // rectangular, so its own arity says nothing about whether a row is a
+    // table's header or a one-line banner.
+    let widths: Vec<usize> = range
+        .rows()
+        .map(|row| row.iter().filter(|c| !render_cell(c).trim().is_empty()).count())
+        .collect();
+    blocks_from(&blanks, &widths)
 }
 
 /// [`regions_of`]'s text-file path: streams raw lines through a `BufReader`
@@ -2485,17 +2531,12 @@ struct Run {
 /// tool refuses. When no window is kept there is nothing dropped either:
 /// the file is then read whole, so every line is read.
 ///
-/// A one-row run directly above a block, as wide as the block's own first
-/// row, with only blank lines between them, is that block's *header*, cut
-/// off by a blank row — header, blank, data is an ordinary spreadsheet
-/// layout. It is adopted: the block's window starts at the header's line
-/// and the blank lines between are inside it (both executors skip a blank
-/// row inside a window). Dropping it instead left the block to bind its
-/// columns positionally as `col_N`, a table read without the names it
-/// states. Adoption runs before the one-run rule, so a file that is only a
-/// header, a blank line and its data is one table read whole.
+/// A one-row run directly above a block, as wide as the block's first row,
+/// may be that block's header cut off by a blank row; whether it is depends
+/// on whether the block has a header of its own, which only a frame can
+/// say, so adoption is the framing step's (`Regions::severed_header`,
+/// `fit::frame_blocks`), not this one's. Here it is an ordinary dropped run.
 fn windows_from_runs(runs: Vec<Run>) -> Regions {
-    let runs = adopt_severed_headers(runs);
     if runs.len() == 1 {
         return Regions::default();
     }
@@ -2517,29 +2558,6 @@ fn windows_from_runs(runs: Vec<Run>) -> Regions {
             .map(|r| DroppedRun { start: r.start, end: r.end, width: r.width, widest: r.widest })
             .collect(),
     }
-}
-
-/// [`windows_from_runs`]' header rule: a run of exactly one row, followed
-/// by a block (3 rows or more) whose first row has the same width, merges
-/// into that block. Runs are separated by blank lines by construction, so
-/// "directly above, only blank lines between" is "the next run".
-fn adopt_severed_headers(runs: Vec<Run>) -> Vec<Run> {
-    let mut out: Vec<Run> = Vec::with_capacity(runs.len());
-    let mut i = 0;
-    while i < runs.len() {
-        let r = runs[i];
-        match runs.get(i + 1) {
-            Some(n) if r.end - r.start == 1 && r.width > 0 && n.width == r.width && n.end - n.start >= 3 => {
-                out.push(Run { end: n.end, widest: r.widest.max(n.widest), ..r });
-                i += 2;
-            }
-            _ => {
-                out.push(r);
-                i += 1;
-            }
-        }
-    }
-    out
 }
 
 /// The same pipeline, but producing at most `max_rows` output rows.
