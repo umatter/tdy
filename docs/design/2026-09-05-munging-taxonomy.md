@@ -1191,15 +1191,20 @@ carries the note *two-digit years are read as
 1970–2069; set `year_pivot` to change*.
 
 **`spec`** since 2026-10-02 — a target declares it: `OPTIONS(year_pivot = '30')`
-on a `DATE` or `TIMESTAMP` column authorises the two-digit formats (`%d.%m.%y`,
-`%d/%m/%y`, `%m/%d/%y`, `%y-%m-%d` and the timestamp forms paired with `%Y`)
+on a `DATE` or `TIMESTAMP` column authorises the two-digit formats — all three
+day/month/year orders for each of `.`, `/` and `-`, and their timestamp forms —
 with that window, `date_order` settling a conflict as it does for `%Y`, and a
 member planned under it carries a note and no review — the reviewed
 declaration is the authorisation. Undeclared, `fit` still tries no `%y`
 format, and a column only `%y` reads is a gap naming the option; a
 hand-written `%y` sidecar under a column declaring no window, or another one,
-still waits on a person. Nothing is missing for the declared case; the window
-is never inferred, by design.
+still waits on a person. The window is never inferred, by design. Still
+missing: two-digit years in spellings the four-digit list does not have either
+(compact `%y%m%d`, month names beside `%y`), and a pile whose members mean
+different windows, which a per-column declaration cannot say — that member
+settles it in its own sidecar, behind review. (The first cut listed only one or
+two orders per separator, so `15-03-24` under a declared `dmy` read as
+2015-03-24 with nothing to disagree with it; every order is tried now.)
 
 ### E15 · Partial and non-Gregorian period values
 **Also called:** `yearmonth`/`yearquarter` (tsibble), `Period`/`PeriodIndex`

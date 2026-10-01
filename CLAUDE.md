@@ -172,7 +172,8 @@ serials below 61 refused naming the row, a time of day on a DATE refused rather 
 Both are DATE/TIMESTAMP only, refused when set twice, refused together, and part of
 `target_hash`. **A declaration authorises a reading**: undeclared, `fit` never tries a `%y`
 format or an epoch (a column only `%y` reads is a gap naming the option); declared,
-`fit::dated` adds the two-digit formats with that pivot (`date_order` settles a conflict as
+`fit::dated` adds the two-digit formats — every day/month/year order per separator, or a
+short list silently chooses the order — with that pivot (`date_order` settles a conflict as
 for `%Y`), or binds through the epoch unit as the *only* reading, and the binding carries a
 note and **no review** — the reviewed `.tdy.sql` is the authorisation, as for `round`. That
 exemption is `fit::review_reasons_for(spec, target)`, used wherever a target is in hand

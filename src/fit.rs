@@ -1874,20 +1874,36 @@ struct Want<'a> {
     epoch: Option<EpochUnit>,
 }
 
-/// The two-digit-year spellings of [`sniff::DATE_FORMATS`], tried only under a
-/// declared `year_pivot`.
-const DATE_FORMATS_2Y: &[&str] = &["%d.%m.%y", "%d/%m/%y", "%m/%d/%y", "%y-%m-%d"];
+/// The two-digit-year date formats, tried only under a declared `year_pivot`:
+/// every day/month/year order for each separator. A short list is a silent
+/// choice of order — with only `%y-%m-%d` for dashes, `15-03-24` under a
+/// declared `dmy` read as 2015-03-24 with nothing to disagree with it. With
+/// all three, the orders that parse disagree and `date_order` settles them,
+/// or the column is refused as ambiguous.
+const DATE_FORMATS_2Y: &[&str] = &[
+    "%d.%m.%y", "%m.%d.%y", "%y.%m.%d",
+    "%d/%m/%y", "%m/%d/%y", "%y/%m/%d",
+    "%d-%m-%y", "%m-%d-%y", "%y-%m-%d",
+];
 
-/// The two-digit-year spellings of [`sniff::TS_FORMATS`]: each `%Y` form with
-/// `%y` in its place.
+/// Each of [`DATE_FORMATS_2Y`] with each time-of-day form `sniff::TS_FORMATS`
+/// pairs with a date.
 const TS_FORMATS_2Y: &[&str] = &[
-    "%y-%m-%d %H:%M:%S",
-    "%y-%m-%dT%H:%M:%S",
-    "%y-%m-%d %H:%M:%S%.f",
-    "%y-%m-%dT%H:%M:%S%.f",
-    "%d.%m.%y %H:%M:%S",
-    "%d.%m.%y %H:%M",
-    "%y-%m-%d %H:%M",
+    "%d.%m.%y %H:%M:%S", "%d.%m.%yT%H:%M:%S", "%d.%m.%y %H:%M:%S%.f",
+    "%d.%m.%yT%H:%M:%S%.f", "%d.%m.%y %H:%M", "%m.%d.%y %H:%M:%S",
+    "%m.%d.%yT%H:%M:%S", "%m.%d.%y %H:%M:%S%.f", "%m.%d.%yT%H:%M:%S%.f",
+    "%m.%d.%y %H:%M", "%y.%m.%d %H:%M:%S", "%y.%m.%dT%H:%M:%S",
+    "%y.%m.%d %H:%M:%S%.f", "%y.%m.%dT%H:%M:%S%.f", "%y.%m.%d %H:%M",
+    "%d/%m/%y %H:%M:%S", "%d/%m/%yT%H:%M:%S", "%d/%m/%y %H:%M:%S%.f",
+    "%d/%m/%yT%H:%M:%S%.f", "%d/%m/%y %H:%M", "%m/%d/%y %H:%M:%S",
+    "%m/%d/%yT%H:%M:%S", "%m/%d/%y %H:%M:%S%.f", "%m/%d/%yT%H:%M:%S%.f",
+    "%m/%d/%y %H:%M", "%y/%m/%d %H:%M:%S", "%y/%m/%dT%H:%M:%S",
+    "%y/%m/%d %H:%M:%S%.f", "%y/%m/%dT%H:%M:%S%.f", "%y/%m/%d %H:%M",
+    "%d-%m-%y %H:%M:%S", "%d-%m-%yT%H:%M:%S", "%d-%m-%y %H:%M:%S%.f",
+    "%d-%m-%yT%H:%M:%S%.f", "%d-%m-%y %H:%M", "%m-%d-%y %H:%M:%S",
+    "%m-%d-%yT%H:%M:%S", "%m-%d-%y %H:%M:%S%.f", "%m-%d-%yT%H:%M:%S%.f",
+    "%m-%d-%y %H:%M", "%y-%m-%d %H:%M:%S", "%y-%m-%dT%H:%M:%S",
+    "%y-%m-%d %H:%M:%S%.f", "%y-%m-%dT%H:%M:%S%.f", "%y-%m-%d %H:%M",
 ];
 
 fn type_for(

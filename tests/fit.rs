@@ -1335,3 +1335,34 @@ fn a_declared_year_pivot_survives_a_refit_and_queries_without_accept() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(text.contains("1945-02-01") && text.contains("2029-02-01"), "{text}");
 }
+
+/// Under a declared pivot every day/month/year order is tried for each
+/// separator, so `date_order` decides between them instead of the one order
+/// a short list happened to hold: `15-03-24` under `dmy` is 2024-03-15, not
+/// 2015-03-24, and `24/03/15` under `ymd` is 2024-03-15, not 2015-03-24.
+#[test]
+fn a_declared_year_pivot_tries_every_order_and_date_order_decides() {
+    let ddl = |order: &str| {
+        format!(
+            "CREATE TABLE s (datum DATE NOT NULL OPTIONS(year_pivot = '30'), betrag BIGINT NOT NULL) \
+             WITH (files = '*.csv'{order})"
+        )
+    };
+    let dmy = "datum;betrag\n15-03-24;10\n28-02-25;20\n";
+    let (_d, f, t) = fit_pair(dmy, &ddl(", date_order = 'dmy'"));
+    let fitted = fit(&f, &t, Limits::default()).unwrap();
+    assert_eq!(fitted.review, None);
+    assert_eq!(dates_of(&fitted.spec, &f, 0), ["2024-03-15", "2025-02-28"]);
+
+    let ymd = "datum;betrag\n24/03/15;10\n25/11/28;20\n";
+    let (_d, f, t) = fit_pair(ymd, &ddl(", date_order = 'ymd'"));
+    let fitted = fit(&f, &t, Limits::default()).unwrap();
+    assert_eq!(dates_of(&fitted.spec, &f, 0), ["2024-03-15", "2025-11-28"]);
+
+    // Undeclared order: the readings disagree, and nothing settles them.
+    for csv in [dmy, ymd] {
+        let (_d, f, t) = fit_pair(csv, &ddl(""));
+        let text = gap_text(&f, &t);
+        assert!(text.contains("parses under more than one format, and they disagree"), "{text}");
+    }
+}
