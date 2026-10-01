@@ -1679,3 +1679,30 @@ fn excel_days_refuse_what_names_no_date() {
     let unit: EpochUnit = serde_json::from_str("\"excel_days\"").unwrap();
     assert_eq!(unit, EpochUnit::ExcelDays);
 }
+
+/// A serial written with a declared decimal comma and thousands point goes
+/// through the same normalisation a number does: `45.000,5` is noon on
+/// 2023-03-15, and a grouping that does not group in threes is refused.
+#[test]
+fn excel_days_honour_the_declared_separators() {
+    let dir = TempDir::new().unwrap();
+    let mut c = col("ts", DType::Timestamp { format: "%s".into(), timezone: None });
+    c.parse = ValueParsing {
+        epoch: Some(EpochUnit::ExcelDays),
+        decimal_separator: Some(','),
+        thousands_separator: Some('.'),
+        ..Default::default()
+    };
+    let s = spec(
+        delim(';', RaggedPolicy::Error),
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![c],
+    );
+    s.validate().unwrap();
+    let p = dir_file(&dir, "s.csv", "ts\n45.000,5\n");
+    let b = spec_to_batch(&s, &p).unwrap();
+    let noon = chrono::NaiveDate::from_ymd_opt(2023, 3, 15).unwrap().and_hms_opt(12, 0, 0).unwrap();
+    assert_eq!(ts_micros(&b, 0), noon.and_utc().timestamp_micros());
+    let p = dir_file(&dir, "g.csv", "ts\n4.5000,5\n");
+    assert!(spec_to_batch(&s, &p).is_err(), "a thousands point that does not group in threes");
+}

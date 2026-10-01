@@ -1231,8 +1231,8 @@ fn a_column_past_a_truncated_width_names_the_ragged_policy_on_both_paths() {
         notes: vec![],
     };
     let want = "resolving output column `col_4`: the spec names `col_4`, but under \
-                `ragged = \"truncate_extra\"` this file's rows were truncated to their modal \
-                width of 3 column(s), so the spec names a column beyond it; \
+                `ragged = \"truncate_extra\"` rows wider than this file's modal width of 3 \
+                column(s) are truncated to it, so the spec names a column beyond it; \
                 `ragged = \"pad_nulls\"` keeps the wider rows";
     let engine = engine::execute_batches(&s, &p, Limits::default())
         .expect_err("the engine read a column that truncation removed");

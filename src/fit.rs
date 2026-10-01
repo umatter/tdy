@@ -2187,7 +2187,8 @@ where
                 let why = if two_digit_years(ctx, two, &make) {
                     format!(
                         "{why}\n    these values carry two-digit years, whose century no value \
-                         states; declare the window:\n      {column} {want} OPTIONS(year_pivot = '…')"
+                         states; declare the window by adding `year_pivot = '…'` to the OPTIONS \
+                         of `{column}`"
                     )
                 } else {
                     why

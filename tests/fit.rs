@@ -1246,7 +1246,7 @@ fn a_declared_year_pivot_reads_two_digit_years_with_a_note_and_no_review() {
     );
     let text = gap_text(&f, &t);
     assert!(
-        text.contains("two-digit years, whose century no value states; declare the window:\n      datum DATE OPTIONS(year_pivot = '…')"),
+        text.contains("two-digit years, whose century no value states; declare the window by adding `year_pivot = '…'` to the OPTIONS of `datum`"),
         "{text}"
     );
 }

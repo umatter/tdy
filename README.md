@@ -852,6 +852,22 @@ simply *lacks* — November predates `Region` — is declarable in the target:
 region TEXT NULL OPTIONS(matches = 'Region', if_missing = 'null')
 ```
 
+and the planner null-fills it with a note and **no** review, because the
+declaration sits in the reviewed `.tdy.sql` — the planner is executing your
+decision, not making one. (`if_missing` is refused on a NOT NULL column, and
+`'null'` is the only declarable fallback.) But a constant *value* — "November
+is all Ticino" — is data the file never contained, so it lives in the sidecar
+as a hand-written transform and gates behind `--accept` like the shift does:
+
+```toml
+[[spec.transforms]]
+op    = "constant"
+name  = "region"
+value = "Ticino"
+```
+
+A `constant` may only add a column, never shadow one the file already has.
+
 Rounding is declared the same way. A file carrying `1234.567` against
 `amount DECIMAL(14,2)` is a gap naming the value, unless the column says so:
 
@@ -904,29 +920,12 @@ names it:
   staff.csv                GAP
       `born` (DATE): reads "Geboren", whose values cannot produce that type
           row 1: cannot parse "01.02.45": date does not match format "%Y%m%d": input contains invalid characters
-          these values carry two-digit years, whose century no value states; declare the window:
-            born DATE OPTIONS(year_pivot = '…')
+          these values carry two-digit years, whose century no value states; declare the window by adding `year_pivot = '…'` to the OPTIONS of `born`
 ```
 
 The declaration authorises the planner's reading, not any hand-written one:
 a sidecar reading `%y` under a column that declares no window, or another
 one, still waits for `--accept`.
-
-and the planner null-fills it with a note and **no** review, because the
-declaration sits in the reviewed `.tdy.sql` — the planner is executing your
-decision, not making one. (`if_missing` is refused on a NOT NULL column, and
-`'null'` is the only declarable fallback.) But a constant *value* — "November
-is all Ticino" — is data the file never contained, so it lives in the sidecar
-as a hand-written transform and gates behind `--accept` like the shift does:
-
-```toml
-[[spec.transforms]]
-op    = "constant"
-name  = "region"
-value = "Ticino"
-```
-
-A `constant` may only add a column, never shadow one the file already has.
 
 If any member cannot be fitted, **no lock is written at all**. A dataset that
 silently omits the months that did not fit is exactly the failure this is

@@ -103,8 +103,10 @@ fn column_option(o: &SqlOption) -> std::result::Result<ColOpt, String> {
         // a count. Each is a fact about the world no value in a file states,
         // so the planner never tries it undeclared — and, declared, the
         // reviewed `.tdy.sql` is what authorises it.
-        "year_pivot" => match text.trim().parse::<u8>() {
-            Ok(p) if p <= 100 => Ok(ColOpt::YearPivot(p)),
+        // A plain decimal integer: ' 30', '+30' and '030' are refused rather
+        // than read, since a declaration is spelled the one way it means.
+        "year_pivot" => match text.parse::<u8>() {
+            Ok(p) if p <= 100 && p.to_string() == text => Ok(ColOpt::YearPivot(p)),
             _ => Err(format!(
                 "year_pivot = {text:?} is out of range; it is the two-digit year (0..=100) \
                  from which 19xx begins — '30' reads 29 as 2029 and 30 as 1930"
@@ -1254,6 +1256,8 @@ mod tests {
         assert_eq!(g.columns[2].epoch, Some(crate::spec::EpochUnit::Milliseconds));
         assert_eq!((g.columns[3].year_pivot, g.columns[3].epoch), (None, None));
         assert_eq!(t("CREATE TABLE s (a DATE OPTIONS(year_pivot = '100')) WITH (files = 'x')").columns[0].year_pivot, Some(100));
+        assert_eq!(t("CREATE TABLE s (a DATE OPTIONS(year_pivot = '0')) WITH (files = 'x')").columns[0].year_pivot, Some(0));
+        assert_eq!(t("CREATE TABLE s (a DATE OPTIONS(year_pivot = 30)) WITH (files = 'x')").columns[0].year_pivot, Some(30));
 
         for (ddl, want) in [
             ("a TEXT OPTIONS(year_pivot = '30')", "year_pivot only applies to a DATE or TIMESTAMP column"),
@@ -1262,6 +1266,9 @@ mod tests {
             ("a DATE OPTIONS(epoch = 'seconds') OPTIONS(epoch = 'seconds')", "epoch is set more than once"),
             ("a DATE OPTIONS(year_pivot = '101')", "out of range"),
             ("a DATE OPTIONS(year_pivot = 'soon')", "out of range"),
+            ("a DATE OPTIONS(year_pivot = ' 30')", "out of range"),
+            ("a DATE OPTIONS(year_pivot = '+30')", "out of range"),
+            ("a DATE OPTIONS(year_pivot = '030')", "out of range"),
             ("a DATE OPTIONS(epoch = 'days')", "excel_days"),
             ("a DATE OPTIONS(epoch = 'excel_days', year_pivot = '30')", "two different readings"),
         ] {

@@ -133,9 +133,9 @@ pub(crate) fn missing_column_error(name: &str, header: &[String], ragged: Ragged
     if generated(name) && !header.is_empty() && header.iter().all(|h| generated(h)) {
         if ragged == RaggedPolicy::TruncateExtra {
             return anyhow!(
-                "the spec names `{name}`, but under `ragged = \"truncate_extra\"` this file's \
-                 rows were truncated to their modal width of {} column(s), so the spec names a \
-                 column beyond it; `ragged = \"pad_nulls\"` keeps the wider rows",
+                "the spec names `{name}`, but under `ragged = \"truncate_extra\"` rows wider \
+                 than this file's modal width of {} column(s) are truncated to it, so the spec \
+                 names a column beyond it; `ragged = \"pad_nulls\"` keeps the wider rows",
                 header.len()
             );
         }
@@ -1866,7 +1866,11 @@ pub(crate) fn build_column_at(
         }
         DType::Date { format } => {
             let out = match p.epoch {
-                Some(EpochUnit::ExcelDays) => parse_all!(i32, excel_serial_days),
+                // A serial is a number first: the declared separators apply
+                // through the same normalisation every numeric column uses.
+                Some(EpochUnit::ExcelDays) => {
+                    parse_all!(i32, |s: &str| excel_serial_days(&numeric(s)?))
+                }
                 Some(unit) => parse_all!(i32, |s: &str| {
                     // Truncating toward the epoch, so 1970-01-01T23:59 is
                     // still 1970-01-01 and a negative instant lands on the day
@@ -1894,7 +1898,7 @@ pub(crate) fn build_column_at(
                 // Except a spreadsheet serial, which is the wall clock it was
                 // typed on: a declared zone says which, as for a format.
                 Some(EpochUnit::ExcelDays) => parse_all!(i64, |s: &str| {
-                    let local = excel_serial_micros(s)?;
+                    let local = excel_serial_micros(&numeric(s)?)?;
                     let shift = offset.map_or(0, |o| i64::from(o.local_minus_utc()) * 1_000_000);
                     local
                         .checked_sub(shift)
