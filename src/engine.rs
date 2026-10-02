@@ -114,6 +114,50 @@ fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<String> {
     }
 }
 
+/// The refusal for a spec naming a column the table does not have, shared by
+/// both executors so they say the same sentence.
+///
+/// When both the wanted name and every name the table has are the generated
+/// `col_N`, listing them says nothing: the reader is looking at a nameless
+/// table that came out narrower than the spec expects, and the useful fact is
+/// *why*. Under `ragged = "truncate_extra"` that is the policy itself — it cut
+/// every row to the modal width, so a spec naming a column past it asks for
+/// fields the policy dropped. Otherwise two reads of one file disagreed about
+/// its width, which happens when parse state crosses a boundary — an
+/// unbalanced quote is the usual one — because the spec's columns come from a
+/// sample and this table came from the file.
+pub(crate) fn missing_column_error(name: &str, header: &[String], ragged: RaggedPolicy) -> anyhow::Error {
+    let generated = |n: &str| {
+        n.strip_prefix("col_").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+    };
+    if generated(name) && !header.is_empty() && header.iter().all(|h| generated(h)) {
+        if ragged == RaggedPolicy::TruncateExtra {
+            return anyhow!(
+                "the spec names `{name}`, but under `ragged = \"truncate_extra\"` rows wider \
+                 than this file's modal width of {} column(s) are truncated to it, so the spec \
+                 names a column beyond it; `ragged = \"pad_nulls\"` keeps the wider rows",
+                header.len()
+            );
+        }
+        return anyhow!(
+            "the spec names `{name}`, but this file's rows yield {} column(s). Two reads \
+             of the file disagreed about its width, which happens when the declared \
+             `quote` is not the character the file actually quotes with: a partial read \
+             then splits rows differently from a whole one. Check `quote` in the sidecar \
+             against the file",
+            header.len()
+        );
+    }
+    let shown: Vec<String> = header.iter().take(50).map(|h| format!("\"{h}\"")).collect();
+    let more = header.len().saturating_sub(shown.len());
+    anyhow!(
+        "no column named `{}`; available columns: [{}{}]",
+        name,
+        shown.join(", "),
+        if more > 0 { format!(", ... {more} more") } else { String::new() }
+    )
+}
+
 /// An integer count since 1970, in the declared unit, as microseconds.
 ///
 /// Refuses anything that is not an integer rather than reaching for a float:
@@ -129,9 +173,96 @@ fn epoch_micros(v: &str, unit: EpochUnit) -> Result<i64> {
         EpochUnit::Seconds => 1_000_000,
         EpochUnit::Milliseconds => 1_000,
         EpochUnit::Microseconds => 1,
+        EpochUnit::ExcelDays => return excel_serial_micros(v),
     };
     n.checked_mul(scale)
         .ok_or_else(|| anyhow!("{v:?} in {unit:?} is further from 1970 than a timestamp reaches"))
+}
+
+/// Microseconds in a day.
+const DAY_MICROS: i128 = 86_400_000_000;
+
+/// 1970-01-01 as a spreadsheet serial: days from 1899-12-30.
+const EXCEL_UNIX_SERIAL: i128 = 25_569;
+
+/// The last serial a spreadsheet has: 9999-12-31.
+const EXCEL_LAST_SERIAL: i128 = 2_958_465;
+
+/// Milliseconds in a day: a spreadsheet's own time resolution.
+const DAY_MILLIS: i128 = 86_400_000;
+
+/// A spreadsheet serial, as wall-clock microseconds since 1970.
+///
+/// Read from the digit string: the integer part is days since 1899-12-30, the
+/// fraction a part of a day rounded to the **millisecond**, half away from
+/// zero, by integer arithmetic on the digits. Exact digits are the wrong
+/// target: a spreadsheet writes a serial to ~15 significant digits, so 08:00
+/// arrives as `45000.3333333333`, which read to the microsecond is
+/// 07:59:59.999997 — a time nobody typed. A millisecond is the finest time a
+/// spreadsheet keeps, so rounding there returns the time that was typed.
+/// Serials 1–60 are refused: Excel counts a 29 February 1900 that never was
+/// (Lotus 1-2-3's bug, kept for compatibility), so below 61 no serial maps
+/// through this origin to the date its author saw. A serial past 2958465
+/// (9999-12-31) is refused before any arithmetic is done with it.
+fn excel_serial_micros(v: &str) -> Result<i64> {
+    let t = v.trim().trim_start_matches('+');
+    let (int, frac) = t.split_once('.').unwrap_or((t, ""));
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if int.is_empty() || !digits(int) || !digits(frac) {
+        bail!(
+            "{v:?} is not a spreadsheet serial (whole days since 1899-12-30, with a fraction \
+             for the time of day)"
+        );
+    }
+    if frac.len() > 18 {
+        bail!("{v:?} carries more fractional digits than a spreadsheet serial has");
+    }
+    let past = || anyhow!("{v:?} is past 9999-12-31, the last spreadsheet serial (2958465)");
+    let significant = int.trim_start_matches('0');
+    if significant.len() > 7 {
+        return Err(past());
+    }
+    let days: i128 = significant.parse().unwrap_or(0);
+    if days > EXCEL_LAST_SERIAL {
+        return Err(past());
+    }
+    if days < 61 {
+        bail!(
+            "{v:?} is spreadsheet serial {days}, below 61: spreadsheets count 1900 as a leap \
+             year, so serials 1–60 do not name one date"
+        );
+    }
+    let frac_millis: i128 = if frac.is_empty() {
+        0
+    } else {
+        let den = 10i128.pow(frac.len() as u32);
+        let num: i128 = frac.parse().map_err(|_| past())?;
+        (2 * num * DAY_MILLIS + den) / (2 * den)
+    };
+    // Rounding can carry a whole day: 2958465.9999999999 is midnight after
+    // the last date, and past it.
+    if days == EXCEL_LAST_SERIAL && frac_millis >= DAY_MILLIS {
+        return Err(past());
+    }
+    days.checked_sub(EXCEL_UNIX_SERIAL)
+        .and_then(|d| d.checked_mul(DAY_MICROS))
+        .and_then(|m| m.checked_add(frac_millis * 1_000))
+        .and_then(|m| i64::try_from(m).ok())
+        .ok_or_else(past)
+}
+
+/// A spreadsheet serial on a DATE column: whole days only. A time of day is
+/// refused rather than dropped, since a date would silently lose it.
+fn excel_serial_days(v: &str) -> Result<i32> {
+    let micros = i128::from(excel_serial_micros(v)?);
+    if micros.rem_euclid(DAY_MICROS) != 0 {
+        bail!(
+            "{v:?} carries a time of day; a DATE column would drop it — read it into a \
+             TIMESTAMP column"
+        );
+    }
+    i32::try_from(micros.div_euclid(DAY_MICROS))
+        .map_err(|_| anyhow!("{v:?} is further from 1899-12-30 than a date reaches"))
 }
 
 /// Which negative-number marker a value carries, if any — the shape only, not
@@ -362,35 +493,7 @@ impl RawTable {
     }
 
     fn missing_column(&self, name: &str) -> anyhow::Error {
-        let header = self.header.as_deref().unwrap_or(&[]);
-        // When both the wanted name and every name the table has are the
-        // generated `col_N`, listing them says nothing: the reader is looking
-        // at a nameless table that came out narrower than the spec expects,
-        // and the useful fact is *why* two reads of one file disagreed about
-        // its width. They disagree when parse state crosses a boundary — an
-        // unbalanced quote is the usual one — because the spec's columns come
-        // from a sample and this table came from the file.
-        let generated = |n: &str| {
-            n.strip_prefix("col_").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
-        };
-        if generated(name) && !header.is_empty() && header.iter().all(|h| generated(h)) {
-            return anyhow!(
-                "the spec names `{name}`, but this file's rows yield {} column(s). Two reads \
-                 of the file disagreed about its width, which happens when the declared \
-                 `quote` is not the character the file actually quotes with: a partial read \
-                 then splits rows differently from a whole one. Check `quote` in the sidecar \
-                 against the file",
-                header.len()
-            );
-        }
-        let shown: Vec<String> = header.iter().take(50).map(|h| format!("\"{h}\"")).collect();
-        let more = header.len().saturating_sub(shown.len());
-        anyhow!(
-            "no column named `{}`; available columns: [{}{}]",
-            name,
-            shown.join(", "),
-            if more > 0 { format!(", ... {more} more") } else { String::new() }
-        )
+        missing_column_error(name, self.header.as_deref().unwrap_or(&[]), self.ragged)
     }
 
     fn col_index(&self, name: &str) -> Result<usize> {
@@ -1768,6 +1871,11 @@ pub(crate) fn build_column_at(
         }
         DType::Date { format } => {
             let out = match p.epoch {
+                // A serial is a number first: the declared separators apply
+                // through the same normalisation every numeric column uses.
+                Some(EpochUnit::ExcelDays) => {
+                    parse_all!(i32, |s: &str| excel_serial_days(&numeric(s)?))
+                }
                 Some(unit) => parse_all!(i32, |s: &str| {
                     // Truncating toward the epoch, so 1970-01-01T23:59 is
                     // still 1970-01-01 and a negative instant lands on the day
@@ -1792,6 +1900,15 @@ pub(crate) fn build_column_at(
             let out = match p.epoch {
                 // An epoch is a count, not a rendering: it has no format to
                 // parse and no timezone to place it in — it is already UTC.
+                // Except a spreadsheet serial, which is the wall clock it was
+                // typed on: a declared zone says which, as for a format.
+                Some(EpochUnit::ExcelDays) => parse_all!(i64, |s: &str| {
+                    let local = excel_serial_micros(&numeric(s)?)?;
+                    let shift = offset.map_or(0, |o| i64::from(o.local_minus_utc()) * 1_000_000);
+                    local
+                        .checked_sub(shift)
+                        .ok_or_else(|| anyhow!("{s:?} is further from 1970 than a timestamp reaches"))
+                }),
                 Some(unit) => parse_all!(i64, |s: &str| epoch_micros(s, unit)),
                 None => {
                     parse_all!(i64, |s: &str| parse_timestamp_micros(s, format, offset, p.year_pivot))

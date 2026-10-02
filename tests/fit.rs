@@ -1205,3 +1205,387 @@ fn a_named_sheet_is_fitted_on_its_own() {
     assert_eq!(total, 150000, "sum(amount) of Q2 is 1500.00");
     assert!(fit_sheet(&p, "Q9", &t, Limits::default()).is_err(), "a sheet that does not exist");
 }
+
+// ---------------------------------------------------------------------------
+// A declaration authorises a reading: `year_pivot` and `epoch` on a target
+// column. Without one, neither reading is ever tried.
+// ---------------------------------------------------------------------------
+
+fn dates_of(spec: &tdy::spec::ParseSpec, f: &Path, i: usize) -> Vec<String> {
+    let b = tdy::provider::spec_to_batch(spec, f).unwrap();
+    let a = b.column(i).as_any().downcast_ref::<datafusion::arrow::array::Date32Array>().unwrap();
+    (0..a.len()).map(|r| a.value_as_date(r).unwrap().to_string()).collect()
+}
+
+/// `01.02.29` is 2029 and `01.02.45` is 1945 under pivot 30, and the century
+/// came from the reviewed declaration, so the plan carries a note and no
+/// review. Without the declaration the file is a gap that names it.
+#[test]
+fn a_declared_year_pivot_reads_two_digit_years_with_a_note_and_no_review() {
+    let csv = "Datum;Betrag\n01.02.29;10\n01.02.45;20\n13.03.30;5\n";
+    let (_d, f, t) = fit_pair(
+        csv,
+        "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum', year_pivot = '30'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv', date_order = 'dmy')",
+    );
+    let fitted = fit(&f, &t, Limits::default()).unwrap();
+    assert_eq!(fitted.review, None, "{:?}", fitted.notes);
+    assert!(
+        fitted.notes.iter().any(|n| n
+            == "`datum`: two-digit years are read as 1930–2029 (year_pivot 30), as the target declares"),
+        "{:?}",
+        fitted.notes
+    );
+    assert!(tdy::fit::review_reasons_for(&fitted.spec, &t).is_empty());
+    assert_eq!(dates_of(&fitted.spec, &f, 0), ["2029-02-01", "1945-02-01", "1930-03-13"]);
+
+    let (_d, f, t) = fit_pair(
+        csv,
+        "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv', date_order = 'dmy')",
+    );
+    let text = gap_text(&f, &t);
+    assert!(
+        text.contains("two-digit years, whose century no value states; declare the window by adding `year_pivot = '…'` to the OPTIONS of `datum`"),
+        "{text}"
+    );
+}
+
+/// The declaration authorises the planner's reading, not any hand-written
+/// one: a manual spec reading `%y` under a target that declares no pivot (or
+/// another pivot) still waits on a person.
+#[test]
+fn a_manual_two_digit_year_without_the_declaration_keeps_its_review() {
+    let csv = "Datum;Betrag\n01.02.29;10\n01.02.45;20\n";
+    let declared = "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum', year_pivot = '30'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv', date_order = 'dmy')";
+    let (_d, f, t) = fit_pair(csv, declared);
+    let spec = fit(&f, &t, Limits::default()).unwrap().spec;
+    for other in [
+        declared.replace(", year_pivot = '30'", ""),
+        declared.replace("year_pivot = '30'", "year_pivot = '50'"),
+    ] {
+        let t2 = Target::parse(&other).unwrap();
+        let r = tdy::fit::review_reasons_for(&spec, &t2);
+        assert_eq!(r.len(), 1, "{other}: {r:?}");
+        assert!(r[0].contains("reads two-digit years as 1930–2029"), "{}", r[0]);
+    }
+}
+
+/// A column declared `epoch = 'excel_days'` binds integers through that unit
+/// — the only reading tried — with a note and no review; serial 59 is refused
+/// naming its row.
+#[test]
+fn a_declared_excel_epoch_reads_serials_as_dates() {
+    let ddl = "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum', epoch = 'excel_days'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv')";
+    let (_d, f, t) = fit_pair("Datum;Betrag\n45000;10\n45001;20\n45351;5\n", ddl);
+    let fitted = fit(&f, &t, Limits::default()).unwrap();
+    assert_eq!(fitted.review, None, "{:?}", fitted.notes);
+    assert!(
+        fitted.notes.iter().any(|n| n == "`datum`: read as spreadsheet serial days (epoch excel_days), as the target declares"),
+        "{:?}",
+        fitted.notes
+    );
+    assert_eq!(dates_of(&fitted.spec, &f, 0), ["2023-03-15", "2023-03-16", "2024-02-29"]);
+    assert!(conforms(&fitted.spec, &t).is_ok());
+
+    // The only reading: an ISO date is not read past the declaration.
+    let (_d, f, t) = fit_pair("Datum;Betrag\n2023-03-15;10\n", ddl);
+    assert!(gap_text(&f, &t).contains("is not a spreadsheet serial"));
+
+    let (_d, f, t) = fit_pair("Datum;Betrag\n45000;10\n59;20\n", ddl);
+    let text = gap_text(&f, &t);
+    assert!(text.contains("row 2: cannot parse \"59\""), "{text}");
+    assert!(text.contains("below 61"), "{text}");
+
+    // Undeclared, integers are no date at all.
+    let (_d, f, t) = fit_pair(
+        "Datum;Betrag\n45000;10\n",
+        "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv')",
+    );
+    let text = gap_text(&f, &t);
+    assert!(text.contains("`datum` (DATE): reads \"Datum\""), "{text}");
+}
+
+/// End to end, twice: the second `tdy fit` reuses the sidecar the first
+/// wrote, and the declaration still authorises its `%y` — no member waits on a
+/// person, and the dataset answers with the declared century.
+#[test]
+fn a_declared_year_pivot_survives_a_refit_and_queries_without_accept() {
+    let (d, _f, _t) = fit_pair(
+        "Datum;Betrag\n01.02.29;10\n01.02.45;20\n",
+        "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum', year_pivot = '30'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv', date_order = 'dmy')",
+    );
+    let t = d.path().join("t.tdy.sql");
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_tdy")).args(args).output().expect("run tdy")
+    };
+    for _ in 0..2 {
+        let out = run(&["fit", t.to_str().unwrap()]);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(!text.contains("REVIEW"), "{text}");
+    }
+    let sql = format!("SELECT min(datum) AS lo, max(datum) AS hi FROM dataset('{}')", t.display());
+    let out = run(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("1945-02-01") && text.contains("2029-02-01"), "{text}");
+}
+
+/// Under a declared pivot every day/month/year order is tried for each
+/// separator, so `date_order` decides between them instead of the one order
+/// a short list happened to hold: `15-03-24` under `dmy` is 2024-03-15, not
+/// 2015-03-24, and `24/03/15` under `ymd` is 2024-03-15, not 2015-03-24.
+#[test]
+fn a_declared_year_pivot_tries_every_order_and_date_order_decides() {
+    let ddl = |order: &str| {
+        format!(
+            "CREATE TABLE s (datum DATE NOT NULL OPTIONS(year_pivot = '30'), betrag BIGINT NOT NULL) \
+             WITH (files = '*.csv'{order})"
+        )
+    };
+    let dmy = "datum;betrag\n15-03-24;10\n28-02-25;20\n";
+    let (_d, f, t) = fit_pair(dmy, &ddl(", date_order = 'dmy'"));
+    let fitted = fit(&f, &t, Limits::default()).unwrap();
+    assert_eq!(fitted.review, None);
+    assert_eq!(dates_of(&fitted.spec, &f, 0), ["2024-03-15", "2025-02-28"]);
+
+    let ymd = "datum;betrag\n24/03/15;10\n25/11/28;20\n";
+    let (_d, f, t) = fit_pair(ymd, &ddl(", date_order = 'ymd'"));
+    let fitted = fit(&f, &t, Limits::default()).unwrap();
+    assert_eq!(dates_of(&fitted.spec, &f, 0), ["2024-03-15", "2025-11-28"]);
+
+    // Undeclared order: the readings disagree, and nothing settles them.
+    for csv in [dmy, ymd] {
+        let (_d, f, t) = fit_pair(csv, &ddl(""));
+        let text = gap_text(&f, &t);
+        assert!(text.contains("parses under more than one format, and they disagree"), "{text}");
+    }
+}
+
+fn tdy_cli(args: &[&str]) -> (bool, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tdy")).args(args).output().expect("run tdy");
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), text)
+}
+
+/// A pile of one serial-date file under a target, fitted; returns the dir,
+/// the target path and the member's sidecar path.
+fn epoch_pile(option: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let (d, f, _t) = fit_pair(
+        "Datum;Betrag\n45000;10\n45001;20\n",
+        &format!(
+            "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum'{option}), \
+             betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv')"
+        ),
+    );
+    let t = d.path().join("t.tdy.sql");
+    (d, t, tdy::sidecar::sidecar_path(&f))
+}
+
+/// A target's declared `epoch` is enforced on a member's spec, not advised:
+/// a sidecar reading the column with another unit contradicts the declaration
+/// — at `tdy fit` for a hand-written one, and at every `dataset()` query for
+/// one edited after its fit — naming both units. It used to serve 1970-01-01.
+#[test]
+fn a_declared_epoch_is_enforced_on_a_member_s_sidecar() {
+    let (_d, t, sc) = epoch_pile(", epoch = 'excel_days'");
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let planned = std::fs::read_to_string(&sc).unwrap();
+    assert!(planned.contains("epoch = \"excel_days\""), "{planned}");
+    let edited = planned.replace("epoch = \"excel_days\"", "epoch = \"seconds\"");
+    std::fs::write(&sc, &edited).unwrap();
+
+    // Edited after the fit: every query re-proves the member, and refuses.
+    let sql = format!("SELECT min(datum) FROM dataset('{}')", t.display());
+    let (ok, text) = tdy_cli(&["query", &sql]);
+    assert!(!ok, "an edited epoch was served: {text}");
+    assert!(
+        text.contains("`datum`: the target declares epoch = 'excel_days', the spec reads it with epoch = 'seconds'"),
+        "{text}"
+    );
+
+    // Hand-written: a contradiction the person has to settle.
+    std::fs::write(&sc, edited.replace("method = \"heuristic\"", "method = \"manual\"")).unwrap();
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("CONTRADICTS"), "{text}");
+    assert!(text.contains("the spec reads it with epoch = 'seconds'"), "{text}");
+}
+
+/// Any epoch reading in a sidecar is a judgement — that `45000` is a date at
+/// all — so it waits on a person unless the target column declares the same
+/// unit. One unix unit and the spreadsheet one, each with and without the
+/// declaration.
+#[test]
+fn an_epoch_reading_waits_on_a_person_unless_the_target_declares_it() {
+    use tdy::spec::{DType, EpochUnit};
+    for (unit, name) in [(EpochUnit::Seconds, "seconds"), (EpochUnit::ExcelDays, "excel_days")] {
+        let undeclared = Target::parse(
+            "CREATE TABLE s (datum DATE NOT NULL, betrag BIGINT NOT NULL) WITH (files = '*.csv')",
+        )
+        .unwrap();
+        let declared = Target::parse(&format!(
+            "CREATE TABLE s (datum DATE NOT NULL OPTIONS(epoch = '{name}'), betrag BIGINT NOT NULL) \
+             WITH (files = '*.csv')"
+        ))
+        .unwrap();
+        let other = Target::parse(
+            "CREATE TABLE s (datum DATE NOT NULL OPTIONS(epoch = 'milliseconds'), betrag BIGINT NOT NULL) \
+             WITH (files = '*.csv')",
+        )
+        .unwrap();
+        let mut spec = tdy::spec::ParseSpec {
+            extraction: tdy::spec::Extraction::Delimited {
+                delimiter: ';',
+                quote: Some('"'),
+                escape: None,
+                encoding: None,
+                comment: None,
+                ragged: tdy::spec::RaggedPolicy::PadNulls,
+                region: None,
+            },
+            transforms: vec![],
+            columns: vec![],
+            confidence: None,
+            notes: vec![],
+        };
+        let mut c = tdy::spec::ColumnSpec {
+            name: "datum".into(),
+            source: None,
+            dtype: DType::Date { format: "%s".into() },
+            nullable: false,
+            parse: Default::default(),
+            pointer: None,
+        };
+        c.parse.epoch = Some(unit);
+        spec.columns.push(c);
+        let want = format!("`datum` reads integers as time (epoch = {name}), which no value in the file states");
+        assert_eq!(tdy::fit::review_reasons(&spec), vec![want.clone()]);
+        assert_eq!(tdy::fit::review_reasons_for(&spec, &undeclared), vec![want.clone()]);
+        assert_eq!(tdy::fit::review_reasons_for(&spec, &other), vec![want], "{name}");
+        assert!(tdy::fit::review_reasons_for(&spec, &declared).is_empty(), "{name}");
+    }
+}
+
+/// End to end: a hand-written serial reading under a target that declares no
+/// epoch is not served until a person accepts it.
+#[test]
+fn a_hand_written_epoch_under_no_declaration_waits_for_accept() {
+    let (d, t, sc) = epoch_pile(", epoch = 'excel_days'");
+    assert!(tdy_cli(&["fit", t.to_str().unwrap()]).0);
+    let manual = std::fs::read_to_string(&sc).unwrap().replace("method = \"heuristic\"", "method = \"manual\"");
+    std::fs::write(&sc, manual).unwrap();
+    std::fs::write(
+        &t,
+        "CREATE TABLE s (datum DATE NOT NULL OPTIONS(matches = 'Datum'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv')",
+    )
+    .unwrap();
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(text.contains("REVIEW: `datum` reads integers as time (epoch = excel_days)"), "{text}");
+    let sql = format!("SELECT min(datum) AS lo FROM dataset('{}')", t.display());
+    assert!(!tdy_cli(&["query", &sql]).0, "served before acceptance");
+    let member = d.path().join("2025-x.csv");
+    assert!(tdy_cli(&["fit", t.to_str().unwrap(), "--accept", "2025-x.csv"]).0, "{}", member.display());
+    let (ok, text) = tdy_cli(&["query", &sql]);
+    assert!(ok && text.contains("2023-03-15"), "{text}");
+}
+
+/// `format = "%s"` with no `epoch` is epoch seconds — chrono's own specifier —
+/// so it is the same judgement as `epoch = "seconds"`: reviewed unless the
+/// target declares `epoch = 'seconds'`, and conforming when it does. It used to
+/// slip past the review (served 2023-11-14T22:13:20 unasked) and to contradict
+/// a declaration it reads identically to.
+#[test]
+fn a_bare_percent_s_is_epoch_seconds_for_review_and_conformance() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let f = dir.path().join("a.csv");
+    std::fs::write(&f, "ts\n1700000000\n1700000060\n").unwrap();
+    let t = dir.path().join("t.tdy.sql");
+    let declared = "CREATE TABLE s (ts TIMESTAMP NOT NULL OPTIONS(epoch = 'seconds')) WITH (files = '*.csv')";
+    std::fs::write(&t, declared).unwrap();
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let sc = tdy::sidecar::sidecar_path(&f);
+    let planned = std::fs::read_to_string(&sc).unwrap();
+    assert!(planned.contains("format = \"%s\"") && planned.contains("epoch = \"seconds\""), "{planned}");
+    let bare: String = planned
+        .lines()
+        .filter(|l| l.trim() != "epoch = \"seconds\"")
+        .map(|l| format!("{l}\n"))
+        .collect::<String>()
+        .replace("method = \"heuristic\"", "method = \"manual\"");
+    std::fs::write(&sc, bare).unwrap();
+    let sql = format!("SELECT min(ts) AS lo FROM dataset('{}')", t.display());
+
+    // The mirror: declared seconds, `%s` alone — conforms, no review, served.
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok && !text.contains("REVIEW") && !text.contains("CONTRADICTS"), "{text}");
+    let (ok, text) = tdy_cli(&["query", &sql]);
+    assert!(ok && text.contains("2023-11-14T22:13:20"), "{text}");
+
+    // Undeclared: the same sidecar waits on a person.
+    std::fs::write(&t, "CREATE TABLE s (ts TIMESTAMP NOT NULL) WITH (files = '*.csv')").unwrap();
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(text.contains("REVIEW: `ts` reads integers as time (epoch = seconds)"), "{text}");
+    assert!(!tdy_cli(&["query", &sql]).0, "served before acceptance");
+
+    // messy() is no pile: unaffected.
+    let (ok, text) = tdy_cli(&["query", &format!("SELECT min(ts) AS lo FROM messy('{}')", f.display())]);
+    assert!(ok && text.contains("2023-11-14T22:13:20"), "{text}");
+
+    assert!(tdy_cli(&["fit", t.to_str().unwrap(), "--accept", "a.csv"]).0);
+    let (ok, text) = tdy_cli(&["query", &sql]);
+    assert!(ok && text.contains("2023-11-14T22:13:20"), "{text}");
+}
+
+fn ts_strings(spec: &tdy::spec::ParseSpec, f: &Path, i: usize) -> Vec<String> {
+    let b = tdy::provider::spec_to_batch(spec, f).unwrap();
+    let a = b
+        .column(i)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::TimestampMicrosecondArray>()
+        .unwrap();
+    (0..a.len()).map(|r| a.value_as_datetime(r).unwrap().to_string()).collect()
+}
+
+/// A target's declared decimal comma reaches a declared epoch column as it
+/// reaches a numeric one: `45000,5` is noon.
+#[test]
+fn a_declared_excel_epoch_honours_the_declared_decimal_separator() {
+    let (_d, f, t) = fit_pair(
+        "Zeit;Betrag\n45000,5;10\n45001,25;20\n",
+        "CREATE TABLE s (zeit TIMESTAMP NOT NULL OPTIONS(matches = 'Zeit', epoch = 'excel_days'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv', decimal_separator = ',')",
+    );
+    let fitted = fit(&f, &t, Limits::default()).unwrap();
+    assert_eq!(ts_strings(&fitted.spec, &f, 0), ["2023-03-15 12:00:00", "2023-03-16 06:00:00"]);
+}
+
+/// An ambiguity names the orders actually in conflict, not always `dmy`:
+/// `13/02/14` is day-first and year-first at once under a declared pivot.
+#[test]
+fn an_ambiguous_date_names_the_orders_in_conflict() {
+    for order in ["", ", date_order = 'mdy'"] {
+        let (_d, f, t) = fit_pair(
+            "datum;betrag\n13/02/14;10\n15/03/16;20\n",
+            &format!(
+                "CREATE TABLE s (datum DATE NOT NULL OPTIONS(year_pivot = '30'), betrag BIGINT NOT NULL) \
+                 WITH (files = '*.csv'{order})"
+            ),
+        );
+        let text = gap_text(&f, &t);
+        assert!(
+            text.contains("Declare which of these orders the exports use: WITH (date_order = 'dmy') or WITH (date_order = 'ymd')."),
+            "{order}: {text}"
+        );
+    }
+}

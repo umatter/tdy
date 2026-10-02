@@ -1756,9 +1756,14 @@ impl Plan {
     fn resolve(&mut self, spec: &ParseSpec, header: &[String]) -> Result<()> {
         let index: HashMap<&str, usize> =
             header.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
-        let missing = |c: &str| {
-            anyhow!("no column named {:?}; available columns are {:?}", c, header.to_vec())
+        // The same sentence the engine says, from the same function: unpivot
+        // rewrites the header there and resets the policy to `pad_nulls`, so
+        // the projection below is checked against the rewritten header too.
+        let ragged = match &spec.extraction {
+            Extraction::Delimited { ragged, .. } => *ragged,
+            _ => RaggedPolicy::PadNulls,
         };
+        let missing = |c: &str| crate::engine::missing_column_error(c, header, ragged);
 
         for op in &mut self.ops {
             match op {
@@ -1802,11 +1807,12 @@ impl Plan {
         };
         let eff_index: HashMap<&str, usize> =
             effective.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+        let eff_ragged = if self.unpivot.is_some() { RaggedPolicy::PadNulls } else { ragged };
         for col in &spec.columns {
             let source = col.source_name();
             let idx = *eff_index
                 .get(source)
-                .ok_or_else(|| missing(source))
+                .ok_or_else(|| crate::engine::missing_column_error(source, &effective, eff_ragged))
                 .with_context(|| format!("resolving output column `{}`", col.name))?;
             self.resolved.push((col.clone(), idx));
         }

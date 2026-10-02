@@ -1526,3 +1526,200 @@ fn transpose_refuses_a_stray_key() {
     assert!(toml::from_str::<Transform>("op = \"transpose\"\ncolumns = [\"a\"]").is_err());
     assert_eq!(serde_json::to_string(&t).unwrap(), r#"{"op":"transpose"}"#);
 }
+
+/// A plain type takes no options, and a stray key beside one is refused with
+/// serde's own sentence naming it — `type = "utf8"` beside a `format` used to
+/// load as `utf8` and drop the format without a word.
+#[test]
+fn a_plain_type_refuses_a_stray_key() {
+    for ty in ["utf8", "bool", "int64", "float64"] {
+        for stray in ["format = \"%d.%m.%Y\"", "precision = 3"] {
+            let key = stray.split(' ').next().unwrap();
+            let e = toml::from_str::<DType>(&format!("type = \"{ty}\"\n{stray}"))
+                .expect_err("a stray key beside a plain type was accepted");
+            assert!(e.to_string().contains(&format!("unknown field `{key}`")), "{ty}: {e}");
+            let e = serde_json::from_str::<DType>(&format!("{{\"type\":\"{ty}\",\"{key}\":1}}"))
+                .expect_err("a stray key beside a plain type was accepted (JSON)");
+            assert!(e.to_string().contains(&format!("unknown field `{key}`")), "{ty}: {e}");
+        }
+    }
+    // A whole column declaration, as a sidecar carries it.
+    let e = toml::from_str::<ColumnSpec>(
+        "name = \"d\"\n[dtype]\ntype = \"utf8\"\nformat = \"%d.%m.%Y\"\nprecision = 3",
+    )
+    .expect_err("a column typed utf8 with a format was accepted");
+    assert!(format!("{e}").contains("unknown field `format`"), "{e}");
+}
+
+/// Every type still reads what it wrote, in both serialisations.
+#[test]
+fn every_dtype_round_trips() {
+    let all = [
+        DType::Utf8,
+        DType::Bool,
+        DType::Int64,
+        DType::Float64,
+        DType::Decimal { precision: 14, scale: 2 },
+        DType::Date { format: "%d.%m.%Y".into() },
+        DType::Timestamp { format: "%Y-%m-%d %H:%M".into(), timezone: Some("+02:00".into()) },
+    ];
+    for d in all {
+        let j = serde_json::to_string(&d).unwrap();
+        assert_eq!(serde_json::from_str::<DType>(&j).unwrap(), d, "{j}");
+        let t = toml::to_string(&d).unwrap();
+        assert_eq!(toml::from_str::<DType>(&t).unwrap(), d, "{t}");
+    }
+    assert_eq!(serde_json::to_string(&DType::Utf8).unwrap(), r#"{"type":"utf8"}"#);
+}
+
+// ---------------------------------------------------------------------------
+// Spreadsheet serial dates (catalogue E14): `epoch = "excel_days"`, whole
+// days since 1899-12-30, a fraction for the time of day.
+// ---------------------------------------------------------------------------
+
+fn all_dates(b: &RecordBatch, i: usize) -> Vec<Option<chrono::NaiveDate>> {
+    let a = b.column(i).as_any().downcast_ref::<Date32Array>().unwrap();
+    (0..a.len()).map(|r| a.value_as_date(r).filter(|_| !a.is_null(r))).collect()
+}
+
+/// Ground truth from the spreadsheet itself: 45000 is 2023-03-15, 61 is
+/// 1900-03-01 (the first serial past Excel's phantom 1900-02-29).
+#[test]
+fn excel_days_read_a_serial_as_its_date() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "x.csv", "ts,v\n45000,1\n45001,2\n61,3\n2958465,4\n,5\n");
+    let s = epoch_spec(Some(EpochUnit::ExcelDays), DType::Date { format: "%s".into() });
+    s.validate().unwrap();
+    let b = spec_to_batch(&s, &p).unwrap();
+    let d = |y, m, dd| Some(chrono::NaiveDate::from_ymd_opt(y, m, dd).unwrap());
+    assert_eq!(all_dates(&b, 0), vec![d(2023, 3, 15), d(2023, 3, 16), d(1900, 3, 1), d(9999, 12, 31), None]);
+}
+
+/// On a timestamp the fraction is the time of day, read from the digits and
+/// rounded to the millisecond (half away from zero), the resolution a
+/// spreadsheet keeps: it writes a serial to ~15 significant digits, so 08:00
+/// arrives as `45000.3333333333` and read exactly would be 07:59:59.999997.
+#[test]
+fn excel_days_read_the_fraction_as_the_time_of_day() {
+    let dir = TempDir::new().unwrap();
+    let ts = DType::Timestamp { format: "%s".into(), timezone: None };
+    let at = |h, m, s| {
+        chrono::NaiveDate::from_ymd_opt(2023, 3, 15).unwrap().and_hms_opt(h, m, s).unwrap()
+    };
+    for (written, want) in [
+        ("45000.5", at(12, 0, 0)),
+        ("45000.3333333333", at(8, 0, 0)),
+        ("45000.9999884259", at(23, 59, 59)),
+        ("45000.7395833333", at(17, 45, 0)),
+    ] {
+        let p = dir_file(&dir, "t.csv", &format!("ts,v\n{written},1\n"));
+        let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), ts.clone()), &p).unwrap();
+        assert_eq!(ts_micros(&b, 0), want.and_utc().timestamp_micros(), "{written}");
+    }
+    // A declared zone says which wall clock the serial was written in.
+    let p = dir_file(&dir, "z.csv", "ts,v\n45000.5,1\n");
+    let zoned = DType::Timestamp { format: "%s".into(), timezone: Some("+02:00".into()) };
+    let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), zoned), &p).unwrap();
+    assert_eq!(ts_micros(&b, 0), at(12, 0, 0).and_utc().timestamp_micros() - 2 * 3_600_000_000);
+}
+
+/// On a DATE the time of day is judged after that rounding: a fraction that
+/// rounds to a whole day is that day, any other is refused.
+#[test]
+fn excel_days_judge_a_date_s_time_of_day_after_rounding() {
+    let dir = TempDir::new().unwrap();
+    let date = DType::Date { format: "%s".into() };
+    let p = dir_file(&dir, "d.csv", "ts,v\n45000.99999999999999,1\n45001.0000000001,2\n");
+    let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), date.clone()), &p).unwrap();
+    let d = |y, m, dd| Some(chrono::NaiveDate::from_ymd_opt(y, m, dd).unwrap());
+    assert_eq!(all_dates(&b, 0), vec![d(2023, 3, 16), d(2023, 3, 16)]);
+    let p = dir_file(&dir, "h.csv", "ts,v\n45000.5,1\n");
+    let e = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), date), &p).expect_err("noon");
+    assert!(format!("{e:#}").contains("carries a time of day"), "{e:#}");
+}
+
+/// A serial past 9999-12-31 (2958465) is refused naming its row, before any
+/// arithmetic: unchecked, a 35-digit serial panicked a debug build and wrapped
+/// to 2023-03-14 in a release one.
+#[test]
+fn excel_days_refuse_a_serial_past_the_last_date() {
+    let dir = TempDir::new().unwrap();
+    for dtype in [DType::Date { format: "%s".into() }, DType::Timestamp { format: "%s".into(), timezone: None }] {
+        for big in ["2958466", "41538374868278621028243970633805767", "1".repeat(60).as_str()] {
+            let p = dir_file(&dir, "b.csv", &format!("ts,v\n45000,1\n{big},2\n"));
+            let e = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), dtype.clone()), &p)
+                .expect_err(big);
+            let e = format!("{e:#}");
+            assert!(e.contains("row 2") && e.contains("past 9999-12-31"), "{big}: {e}");
+        }
+    }
+}
+
+/// Excel counts a 29 February 1900 that never was, so serials 1–60 name no
+/// single date: refused, naming the row. A time of day on a DATE column is
+/// refused rather than dropped, and so is anything that is not a serial.
+#[test]
+fn excel_days_refuse_what_names_no_date() {
+    let dir = TempDir::new().unwrap();
+    let date = DType::Date { format: "%s".into() };
+    for (body, want) in [
+        ("ts,v\n45000,1\n59,2\n", "row 2: cannot parse \"59\": \"59\" is spreadsheet serial 59, below 61"),
+        ("ts,v\n45000.25,1\n", "carries a time of day"),
+        ("ts,v\n-3,1\n", "is not a spreadsheet serial"),
+        ("ts,v\n4.5e4,1\n", "is not a spreadsheet serial"),
+    ] {
+        let p = dir_file(&dir, "r.csv", body);
+        let e = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), date.clone()), &p)
+            .expect_err(body);
+        assert!(format!("{e:#}").contains(want), "{body}: {e:#}");
+    }
+    let text = epoch_spec(Some(EpochUnit::ExcelDays), DType::Int64);
+    let e = format!("{:?}", text.validate().expect_err("a serial is a date, not an integer"));
+    assert!(e.contains("`epoch` counts time, which means nothing for a"), "{e}");
+    let unit: EpochUnit = serde_json::from_str("\"excel_days\"").unwrap();
+    assert_eq!(unit, EpochUnit::ExcelDays);
+}
+
+/// A serial written with a declared decimal comma and thousands point goes
+/// through the same normalisation a number does: `45.000,5` is noon on
+/// 2023-03-15, and a grouping that does not group in threes is refused.
+#[test]
+fn excel_days_honour_the_declared_separators() {
+    let dir = TempDir::new().unwrap();
+    let mut c = col("ts", DType::Timestamp { format: "%s".into(), timezone: None });
+    c.parse = ValueParsing {
+        epoch: Some(EpochUnit::ExcelDays),
+        decimal_separator: Some(','),
+        thousands_separator: Some('.'),
+        ..Default::default()
+    };
+    let s = spec(
+        delim(';', RaggedPolicy::Error),
+        vec![Transform::PromoteHeader { rows: 1, join: " ".into() }],
+        vec![c],
+    );
+    s.validate().unwrap();
+    let p = dir_file(&dir, "s.csv", "ts\n45.000,5\n");
+    let b = spec_to_batch(&s, &p).unwrap();
+    let noon = chrono::NaiveDate::from_ymd_opt(2023, 3, 15).unwrap().and_hms_opt(12, 0, 0).unwrap();
+    assert_eq!(ts_micros(&b, 0), noon.and_utc().timestamp_micros());
+    let p = dir_file(&dir, "g.csv", "ts\n4.5000,5\n");
+    assert!(spec_to_batch(&s, &p).is_err(), "a thousands point that does not group in threes");
+}
+
+/// Rounding the time of day must not carry a serial past the last date: the
+/// bound is checked after the carry.
+#[test]
+fn excel_days_refuse_a_carry_past_the_last_date() {
+    let dir = TempDir::new().unwrap();
+    for dtype in [DType::Date { format: "%s".into() }, DType::Timestamp { format: "%s".into(), timezone: None }] {
+        let p = dir_file(&dir, "c.csv", "ts,v\n2958465.9999999999,1\n");
+        let e = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), dtype), &p).expect_err("carried");
+        assert!(format!("{e:#}").contains("past 9999-12-31"), "{e:#}");
+    }
+    let p = dir_file(&dir, "l.csv", "ts,v\n2958465.5,1\n");
+    let ts = DType::Timestamp { format: "%s".into(), timezone: None };
+    let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), ts), &p).unwrap();
+    let noon = chrono::NaiveDate::from_ymd_opt(9999, 12, 31).unwrap().and_hms_opt(12, 0, 0).unwrap();
+    assert_eq!(ts_micros(&b, 0), noon.and_utc().timestamp_micros());
+}

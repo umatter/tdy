@@ -46,6 +46,10 @@ pub enum Mismatch {
     /// The spec's own type could not be built, so it produces no schema to
     /// compare. Carries the real reason rather than inventing a comparison.
     Underivable { column: String, reason: String },
+    /// The target declares how the column is read (`epoch`) and the spec
+    /// reads it another way. Same Arrow type, different values: a declared
+    /// reading that is not enforced is the one thing a target must not be.
+    Reading { column: String, declared: String, got: Option<String> },
 }
 
 impl Mismatch {
@@ -75,6 +79,15 @@ impl Mismatch {
             Mismatch::Underivable { column, reason } => format!(
                 "`{column}`: the spec's own type cannot be built, so it produces no schema \
                  to compare — {reason}"
+            ),
+            Mismatch::Reading { column, declared, got } => format!(
+                "`{column}`: the target declares epoch = '{declared}', the spec reads it {}. \
+                 A declared reading is enforced, not advised: read the column with epoch = \
+                 '{declared}', or change the declaration",
+                match got {
+                    Some(g) => format!("with epoch = '{g}'"),
+                    None => "with no epoch".to_string(),
+                }
             ),
             Mismatch::Order { column, want, got } => format!(
                 "`{column}`: the target puts it at position {}, the spec at {}. \
@@ -134,7 +147,35 @@ pub fn conforms(spec: &ParseSpec, target: &Target) -> Result<(), Vec<Mismatch>> 
             return Err(vec![Mismatch::Underivable { column, reason }]);
         }
     };
-    compare(&produced, &target.arrow_schema())
+    let mut out = compare(&produced, &target.arrow_schema()).err().unwrap_or_default();
+    out.extend(readings(spec, target));
+    if out.is_empty() {
+        Ok(())
+    } else {
+        Err(out)
+    }
+}
+
+/// Where a target column declares an `epoch`, the spec column of that name
+/// must read it with exactly that unit. Still no I/O: both are declarations.
+fn readings(spec: &ParseSpec, target: &Target) -> Vec<Mismatch> {
+    let name = |u: crate::spec::EpochUnit| {
+        serde_json::to_value(u).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+    };
+    target
+        .columns
+        .iter()
+        .filter_map(|tc| Some((tc, tc.epoch?)))
+        .filter_map(|(tc, declared)| {
+            let c = spec.columns.iter().find(|c| c.name == tc.name)?;
+            let got = crate::spec::effective_epoch(c);
+            (got != Some(declared)).then(|| Mismatch::Reading {
+                column: tc.name.clone(),
+                declared: name(declared),
+                got: got.map(name),
+            })
+        })
+        .collect()
 }
 
 /// Field-for-field comparison of two schemas, as the contract defines it.

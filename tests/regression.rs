@@ -2188,8 +2188,8 @@ fn a_percent_note_needs_every_value_to_carry_the_sign() {
 /// `45000` in a CSV exported from a spreadsheet is very often 2023-03-15, and
 /// nothing in the value says so. An integer column with a date-like name and
 /// every value in the serial band keeps its type and gains a note with the
-/// date the first value would be — and the query that converts it, since no
-/// declaration reads days since 1899-12-30.
+/// date the first value would be — and the declaration that reads it
+/// (`epoch = "excel_days"`), which it never writes itself.
 #[test]
 fn a_spreadsheet_serial_date_column_is_noted_not_converted() {
     let dir = TempDir::new().unwrap();
@@ -2202,8 +2202,9 @@ fn a_spreadsheet_serial_date_column_is_noted_not_converted() {
     assert_eq!(
         notes[0],
         "column `datum` holds integers like 45000; as spreadsheet serial days that is \
-         2023-03-15 — if these are dates, no declaration reads them yet, so convert in \
-         the query: CAST(CAST(\"datum\" - 25569 AS INT) AS DATE)"
+         2023-03-15 — if these are dates, declare it: in the sidecar type = \"date\", \
+         format = \"%s\", epoch = \"excel_days\"; in a target OPTIONS(epoch = 'excel_days') \
+         on a DATE column"
     );
 }
 
@@ -2218,22 +2219,19 @@ fn a_serial_date_note_needs_the_name_and_the_band() {
     assert!(!sniffed(&p).spec.notes.iter().any(|n| n.contains("serial")));
 }
 
-/// The SQL the note prints has to run, and give the date the note names.
-#[tokio::test]
-async fn the_serial_date_notes_query_runs_and_agrees() {
+/// The declaration the note names has to read the column, and give the date
+/// the note names.
+#[test]
+fn the_serial_date_notes_declaration_reads_the_date_it_names() {
     let dir = TempDir::new().unwrap();
-    // `current_date` is a SQL keyword: unquoted, the note's query would read
-    // today's date instead of the column. The note quotes the name.
-    let p = write(&dir, "s.csv", "current_date\n45000\n");
-    let note = sniffed(&p).spec.notes.into_iter().find(|n| n.contains("serial")).unwrap();
-    assert!(note.contains("CAST(CAST(\"current_date\" - 25569 AS INT) AS DATE)"), "{note}");
-    let sql = format!(
-        "SELECT CAST(CAST(\"current_date\" - 25569 AS INT) AS DATE) AS d FROM messy('{}')",
-        p.display()
-    );
-    let b = query(&sql).await;
-    let a = b[0].column(0);
-    let d = a.as_any().downcast_ref::<datafusion::arrow::array::Date32Array>().unwrap();
+    let p = write(&dir, "s.csv", "datum\n45000\n");
+    let mut spec = sniffed(&p).spec;
+    let c = spec.columns.iter_mut().find(|c| c.name == "datum").unwrap();
+    c.dtype = DType::Date { format: "%s".into() };
+    c.parse.epoch = Some(EpochUnit::ExcelDays);
+    spec.validate().unwrap();
+    let b = tdy::engine::execute(&spec, &p, Limits::default()).unwrap();
+    let d = b.column(0).as_any().downcast_ref::<datafusion::arrow::array::Date32Array>().unwrap();
     assert_eq!(d.value_as_date(0).unwrap().to_string(), "2023-03-15");
 }
 
@@ -2318,4 +2316,86 @@ fn a_percent_note_with_an_undecided_separator_quotes_no_number() {
          `strip` with `decimal_shift = -2` reads it as a fraction — the file does not say which \
          is meant"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 2026-10-01: a title line padded to the table's width (`Report 2025;;`, as
+// Excel's "Save as CSV" writes one) has the modal arity, so the arity rule
+// alone read it as the header. A leading line whose only filled field is the
+// first is a title line exactly as a one-field line is.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn padded_title_lines_are_skipped_like_one_field_ones() {
+    let dir = TempDir::new().unwrap();
+    let f = write(
+        &dir,
+        "padded.csv",
+        "Report 2025;;\nSource: FSO;;\nState;2008;2009\nBern;1;2\nZug;3;4\nUri;5;6\nGenf;7;8\n",
+    );
+    let spec = sniffed(&f).spec;
+    assert!(
+        matches!(
+            spec.transforms[..],
+            [Transform::SkipRows { head: 2, tail: 0 }, Transform::PromoteHeader { rows: 1, .. }, ..]
+        ),
+        "{:?}",
+        spec.transforms
+    );
+    let names: Vec<&str> = spec.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["state", "c_2008", "c_2009"], "the header, sanitized: {names:?}");
+}
+
+/// Leading lines only: a data row with one filled cell under a real header is
+/// data, and the header stays on line 1.
+#[test]
+fn a_first_data_row_with_one_filled_cell_is_not_a_title() {
+    let dir = TempDir::new().unwrap();
+    let f = write(&dir, "sparse.csv", "Kanton;Betrag;Menge\nBern;;\nZug;3;4\nUri;5;6\nGenf;7;8\n");
+    let spec = sniffed(&f).spec;
+    assert!(
+        matches!(spec.transforms[..], [Transform::PromoteHeader { rows: 1, .. }]),
+        "{:?}",
+        spec.transforms
+    );
+    let rows = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(rows.num_rows(), 4, "Bern stays a row");
+}
+
+/// The padded-title rule is narrow: a run of first-cell-only rows is a title
+/// only when the row after it is then promoted as a header with two or more
+/// filled fields. Each of these is an ordinary file the first cut of the rule
+/// cut rows from; each reads as it did before the rule.
+#[test]
+fn first_cell_only_rows_are_not_titles_unless_a_header_follows() {
+    let dir = TempDir::new().unwrap();
+    let no_skip = |spec: &ParseSpec| {
+        !spec.transforms.iter().any(|t| matches!(t, Transform::SkipRows { head, .. } if *head > 0))
+    };
+    // A single column with a trailing `;`: every row is "first cell only".
+    let f = write(&dir, "list.csv", "name;\nAlice;\nBob;\nCarol;\nDave;\nEve;\n");
+    let spec = sniffed(&f).spec;
+    assert!(no_skip(&spec), "{:?}", spec.transforms);
+    let rows = tdy::engine::execute(&spec, &f, Limits::default()).unwrap().num_rows();
+    assert_eq!(rows, 6, "name and Alice..Eve are all kept");
+
+    // A headerless file whose first record has empty fields.
+    let f = write(&dir, "headless.csv", "Bern;;\nZuerich;5;6\nGenf;7;8\nBasel;9;10\n");
+    let spec = sniffed(&f).spec;
+    assert!(no_skip(&spec), "{:?}", spec.transforms);
+    assert_eq!(tdy::engine::execute(&spec, &f, Limits::default()).unwrap().num_rows(), 4, "Bern is kept");
+
+    // The same with a quoted first cell holding the delimiter.
+    let f = write(&dir, "quoted.csv", "\"a;b\";;\n\"c;d\";1;2\n\"e;f\";3;4\n\"g;h\";5;6\n");
+    let spec = sniffed(&f).spec;
+    assert!(no_skip(&spec), "{:?}", spec.transforms);
+    assert_eq!(tdy::engine::execute(&spec, &f, Limits::default()).unwrap().num_rows(), 4);
+
+    // A first row whose only filled cell is `id`: not promoted (it names one
+    // column of four), so it stays a row as before, never skipped unread.
+    let f = write(&dir, "idhdr.csv", "id;;;\n1;a;b;c\n2;d;e;f\n3;g;h;i\n");
+    let spec = sniffed(&f).spec;
+    assert!(no_skip(&spec), "{:?}", spec.transforms);
+    let b = tdy::engine::execute(&spec, &f, Limits::default()).unwrap();
+    assert_eq!(b.num_rows(), 4, "the `id` row is kept");
 }

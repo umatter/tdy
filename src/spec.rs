@@ -449,12 +449,21 @@ pub enum Transform {
 /// microsecond ones some databases do. `1748736000` and `1748736000000` are
 /// the same instant a thousand apart, and both are plausible integers, so the
 /// scale is declared and never guessed.
+///
+/// `excel_days` is a spreadsheet serial: days since 1899-12-30 (45000 is
+/// 2023-03-15), whole on a date column, with a fraction for the time of day on
+/// a timestamp one. Serials below 61 are refused (the 1900 leap-year bug makes
+/// 1–60 ambiguous).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EpochUnit {
     Seconds,
     Milliseconds,
     Microseconds,
+    // Read from the digits, never through a float. No `///` here: a variant
+    // doc comment turns the schema's flat `enum` into a `oneOf`, a shape
+    // strict structured-output modes refuse.
+    ExcelDays,
 }
 
 /// Which part of a file's location `source_name` reads.
@@ -559,7 +568,14 @@ fn default_true() -> bool {
 
 /// Maps 1:1 onto Arrow types. Deliberately small — a grammar-constrained
 /// 8–30B model picks reliably from a short list.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+//
+// Deserialised through `DTypeRepr`, not derived: `deny_unknown_fields` does
+// not reach a unit variant of an internally tagged enum, so `type = "utf8"`
+// beside a stray `format` used to load as `utf8` and drop the format without
+// a word. Serialisation and the JSON Schema stay derived from this enum, so
+// neither the wire format nor the schema changes. (A `//` comment, not `///`:
+// the doc comment is the schema's description, which is part of the prompt.)
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DType {
     Utf8,
@@ -586,6 +602,52 @@ pub enum DType {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timezone: Option<String>,
     },
+}
+
+/// What a sidecar's `dtype` table is read as: [`DType`] with its plain types
+/// as *empty struct* variants, which `deny_unknown_fields` does reach — the
+/// same move `Transform::Transpose {}` and `Transform::RemoveEmpty {}` make.
+/// Private, so `DType::Utf8` stays a unit variant for every caller and for
+/// the published API.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum DTypeRepr {
+    Utf8 {},
+    Bool {},
+    Int64 {},
+    Float64 {},
+    Decimal {
+        precision: u8,
+        scale: i8,
+    },
+    Date {
+        format: String,
+    },
+    Timestamp {
+        format: String,
+        #[serde(default)]
+        timezone: Option<String>,
+    },
+}
+
+impl From<DTypeRepr> for DType {
+    fn from(r: DTypeRepr) -> Self {
+        match r {
+            DTypeRepr::Utf8 {} => DType::Utf8,
+            DTypeRepr::Bool {} => DType::Bool,
+            DTypeRepr::Int64 {} => DType::Int64,
+            DTypeRepr::Float64 {} => DType::Float64,
+            DTypeRepr::Decimal { precision, scale } => DType::Decimal { precision, scale },
+            DTypeRepr::Date { format } => DType::Date { format },
+            DTypeRepr::Timestamp { format, timezone } => DType::Timestamp { format, timezone },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DType {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        DTypeRepr::deserialize(d).map(DType::from)
+    }
 }
 
 /// How a negative number is written, when it is not written with a leading `-`.
@@ -686,7 +748,8 @@ pub struct ValueParsing {
     /// See [`Rounding`]. Only meaningful on a `decimal` column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round: Option<Rounding>,
-    /// Read this column as an integer count since 1970 in the given unit.
+    /// Read this column as an integer count since 1970 in the given unit, or
+    /// as a spreadsheet serial (`excel_days`, days since 1899-12-30).
     ///
     /// Only on a `date` or `timestamp` column, and only alongside
     /// `format = "%s"` — the format and this option are two statements about
@@ -752,6 +815,20 @@ pub fn two_digit_year_note(c: &ColumnSpec) -> Option<String> {
         "column `{}`: two-digit years are read as {from}–{to}; set `year_pivot` to change",
         c.name
     ))
+}
+
+/// The count unit a column is read in, however the spec says it:
+/// `epoch = "…"`, or a `format` that reads `%s`, chrono's own specifier for
+/// epoch seconds, wherever it sits (`%s` alone, `%s%.3f`). One answer for
+/// review and conformance alike, so `%s` with no `epoch` is not a way around
+/// either. `%S`, the seconds field of a clock time, is a different specifier.
+pub fn effective_epoch(c: &ColumnSpec) -> Option<EpochUnit> {
+    match &c.dtype {
+        DType::Date { format } | DType::Timestamp { format, .. } => {
+            c.parse.epoch.or(format.contains("%s").then_some(EpochUnit::Seconds))
+        }
+        _ => c.parse.epoch,
+    }
 }
 
 /// The first and last year a `%y` column's two-digit years can land in,
@@ -1789,5 +1866,24 @@ mod tests {
         }
         let errs = s.validate().unwrap_err();
         assert!(errs.iter().any(|e| e.contains("region") && e.contains("start")), "{errs:?}");
+    }
+
+    #[test]
+    fn any_format_reading_percent_s_is_epoch_seconds() {
+        // `%s` is chrono's epoch-seconds specifier wherever it sits in the
+        // format: `%s%.3f` reads seconds with a fraction and is the same
+        // judgement as `%s` alone. `%S` is the seconds *field* of a clock
+        // time and is not.
+        let col = |format: &str| ColumnSpec {
+            name: "ts".into(),
+            source: None,
+            dtype: DType::Timestamp { format: format.into(), timezone: None },
+            nullable: true,
+            parse: ValueParsing::default(),
+            pointer: None,
+        };
+        assert_eq!(effective_epoch(&col("%s")), Some(EpochUnit::Seconds));
+        assert_eq!(effective_epoch(&col("%s%.3f")), Some(EpochUnit::Seconds));
+        assert_eq!(effective_epoch(&col("%Y-%m-%d %H:%M:%S")), None);
     }
 }

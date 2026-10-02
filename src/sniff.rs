@@ -485,7 +485,33 @@ fn sniff_delimited(
     // Leading rows of the wrong width are title junk — but in a file where
     // *every* row has a different width, "leading" is all of them, and
     // skipping them would leave nothing to promote a header from.
-    let leading = counts.iter().take_while(|c| **c != modal_arity).count();
+    //
+    // A title line padded to the table's width (`Report 2025;;`, as Excel's
+    // "Save as CSV" writes one) has the modal arity, so arity alone reads it
+    // as the header. A leading run of rows whose only filled field is the
+    // first is a title run — but only when the row after it is then promoted
+    // as the header and has two or more filled fields. A single column with a
+    // trailing `;`, a headerless file whose first record has empty fields,
+    // and an `id;;;` header are all "first cell only" too, and the first cut
+    // of this rule cut their rows; failing the condition, the arity-only
+    // count stands exactly as before, and a run reaching the end of the
+    // probe is never a title.
+    let arity_leading = counts.iter().take_while(|c| **c != modal_arity).count();
+    let padded_leading = table
+        .rows
+        .iter()
+        .take_while(|r| r.len() != modal_arity || is_padded_title(r))
+        .count();
+    let leading = match table.rows.get(padded_leading) {
+        Some(next)
+            if padded_leading > arity_leading
+                && next.iter().filter(|c| !c.trim().is_empty()).count() >= 2
+                && matches!(header_verdict(&table.rows[padded_leading..]), HeaderVerdict::Present) =>
+        {
+            padded_leading
+        }
+        _ => arity_leading,
+    };
     let skip_head = leading.min(counts.len().saturating_sub(2)) as u32;
     if skip_head > 0 {
         doubts.add(0.05, format!("skipped {skip_head} leading non-tabular row(s)"));
@@ -557,6 +583,13 @@ fn sniff_delimited(
     note_trailing_blocks(&table, &mut doubts);
 
     finish(extraction, transforms, table, 0.95, doubts, &std::collections::HashSet::new())
+}
+
+/// A row of several fields whose only non-empty one is the first.
+fn is_padded_title(row: &[String]) -> bool {
+    row.len() > 1
+        && row.first().is_some_and(|c| !c.trim().is_empty())
+        && row[1..].iter().all(|c| c.trim().is_empty())
 }
 
 fn sniff_lines(
@@ -1921,9 +1954,10 @@ fn date_like_name(name: &str) -> bool {
 /// 2023-03-15. Both halves of the evidence are needed — every non-missing
 /// sampled value in [`SERIAL_DATE_BAND`] and a header that reads like a date —
 /// and even then it is a note: an order number in that range under a column
-/// called `tag` is not a date, and only a person knows. No declaration reads
-/// days since 1899-12-30 (`epoch` counts from 1970), so the note gives the
-/// query that does; `tests/regression.rs` runs it.
+/// called `tag` is not a date, and only a person knows. The note names the
+/// declaration that reads it — `epoch = "excel_days"` in a sidecar,
+/// `OPTIONS(epoch = 'excel_days')` in a target — and `tests/regression.rs`
+/// runs it.
 fn serial_date_note(values: &[&str], name: &str) -> Option<String> {
     if !date_like_name(name) {
         return None;
@@ -1940,13 +1974,10 @@ fn serial_date_note(values: &[&str], name: &str) -> Option<String> {
     }
     let first = ints[0];
     let date = serial_origin() + chrono::Duration::days(first);
-    // 25569 is 1970-01-01 as a serial, so the difference is DataFusion's own
-    // days-since-epoch, which a cast to DATE reads directly.
-    let unix_offset = (NaiveDate::from_ymd_opt(1970, 1, 1).expect("a date") - serial_origin()).num_days();
     Some(format!(
         "column `{name}` holds integers like {first}; as spreadsheet serial days that is {date} \
-         — if these are dates, no declaration reads them yet, so convert in the query: \
-         CAST(CAST(\"{name}\" - {unix_offset} AS INT) AS DATE)"
+         — if these are dates, declare it: in the sidecar type = \"date\", format = \"%s\", \
+         epoch = \"excel_days\"; in a target OPTIONS(epoch = 'excel_days') on a DATE column"
     ))
 }
 

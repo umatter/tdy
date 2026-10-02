@@ -1112,7 +1112,7 @@ pub async fn fit_pile(
                     break 'member;
                 }
                 let review = {
-                    let mut rs = crate::fit::review_reasons(&spec);
+                    let mut rs = crate::fit::review_reasons_for(&spec, &target);
                     // A model-framed plan's judgement is recorded in its
                     // provenance, not in the spec: reconstruct it, or the
                     // review gate would evaporate on the second `tdy fit`.

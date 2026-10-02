@@ -164,6 +164,35 @@ hand-written constant *value* ("November is all Ticino") is data the file never 
 and gates behind `--accept` exactly like `decimal_shift`. `if_missing_null` is part of
 `target_hash`, so declaring or retracting a fill voids the proofs.
 
+**Declared readings are in (2026-10-02).** Two column options name a reading no value can
+establish: `year_pivot = 'N'` (the century of a two-digit year) and `epoch = '<unit>'` (a
+count: `seconds`/`milliseconds`/`microseconds` since 1970, or `excel_days`, a spreadsheet
+serial — `EpochUnit::ExcelDays`, parsed from the digit string by `engine::excel_serial_micros`,
+the fraction rounded to the millisecond since a spreadsheet writes ~15 significant digits,
+serials below 61 or past 2958465 refused naming the row before any arithmetic, a time of day
+on a DATE refused rather than dropped).
+Both are DATE/TIMESTAMP only, refused when set twice, refused together, and part of
+`target_hash`. **A declaration authorises a reading**: undeclared, `fit` never tries a `%y`
+format or an epoch (a column only `%y` reads is a gap naming the option); declared,
+`fit::dated` adds the two-digit formats — every day/month/year order per separator, or a
+short list silently chooses the order — with that pivot (`date_order` settles a conflict as
+for `%Y`), or binds through the epoch unit as the *only* reading, and the binding carries a
+note and **no review** — the reviewed `.tdy.sql` is the authorisation, as for `round`. That
+exemption is `fit::review_reasons_for(spec, target)`, used wherever a target is in hand
+(`fit`, `fit_pile`'s sidecar reuse, the console's `.accept`): it drops a `%y` reason only when
+the target column declares exactly the pivot the spec reads, so a hand-written `%y` under no
+or another declared window still waits on a person. Likewise **any `epoch` in a spec is a
+review reason** — `format = "%s"` alone included, which is epoch seconds
+(`spec::effective_epoch`, the one answer review and conformance both use) ("`datum` reads integers as time (epoch = excel_days), which no value in the
+file states"), dropped only when the target column declares that very unit — so a
+hand-written epoch sidecar that joined a pile silently before 2026-10-02 now waits for one
+`--accept` (or the declaration); a `messy()` query is unaffected, review being a pile
+concept. And a declared `epoch` is **enforced**, not advised: `conform::conforms` reports a
+`Mismatch::Reading` for a member column read with another unit or none, so a hand-written
+sidecar CONTRADICTS and an edited one is refused by every `dataset()` query, naming both
+units. `draft` declares neither. The sniffer's
+serial-date note now names the declaration instead of SQL.
+
 **`tdy draft` scaffolds a target from a pile** (`src/draft.rs`): sniffs every file, groups
 columns by sanitized name, carries verbatim spellings as `matches`, merges types by widening
 (Int+Decimal → DECIMAL, anything+Utf8 → TEXT with the conflict named), counts per-file
@@ -550,9 +579,13 @@ also over a promoted header that reads like data, and then the member waits on a
 that row is data, not this table's header`), never a note alone: `Sales report;Q1 2025`
 over `State;2024` is that shape, and a note let its unedited draft serve `State | 2024`
 as a row (2624, not 600). `draft` never adopts over a promoted header
-(`fit::Adoption::Draft`). A known gap: the text sniffer does not skip title lines padded to
-the table's width (`Table 1. …;;`), so in a CSV such a run is never adopted and the file is
-a loud whole-file GAP (`regions_padded_titles.csv`), where the sheet gives members. ADP-31's run above the states ends in the "United States" total, so it is
+(`fit::Adoption::Draft`). The text sniffer skips a leading run of lines whose only filled field is
+the first (`Table 1. …;;`, a title padded to the table's width as Excel writes CSV) as it
+skips one-field ones — but only when the row after the run is then promoted as the header
+with two or more filled fields, and never when the run reaches the end of the probe; a
+single column with a trailing `;`, a headerless file whose first record has empty fields
+and an `id;;;` first row are "first cell only" too, and the first cut cut their rows. So
+`regions_padded_titles.csv` gives the three members its sheet layout does. ADP-31's run above the states ends in the "United States" total, so it is
 not adopted and that sheet is still read whole. It streams the text
 (`regions_of_lines`) rather than materialising it, so memory is O(runs), not
 O(file): measured 3.9 MB peak RSS on a 50 MB fixture
@@ -728,16 +761,24 @@ had, so re-run it after touching extraction or framing.
 ## Real data
 
 `scripts/download_corpus.sh` clones twenty-six public data-wrangling exercise repositories
-into `corpus/` (gitignored, ~7 GB, 9,881 files). `TDY_CORPUS=corpus cargo test --test corpus
--- --nocapture` sweeps them: never panic, never hang, anything read confidently is
-reproducible, plus a survey. Nothing in CI sees it, so anything it *finds* has to become a
+into `corpus/` (gitignored, ~7 GB, 9,881 files). `TDY_CORPUS=corpus cargo test --release --test
+corpus -- --nocapture` sweeps them: never panic, never hang, anything read confidently is
+reproducible, plus a survey. `--release` is not optional: the per-file time assertion is
+calibrated on an optimised build, and unoptimised calamine takes ~95 s over a 10 MB workbook
+the release build reads in ~6 s. Nothing in CI sees it, so anything it *finds* has to become a
 fixture in `testdata/` — that is what `12_late_surprises.py` is. The 2026-09-03 sweep's own
 findings live in `gap_reports/AUDIT_FINDINGS.md` (gitignored, like every `gap_reports/`
 report); its fixtures are `15_audit_defects.py` (below).
 
-Current state (re-swept after the calamine 0.26→0.36 upgrade — no regressions, and the
-only "declined" xlsx are Office `~$` owner-lock stubs, which is correct):
-**0 of 1,374 real CSVs declined** (15 before the type-verification work);
+Current state (re-swept 2026-10-01 in release, at 46436b3: 3 tests passed in 796 s, no
+panic or hang): of 9,881 files, 4,019 are read confidently (41%), 4,868 read unsure (49%)
+and 994 declined (10%); the four declined xlsx are still Office `~$` owner-lock stubs,
+which is correct. **0 of 1,374 real CSVs declined** (15 before the type-verification work).
+The rise from the 2026-09-04 survey's 3,868 confident files has one cause, traced per file
+over all 1,385 csv/tsv files: all 138 that rose did so between 2026-09-04 and 2026-09-08,
+each losing exactly the doubt "nearly every column typed as text", which the September
+audit restricted to files whose column names tdy had to invent (`!named_by_file`), and no
+file's confidence has moved since.
 `OxfordIHTM/messy-data`, which is purpose-built to be hard, lands at 50-75% confidence with
 accurate notes, which is the documented tier-2 boundary rather than a defect.
 

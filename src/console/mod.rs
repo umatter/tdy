@@ -871,7 +871,13 @@ impl Session {
                 // model's frame) or in the lock alone (a pile-level fact,
                 // such as a member out of scale with its siblings). Both
                 // are what a person is asked to accept.
-                let mut reasons = crate::fit::review_reasons(&sc.spec);
+                // Less what the target's own declarations authorise, as
+                // `fit` computes it; a target that no longer parses asks
+                // the plain question.
+                let mut reasons = match crate::target::Target::load(&t) {
+                    Ok(decl) => crate::fit::review_reasons_for(&sc.spec, &decl),
+                    Err(_) => crate::fit::review_reasons(&sc.spec),
+                };
                 if let Some(r) = lock.as_ref().and_then(|l| l.member(&mref.path, mref.sheet.as_deref(), mref.region)).and_then(|m| m.review.clone()) {
                     for part in r.split("; ") {
                         if !reasons.iter().any(|x| x == part) {

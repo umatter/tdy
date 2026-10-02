@@ -84,13 +84,15 @@ it.
    was the one finding in this report that touched the project's central rule
    directly. See **E5**, which now records the fix rather than the defect.
 
-**A known gap in the spec's own strictness (2026-10-01).** `deny_unknown_fields`
-does not reach a *unit* variant of an internally tagged enum: serde accepts and
-drops any stray key beside its tag. `transpose` and `remove_empty` are therefore
-empty struct variants (`Transpose {}`, `RemoveEmpty {}`), which refuse
-`op = "transpose"` beside `rows = 5`. `DType`'s unit variants (`utf8`, `bool`,
-`int64`, `float64`) still have the hole, so a stray key beside one of those
-types is dropped without a word; that is left for its own change.
+**The spec's own strictness reaches every variant (2026-10-01).**
+`deny_unknown_fields` does not reach a *unit* variant of an internally tagged
+enum: serde accepts and drops any stray key beside its tag. `transpose` and
+`remove_empty` are therefore empty struct variants (`Transpose {}`,
+`RemoveEmpty {}`), which refuse `op = "transpose"` beside `rows = 5`; `DType`'s
+plain types (`utf8`, `bool`, `int64`, `float64`) are read through a private
+representation whose variants are empty structs, so `type = "utf8"` beside a
+`format` is refused naming the field, while `DType::Utf8` stays a unit variant
+for every caller and the JSON Schema is unchanged.
 
 ### 0.5 A second pass, against the literature and the tool docs
 
@@ -1150,13 +1152,28 @@ with a name token that is or ends with `date`, `datum`, `day`, `tag`, `zeit`,
 beside an `id`, `count`, `ms`, `s`, `sec`, `nr` or `n` token) and whose every
 sampled value lies in 25,000..=60,000 (1968-06-11 to
 2064-04-08) stays an integer and is told *column `datum` holds integers like
-45000; as spreadsheet serial days that is 2023-03-15 — if these are dates, no
-declaration reads them yet, so convert in the query: CAST(CAST("datum" - 25569
-AS INT) AS DATE)* — the name quoted, since `current_date` unquoted is today. The floor makes the 1899-12-30 origin exact (serial 60 is the
-phantom 1900-02-29). It stays `partial` for the half that is still missing: a
-*declarable* serial reading — `epoch` counts from 1970 — so the conversion lives
-in a query rather than in the sidecar, where a target declaring `DATE` could
-prove it.
+45000; as spreadsheet serial days that is 2023-03-15 — if these are dates,
+declare it: in the sidecar type = "date", format = "%s", epoch = "excel_days";
+in a target OPTIONS(epoch = 'excel_days') on a DATE column*. The floor makes the
+1899-12-30 origin exact (serial 60 is the phantom 1900-02-29).
+
+**`spec`** since 2026-10-02 — the reading is declarable. `EpochUnit::ExcelDays`
+(`epoch = "excel_days"` beside `format = "%s"`) reads whole days since
+1899-12-30 on a `date` column and a fraction of a day as the time on a
+`timestamp` one, from the digit string by integer arithmetic (the fraction is
+rounded to the millisecond, half away from zero — a spreadsheet's own
+resolution — because it writes a serial to ~15 significant digits: 08:00
+arrives as `45000.3333333333`, which read to the microsecond is
+07:59:59.999997); a serial below 61 or past 2958465 (9999-12-31) is refused
+naming its row, a time of day on a `date` (judged after that rounding) is
+refused rather than dropped, and both executors parse through the same
+function. A target declares it per column — `OPTIONS(epoch =
+'excel_days')` on a `DATE` or `TIMESTAMP` — and that becomes the only reading
+`fit` tries for the column, with a note and no review. Still never inferred:
+the sniffer notes, a person declares. What is still missing is the **1904 date
+system** (classic Mac Excel, serial 0 = 1904-01-01): no unit reads it, and a
+workbook in it is four years and a day off under `excel_days` — calamine
+handles it for date-formatted cells, the CSV case would need its own unit.
 
 ### E14 · Two-digit years and century windowing
 **Also called:** `YEARCUTOFF=` (SAS), pivot year, `%y` semantics, Y2K windowing,
@@ -1174,9 +1191,23 @@ entry first recorded. `validate()` refuses it on anything but a `date` or
 force, declared or default. A spec that reads `%y` without a person having
 written it — the model's tier; the sniffer and `fit` choose no `%y` format —
 carries the note *two-digit years are read as
-1970–2069; set `year_pivot` to change*. It stays `partial` because a **target
-cannot declare it yet**: `year_pivot` is a sidecar field, so a dataset whose
-members write two-digit years has to settle the window per member.
+1970–2069; set `year_pivot` to change*.
+
+**`spec`** since 2026-10-02 — a target declares it: `OPTIONS(year_pivot = '30')`
+on a `DATE` or `TIMESTAMP` column authorises the two-digit formats — all three
+day/month/year orders for each of `.`, `/` and `-`, and their timestamp forms —
+with that window, `date_order` settling a conflict as it does for `%Y`, and a
+member planned under it carries a note and no review — the reviewed
+declaration is the authorisation. Undeclared, `fit` still tries no `%y`
+format, and a column only `%y` reads is a gap naming the option; a
+hand-written `%y` sidecar under a column declaring no window, or another one,
+still waits on a person. The window is never inferred, by design. Still
+missing: two-digit years in spellings the four-digit list does not have either
+(compact `%y%m%d`, month names beside `%y`), and a pile whose members mean
+different windows, which a per-column declaration cannot say — that member
+settles it in its own sidecar, behind review. (The first cut listed only one or
+two orders per separator, so `15-03-24` under a declared `dmy` read as
+2015-03-24 with nothing to disagree with it; every order is tried now.)
 
 ### E15 · Partial and non-Gregorian period values
 **Also called:** `yearmonth`/`yearquarter` (tsibble), `Period`/`PeriodIndex`
@@ -1271,7 +1302,10 @@ was genuinely missing were the two scales chrono has no spelling for, and
 `parse.epoch = "seconds" | "milliseconds" | "microseconds"` now covers all
 three — required to sit beside `format = "%s"`, so the two cannot make
 different claims about one value. A fractional value is an error rather than a
-rounding. The original claim, for the record:
+rounding. Since 2026-10-02 a target declares the unit too, `OPTIONS(epoch =
+'milliseconds')` on a `DATE` or `TIMESTAMP` column, and `fit` then reads the
+column through it and nothing else (see **E13**). The original claim, for the
+record:
 
 **`gap`, of the same shape as E13** — `DType` has no epoch variant, so the column
 types as `int64` and stays a number. Downstream `to_timestamp_seconds()` fixes it
@@ -2157,9 +2191,9 @@ would mean producing a value the file does not contain.
 
 9. ~~**G2 · Fill up**~~ — **done**: `fill_down` takes a `direction`.
 10. **E15 · Quarters and ISO weeks** — or at least a documented `replace` idiom.
-11. **E13 + E21 · Time that does not look like time** — spreadsheet serials and
-    Unix epochs both type as integers. A sniffer note; a declarable parse; never
-    a silent conversion.
+11. ~~**E13 + E21 · Time that does not look like time**~~ — **done**: a sniffer
+    note for serials, `epoch` for Unix scales and `excel_days` for serials,
+    declarable in a sidecar and a target; never a silent conversion.
 12. **B7 · Multi-character delimiters** — *moved up from "trivial, rare":* 2.7%
     of real CSVs use comma-plus-whitespace, the third most common dialect.
 13. **E17 · Duration type**, **F3 · ordered categoricals**, ~~**C7 · blank-column

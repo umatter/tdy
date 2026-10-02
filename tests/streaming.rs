@@ -1206,3 +1206,56 @@ fn a_year_pivot_reads_the_same_on_both_executors() {
     let text = render(&stream::execute_batches(&s, &p, Limits::default()).unwrap());
     assert!(text.contains("1930-02-01") && text.contains("2029-02-01") && text.contains("1999-12-31"), "{text}");
 }
+
+/// A spec naming a generated column past the modal width under `ragged =
+/// "truncate_extra"` is refused by both executors with one sentence, and the
+/// sentence names the policy that cut the rows — not `quote`, which is the
+/// cure only when two reads of the file disagreed about its width.
+#[test]
+fn a_column_past_a_truncated_width_names_the_ragged_policy_on_both_paths() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "trunc.csv", "#;#;#\n#;#;#\n#;#;#\na;1;2;3\nb;4;5;6\n");
+    let s = ParseSpec {
+        extraction: Extraction::Delimited {
+            delimiter: ';',
+            quote: Some('"'),
+            escape: None,
+            encoding: None,
+            comment: None,
+            ragged: RaggedPolicy::TruncateExtra,
+            region: None,
+        },
+        transforms: vec![Transform::DropRowsMatching { pattern: "^#".into(), column: None }],
+        columns: (1..=4).map(|i| col(&format!("col_{i}"), DType::Utf8)).collect(),
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    let want = "resolving output column `col_4`: the spec names `col_4`, but under \
+                `ragged = \"truncate_extra\"` rows wider than this file's modal width of 3 \
+                column(s) are truncated to it, so the spec names a column beyond it; \
+                `ragged = \"pad_nulls\"` keeps the wider rows";
+    let engine = engine::execute_batches(&s, &p, Limits::default())
+        .expect_err("the engine read a column that truncation removed");
+    let streamed = stream::execute_batches(&s, &p, Limits::default())
+        .expect_err("the stream read a column that truncation removed");
+    assert_eq!(format!("{engine:#}"), want);
+    assert_eq!(format!("{streamed:#}"), want);
+}
+
+/// Spreadsheet serials read identically on both executors: the date, the
+/// time of day from the fraction, and the refusal below serial 61.
+#[test]
+fn excel_days_agree_on_both_paths() {
+    let dir = TempDir::new().unwrap();
+    let mut ts = col("ts", DType::Timestamp { format: "%s".into(), timezone: None });
+    ts.parse.epoch = Some(EpochUnit::ExcelDays);
+    let mut d = col("d", DType::Date { format: "%s".into() });
+    d.parse.epoch = Some(EpochUnit::ExcelDays);
+    let s = spec(vec![Transform::PromoteHeader { rows: 1, join: " ".into() }], vec![ts, d]);
+    let p = write(&dir, "x.csv", "ts,d\n45000.5,45000\n45001.75,45001\n61,61\n,\n");
+    assert_paths_agree(&s, &p, "excel_days");
+    let bad = write(&dir, "bad.csv", "ts,d\n45000.5,45000\n45001.75,60\n");
+    assert_paths_agree(&s, &bad, "excel_days below 61");
+    let e = stream::execute_batches(&s, &bad, Limits::default()).expect_err("serial 60");
+    assert!(format!("{e:#}").contains("\"60\" is spreadsheet serial 60, below 61"), "{e:#}");
+}

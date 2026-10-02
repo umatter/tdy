@@ -11,8 +11,12 @@
 //!
 //! ```text
 //! ./scripts/download_corpus.sh corpus
-//! TDY_CORPUS=corpus cargo test --test corpus -- --nocapture
+//! TDY_CORPUS=corpus cargo test --release --test corpus -- --nocapture
 //! ```
+//!
+//! `--release` is not optional: the per-file time assertion is calibrated on an
+//! optimised build, and an unoptimised calamine takes ~95 s over a 10 MB
+//! workbook (`week18_dallas_animals.xlsx`) that the release build reads in ~6 s.
 //!
 //! Without `TDY_CORPUS` every test here skips, which is what CI sees and what
 //! an ordinary `cargo test` sees.
