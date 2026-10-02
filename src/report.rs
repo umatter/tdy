@@ -752,7 +752,7 @@ fn is_dropped_note(n: &str) -> bool {
 /// or tdy's own written for a block that has since been renumbered? The
 /// prefixes are fixed so `render_pile_text` can find them.
 fn is_refusal_note(n: &str) -> bool {
-    n.starts_with("sidecar refused: ") || n.starts_with("sidecar window was ")
+    n.starts_with("sidecar refused: ") || n.starts_with("sidecar window was ") || n.starts_with("the lock's plan ")
 }
 
 /// The notes the CLI shows under a member. Most of a spec's notes are

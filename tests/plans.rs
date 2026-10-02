@@ -554,3 +554,66 @@ fn draft_declares_plans_in_the_lock_for_a_pile_of_200() {
     assert!(!sql.contains("plans"), "{sql}");
     assert_eq!(tdy::target::Target::parse(&sql).unwrap().plans, tdy::target::PlanStore::Sidecars);
 }
+
+/// The drifting exports plus a file of three stacked blocks and a workbook
+/// whose two sheets both fit, every block accepted: 51 rows, 62,440.00.
+fn blocks_and_sheets() -> (TempDir, PathBuf) {
+    let (dir, t) = staged(true);
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+    std::fs::copy(data.join("regions_three.csv"), dir.path().join("2025-13.csv")).unwrap();
+    std::fs::copy(data.join("sheet_frames_two_fit.xlsx"), dir.path().join("2025-14.xlsx")).unwrap();
+    let ts = t.to_str().unwrap();
+    fit(&t);
+    ok(&tdy(&["fit", ts, "--accept", "2025-13.csv#1", "--accept", "2025-13.csv#2", "--accept", "2025-13.csv#3"]));
+    let q = ok(&query(&t, "SELECT count(*) AS n, sum(amount) AS total FROM dataset('@')"));
+    assert!(q.contains(" 51 ") && q.contains("62440.00"), "{q}");
+    (dir, t)
+}
+
+/// Point member `a` at the plan member `b` names — a one-line edit of the lock.
+fn repoint(t: &Path, a: (&str, Option<&str>, Option<u32>), b: (&str, Option<&str>, Option<u32>)) {
+    let mut lock = tdy::lockfile::Lock::load(t).unwrap().unwrap();
+    let id = lock.member(b.0, b.1, b.2).unwrap().spec.clone().unwrap();
+    let m = lock.members.iter_mut().find(|m| m.path == a.0 && m.sheet.as_deref() == a.1 && m.region == a.2).unwrap();
+    assert_ne!(m.spec.as_deref(), Some(id.as_str()), "the two already share a plan; pick another pair");
+    m.spec = Some(id);
+    lock.save(t).unwrap();
+}
+
+/// A lock-held plan is about one sheet or one block. Handed to a member it
+/// does not read — two `spec =` lines swapped — it is refused by name, as a
+/// sidecar about the wrong sheet or block always was, and a refit re-plans it.
+#[test]
+fn a_lock_plan_for_another_block_or_sheet_is_refused() {
+    for (a, b, said) in [
+        (("2025-13.csv", None, Some(1)), ("2025-13.csv", None, Some(3)), "region 1"),
+        (("2025-14.xlsx", Some("Q1"), None), ("2025-14.xlsx", Some("Q2"), None), "sheet \"Q1\""),
+    ] {
+        let (dir, t) = blocks_and_sheets();
+        repoint(&t, a, b);
+        let out = query(&t, "SELECT count(*) AS n, sum(amount) AS total FROM dataset('@')");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{said}: a plan for another member was served:\n{}", String::from_utf8_lossy(&out.stdout));
+        assert!(err.contains(said) && err.contains("plan"), "{said}: {err}");
+
+        let member = match (a.1, a.2) {
+            (Some(s), _) => format!("2025-14.xlsx#{s}"),
+            (_, Some(r)) => format!("2025-13.csv#{r}"),
+            _ => unreachable!(),
+        };
+        let out = tdy(&["check", t.to_str().unwrap(), "--against", dir.path().join(&member).to_str().unwrap()]);
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("CONFORMS"), "{said}: {}", String::from_utf8_lossy(&out.stdout));
+        assert!(!out.status.success());
+
+        let text = fit(&t);
+        assert!(text.contains("plan refused"), "{said}: {text}");
+        // The acceptance was given to the plan the lock named; the plan the
+        // refit proved is another, so it is asked for again.
+        if a.2.is_some() {
+            assert!(text.contains("REVIEW"), "{said}: {text}");
+            ok(&tdy(&["fit", t.to_str().unwrap(), "--accept", &member]));
+        }
+        let q = ok(&query(&t, "SELECT count(*) AS n, sum(amount) AS total FROM dataset('@')"));
+        assert!(q.contains(" 51 ") && q.contains("62440.00"), "{said}: {q}");
+    }
+}

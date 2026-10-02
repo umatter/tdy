@@ -228,6 +228,14 @@ impl<'a> Plans<'a> {
                 short_id(id)
             ),
         };
+        reads_its_own_member(&held.spec, entry).map_err(|why| {
+            anyhow::anyhow!(
+                "{}: the lock's plan {} {why}. A member's plan must be about its own sheet and \
+                 block: re-run `tdy fit`.",
+                self.lock_path.display(),
+                short_id(id)
+            )
+        })?;
         Ok(Some(Plan {
             spec: held.spec.clone(),
             own_notes: entry.notes.clone(),
@@ -253,6 +261,48 @@ impl<'a> Plans<'a> {
             _ => String::new(),
         }
     }
+}
+
+/// Does a plan read the sheet and the block its member *is*?
+///
+/// A plan is shared by id, and the member's `spec =` line is text: the same
+/// two checks `sidecar::load_member` makes of a sheet or region sidecar
+/// (whose name, and whose `source` block, are just as editable) are made
+/// here, against the member the lock lists. Without them, two `spec =` lines
+/// swapped make one block — or one sheet — read twice and its sibling not at
+/// all, totalling a plausible wrong number.
+///
+/// A plain member is not held to it: a workbook read whole names the one
+/// sheet that fits, and a file with one proper block reads that block's
+/// window — both legitimately, with no sheet or region in the member's name.
+fn reads_its_own_member(spec: &ParseSpec, m: &Member) -> std::result::Result<(), String> {
+    use crate::spec::Extraction;
+    let (framed_sheet, framed_region) = match &spec.extraction {
+        Extraction::Excel { sheet_name, region_ordinal, .. } => (sheet_name.as_deref(), *region_ordinal),
+        Extraction::Delimited { region, .. } => (None, region.map(|w| w.ordinal)),
+        _ => (None, None),
+    };
+    let named = |s: Option<&str>| s.map(|s| format!("{s:?}")).unwrap_or_else(|| "(none)".into());
+    let numbered = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_else(|| "(none)".into());
+    if let Some(s) = m.sheet.as_deref() {
+        if framed_sheet != Some(s) {
+            return Err(format!(
+                "names member {} as sheet {s:?}, but it reads sheet {}",
+                m.name(),
+                named(framed_sheet)
+            ));
+        }
+    }
+    if let Some(r) = m.region {
+        if framed_region != Some(r) {
+            return Err(format!(
+                "names member {} as region {r}, but it reads the block with ordinal {}",
+                m.name(),
+                numbered(framed_region)
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {
