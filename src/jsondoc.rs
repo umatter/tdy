@@ -303,7 +303,8 @@ fn render_number(src: &str) -> (String, bool) {
 enum Rendered {
     /// serde_json's rendering, which is the source text itself.
     Same,
-    /// The source text, because serde_json's value was not the number.
+    /// The source text, because serde_json's value was not the number, or
+    /// because serde_json would print a plain literal in exponent form.
     Verbatim,
     /// serde_json's rendering, which differs from the source (`1e3`).
     Text(String),
@@ -337,7 +338,19 @@ fn render(src: &str) -> Rendered {
     if integer_syntax && digits.len() <= 18 && src != "-0" {
         return Rendered::Same;
     }
-    let exact = |t: String| if t == src { Rendered::Same } else { Rendered::Text(t) };
+    // A plain literal keeps its written text where serde_json would print the
+    // same value in exponent form: `0.00000123` is not `1.23e-6` to a DECIMAL
+    // column, which refuses exponent form.
+    let plain = !src.bytes().any(|b| b == b'e' || b == b'E');
+    let exact = |t: String| {
+        if t == src {
+            Rendered::Same
+        } else if plain && t.contains('e') {
+            Rendered::Verbatim
+        } else {
+            Rendered::Text(t)
+        }
+    };
     if !integer_syntax {
         if let Some(cell) = shortest_of_short_decimal(src) {
             return exact(cell);
@@ -953,6 +966,15 @@ mod tests {
             ("12345678901234567890123", "12345678901234567890123", true),
             ("1e22", "1e+22", false),
             ("2.5E-3", "0.0025", false),
+            // A plain literal serde_json would print in exponent form keeps
+            // its written text: `1.23e-6` is the same number, and a DECIMAL
+            // column refuses it.
+            ("0.00000123", "0.00000123", true),
+            ("0.000000000000000001", "0.000000000000000001", true),
+            ("-0.000001", "-0.000001", true),
+            ("10000000000000000.0", "10000000000000000.0", true),
+            ("0.00001", "0.00001", false), // serde_json prints 1e-5 as 0.00001
+            ("1e-6", "1e-6", false),
         ];
         for &(src, cell, verbatim) in cases {
             assert_eq!(render_number(src), (cell.to_string(), verbatim), "{src}");

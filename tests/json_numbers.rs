@@ -161,7 +161,7 @@ fn pile() -> TempDir {
         &dir,
         "jan.ndjson",
         "{\"id\":12345678901234567890123,\"amount\":1234567890.123456789012345678}\n\
-         {\"id\":12345678901234567890124,\"amount\":0.25}\n",
+         {\"id\":12345678901234567890124,\"amount\":0.000000000000000001}\n",
     );
     write(&dir, "feb.ndjson", "{\"id\":98765432109876543210987,\"amount\":-7.5}\n");
     dir
@@ -189,12 +189,12 @@ fn an_integer_past_bigint_fits_a_declared_decimal_and_a_long_decimal_lands_exact
         "12345678901234567890124",
         "98765432109876543210987",
         "1234567890.123456789012345678",
-        "0.250000000000000000",
+        "0.000000000000000001",
     ] {
         assert!(text.contains(want), "{want} missing:\n{text}");
     }
     let sum = tdy(&["query", &format!("SELECT CAST(sum(amount) AS VARCHAR) s FROM dataset('{}')", t.display())]);
-    assert!(out(&sum).contains("1234567882.873456789012345678"), "{}", out(&sum));
+    assert!(out(&sum).contains("1234567882.623456789012345679"), "{}", out(&sum));
 }
 
 /// The same identifiers declared `TEXT` are their digits, not a double's.
@@ -320,4 +320,27 @@ fn a_seventeen_digit_double_is_correctly_rounded() {
         let got = batches[0].column(0).as_any().downcast_ref::<Float64Array>().unwrap().value(0);
         assert_eq!(got.to_bits(), exact.to_bits(), "{executor}: {got:?}");
     }
+}
+
+/// A plain literal stays plain: `0.00000123` would print as `1.23e-6`, the
+/// same number, but a DECIMAL column refuses exponent form — on main too.
+#[test]
+fn a_small_decimal_written_plainly_lands_in_a_decimal_column() {
+    let dir = TempDir::new().unwrap();
+    write(&dir, "a.ndjson", "{\"x\":0.00000123,\"big\":10000000000000000}\n{\"x\":0.5,\"big\":7}\n");
+    let t = write(
+        &dir,
+        "t.tdy.sql",
+        "CREATE TABLE t (x DECIMAL(16,8) NOT NULL, big BIGINT NOT NULL) WITH (files = '*.ndjson')",
+    );
+    let fit = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(fit.status.success(), "{}", out(&fit));
+    let q = tdy(&["query", &format!("SELECT CAST(x AS VARCHAR) x, big FROM dataset('{}') ORDER BY big DESC", t.display())]);
+    let text = out(&q);
+    assert!(text.contains("0.00000123") && text.contains("10000000000000000"), "{text}");
+
+    let u = write(&dir, "u.tdy.sql", "CREATE TABLE u (big TEXT NOT NULL) WITH (files = '*.ndjson')");
+    assert!(tdy(&["fit", u.to_str().unwrap()]).status.success());
+    let q = tdy(&["query", &format!("SELECT big FROM dataset('{}')", u.display())]);
+    assert!(out(&q).contains("| 10000000000000000 |"), "{}", out(&q));
 }

@@ -840,9 +840,11 @@ record's own header is in document order, as before. serde_json stays for tdy's 
 (`--json`, MCP, the JSON Schema). `jsondoc`'s differential test reads every JSON fixture both
 ways and requires agreement but for inexact numbers. Typing did not change: an integer past
 i64 stays text or fits a declared `DECIMAL(38,0)`; a long decimal parses exactly into
-`DECIMAL(p,s)`, or is refused under the rounding rule. One loud edge remains: a number
-serde_json renders in exponent form (`0.000000000000000001` → `1e-18`) is exact, so it keeps
-that rendering, which a `DECIMAL` column refuses rather than misreads. Cost: the common
+`DECIMAL(p,s)`, or is refused under the rounding rule. A plain literal (no `e`/`E`) that
+serde_json would print in exponent form keeps its written text too (`0.00000123`, not
+`1.23e-6`; `0.000000000000000001`, not `1e-18`), because a `DECIMAL` column refuses exponent
+form and main refused those values for that reason; a literal written with an exponent keeps
+serde_json's rendering as before. Cost: the common
 decimal (≤15 significant digits written, a power of ten within ±22) is laid out directly,
 pinned against serde_json over random decimals, since there serde_json's parse is one exactly
 rounded operation; anything else asks serde_json. A 100 MB NDJSON `count(*)` went 4.5 s →
