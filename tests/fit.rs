@@ -1589,3 +1589,143 @@ fn an_ambiguous_date_names_the_orders_in_conflict() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// A document is a record: one JSON object per file, nested fields reached
+// through a declared `pointer`.
+// ---------------------------------------------------------------------------
+
+fn record_pile(docs: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::TempDir::new().unwrap();
+    for (name, body) in docs {
+        std::fs::write(dir.path().join(name), body).unwrap();
+    }
+    dir
+}
+
+const ITEMS: &[(&str, &str)] = &[
+    ("cap.json", r#"{"id":"cap","name":"1-up Cap","category":"Hats","games":{"nh":{"sellPrice":{"currency":"bells","value":80}}}}"#),
+    ("cake.json", r#"{"id":"cake","name":"2017 Cake","category":"Food","games":{"nh":{"sellPrice":{"currency":"bells","value":250},"orderable":true}}}"#),
+    ("lamp.json", r#"{"category":"Furniture","name":"Lamp","id":"lamp","games":{"nh":{"sellPrice":{"currency":"bells","value":1200}}}}"#),
+];
+
+fn ints_of(spec: &tdy::spec::ParseSpec, p: &Path, col: usize) -> Vec<Option<i64>> {
+    let b = tdy::provider::spec_to_batch(spec, p).unwrap();
+    let a = b.column(col).as_any().downcast_ref::<datafusion::arrow::array::Int64Array>().unwrap();
+    (0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i))).collect()
+}
+
+/// Each file is one object; the target names its keys, in any order the
+/// files happen to write them. Nothing to eliminate (no array anywhere), so
+/// no elimination note and nothing to review.
+#[test]
+fn a_pile_of_one_object_documents_fits_by_name() {
+    let dir = record_pile(ITEMS);
+    let t = Target::parse(
+        "CREATE TABLE items (id TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL) \
+         WITH (files = '*.json')",
+    )
+    .unwrap();
+    for (name, _) in ITEMS {
+        let p = dir.path().join(name);
+        let fitted = fit(&p, &t, Limits::default()).unwrap_or_else(|e| panic!("{name}:\n{e}"));
+        assert!(
+            matches!(fitted.spec.extraction, tdy::spec::Extraction::Json { record: true, pointer: None, lines: false }),
+            "{name}: {:?}",
+            fitted.spec.extraction
+        );
+        assert!(fitted.review.is_none(), "{name}: {:?}", fitted.review);
+        assert!(!fitted.notes.iter().any(|n| n.contains("elimination")), "{name}: {:?}", fitted.notes);
+        let b = tdy::provider::spec_to_batch(&fitted.spec, &p).unwrap();
+        assert_eq!(b.num_rows(), 1, "{name}");
+    }
+}
+
+/// `matches` binds the top-level key, `pointer` reaches inside its value,
+/// and two columns may open the same key at different places without
+/// colliding.
+#[test]
+fn a_nested_leaf_binds_through_options_pointer() {
+    let dir = record_pile(ITEMS);
+    let t = Target::parse(
+        "CREATE TABLE items (
+            id         TEXT   NOT NULL,
+            sell_price BIGINT NOT NULL OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value'),
+            currency   TEXT   NOT NULL OPTIONS(matches = 'games', pointer = '/nh/sellPrice/currency'),
+            orderable  BOOLEAN        OPTIONS(matches = 'games', pointer = '/nh/orderable')
+        ) WITH (files = '*.json')",
+    )
+    .unwrap();
+    let mut total = 0;
+    for (name, _) in ITEMS {
+        let p = dir.path().join(name);
+        let fitted = fit(&p, &t, Limits::default()).unwrap_or_else(|e| panic!("{name}:\n{e}"));
+        let sell = &fitted.spec.columns[1];
+        assert_eq!(sell.source.as_deref(), Some("games"), "{name}");
+        assert_eq!(sell.pointer.as_deref(), Some("/nh/sellPrice/value"), "{name}");
+        assert_eq!(fitted.spec.columns[2].pointer.as_deref(), Some("/nh/sellPrice/currency"));
+        assert!(conforms(&fitted.spec, &t).is_ok());
+        total += ints_of(&fitted.spec, &p, 1)[0].unwrap();
+    }
+    assert_eq!(total, 80 + 250 + 1200);
+}
+
+/// The executor's semantics, at plan time: a pointer that resolves to
+/// nothing is a null, and a NOT NULL column refuses the member, naming the
+/// column.
+#[test]
+fn a_not_null_column_whose_pointer_resolves_to_nothing_refuses_the_member() {
+    let dir = record_pile(&[("old.json", r#"{"id":"old","games":{"nl":{"sellPrice":{"value":10}}}}"#)]);
+    let t = Target::parse(
+        "CREATE TABLE items (
+            id         TEXT   NOT NULL,
+            sell_price BIGINT NOT NULL OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value')
+        ) WITH (files = '*.json')",
+    )
+    .unwrap();
+    let e = fit(&dir.path().join("old.json"), &t, Limits::default()).expect_err("no /nh in this one");
+    let m = format!("{e}");
+    assert!(m.contains("sell_price"), "{m}");
+
+    // Nullable, the same document fits, with a null.
+    let t = Target::parse(
+        "CREATE TABLE items (
+            id         TEXT   NOT NULL,
+            sell_price BIGINT OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value')
+        ) WITH (files = '*.json')",
+    )
+    .unwrap();
+    let p = dir.path().join("old.json");
+    let fitted = fit(&p, &t, Limits::default()).unwrap();
+    assert_eq!(ints_of(&fitted.spec, &p, 1), vec![None]);
+}
+
+/// A pointer onto an object or an array is an error, as in the sidecar: the
+/// column would hold JSON text again.
+#[test]
+fn a_pointer_onto_a_container_is_a_gap() {
+    let dir = record_pile(ITEMS);
+    let t = Target::parse(
+        "CREATE TABLE items (id TEXT, price TEXT OPTIONS(matches = 'games', pointer = '/nh/sellPrice')) \
+         WITH (files = '*.json')",
+    )
+    .unwrap();
+    let e = fit(&dir.path().join("cap.json"), &t, Limits::default()).expect_err("lands on an object");
+    let m = format!("{e}");
+    assert!(m.contains("price") && m.contains("an object"), "{m}");
+}
+
+/// `pointer` reads inside a JSON value; on a member read as anything else it
+/// is refused at fit time with the sidecar's own rule.
+#[test]
+fn a_pointer_on_a_member_that_is_not_json_is_refused() {
+    let dir = record_pile(&[("x.csv", "id,games\na,1\nb,2\n")]);
+    let t = Target::parse(
+        "CREATE TABLE items (id TEXT, n BIGINT OPTIONS(matches = 'games', pointer = '/nh')) \
+         WITH (files = '*.csv')",
+    )
+    .unwrap();
+    let e = fit(&dir.path().join("x.csv"), &t, Limits::default()).expect_err("csv has no JSON inside");
+    let m = format!("{e}");
+    assert!(m.contains("`pointer` reads inside a JSON value, and this file is read as"), "{m}");
+}

@@ -501,8 +501,15 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
             if taken.contains(&i) {
                 continue;
             }
-            let values: Vec<&str> =
+            let raw: Vec<&str> =
                 rows.iter().map(|r| r.get(i).map(|s| s.as_str()).unwrap_or("")).collect();
+            // A declared pointer is part of what the column asks of a
+            // candidate: the pointed-at values are what must type-check.
+            let Ok(pointed) = pointed_values(tc, &draft.extraction, &raw) else { continue };
+            let values: Vec<&str> = match &pointed {
+                Some(p) => p.iter().map(String::as_str).collect(),
+                None => raw,
+            };
             let addressable = header.get(i).cloned().unwrap_or_else(|| name.clone());
             if type_for(
                 &Want { column: &tc.name, source: &addressable, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round, year_pivot: tc.year_pivot, epoch: tc.epoch },
@@ -1514,8 +1521,10 @@ fn fit_framed(
     let mut columns = Vec::with_capacity(target.columns.len());
     let mut gaps = Vec::new();
     // Which declared column claimed each position of the file, so a second
-    // claim on the same position is caught rather than duplicated.
-    let mut claimed: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    // claim on the same position is caught rather than duplicated. A
+    // position opened at two different `pointer`s is two values, not one
+    // claimed twice: `games` holds the sell price and the buy price.
+    let mut claimed: std::collections::HashMap<(usize, Option<&str>), String> = std::collections::HashMap::new();
     // Declared-absent columns to fill with nulls, as `constant` transforms.
     let mut null_fills: Vec<String> = Vec::new();
     // The framing's own notes travel with the plan. The sniffer's auto-drop of
@@ -1594,7 +1603,8 @@ fn fit_framed(
         };
 
         let idx = header.iter().position(|h| *h == source).expect("bound to a real header cell");
-        if let Some(other) = claimed.get(&idx) {
+        let claim = (idx, tc.pointer.as_deref());
+        if let Some(other) = claimed.get(&claim) {
             gaps.push(Gap::Collides {
                 column: tc.name.clone(),
                 other: other.clone(),
@@ -1602,9 +1612,27 @@ fn fit_framed(
             });
             continue;
         }
-        claimed.insert(idx, tc.name.clone());
-        let values: Vec<&str> =
+        claimed.insert(claim, tc.name.clone());
+        let raw: Vec<&str> =
             rows.iter().map(|r| r.get(idx).map(|s| s.as_str()).unwrap_or("")).collect();
+        // A declared pointer: the candidates are the pointed-at values, and
+        // those are what is type-checked — never the JSON text around them.
+        let pointed = match pointed_values(tc, &draft.extraction, &raw) {
+            Ok(p) => p,
+            Err(why) => {
+                gaps.push(Gap::Untypable {
+                    column: tc.name.clone(),
+                    source: source.clone(),
+                    want: render(&tc.dtype),
+                    why,
+                });
+                continue;
+            }
+        };
+        let values: Vec<&str> = match &pointed {
+            Some(p) => p.iter().map(String::as_str).collect(),
+            None => raw,
+        };
 
         match type_for(
             &Want { column: &tc.name, source: &source, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round, year_pivot: tc.year_pivot, epoch: tc.epoch },
@@ -1623,7 +1651,7 @@ fn fit_framed(
                     dtype,
                     nullable: tc.nullable,
                     parse,
-                    pointer: None,
+                    pointer: tc.pointer.clone(),
                 });
             }
             Err(g) => gaps.push(g),
@@ -1712,6 +1740,31 @@ fn fit_framed(
         (!rs.is_empty()).then(|| rs.join("; "))
     };
     Ok(Fitted { spec, notes, review })
+}
+
+/// A column's values as its declared `pointer` reads them, `None` when it
+/// declares none. The executor's own function does the reading
+/// ([`engine::json_pointer_value`]), so a value that resolves here resolves
+/// identically there: nothing is a null, an object or an array is the error
+/// it is in a sidecar. On a member not read as JSON the sidecar's own rule
+/// refuses the pointer.
+fn pointed_values(
+    tc: &crate::target::TargetColumn,
+    extraction: &Extraction,
+    raw: &[&str],
+) -> Result<Option<Vec<String>>, String> {
+    let Some(ptr) = &tc.pointer else { return Ok(None) };
+    if !matches!(extraction, Extraction::Json { .. }) {
+        return Err(format!(
+            "`pointer` reads inside a JSON value, and this file is read as {}",
+            extraction.format_name()
+        ));
+    }
+    raw.iter()
+        .enumerate()
+        .map(|(i, v)| engine::json_pointer_value(v, ptr, i + 1).map_err(|e| format!("{e:#}")))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 /// The post-transform header and body the executor will see, capped.

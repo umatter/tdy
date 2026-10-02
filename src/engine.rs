@@ -92,7 +92,7 @@ fn split_partial(
 /// *is* an error is a pointer that lands on an object or an array, because the
 /// column would quietly go back to holding JSON text — the state a pointer is
 /// declared to get out of.
-fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<String> {
+pub(crate) fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<String> {
     let t = raw.trim();
     if t.is_empty() {
         return Ok(String::new());

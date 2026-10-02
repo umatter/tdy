@@ -141,6 +141,11 @@ pub fn target_hash(t: &Target) -> String {
         if let Some(u) = c.epoch {
             h.update(format!("e{u:?}").as_bytes());
         }
+        // Where inside a JSON value the column's value lives is what the
+        // column means: `/nh/sellPrice` and `/nl/sellPrice` are two prices.
+        if let Some(p) = &c.pointer {
+            h.update(format!("p{p:?}").as_bytes());
+        }
         for m in &c.matches {
             h.update(b"\x1f");
             h.update(m.as_bytes());
@@ -901,6 +906,23 @@ mod tests {
         }
     }
 
+    /// Where a column's value lives inside a JSON value is what the column
+    /// means: declaring, moving or retracting a pointer voids the proofs.
+    #[test]
+    fn pointer_is_part_of_the_targets_meaning() {
+        let hashes: Vec<String> = [
+            "CREATE TABLE t (a TEXT OPTIONS(matches = 'games')) WITH (files = '*.json')",
+            "CREATE TABLE t (a TEXT OPTIONS(matches = 'games', pointer = '/nh/x')) WITH (files = '*.json')",
+            "CREATE TABLE t (a TEXT OPTIONS(matches = 'games', pointer = '/nl/x')) WITH (files = '*.json')",
+        ]
+        .iter()
+        .map(|s| target_hash(&t(s)))
+        .collect();
+        assert_ne!(hashes[0], hashes[1]);
+        assert_ne!(hashes[1], hashes[2]);
+        assert_ne!(hashes[0], hashes[2]);
+    }
+
     /// Declaring or retracting rounding changes what a member may do, so it
     /// voids the proofs, as `if_missing` does.
     #[test]
@@ -947,6 +969,9 @@ mod tests {
         assert_ne!(h(yp, date, ""), h(date, yp, ""), "year_pivot");
         let ep = "DATE OPTIONS(epoch = 'seconds')";
         assert_ne!(h(ep, date, ""), h(date, ep, ""), "epoch");
+        let text = "TEXT OPTIONS(matches = 'games')";
+        let pt = "TEXT OPTIONS(matches = 'games', pointer = '/nh/x')";
+        assert_ne!(h(pt, text, ""), h(text, pt, ""), "pointer");
         // And the table-level one moves the hash both ways.
         assert_ne!(h(date, date, ""), h(date, date, ", provenance = 'true'"), "provenance");
         assert_eq!(h(date, date, ""), h(date, date, ", provenance = 'false'"), "provenance off is absent");
