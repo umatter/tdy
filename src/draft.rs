@@ -673,9 +673,12 @@ impl JsonLeaves {
         for p in seen_deep {
             *self.too_deep.entry(p).or_default() += 1;
         }
-        let mut names = BTreeSet::new();
+        // A document's vocabulary, for the grouping note, is its top-level
+        // keys: which games a villager appears in is the contents of one
+        // key, and drift there is what `if_missing` is for — grouping by
+        // leaves split villagerdb's 483 villagers into five "datasets".
+        let names: BTreeSet<String> = entries.iter().map(|(k, _)| crate::sniff::sanitize(k)).collect();
         for (p, value, array) in found {
-            names.insert(crate::sniff::sanitize(&p.join("_")));
             let i = match self.at.get(&p) {
                 Some(i) => *i,
                 None => {

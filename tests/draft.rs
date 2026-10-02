@@ -425,3 +425,18 @@ fn leaf_names_that_collide_are_deduped_and_said() {
     assert!(second.contains("pointer = '/afe+/song'") && second.contains("games/afe+/song"), "{second}");
     fits_every_file(&sql, &files);
 }
+
+/// Documents that share their top-level keys are one dataset however
+/// differently their nested objects are filled: which games a villager
+/// appears in is the contents of one key, and that drift is what
+/// `if_missing` is for, not a second dataset.
+#[test]
+fn documents_with_the_same_top_level_keys_are_one_dataset() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":"a","games":{"ac":{"song":"x","phrase":"p"},"ww":{"song":"y"}}}"#),
+        ("b.json", r#"{"id":"b","games":{"nh":{"song":"z","quote":"q"},"cf":{"song":"w"}}}"#),
+        ("c.json", r#"{"id":"c","games":{"nl":{"skill":"s","goal":"g","fear":"f"}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    assert!(!sql.contains("do not look like ONE dataset"), "{sql}");
+}
