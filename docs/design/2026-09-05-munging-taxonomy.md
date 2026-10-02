@@ -1642,7 +1642,7 @@ keep='last')` (pandas), `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …) = 1`,
 to find that line in the original file; or a union of forty members needs to know
 which member each row came from.
 
-**`spec`** since 2026-09-06 — `WITH (provenance = true)` on a target adds
+**`spec`** since 2026-09-06 — `WITH (provenance = 'true')` on a target adds
 `_member` (the member's lock-relative path) and `_row` (1-based within that
 member) to what `dataset()` returns. Opt-in, since a dataset's schema is what
 the declaration says it is, and part of `target_hash`, since turning it on
@@ -2222,7 +2222,7 @@ would mean producing a value the file does not contain.
    cures and an ordinary wide report are indistinguishable from the file alone.
 ~~2. **C9 + H4 · Source identity as data.**~~ **Done, 2026-09-06 and
    2026-09-07** — `source_name` reads a column out of the path (or the sheet, or
-   the region), and `WITH (provenance = true)` gives a row `_member` and `_row`.
+   the region), and `WITH (provenance = 'true')` gives a row `_member` and `_row`.
    The *sheet* half landed with workbook members: a workbook with several
    fitting sheets is one member per sheet. What stays manual is that `fit`
    never plans a `source_name` (**C9**).

@@ -22,7 +22,8 @@ lists every such change. As with 0.2.0, a fresh sidecar is not invalidated by
 the upgrade: its file's blake3 still matches, so a `<file>.tdy.toml` written by
 0.2.0 keeps being used — and then re-proved, against the target and by a dry
 run, on every `tdy fit` and every `dataset()` query, which is where most of the
-changes below take effect.
+changes below take effect. A 0.2.0 lock keeps its proofs too, when its target
+declares none of the new options (*Locks*, below).
 
 ### Changed — what you will notice upgrading from 0.2.0
 
@@ -50,15 +51,19 @@ changes below take effect.
   in force** — declared with `year_pivot`, or chrono's default (00–69 → 20xx,
   70–99 → 19xx). A target column declaring exactly that window with
   `OPTIONS(year_pivot = 'N')` authorises it with a note and no review.
-- **Body transforms see rows after the ragged policy on both executors.** The
-  streaming executor always applied `ragged` as it read; the materialising one
-  applied it later, so a whole-row `drop_rows_matching` or `remove_empty` on a
-  headerless file tested the row before the policy had judged it. Under
-  `ragged = "error"`, a file whose too-wide row such a `drop_rows_matching`
-  removed is now refused by the materialising executor as the streaming one
-  already refused it; under `truncate_extra` both transforms now test the
-  truncated row, so a row count can change. The sniffer chooses `pad_nulls`, so
-  a sniffed spec is unaffected.
+- **Body transforms see rows after the ragged policy on both executors.** This
+  reaches only the materialising executor — which runs a delimited spec the
+  streaming one cannot take, or any spec under `TDY_NO_STREAM=1` — and only a
+  headerless delimited file with a whole-row `drop_rows_matching` or
+  `remove_empty`. The streaming executor always applied `ragged` as it read and
+  is unchanged; a spec that promotes a header was already rectangularised
+  before its body transforms. In that one case the materialising executor
+  tested a row before the policy had judged it. Now, under `ragged = "error"`,
+  a file whose too-wide row such a `drop_rows_matching` removed is refused, as
+  the streaming executor already refused it; under `truncate_extra` the two
+  transforms test the truncated row, so the row count can change to what the
+  streaming executor already returned. The sniffer chooses `pad_nulls`, so a
+  sniffed spec is unaffected.
 - **A sheet's blank body rows are no longer all-NULL records.** They inflated
   `count(*)` on any sheet with spacer rows. They are dropped past the last
   framing transform, so a hand-written `skip_rows` still counts the rows it
@@ -91,7 +96,18 @@ changes below take effect.
   about the pile.
 - **Compressed files are read, not refused.** 0.2.0 read a gzip file as text
   and returned one confident column of mojibake. gzip, zstd, bzip2 and xz are
-  now decompressed (see *Added*); lz4 and zip are refused by name.
+  now decompressed (see *Added*); lz4 and zip are refused by name. A sidecar
+  0.2.0 wrote for a compressed file still matches its fingerprint — that is
+  over the compressed bytes, then and now — so its old frame keeps being used,
+  now over the decompressed text (on a gzip CSV: one text column holding each
+  whole line, at the old low confidence), until the sidecar is deleted or the
+  file re-sniffed with `tdy sniff FILE --force`.
+- **Locks.** A lock written by the published 0.2.0 stays valid when its target
+  declares none of the options added since (`round`, `epoch`, `year_pivot`,
+  `provenance`), and its sidecars are reused as they are. A lock written by an
+  unreleased build between 0.2.0 and 0.3.0 (0.2.1 was never published) is out
+  of date once: `dataset()` refuses it until `tdy fit TARGET`, which reuses the
+  sidecars.
 
 ### Fixed — both found by the Pollock benchmark
 
@@ -127,6 +143,16 @@ from RFC 4180 each turned up two things nothing in the tree had:
 
 ### Fixed — found since
 
+- **A lock written by 0.2.0 is no longer refused as out of date.** The one
+  code change made while preparing this release. `target_hash` hashed `round`
+  and `provenance` for every target, though its own comment said an absent
+  option hashes nothing, so every 0.2.0 lock failed with "the target
+  declaration changed, so every member must be re-fitted". Every option added
+  since 0.2.0 now contributes to the hash only when declared, inside its own
+  column's segment, and the hash 0.2.0 wrote for
+  `testdata/drifting_exports/sales_ok.tdy.sql` is pinned as a test. A lock
+  written by the 0.2.0 binary over that pile queries unchanged: 36 rows,
+  57,340.00.
 - **Padded title lines in a CSV are skipped as titles.** A leading run of lines
   whose only filled cell is the first (`Table 1. …;;`, a title padded to the
   table's width as Excel writes CSV) is skipped as one-field title lines are —
@@ -227,7 +253,7 @@ from RFC 4180 each turned up two things nothing in the tree had:
   property of the extraction, and passing it separately would be a second
   thing that could disagree with the rows.
 
-- **`WITH (provenance = true)`: a row can say where it came from.** Adds
+- **`WITH (provenance = 'true')`: a row can say where it came from.** Adds
   `_member` (the member's name as the lock records it, relative to the
   target — `book.xlsx#Q1` for a sheet member) and `_row` (1-based **within
   that member**) to what `dataset()` returns.
