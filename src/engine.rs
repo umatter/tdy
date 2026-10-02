@@ -1889,7 +1889,14 @@ pub(crate) fn build_column_at(
                 {
                     bail!("{t:?} is not a number (add it to na_values if it means \"missing\")");
                 }
-                t.parse::<f64>().map_err(|e| anyhow!("{e}"))
+                let x = t.parse::<f64>().map_err(|e| anyhow!("{e}"))?;
+                // Digits a double cannot hold are not infinity, and not zero:
+                // either would be a plausible wrong number.
+                let mantissa = t.split(['e', 'E']).next().unwrap_or(t);
+                if !x.is_finite() || (x == 0.0 && mantissa.bytes().any(|b| matches!(b, b'1'..=b'9'))) {
+                    bail!("{t} is outside a double's range");
+                }
+                Ok(x)
             });
             (ArrowType::Float64, Arc::new(Float64Array::from(out)))
         }
@@ -3133,6 +3140,30 @@ mod tests {
         assert!(build_column_at(&col, &["NaN"], 0).is_err());
         assert!(build_column_at(&col, &["Infinity"], 0).is_err());
         assert!(build_column_at(&col, &["1.5"], 0).is_ok());
+    }
+
+    /// A literal outside a double's range is not infinity and not zero: both
+    /// would be a plausible wrong number. `inf`/`nan` as words are refused
+    /// above; these are digits that overflow or underflow.
+    #[test]
+    fn a_float_outside_a_doubles_range_is_refused_naming_the_row() {
+        let col = ColumnSpec {
+            name: "v".into(),
+            source: None,
+            dtype: DType::Float64,
+            nullable: true,
+            parse: ValueParsing::default(),
+            pointer: None,
+        };
+        for bad in ["1E400", "-1e400", "1e-400", "-2.5e-999", "0.000001e-330"] {
+            let err = build_column_at(&col, &["1.5", bad], 0).expect_err(bad);
+            let msg = format!("{err:#}");
+            assert!(msg.contains("row 2") && msg.contains(bad) && msg.contains("outside a double's range"), "{msg}");
+        }
+        for zero in ["0.0", "0e0", "-0.0", "0.000", "0", "0E-400"] {
+            assert!(build_column_at(&col, &[zero], 0).is_ok(), "{zero}");
+        }
+        assert!(build_column_at(&col, &["1.7976931348623157e308", "5e-324"], 0).is_ok());
     }
 
     #[test]

@@ -226,3 +226,69 @@ fn bigint_and_a_short_scale_are_still_refused() {
     assert!(!fit.status.success(), "{text}");
     assert!(text.contains("fractional digits") && text.contains("round = 'half_away'"), "{text}");
 }
+
+// ---------------------------------------------------------------------------
+// a literal outside a double's range
+// ---------------------------------------------------------------------------
+
+fn float_spec(extraction: Extraction) -> ParseSpec {
+    let mut x = text_col("x");
+    x.dtype = DType::Float64;
+    let mut s = spec(extraction, vec![x]);
+    if matches!(s.extraction, Extraction::Delimited { .. }) {
+        s.transforms = vec![Transform::PromoteHeader { rows: 1, join: " ".into() }];
+    }
+    s
+}
+
+fn csv() -> Extraction {
+    Extraction::Delimited {
+        delimiter: ';',
+        quote: Some('"'),
+        escape: None,
+        encoding: None,
+        comment: None,
+        ragged: RaggedPolicy::Error,
+        region: None,
+    }
+}
+
+/// `1E400` is no double: reading it as `inf` (or `1e-400` as `0`) is a
+/// plausible wrong number. Both executors refuse it, naming the row, in
+/// NDJSON and in CSV alike.
+#[test]
+fn a_float_outside_a_doubles_range_is_refused_on_both_executors() {
+    use tdy::config::Limits;
+    let dir = TempDir::new().unwrap();
+    for (bad, name, body, extraction) in [
+        ("1E400", "o.ndjson", "{\"x\":1.5}\n{\"x\":1E400}\n", Extraction::Json { lines: true, pointer: None, record: false }),
+        ("1e-400", "u.ndjson", "{\"x\":1.5}\n{\"x\":1e-400}\n", Extraction::Json { lines: true, pointer: None, record: false }),
+        ("1E400", "o.csv", "x\n1.5\n1E400\n", csv()),
+        ("1e-400", "u.csv", "x\n1.5\n1e-400\n", csv()),
+    ] {
+        let p = write(&dir, name, body);
+        let s = float_spec(extraction);
+        let engine = tdy::engine::execute_batches(&s, &p, Limits::default()).expect_err(name);
+        let streamed = tdy::stream::execute_batches(&s, &p, Limits::default()).expect_err(name);
+        for e in [engine, streamed] {
+            let msg = format!("{e:#}");
+            assert!(msg.contains("row 2") && msg.contains(bad) && msg.contains("outside a double's range"), "{name}: {msg}");
+        }
+    }
+    // Zeros written as zeros are zeros.
+    let p = write(&dir, "z.ndjson", "{\"x\":0.0}\n{\"x\":0e0}\n{\"x\":-0.0}\n{\"x\":0.000}\n");
+    let b = spec_to_batch(&float_spec(Extraction::Json { lines: true, pointer: None, record: false }), &p).unwrap();
+    assert_eq!(b.num_rows(), 4);
+}
+
+/// Under a DOUBLE target the same file is a gap naming the row, not a fit.
+#[test]
+fn a_float_outside_a_doubles_range_is_a_gap_under_a_double_target() {
+    let dir = TempDir::new().unwrap();
+    write(&dir, "a.ndjson", "{\"x\":1.5}\n{\"x\":1E400}\n");
+    let t = write(&dir, "t.tdy.sql", "CREATE TABLE t (x DOUBLE) WITH (files = '*.ndjson')");
+    let fit = tdy(&["fit", t.to_str().unwrap()]);
+    let text = out(&fit);
+    assert!(!fit.status.success(), "{text}");
+    assert!(text.contains("row 2") && text.contains("1E400") && text.contains("outside a double's range"), "{text}");
+}
