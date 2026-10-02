@@ -81,7 +81,17 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   (`1e3` is still `1000.0`), one it did not reads as the file wrote it. Such
   an identifier now fits a `DECIMAL(38, 0)` or `TEXT` column, and a long
   amount lands exactly in `DECIMAL(p, s)`. A number past a double's range
-  (`1E400`) is read as written where the whole document used to be refused.
+  (`1E400`) is read as written into `TEXT` where the whole document used to
+  be refused.
+- **A float64 column of 17-digit values is now correctly rounded.** serde_json
+  (as tdy builds it) read such a literal with two roundings and landed one
+  unit in the last place off for about one value in ten — `0.09743057599473337`
+  was served as `0.09743057599473336`. Those values now read as the nearest
+  double, so a float64 column written with 17 digits can change in its last
+  digit. Nothing else that a double held moves.
+- **A number outside a double's range is refused in a float64 column**, naming
+  the row: `1E400` read as `inf` and `1e-400` as `0` — in a CSV always, and in
+  JSON once the reader kept the literal. A zero written as a zero is a zero.
 
 ### What a pile of one-object documents costs, and what is deferred
 

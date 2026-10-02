@@ -292,3 +292,32 @@ fn a_float_outside_a_doubles_range_is_a_gap_under_a_double_target() {
     assert!(!fit.status.success(), "{text}");
     assert!(text.contains("row 2") && text.contains("1E400") && text.contains("outside a double's range"), "{text}");
 }
+
+/// serde_json without `float_roundtrip` reads a 17-digit literal through
+/// `significand as f64` and one multiply or divide by a power of ten — two
+/// roundings — and lands one ULP off for about one in ten such values
+/// (`0.09743057599473337`, from a random 100 MB export). tdy used to serve that
+/// double; the literal now reaches the Float64 cast as written and is parsed
+/// correctly rounded. A correction, and the one place float64 data moves.
+#[test]
+fn a_seventeen_digit_double_is_correctly_rounded() {
+    use datafusion::arrow::array::Float64Array;
+    let lit = "0.09743057599473337";
+    let serde: f64 = serde_json::from_str(lit).unwrap();
+    let exact: f64 = lit.parse().unwrap();
+    assert_ne!(serde.to_bits(), exact.to_bits(), "the case this pins: serde_json is one ULP off");
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "r.ndjson", &format!("{{\"x\":{lit}}}\n"));
+    let mut x = text_col("x");
+    x.dtype = DType::Float64;
+    for executor in ["engine", "stream"] {
+        let s = spec(Extraction::Json { lines: true, pointer: None, record: false }, vec![x.clone()]);
+        let batches = if executor == "engine" {
+            tdy::engine::execute_batches(&s, &p, tdy::config::Limits::default()).unwrap()
+        } else {
+            tdy::stream::execute_batches(&s, &p, tdy::config::Limits::default()).unwrap()
+        };
+        let got = batches[0].column(0).as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+        assert_eq!(got.to_bits(), exact.to_bits(), "{executor}: {got:?}");
+    }
+}

@@ -820,8 +820,14 @@ keeps keys in document order and each number as its source text, rendered into a
 when one is asked for (header discovery and the sniffer's walks never render), by
 **`jsondoc::render`'s rule**: if serde_json held the number exactly (u64/i64, or an f64 whose shortest rendering
 denotes the same real number — compared as normalised decimal digits, never as floats), the
-cell is serde_json's rendering (`1e3` → `1000.0`, `-0` → `-0.0`), so ordinary data does not
-move by a byte; otherwise it is the source text verbatim. An integer written without
+cell is serde_json's rendering (`1e3` → `1000.0`, `-0` → `-0.0`); otherwise it is the source
+text verbatim. That is not "nothing moves": a float64 column moves where serde_json was wrong.
+Built without `float_roundtrip`, serde_json reads a 17-digit literal as `significand as f64`
+then one multiply or divide by a power of ten — two roundings — and lands one ULP off for about
+one value in ten (10.6% of a random float column of 595k rows; `0.09743057599473337` read as
+`…336`). Such a literal is not exact by the rule, reaches the Float64 cast as written and is
+parsed correctly rounded: a correction, pinned by
+`json_numbers::a_seventeen_digit_double_is_correctly_rounded`. An integer written without
 fraction or exponent past u64/i64 is never exact, even when a double equals it
 (`100000000000000000000`, not `1e+20`). Every data path goes through it — the record and
 array extractions, NDJSON in `engine` and `stream`, `json_pointer_value`'s re-read of a nested

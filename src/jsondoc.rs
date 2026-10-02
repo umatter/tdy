@@ -20,9 +20,10 @@
 //!
 //! **A number cell keeps its digits.** [`render`] is the whole rule: a
 //! number that serde_json held exactly renders exactly as serde_json renders
-//! it (`1.0`, `1e3` → `1000.0`, `-0` → `-0.0`), so ordinary data reads byte
-//! for byte as it always did; a number it did not hold exactly renders as the
-//! text the file wrote. Only the numbers that used to come out wrong change.
+//! it (`1.0`, `1e3` → `1000.0`, `-0` → `-0.0`); a number it did not hold
+//! exactly renders as the text the file wrote. Only numbers that used to come
+//! out wrong change — including 17-digit literals serde_json's two-rounding
+//! parse put one ULP off, which a Float64 column now reads correctly rounded.
 
 use std::fmt;
 
@@ -313,8 +314,8 @@ enum Rendered {
 ///
 /// serde_json holds an integer that fits `u64`/`i64` as one, and anything
 /// else as the nearest `f64`. When that value is the number the file wrote,
-/// the cell is serde_json's rendering of it — what tdy has always produced,
-/// so ordinary data does not move by a byte. When it is not — an integer past
+/// the cell is serde_json's rendering of it — what tdy has always produced.
+/// When it is not — an integer past
 /// `u64`, a decimal with more digits than a double carries, a magnitude a
 /// double overflows or underflows — the cell is the file's own text, and the
 /// typing downstream decides what it is (an oversized integer stays text or
