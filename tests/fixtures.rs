@@ -276,7 +276,7 @@ fn impossible_dates_are_not_typed_as_dates() {
 fn a_wrapped_records_array_is_found() {
     let (spec, b) = read("json_shapes/json_shapes_wrapped.json");
     match &spec.extraction {
-        Extraction::Json { lines, pointer } => {
+        Extraction::Json { lines, pointer, .. } => {
             assert!(!lines);
             assert_eq!(pointer.as_deref(), Some("/data"));
         }

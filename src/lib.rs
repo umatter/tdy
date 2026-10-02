@@ -33,6 +33,7 @@ pub mod evidence;
 pub mod fileio;
 pub mod fit;
 pub mod infer;
+pub(crate) mod jsondoc;
 pub mod lockfile;
 pub mod magnitude;
 pub mod member;

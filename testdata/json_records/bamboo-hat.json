@@ -1,0 +1,14 @@
+{
+  "id": "bamboo-hat",
+  "name": "Bamboo Hat",
+  "category": "Hats",
+  "games": {
+    "nh": {
+      "orderable": true,
+      "sellPrice": {
+        "currency": "bells",
+        "value": 280
+      }
+    }
+  }
+}

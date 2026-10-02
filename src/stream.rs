@@ -89,7 +89,7 @@ pub fn can_stream(spec: &ParseSpec) -> bool {
         // NDJSON records are independent lines, so they stream; a JSON
         // *array* is one document and has to be parsed whole before any
         // record exists. A pointer only applies to the array form.
-        Extraction::Json { lines: true, pointer: None } => true,
+        Extraction::Json { lines: true, pointer: None, record: false } => true,
         _ => return false,
     };
     // `promote_header` over a source that already has a header replaces it

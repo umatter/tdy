@@ -1035,55 +1035,185 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
     drop(bytes);
     let trimmed = text.trim_start();
 
-    let (lines, pointer) = match serde_json::from_str::<serde_json::Value>(&text) {
+    let (lines, pointer, record) = match serde_json::from_str::<serde_json::Value>(&text) {
         Ok(doc) => match &doc {
-            serde_json::Value::Array(_) => (false, None),
+            serde_json::Value::Array(_) => (false, None, false),
             serde_json::Value::Object(_) => {
                 // The records array may be nested — `{"data": {"items": [...]}}`
                 // is as common in API dumps as a top-level one.
                 let mut found = Vec::new();
                 find_record_arrays(&doc, &mut String::new(), &mut found, 0);
                 if found.is_empty() {
-                    bail!(
-                        "this JSON document contains no array of records; set \
-                         `pointer` in the sidecar to the array you mean"
-                    );
-                }
-                // Prefer arrays of objects, then longer, then shallower.
-                found.sort_by_key(|c| (!c.of_objects, usize::MAX - c.len, c.depth, c.pointer.clone()));
-                let best = &found[0];
-                if found.len() > 1 {
-                    doubts.add(
-                        0.25,
-                        format!(
-                            "the document has {} candidate record arrays; reading {:?}. \
-                             Set `pointer` in the sidecar to choose a different one.",
-                            found.len(),
+                    // An empty array is the ordinary "no results" export:
+                    // zero records, and the envelope around them is not one.
+                    if let Some(empty) = first_empty_array(&doc, &mut String::new(), 0) {
+                        bail!("{}", empty_array_message(&empty));
+                    }
+                    // Nothing to be a table of: the document is the record,
+                    // and a directory of them is the table.
+                    doubts.note(RECORD_NOTE);
+                    // ...unless every top-level value is itself an object:
+                    // `{"ace": {...}, "bob": {...}}` is as likely a map of
+                    // records keyed by name. Read (no value is wrong), never
+                    // confidently.
+                    if let serde_json::Value::Object(map) = &doc {
+                        if map.len() >= 2 && map.values().all(serde_json::Value::is_object) {
+                            let keys: Vec<String> = map.keys().take(2).map(|k| format!("`{k}`")).collect();
+                            doubts.add(
+                                0.25,
+                                format!(
+                                    "every top-level value is an object — this may be a map of records \
+                                     keyed by {}, … rather than one record",
+                                    keys.join(", ")
+                                ),
+                            );
+                        }
+                    }
+                    (false, None, true)
+                } else {
+                    // Prefer arrays of objects, then longer, then shallower.
+                    found.sort_by_key(|c| (!c.of_objects, usize::MAX - c.len, c.depth, c.pointer.clone()));
+                    let best = &found[0];
+                    // The array keeps its reading — `messy('report.json')` on
+                    // a document whose point is its `rows` must not start
+                    // returning one row — but the other reading is named.
+                    // An empty array beside the one read is zero records,
+                    // and a person choosing between readings should see it.
+                    let mut empties = Vec::new();
+                    empty_arrays(&doc, &mut String::new(), 0, &mut empties);
+                    for e in &empties {
+                        doubts.note(format!("`{e}` is empty — zero records"));
+                    }
+                    if found.len() > 1 {
+                        doubts.add(
+                            0.25,
+                            format!(
+                                "the document has {} candidate record arrays; reading {:?}. \
+                                 Set `pointer` in the sidecar to choose a different one, {RECORD_ALTERNATIVE}.",
+                                found.len(),
+                                best.pointer
+                            ),
+                        );
+                    } else if best.depth > 1 {
+                        doubts.note(format!(
+                            "records read from the nested array at {:?}; {RECORD_ALTERNATIVE}",
                             best.pointer
-                        ),
-                    );
-                } else if best.depth > 1 {
-                    doubts.note(format!("records read from the nested array at {:?}", best.pointer));
+                        ));
+                    } else {
+                        doubts.note(format!("records read from the array at {:?}; {RECORD_ALTERNATIVE}", best.pointer));
+                    }
+                    (false, Some(best.pointer.clone()), false)
                 }
-                (false, Some(best.pointer.clone()))
             }
             _ => bail!("JSON document is a scalar; nothing tabular to extract"),
         },
         Err(_) if trimmed.starts_with('{') || trimmed.starts_with('[') => {
             // Not one valid document: NDJSON.
-            (true, None)
+            (true, None, false)
         }
         Err(e) => bail!("file has a .json-ish extension but does not parse as JSON: {e}"),
     };
 
-    let extraction = Extraction::Json { lines, pointer };
+    let extraction = Extraction::Json { lines, pointer, record };
     let table = engine::extract(&extraction, path, &ExtractOpts::capped(limits, PROBE_ROWS))
         .with_context(|| format!("probing {}", path.display()))?;
     finish(extraction, vec![], table, 0.95, doubts, &std::collections::HashSet::new())
 }
 
+/// The refusal for a root object whose only arrays are empty.
+fn empty_array_message(pointer: &str) -> String {
+    format!(
+        "`{pointer}` is an empty array — zero records. If the document itself is the \
+         record, set `record = true` in the sidecar ([spec.extraction])"
+    )
+}
+
+/// The first empty array in a document, by the same walk (and the same
+/// depth bound) [`find_record_arrays`] makes for non-empty ones.
+fn first_empty_array(v: &serde_json::Value, prefix: &mut String, depth: usize) -> Option<String> {
+    if depth > 6 {
+        return None;
+    }
+    match v {
+        serde_json::Value::Array(a) if a.is_empty() => Some(prefix.clone()),
+        serde_json::Value::Object(map) => map.iter().find_map(|(k, child)| {
+            let mark = prefix.len();
+            prefix.push('/');
+            prefix.push_str(&escape_pointer_token(k));
+            let found = first_empty_array(child, prefix, depth + 1);
+            prefix.truncate(mark);
+            found
+        }),
+        _ => None,
+    }
+}
+
+/// Every empty array in a document, by the same bounded walk.
+pub(crate) fn empty_arrays(v: &serde_json::Value, prefix: &mut String, depth: usize, out: &mut Vec<String>) {
+    if depth > 6 || out.len() > 64 {
+        return;
+    }
+    match v {
+        serde_json::Value::Array(a) if a.is_empty() => out.push(prefix.clone()),
+        serde_json::Value::Object(map) => {
+            for (k, child) in map {
+                let mark = prefix.len();
+                prefix.push('/');
+                prefix.push_str(&escape_pointer_token(k));
+                empty_arrays(child, prefix, depth + 1, out);
+                prefix.truncate(mark);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`empty_arrays`] of a file's document; empty for anything unreadable.
+pub(crate) fn empty_arrays_in(path: &Path, limits: Limits) -> Vec<String> {
+    let Ok(bytes) = crate::fileio::read_all(path, limits.max_file_bytes) else { return Vec::new() };
+    let (text, _) = crate::sample::decode_text(&bytes, None);
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let mut out = Vec::new();
+    empty_arrays(&doc, &mut String::new(), 0, &mut out);
+    out
+}
+
+/// For `fit`: the record frame of a root object the sniffer declines because
+/// its only arrays are empty, with the first of them. A pile's target may
+/// still bind the envelope's own keys; that is the target's decision, not a
+/// reading the sniffer makes on its own.
+pub(crate) fn empty_array_record_frame(path: &Path, limits: Limits) -> Option<(ParseSpec, String)> {
+    let bytes = crate::fileio::read_all(path, limits.max_file_bytes).ok()?;
+    let (text, _) = crate::sample::decode_text(&bytes, None);
+    let doc = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    if !doc.is_object() {
+        return None;
+    }
+    let mut found = Vec::new();
+    find_record_arrays(&doc, &mut String::new(), &mut found, 0);
+    if !found.is_empty() {
+        return None;
+    }
+    let empty = first_empty_array(&doc, &mut String::new(), 0)?;
+    let spec = ParseSpec {
+        extraction: Extraction::Json { lines: false, pointer: None, record: true },
+        transforms: Vec::new(),
+        columns: Vec::new(),
+        confidence: None,
+        notes: Vec::new(),
+    };
+    Some((spec, empty))
+}
+
+/// What the sniffer says about a root object with no array in it.
+pub(crate) const RECORD_NOTE: &str = "this document is one object and is read as one record";
+
+/// The other reading of a root object that holds arrays, named beside the one
+/// the sniffer picked.
+const RECORD_ALTERNATIVE: &str = "or the document itself as one record (`record = true`)";
+
 /// RFC 6901: `~` is `~0` and `/` is `~1`.
-fn escape_pointer_token(s: &str) -> String {
+pub(crate) fn escape_pointer_token(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
 }
 
@@ -2076,6 +2206,25 @@ fn accounting_shape(sample: &[&str]) -> Option<&'static str> {
     numfmt::infer(&bodies).and(kind)
 }
 
+/// The type the sniffer would give a column holding `values`, over all of
+/// them rather than the first [`TYPE_SAMPLE`]: `tdy draft` collects one leaf
+/// per document across a pile, and a type that only the first five hundred
+/// documents support would refuse the five-hundred-and-first at fit time.
+/// Guessed in sample-sized chunks of the non-missing values and widened with
+/// `widen` across chunks, so each chunk is judged exactly as a sniff judges
+/// a column. `None` when no value is present at all.
+pub(crate) fn guess_dtype_all(
+    values: &[&str],
+    name: &str,
+    mut widen: impl FnMut(&DType, &DType) -> DType,
+) -> Option<DType> {
+    let present: Vec<&str> = values.iter().map(|v| v.trim()).filter(|v| !is_na(v)).collect();
+    present
+        .chunks(TYPE_SAMPLE)
+        .map(|chunk| guess_type(chunk, name, false).dtype)
+        .reduce(|a, b| widen(&a, &b))
+}
+
 fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGuess {
     let sample: Vec<&str> = values
         .iter()
@@ -2435,6 +2584,98 @@ fn dedupe(names: &mut [String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sniff_json_text(body: &str) -> Result<SniffResult> {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("doc.json");
+        std::fs::write(&p, body).unwrap();
+        sniff_json(&p, Limits::default())
+    }
+
+    /// A root object with no array anywhere was declined; it is one record.
+    #[test]
+    fn a_lone_object_is_read_as_one_record() {
+        let r = sniff_json_text(r#"{"id":"ace","name":"Ace","games":{"nh":{"song":"K.K. Parade"}}}"#)
+            .expect("one object is one record");
+        assert!(
+            matches!(r.spec.extraction, Extraction::Json { lines: false, pointer: None, record: true }),
+            "{:?}",
+            r.spec.extraction
+        );
+        let names: Vec<&str> = r.spec.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["id", "name", "games"]);
+        assert!(
+            r.spec.notes.iter().any(|n| n.contains("this document is one object and is read as one record")),
+            "{:?}",
+            r.spec.notes
+        );
+    }
+
+    /// A root object holding arrays keeps today's reading — `messy()` on a
+    /// document whose point is its `rows` array must not start returning one
+    /// row — and the note names the other reading.
+    #[test]
+    fn an_object_with_an_array_keeps_the_array_and_names_the_record() {
+        for body in [
+            r#"{"meta":{"v":1},"rows":[{"a":1},{"a":2}]}"#,
+            r#"{"rows":[{"a":1},{"a":2}],"more":[{"b":1}]}"#,
+        ] {
+            let r = sniff_json_text(body).unwrap();
+            assert!(
+                matches!(&r.spec.extraction, Extraction::Json { pointer: Some(p), record: false, .. } if p == "/rows"),
+                "{body}: {:?}",
+                r.spec.extraction
+            );
+            assert!(
+                r.spec.notes.iter().any(|n| n.contains("or the document itself as one record (`record = true`)")),
+                "{body}: {:?}",
+                r.spec.notes
+            );
+        }
+    }
+
+    /// A root object whose only array is EMPTY is the ordinary "no results"
+    /// export: zero records, not one. Reading the envelope as a record made
+    /// `count(*)` 1. Declined, naming the empty array and the way to say the
+    /// document is the record.
+    #[test]
+    fn an_object_whose_arrays_are_all_empty_is_declined() {
+        let Err(e) = sniff_json_text(r#"{"status":"ok","count":0,"rows":[]}"#) else { panic!("zero records is not one record") };
+        let m = format!("{e:#}");
+        assert!(m.contains("`/rows` is an empty array") && m.contains("zero records"), "{m}");
+        assert!(m.contains("record = true"), "{m}");
+    }
+
+    /// A map of records keyed by name reads as one row whose cells are JSON
+    /// text. No value is wrong, so it is read, but never confidently.
+    #[test]
+    fn a_map_of_records_is_read_with_doubt() {
+        let r = sniff_json_text(r#"{"ace":{"name":"Ace","n":1},"bob":{"name":"Bob","n":2}}"#).unwrap();
+        assert!(r.confidence < 0.8, "{}", r.confidence);
+        assert!(
+            r.spec.notes.iter().any(|n| n.contains("every top-level value is an object")
+                && n.contains("map of records keyed by `ace`, `bob`")),
+            "{:?}",
+            r.spec.notes
+        );
+        // One object-valued key beside scalars is an ordinary record.
+        let r = sniff_json_text(r#"{"id":"ace","games":{"nh":{"song":"x"}}}"#).unwrap();
+        assert!(r.confidence >= 0.8, "{}", r.confidence);
+    }
+
+    /// Beside an array that is read, an empty one is named too: it is zero
+    /// records, and a person choosing between the readings should see it.
+    #[test]
+    fn an_empty_array_beside_the_one_read_is_named() {
+        let r = sniff_json_text(r#"{"rows":[],"items":[{"a":1},{"a":2}]}"#).unwrap();
+        assert!(r.spec.notes.iter().any(|n| n.contains("`/rows` is empty — zero records")), "{:?}", r.spec.notes);
+    }
+
+    /// A scalar document is still nothing tabular.
+    #[test]
+    fn a_scalar_document_is_still_declined() {
+        assert!(sniff_json_text("3").is_err());
+    }
 
     fn rows(v: &[&[&str]]) -> Vec<Vec<String>> {
         v.iter()

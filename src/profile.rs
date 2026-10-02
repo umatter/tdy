@@ -297,9 +297,12 @@ pub fn profile_member(
     };
     let mut notes = Vec::new();
     let mut candidates = Vec::new();
-    if let Extraction::Json { lines: false, pointer } = &mut frame.extraction {
+    if let Extraction::Json { lines: false, pointer, record } = &mut frame.extraction {
         match &req.pointer {
             Some(want) => {
+                // `--pointer` names a record array, so the document is no
+                // longer read as one record.
+                *record = false;
                 *pointer = Some(want.clone());
                 source.push_str("; record array from --pointer");
             }

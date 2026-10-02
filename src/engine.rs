@@ -92,7 +92,7 @@ fn split_partial(
 /// *is* an error is a pointer that lands on an object or an array, because the
 /// column would quietly go back to holding JSON text — the state a pointer is
 /// declared to get out of.
-fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<String> {
+pub(crate) fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<String> {
     let t = raw.trim();
     if t.is_empty() {
         return Ok(String::new());
@@ -576,7 +576,10 @@ pub fn extract(extraction: &Extraction, path: &Path, opts: &ExtractOpts) -> Resu
         Extraction::Lines { pattern, encoding, on_no_match } => {
             extract_lines(path, pattern, encoding.as_deref(), *on_no_match, opts)
         }
-        Extraction::Json { lines, pointer } => extract_json(path, *lines, pointer.as_deref(), opts),
+        Extraction::Json { lines: false, pointer, record: true } => {
+            extract_json_record(path, pointer.as_deref(), opts)
+        }
+        Extraction::Json { lines, pointer, .. } => extract_json(path, *lines, pointer.as_deref(), opts),
     }?;
     table.check_size(&opts.limits)?;
     table.source = SourceRef {
@@ -1098,6 +1101,37 @@ fn extract_json(
         .collect();
 
     Ok(RawTable::with_header(header, rows, truncated))
+}
+
+/// `record = true`: the object at `pointer` (the root when absent) is one
+/// row. Its keys, in the order the document wrote them, are the header; a
+/// nested value is a cell of compact JSON text, exactly as it is inside a
+/// record array. Anything but an object there is named and refused — a
+/// record is never coerced out of an array, a scalar or a null.
+fn extract_json_record(path: &Path, pointer: Option<&str>, opts: &ExtractOpts) -> Result<RawTable> {
+    let text = read_text(path, None, opts)?;
+    let doc = crate::jsondoc::Node::parse(&text).context("invalid JSON document")?;
+    let at = |p: Option<&str>| p.map(|p| format!(" at pointer {p:?}")).unwrap_or_default();
+    let node = match pointer {
+        Some(p) => doc.pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,
+        None => &doc,
+    };
+    let crate::jsondoc::Node::Object(entries) = node else {
+        bail!(
+            "`record = true` reads one JSON object as one row, and found {}{} — a record \
+             is never made out of anything else{}",
+            node.kind(),
+            at(pointer),
+            if matches!(node, crate::jsondoc::Node::Array(_)) {
+                "; an array of records is read without `record`"
+            } else {
+                ""
+            }
+        );
+    };
+    let header: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+    let row: Vec<String> = entries.iter().map(|(_, v)| json_scalar(&v.to_value())).collect();
+    Ok(RawTable::with_header(header, vec![row], false))
 }
 
 pub(crate) fn json_scalar(v: &serde_json::Value) -> String {
@@ -2905,6 +2939,73 @@ pub fn dry_run(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<RecordBa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn json_file(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("doc.json");
+        std::fs::write(&p, body).unwrap();
+        (d, p)
+    }
+
+    fn record(pointer: Option<&str>) -> Extraction {
+        Extraction::Json { lines: false, pointer: pointer.map(String::from), record: true }
+    }
+
+    /// `record = true`: the object is one row, its keys the header in the
+    /// document's own order, a nested value a cell of compact JSON text.
+    #[test]
+    fn a_record_is_one_row_in_document_order() {
+        let (_d, p) = json_file(r#"{"name":"Ace","id":"ace","games":{"nh":{"sellPrice":{"value":80}}},"tags":["a"],"gone":null}"#);
+        let t = extract(&record(None), &p, &ExtractOpts::full(Limits::default())).unwrap();
+        assert_eq!(t.header.as_deref().unwrap(), ["name", "id", "games", "tags", "gone"]);
+        assert_eq!(t.rows.len(), 1);
+        assert_eq!(t.rows[0][0], "Ace");
+        assert_eq!(t.rows[0][2], r#"{"nh":{"sellPrice":{"value":80}}}"#);
+        assert_eq!(t.rows[0][3], r#"["a"]"#);
+        assert_eq!(t.rows[0][4], "");
+    }
+
+    #[test]
+    fn a_record_can_sit_under_a_pointer() {
+        let (_d, p) = json_file(r#"{"meta":{"v":1},"data":{"b":2,"a":1}}"#);
+        let t = extract(&record(Some("/data")), &p, &ExtractOpts::full(Limits::default())).unwrap();
+        assert_eq!(t.header.as_deref().unwrap(), ["b", "a"]);
+        assert_eq!(t.rows, vec![vec!["2".to_string(), "1".to_string()]]);
+    }
+
+    /// An array, a scalar or a null where the record should be is named,
+    /// never coerced into a row.
+    #[test]
+    fn a_record_must_be_an_object() {
+        for (body, what) in [
+            (r#"{"data":[{"a":1}]}"#, "an array"),
+            (r#"{"data":3}"#, "a number"),
+            (r#"{"data":null}"#, "null"),
+            (r#"{"data":"x"}"#, "a string"),
+        ] {
+            let (_d, p) = json_file(body);
+            let e = extract(&record(Some("/data")), &p, &ExtractOpts::full(Limits::default())).expect_err(body);
+            let m = format!("{e:#}");
+            assert!(m.contains("record") && m.contains(what), "{body}: {m}");
+        }
+        let (_d, p) = json_file("[1,2]");
+        let m = format!("{:#}", extract(&record(None), &p, &ExtractOpts::full(Limits::default())).unwrap_err());
+        assert!(m.contains("an array"), "{m}");
+    }
+
+    /// Never implied: without `record`, an object where the records array
+    /// should be keeps today's error.
+    #[test]
+    fn an_object_is_not_a_record_unless_declared() {
+        let (_d, p) = json_file(r#"{"a":1}"#);
+        let e = extract(
+            &Extraction::Json { lines: false, pointer: None, record: false },
+            &p,
+            &ExtractOpts::full(Limits::default()),
+        )
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("expected a JSON array of records"), "{e:#}");
+    }
 
     #[test]
     fn dedupe_never_collides_with_an_existing_name() {

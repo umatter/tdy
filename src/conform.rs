@@ -50,6 +50,10 @@ pub enum Mismatch {
     /// reads it another way. Same Arrow type, different values: a declared
     /// reading that is not enforced is the one thing a target must not be.
     Reading { column: String, declared: String, got: Option<String> },
+    /// The target declares where inside a JSON value the column lives
+    /// (`pointer`) and the spec reads it from somewhere else, or from the
+    /// value whole. Same Arrow type, different values — enforced, as `epoch`.
+    Pointer { column: String, declared: String, got: Option<String> },
 }
 
 impl Mismatch {
@@ -87,6 +91,15 @@ impl Mismatch {
                 match got {
                     Some(g) => format!("with epoch = '{g}'"),
                     None => "with no epoch".to_string(),
+                }
+            ),
+            Mismatch::Pointer { column, declared, got } => format!(
+                "`{column}`: the target declares pointer = '{declared}', the spec reads {}. \
+                 A declared pointer is enforced, not advised: read the column with pointer = \
+                 '{declared}', or change the declaration",
+                match got {
+                    Some(g) => format!("pointer = '{g}'"),
+                    None => "the whole value, with no pointer".to_string(),
                 }
             ),
             Mismatch::Order { column, want, got } => format!(
@@ -156,9 +169,28 @@ pub fn conforms(spec: &ParseSpec, target: &Target) -> Result<(), Vec<Mismatch>> 
     }
 }
 
-/// Where a target column declares an `epoch`, the spec column of that name
-/// must read it with exactly that unit. Still no I/O: both are declarations.
+/// Where a target column declares an `epoch` or a `pointer`, the spec column
+/// of that name must read it exactly so. Still no I/O: both are declarations.
 fn readings(spec: &ParseSpec, target: &Target) -> Vec<Mismatch> {
+    let mut out = epochs(spec, target);
+    out.extend(target.columns.iter().filter_map(|tc| {
+        let declared = tc.pointer.as_ref()?;
+        let c = spec.columns.iter().find(|c| c.name == tc.name)?;
+        // A column a member lacks, null-filled under `if_missing = 'null'`,
+        // reads no value at all, so there is nothing for a pointer to open.
+        let null_fill = spec.transforms.iter().any(|t| {
+            matches!(t, crate::spec::Transform::Constant { name, value } if name == c.source_name() && value.is_empty())
+        });
+        (!null_fill && c.pointer.as_ref() != Some(declared)).then(|| Mismatch::Pointer {
+            column: tc.name.clone(),
+            declared: declared.clone(),
+            got: c.pointer.clone(),
+        })
+    }));
+    out
+}
+
+fn epochs(spec: &ParseSpec, target: &Target) -> Vec<Mismatch> {
     let name = |u: crate::spec::EpochUnit| {
         serde_json::to_value(u).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
     };
@@ -346,6 +378,33 @@ mod tests {
             col("region", DType::Utf8, false),
             col("amount", DType::Decimal { precision: 14, scale: 2 }, false),
         ]
+    }
+
+    /// A declared `pointer` is enforced, not advised, exactly as `epoch` is:
+    /// a hand-edited sidecar reading the column from another place inside
+    /// the value lands the same Arrow type with different values.
+    #[test]
+    fn a_declared_pointer_is_enforced() {
+        let t = target_of(
+            "CREATE TABLE sales (
+                month  DATE          NOT NULL,
+                region TEXT          NOT NULL OPTIONS(matches = 'where', pointer = '/name'),
+                amount DECIMAL(14,2) NOT NULL
+            ) WITH (files = 'x.json')",
+        );
+        let with = |p: Option<&str>| {
+            let mut cols = conforming();
+            cols[1].source = Some("where".into());
+            cols[1].pointer = p.map(String::from);
+            spec_of(cols)
+        };
+        assert!(conforms(&with(Some("/name")), &t).is_ok());
+        for got in [None, Some("/code")] {
+            let errs = conforms(&with(got), &t).unwrap_err();
+            assert_eq!(errs.len(), 1, "{errs:?}");
+            let m = errs[0].message();
+            assert!(m.contains("`region`") && m.contains("pointer = '/name'"), "{m}");
+        }
     }
 
     #[test]

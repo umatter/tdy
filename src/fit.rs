@@ -106,6 +106,9 @@ pub enum Gap {
         formats: Vec<String>,
         example: String,
     },
+    /// A NOT NULL column whose declared `pointer` finds nothing (or a null)
+    /// in the value it binds, at a row of this file.
+    NothingAtPointer { column: String, source: String, pointer: String, want: String, row: usize },
     /// Two declared columns both bind the same column of the file.
     ///
     /// tdy has no computed columns, so the two would be byte-identical: a
@@ -122,7 +125,8 @@ impl Gap {
             | Gap::Untypable { column, .. }
             | Gap::AmbiguousSeparator { column, .. }
             | Gap::AmbiguousFormat { column, .. }
-            | Gap::Collides { column, .. } => column,
+            | Gap::Collides { column, .. }
+            | Gap::NothingAtPointer { column, .. } => column,
         }
     }
 
@@ -220,6 +224,11 @@ impl Gap {
                     formats.iter().map(|f| format!("{f:?}")).collect::<Vec<_>>().join(" and ")
                 )
             }
+            Gap::NothingAtPointer { column, source, pointer, want, row } => format!(
+                "`{column}` ({want}): pointer {pointer:?} finds nothing (or a null) in {source:?} at \
+                 row {row}, and the column is NOT NULL\n    \
+                 declare it nullable if this member may lack it"
+            ),
             Gap::Collides { column, other, source } => format!(
                 "`{column}` and `{other}` both bind {source:?} — the same column of the file, \
                  twice\n    tdy has no computed columns, so both would hold identical \
@@ -387,14 +396,19 @@ impl std::fmt::Display for FitError {
                     choices.len()
                 )?;
                 for c in choices {
-                    writeln!(f, "    {field} = {c:?}")?;
+                    writeln!(f, "    {}", frame_setting(field, c))?;
                 }
+                let settings = if field == JSON_FRAME_FIELDS {
+                    "record = true, or pointer = \"...\"".to_string()
+                } else {
+                    format!("{field} = \"...\"")
+                };
                 writeln!(
                     f,
                     "  Each is a complete, well-typed, different answer, and choosing one \
                      would be a guess.\n  \
                      fix: write the {field} you mean into the sidecar ([spec.extraction] \
-                     {field} = \"...\") and mark it method = \"manual\""
+                     {settings}) and mark it method = \"manual\""
                 )?;
                 Ok(())
             }
@@ -501,8 +515,15 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
             if taken.contains(&i) {
                 continue;
             }
-            let values: Vec<&str> =
+            let raw: Vec<&str> =
                 rows.iter().map(|r| r.get(i).map(|s| s.as_str()).unwrap_or("")).collect();
+            // A declared pointer is part of what the column asks of a
+            // candidate: the pointed-at values are what must type-check.
+            let Ok(pointed) = pointed_values(tc, &draft.extraction, &raw) else { continue };
+            let values: Vec<&str> = match &pointed {
+                Some(p) => p.iter().map(String::as_str).collect(),
+                None => raw,
+            };
             let addressable = header.get(i).cloned().unwrap_or_else(|| name.clone());
             if type_for(
                 &Want { column: &tc.name, source: &addressable, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round, year_pivot: tc.year_pivot, epoch: tc.epoch },
@@ -532,38 +553,114 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
 
 /// Plan a spec for `path` that lands on `target`.
 pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitError> {
+    let mut fitted = fit_frames(path, target, limits)?;
+    if let Some(reason) = empty_array_reason(&fitted.spec, path, limits) {
+        fitted.review = Some(match fitted.review.take() {
+            Some(prev) => format!("{prev}; {reason}"),
+            None => reason,
+        });
+    }
+    Ok(fitted)
+}
+
+/// The review reason a document read as one record carries when it holds an
+/// empty array: the elimination never saw that array's reading, zero rows,
+/// because an empty array has no header to bind — so the record reading of
+/// a "no results" export is one plausible row of envelope data unless a
+/// person says the document is the record. `None` for anything else,
+/// including a record document with no empty array. One function for the
+/// plan and for a reused sidecar, since the lock's acceptance carryover
+/// compares the text.
+pub fn empty_array_reason(spec: &ParseSpec, path: &Path, limits: Limits) -> Option<String> {
+    if !matches!(spec.extraction, Extraction::Json { record: true, .. }) {
+        return None;
+    }
+    let empties = sniff::empty_arrays_in(path, limits);
+    if empties.is_empty() {
+        return None;
+    }
+    let named: Vec<String> = empties.iter().map(|e| format!("`{e}`")).collect();
+    Some(format!(
+        "{} {} empty — zero records; this member is read as one record of the document's own \
+         keys. Accept only if the document itself is the record",
+        named.join(", "),
+        if empties.len() == 1 { "is" } else { "are" }
+    ))
+}
+
+fn fit_frames(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitError> {
     // 1. The frame. What the sniffer knows about this file's *shape* is about
     //    the file, not about the columns anyone wants, so it is reused whole.
     //    Only its `columns` are discarded.
-    let draft = sniff_draft(path, target, limits)?;
+    let (draft, empty_array) = match sniff_draft(path, target, limits) {
+        Ok(d) => (d, None),
+        // Declined by the sniffer because its only arrays are empty (zero
+        // records); the declared table may still bind the envelope's keys.
+        Err(e) => match sniff::empty_array_record_frame(path, limits) {
+            Some((d, empty)) => (d, Some(empty)),
+            None => return Err(e),
+        },
+    };
+    if let Some(empty) = empty_array {
+        let mut fitted = fit_framed(path, target, limits, draft, Rigour::Full)?;
+        let note = format!(
+            "read as one record: the document's arrays are empty (`{empty}`, zero records), and the \
+             declared table binds the document's own keys"
+        );
+        fitted.notes.push(note.clone());
+        fitted.spec.notes.push(note);
+        return Ok(fitted);
+    }
 
     // A file with several possible frames — a JSON document with several
     // record arrays, a workbook with several sheets — makes the sniffer's
     // ranking of them a guess. The declared table turns the guess into a
     // search: try every candidate, and the answer is the one that fits —
     // provably, if it is alone in doing so.
-    if let Extraction::Json { lines: false, pointer: Some(_) } = &draft.extraction {
-        let pointers = sniff::json_record_pointers(path, limits);
-        if pointers.len() > 1 {
-            let candidates = pointers
-                .iter()
-                .map(|ptr| {
+    //
+    // A root object has one more frame than its arrays: the document itself
+    // as one record. It is tried first, so a refusal when nothing fits is
+    // about the reading a one-object pile means; with no array in the
+    // document it is the only frame, and needs no elimination.
+    if let Extraction::Json { lines: false, pointer, record } = &draft.extraction {
+        if *record || pointer.is_some() {
+            let pointers = sniff::json_record_pointers(path, limits);
+            if !pointers.is_empty() {
+                let as_record = |d: &ParseSpec| {
+                    let mut d = d.clone();
+                    d.extraction = Extraction::Json { lines: false, pointer: None, record: true };
+                    d
+                };
+                // The sniffer's own frame: its failure is the report when
+                // nothing fits — for an API dump that is its array, whose
+                // real gap the record frame's "no column binds" would bury.
+                let ranked = match pointer {
+                    Some(p) if !*record => pointers.iter().position(|q| q == p).map_or(0, |i| i + 1),
+                    _ => 0,
+                };
+                let mut candidates = vec![(RECORD_FRAME.to_string(), as_record(&draft))];
+                candidates.extend(pointers.iter().map(|ptr| {
                     let mut d = draft.clone();
-                    d.extraction = Extraction::Json { lines: false, pointer: Some(ptr.clone()) };
+                    d.extraction = Extraction::Json { lines: false, pointer: Some(ptr.clone()), record: false };
                     (ptr.clone(), d)
-                })
-                .collect();
-            return fit_by_elimination(
-                path,
-                target,
-                limits,
-                FrameCandidates {
-                    what: "record arrays",
-                    field: "pointer",
-                    total: pointers.len(),
-                    candidates,
-                },
-            );
+                }));
+                return fit_by_elimination(
+                    path,
+                    target,
+                    limits,
+                    FrameCandidates {
+                        what: format!(
+                            "frames (the document as one record, and {} record array{})",
+                            pointers.len(),
+                            if pointers.len() == 1 { "" } else { "s" }
+                        ),
+                        field: JSON_FRAME_FIELDS,
+                        total: candidates.len(),
+                        ranked,
+                        candidates,
+                    },
+                );
+            }
         }
     }
 
@@ -576,7 +673,7 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
                 path,
                 target,
                 limits,
-                FrameCandidates { what: "sheets", field: "sheet_name", total: names.len(), candidates },
+                FrameCandidates { what: "sheets".into(), field: "sheet_name", total: names.len(), ranked: 0, candidates },
             );
         }
     }
@@ -1187,8 +1284,13 @@ pub(crate) fn region_read_hint(path: &Path, sheet: Option<&str>, limits: Limits)
     // dressed up as a correctness one — `sample::guess_format` reads only the
     // extension, no I/O, and is the same predicate `draft` uses for exactly
     // this decision.
-    if crate::sample::guess_format(path) != crate::sample::FormatGuess::Excel {
-        return Some(None);
+    // A JSON document is never split: a blank line inside pretty-printed
+    // JSON is not a table boundary, and a document's frames are its record
+    // and its arrays, which `fit` eliminates between itself.
+    match crate::sample::guess_format(path) {
+        crate::sample::FormatGuess::Excel => {}
+        crate::sample::FormatGuess::Json => return None,
+        _ => return Some(None),
     }
     match engine::excel_sheet_shapes(path, limits) {
         Ok(shapes) if shapes.len() == 1 => Some(Some(shapes[0].name.clone())),
@@ -1197,14 +1299,33 @@ pub(crate) fn region_read_hint(path: &Path, sheet: Option<&str>, limits: Limits)
     }
 }
 
+/// The label of a JSON document's record frame among its candidates.
+const RECORD_FRAME: &str = "the document as one record";
+
+/// The `field` of a JSON root object's frames: either setting settles it.
+const JSON_FRAME_FIELDS: &str = "record or pointer";
+
+/// One candidate as the sidecar setting that would choose it by hand.
+pub(crate) fn frame_setting(field: &str, choice: &str) -> String {
+    if choice == RECORD_FRAME {
+        return "record = true".into();
+    }
+    let field = field.rsplit(" or ").next().unwrap_or(field);
+    format!("{field} = {choice:?}")
+}
+
 /// The enumerable frames of one file, labelled for the messages.
 struct FrameCandidates {
-    /// What kind of thing is being chosen between: "record arrays", "sheets".
-    what: &'static str,
+    /// What kind of thing is being chosen between: "sheets", or a JSON
+    /// document's record frame and record arrays.
+    what: String,
     /// The sidecar field that would settle it by hand.
     field: &'static str,
     /// How many frames exist, counting ones already eliminated at framing.
     total: usize,
+    /// Which candidate is the sniffer's own frame: among failures that bound
+    /// equally many declared columns, its error is the one reported.
+    ranked: usize,
     candidates: Vec<(String, ParseSpec)>,
 }
 
@@ -1402,6 +1523,9 @@ fn describe_frame(spec: &ParseSpec) -> String {
     if let Extraction::Json { pointer: Some(p), .. } = &spec.extraction {
         parts.push(format!("pointer {p:?}"));
     }
+    if let Extraction::Json { record: true, .. } = &spec.extraction {
+        parts.push("record".into());
+    }
     if let Extraction::Excel { sheet_name: Some(sh), .. } = &spec.extraction {
         parts.push(format!("sheet {sh:?}"));
     }
@@ -1451,8 +1575,8 @@ enum Rigour {
 /// * several fit — refused. Two frames that both produce the declared columns
 ///   are two different answers, and ranking them would be a guess with a
 ///   plausible wrong number at the end of it.
-/// * none fit — the error for the sniffer's own ranked choice, which is what
-///   the user would have seen anyway.
+/// * none fit — the error of the frame that bound the most declared columns,
+///   ties going to the sniffer's own frame (`ranked`).
 fn fit_by_elimination(
     path: &Path,
     target: &Target,
@@ -1460,21 +1584,25 @@ fn fit_by_elimination(
     fc: FrameCandidates,
 ) -> Result<Fitted, FitError> {
     let mut survivors: Vec<&(String, ParseSpec)> = Vec::new();
-    let mut first_error: Option<FitError> = None;
-    for cand in &fc.candidates {
+    let mut errors: Vec<(usize, FitError)> = Vec::new();
+    for (i, cand) in fc.candidates.iter().enumerate() {
         match fit_framed(path, target, limits, cand.1.clone(), Rigour::Gates) {
             Ok(_) => survivors.push(cand),
-            Err(e) => {
-                // The ranked candidate's failure is the representative one.
-                if first_error.is_none() {
-                    first_error = Some(e);
-                }
-            }
+            Err(e) => errors.push((i, e)),
         }
     }
 
     match survivors.as_slice() {
-        [] => Err(first_error.expect("candidates was non-empty")),
+        // The representative failure is the frame that bound the most
+        // declared columns — its gaps are the real ones (an API dump's
+        // `amount` cannot parse "x"; a record's pointer lands on a string),
+        // where a frame that binds nothing only says "no column binds".
+        // Ties go to the sniffer's own frame, then to the earlier one.
+        [] => Err(errors
+            .into_iter()
+            .min_by_key(|(i, e)| (unbound(e), *i != fc.ranked, *i))
+            .map(|(_, e)| e)
+            .expect("candidates was non-empty")),
         [(label, d)] => {
             let mut fitted = fit_framed(path, target, limits, d.clone(), Rigour::Full)?;
             fitted.notes.push(format!(
@@ -1488,10 +1616,26 @@ fn fit_by_elimination(
             Ok(fitted)
         }
         several => Err(FitError::AmbiguousFrame {
-            what: fc.what.into(),
+            what: fc.what,
             field: fc.field.into(),
             choices: several.iter().map(|(l, _)| l.clone()).collect(),
         }),
+    }
+}
+
+/// A position of the file, opened at a pointer (or whole), as one declared
+/// column claims it.
+type Claim<'a> = (usize, Option<&'a str>);
+
+/// How many declared columns a failed frame could not bind at all: the
+/// measure of how far it got. A frame that bound everything and then failed
+/// on values (or its own gate) bound all of them; one that could not be read
+/// bound none.
+fn unbound(e: &FitError) -> usize {
+    match e {
+        FitError::Gaps(g) => g.iter().filter(|g| matches!(g, Gap::NoCandidate { .. })).count(),
+        FitError::Unreadable(_) => usize::MAX,
+        FitError::Rejected(_) | FitError::DryRun(_) | FitError::AmbiguousFrame { .. } => 0,
     }
 }
 
@@ -1511,8 +1655,10 @@ fn fit_framed(
     let mut columns = Vec::with_capacity(target.columns.len());
     let mut gaps = Vec::new();
     // Which declared column claimed each position of the file, so a second
-    // claim on the same position is caught rather than duplicated.
-    let mut claimed: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    // claim on the same position is caught rather than duplicated. A
+    // position opened at two different `pointer`s is two values, not one
+    // claimed twice: `games` holds the sell price and the buy price.
+    let mut claimed: std::collections::HashMap<Claim<'_>, String> = std::collections::HashMap::new();
     // Declared-absent columns to fill with nulls, as `constant` transforms.
     let mut null_fills: Vec<String> = Vec::new();
     // The framing's own notes travel with the plan. The sniffer's auto-drop of
@@ -1591,7 +1737,8 @@ fn fit_framed(
         };
 
         let idx = header.iter().position(|h| *h == source).expect("bound to a real header cell");
-        if let Some(other) = claimed.get(&idx) {
+        let claim = (idx, tc.pointer.as_deref());
+        if let Some(other) = claimed.get(&claim) {
             gaps.push(Gap::Collides {
                 column: tc.name.clone(),
                 other: other.clone(),
@@ -1599,9 +1746,42 @@ fn fit_framed(
             });
             continue;
         }
-        claimed.insert(idx, tc.name.clone());
-        let values: Vec<&str> =
+        claimed.insert(claim, tc.name.clone());
+        let raw: Vec<&str> =
             rows.iter().map(|r| r.get(idx).map(|s| s.as_str()).unwrap_or("")).collect();
+        // A declared pointer: the candidates are the pointed-at values, and
+        // those are what is type-checked — never the JSON text around them.
+        let pointed = match pointed_values(tc, &draft.extraction, &raw) {
+            Ok(p) => p,
+            Err(why) => {
+                gaps.push(Gap::Untypable {
+                    column: tc.name.clone(),
+                    source: source.clone(),
+                    want: render(&tc.dtype),
+                    why,
+                });
+                continue;
+            }
+        };
+        // Nothing at the pointer is a null, so a NOT NULL column refuses the
+        // member — said in the pointer's terms, naming the row, rather than
+        // as a type failure on an empty string.
+        if let (Some(p), false, Some(ptr)) = (&pointed, tc.nullable, &tc.pointer) {
+            if let Some(i) = p.iter().position(|v| v.trim().is_empty()) {
+                gaps.push(Gap::NothingAtPointer {
+                    column: tc.name.clone(),
+                    source: source.clone(),
+                    pointer: ptr.clone(),
+                    want: render(&tc.dtype),
+                    row: i + 1,
+                });
+                continue;
+            }
+        }
+        let values: Vec<&str> = match &pointed {
+            Some(p) => p.iter().map(String::as_str).collect(),
+            None => raw,
+        };
 
         match type_for(
             &Want { column: &tc.name, source: &source, dtype: &tc.dtype, nullable: tc.nullable, round: tc.round, year_pivot: tc.year_pivot, epoch: tc.epoch },
@@ -1620,7 +1800,7 @@ fn fit_framed(
                     dtype,
                     nullable: tc.nullable,
                     parse,
-                    pointer: None,
+                    pointer: tc.pointer.clone(),
                 });
             }
             Err(g) => gaps.push(g),
@@ -1709,6 +1889,31 @@ fn fit_framed(
         (!rs.is_empty()).then(|| rs.join("; "))
     };
     Ok(Fitted { spec, notes, review })
+}
+
+/// A column's values as its declared `pointer` reads them, `None` when it
+/// declares none. The executor's own function does the reading
+/// ([`engine::json_pointer_value`]), so a value that resolves here resolves
+/// identically there: nothing is a null, an object or an array is the error
+/// it is in a sidecar. On a member not read as JSON the sidecar's own rule
+/// refuses the pointer.
+fn pointed_values(
+    tc: &crate::target::TargetColumn,
+    extraction: &Extraction,
+    raw: &[&str],
+) -> Result<Option<Vec<String>>, String> {
+    let Some(ptr) = &tc.pointer else { return Ok(None) };
+    if !matches!(extraction, Extraction::Json { .. }) {
+        return Err(format!(
+            "`pointer` reads inside a JSON value, and this file is read as {}",
+            extraction.format_name()
+        ));
+    }
+    raw.iter()
+        .enumerate()
+        .map(|(i, v)| engine::json_pointer_value(v, ptr, i + 1).map_err(|e| format!("{e:#}")))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 /// The post-transform header and body the executor will see, capped.
@@ -2499,6 +2704,11 @@ mod tests {
         let fake = dir.path().join("fake.csv");
         std::fs::copy(&src, &fake).unwrap();
         assert_eq!(region_read_hint(&fake, None, Limits::default()), Some(None));
+        // A blank line inside pretty-printed JSON is not a table boundary:
+        // no region discovery runs over a JSON document at all.
+        let json = dir.path().join("doc.json");
+        std::fs::write(&json, "{\n  \"a\": 1,\n\n  \"b\": 2\n}\n").unwrap();
+        assert_eq!(region_read_hint(&json, None, Limits::default()), None);
         // The real extension is unaffected.
         assert_eq!(region_read_hint(&src, None, Limits::default()), Some(Some("Data".to_string())));
     }

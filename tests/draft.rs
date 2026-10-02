@@ -94,7 +94,9 @@ fn the_cli_prints_a_scaffold_and_refuses_an_unreadable_pile() {
 
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("junk.json");
-    std::fs::write(&junk, "{\"not\": \"records\"}").unwrap();
+    // A scalar document: nothing tabular. (A lone object used to stand in
+    // here; it is a record now, and drafts as one.)
+    std::fs::write(&junk, "\"not records\"").unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_tdy"))
         .args(["draft", junk.to_str().unwrap()])
         .output()
@@ -301,4 +303,255 @@ fn a_draft_of_files_outside_the_current_directory_writes_an_absolute_glob() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("files = '*.csv'"), "{}", String::from_utf8_lossy(&out.stdout));
     let out = run(&here.path().join("sub"), &["draft", a.to_str().unwrap()]);
     assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("files = '{}/*.csv'", abs.display())), "{sub:?}");
+}
+
+// ---------------------------------------------------------------------------
+// A document is a record: a pile of one-object JSON documents.
+// ---------------------------------------------------------------------------
+
+fn json_pile(docs: &[(&str, &str)]) -> (tempfile::TempDir, Vec<PathBuf>) {
+    let dir = tempfile::tempdir().unwrap();
+    let files = docs
+        .iter()
+        .map(|(n, body)| {
+            let p = dir.path().join(n);
+            std::fs::write(&p, body).unwrap();
+            p
+        })
+        .collect();
+    (dir, files)
+}
+
+fn fits_every_file(sql: &str, files: &[PathBuf]) -> Target {
+    let target = Target::parse(sql).unwrap_or_else(|e| panic!("draft must parse:\n{sql}\n{e:#}"));
+    for p in files {
+        if let Err(e) = tdy::fit::fit(p, &target, Limits::default()) {
+            panic!("{} should fit the draft drawn from it:\n{e}\n--- draft ---\n{sql}", p.display());
+        }
+    }
+    target
+}
+
+const SAME_KEYS: &[(&str, &str)] = &[
+    ("ace.json", r#"{"id":"ace","name":"Ace","birthday":"3-13","games":{"nh":{"song":"K.K. Parade","sellPrice":{"value":80}}}}"#),
+    ("bob.json", r#"{"id":"bob","name":"Bob","birthday":"1-1","games":{"nh":{"song":"K.K. Ska","sellPrice":{"value":120}}}}"#),
+    ("cat.json", "{\n  \"name\": \"Cat\",\n\n  \"id\": \"cat\",\n  \"birthday\": \"7-4\",\n\n  \"games\": {\"nh\": {\"song\": \"Bubblegum\", \"sellPrice\": {\"value\": 5}}}\n}\n"),
+];
+
+/// The round trip over documents: identical keys, the unedited draft fits
+/// every file. The third document is pretty-printed with blank lines in it,
+/// which is not a table boundary: no region split runs over JSON.
+#[test]
+fn the_unedited_draft_of_one_object_documents_fits_every_file() {
+    let (_d, files) = json_pile(SAME_KEYS);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    assert!(!sql.contains("stacked"), "{sql}");
+    let t = fits_every_file(&sql, &files);
+    assert_eq!(t.columns.len(), 5, "{sql}");
+}
+
+/// Every scalar leaf under a nested object is a column named from its path,
+/// bound by `matches` to the top-level key and reached by `pointer`.
+#[test]
+fn leaves_get_a_pointer() {
+    let (_d, files) = json_pile(SAME_KEYS);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let line = |name: &str| {
+        sql.lines().find(|l| l.trim_start().starts_with(&format!("{name} "))).unwrap_or_else(|| panic!("no {name}:\n{sql}")).to_string()
+    };
+    let sell = line("games_nh_sellprice_value");
+    assert!(sell.contains("BIGINT"), "{sell}");
+    assert!(sell.contains("OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value')"), "{sell}");
+    let song = line("games_nh_song");
+    assert!(song.contains("TEXT") && song.contains("pointer = '/nh/song'"), "{song}");
+    // A top-level scalar is an ordinary column.
+    assert!(!line("birthday").contains("pointer"), "{sql}");
+}
+
+/// An array is not descended into: at the top level it is one TEXT column
+/// of JSON, and the comment says so; under a nested object no column can
+/// hold it (a pointer onto an array is an error), and a note says that.
+#[test]
+fn an_array_key_is_one_text_column() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":"a","tags":["x","y"],"games":{"nl":{"buyPrices":[{"value":320}],"sellPrice":{"value":80}}}}"#),
+        ("b.json", r#"{"id":"b","tags":["z"],"games":{"nl":{"sellPrice":{"value":10}}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let tags = sql.lines().find(|l| l.trim_start().starts_with("tags ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(tags.contains("TEXT") && !tags.contains("pointer"), "{tags}");
+    assert!(tags.contains("an array"), "the comment must say so:\n{tags}");
+    assert!(!sql.contains("currency") && !sql.contains("\n  value "), "the record is drafted, not the array:\n{sql}");
+    assert!(sql.contains("games/nl/buyPrices"), "the nested array is named:\n{sql}");
+    assert!(!sql.contains("games_nl_buyprices"), "{sql}");
+    let t = fits_every_file(&sql, &files);
+    // The array's JSON text is the cell.
+    let p = &files[0];
+    let fitted = tdy::fit::fit(p, &t, Limits::default()).unwrap();
+    let b = tdy::provider::spec_to_batch(&fitted.spec, p).unwrap();
+    let i = fitted.spec.columns.iter().position(|c| c.name == "tags").unwrap();
+    let a = b.column(i).as_any().downcast_ref::<datafusion::arrow::array::StringArray>().unwrap();
+    assert_eq!(a.value(0), r#"["x","y"]"#);
+}
+
+/// Presence is counted per file: the draft reports a leaf some documents
+/// lack, it does not declare the absence.
+#[test]
+fn a_leaf_some_documents_lack_is_counted_not_declared() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":"a","games":{"nh":{"sellPrice":{"value":80}}}}"#),
+        ("b.json", r#"{"id":"b","games":{"nl":{"sellPrice":{"value":10}}}}"#),
+        ("c.json", r#"{"id":"c","games":{"nh":{"sellPrice":{"value":5}}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let nl = sql.lines().find(|l| l.trim_start().starts_with("games_nl_sellprice_value ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(nl.contains("in 1 of 3 file(s)"), "{nl}");
+    assert!(!nl.contains("if_missing"), "{nl}");
+    let nh = sql.lines().find(|l| l.trim_start().starts_with("games_nh_sellprice_value ")).unwrap();
+    assert!(nh.contains("in 2 of 3 file(s)"), "{nh}");
+}
+
+/// Two paths that sanitise to one name are two columns: the second is
+/// renamed by the usual dedupe, and the comment says which path it reads.
+#[test]
+fn leaf_names_that_collide_are_deduped_and_said() {
+    let (_d, files) = json_pile(&[(
+        "a.json",
+        r#"{"id":"a","games":{"afe":{"song":"x"},"afe+":{"song":"y"}}}"#,
+    )]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    assert!(sql.contains("games_afe_song "), "{sql}");
+    let second = sql.lines().find(|l| l.trim_start().starts_with("games_afe_song_2 ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(second.contains("pointer = '/afe+/song'") && second.contains("games/afe+/song"), "{second}");
+    fits_every_file(&sql, &files);
+}
+
+/// Documents that share their top-level keys are one dataset however
+/// differently their nested objects are filled: which games a villager
+/// appears in is the contents of one key, and that drift is what
+/// `if_missing` is for, not a second dataset.
+#[test]
+fn documents_with_the_same_top_level_keys_are_one_dataset() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":"a","games":{"ac":{"song":"x","phrase":"p"},"ww":{"song":"y"}}}"#),
+        ("b.json", r#"{"id":"b","games":{"nh":{"song":"z","quote":"q"},"cf":{"song":"w"}}}"#),
+        ("c.json", r#"{"id":"c","games":{"nl":{"skill":"s","goal":"g","fear":"f"}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    assert!(!sql.contains("do not look like ONE dataset"), "{sql}");
+}
+
+/// One-object documents beside a root array and an NDJSON file of the same
+/// shape: each top-level column is drafted once, and the unedited draft fits
+/// all four files (it drafted `id` and `id_2` and collided).
+#[test]
+fn records_beside_arrays_and_ndjson_draft_each_column_once() {
+    let (_d, files) = json_pile(&[
+        ("arr.json", r#"[{"id":3,"name":"c","price":{"v":5}},{"id":4,"name":"d","price":{"v":6}}]"#),
+        ("nd.json", "{\"id\":5,\"name\":\"e\"}\n{\"id\":6,\"name\":\"f\"}\n"),
+        ("one.json", r#"{"id":1,"name":"a","price":{"v":3}}"#),
+        ("two.json", r#"{"id":2,"name":"b","price":{"v":4}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    for dup in ["id_2", "name_2", "price_2"] {
+        assert!(!sql.contains(dup), "{dup}:\n{sql}");
+    }
+    // `nd.json` has no `price`: the draft counts it, it does not declare
+    // the absence, and the one edit its comments call for fits all four.
+    let price = sql.lines().find(|l| l.trim_start().starts_with("price ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(price.contains("in 3 of 4 file(s)"), "{price}");
+    let edited: String = sql
+        .lines()
+        .map(|l| match l.split_once("  --") {
+            Some((decl, c)) if c.contains(" of 4 file(s)") && !c.contains("null where absent") => {
+                let comma = if decl.ends_with(',') { "," } else { "" };
+                let decl = decl.trim_end_matches(',');
+                let decl = match decl.strip_suffix(')') {
+                    Some(h) if decl.contains("OPTIONS(") => format!("{h}, if_missing = 'null')"),
+                    _ => format!("{decl} OPTIONS(if_missing = 'null')"),
+                };
+                format!("{decl}{comma}  --{c}\n")
+            }
+            _ => format!("{l}\n"),
+        })
+        .collect();
+    fits_every_file(&edited, &files);
+}
+
+const SAME_ARRAY: &[(&str, &str)] = &[
+    ("a.json", r#"{"id":"a","name":"Acorn","price":5,"buyPrices":[{"value":100,"currency":"bells"}]}"#),
+    ("b.json", r#"{"id":"b","name":"Box","price":7,"buyPrices":[{"value":200,"currency":"bells"}]}"#),
+];
+
+/// Every document read through the same array drafts the array, as it
+/// always did — and now says that each document is also one object, and how
+/// to draft that reading instead.
+#[test]
+fn a_pile_drafted_through_one_array_says_so_and_names_records() {
+    let (_d, files) = json_pile(SAME_ARRAY);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    assert!(sql.contains("\n  value "), "{sql}");
+    assert!(
+        sql.contains("every document is also one object") && sql.contains("/buyPrices") && sql.contains("tdy draft --records"),
+        "{sql}"
+    );
+}
+
+/// `--records`: one row per document, whatever arrays it holds.
+#[test]
+fn records_drafts_one_row_per_document() {
+    let (_d, files) = json_pile(SAME_ARRAY);
+    let sql = tdy::draft::draft_target_opts(&files, None, Limits::default(), tdy::draft::DraftOpts { records: true }).unwrap();
+    for col in ["\n  id ", "\n  name ", "\n  price "] {
+        assert!(sql.contains(col), "{col}:\n{sql}");
+    }
+    assert!(!sql.contains("\n  value "), "{sql}");
+    let t = fits_every_file(&sql, &files);
+    let fitted = tdy::fit::fit(&files[0], &t, Limits::default()).unwrap();
+    assert!(matches!(fitted.spec.extraction, tdy::spec::Extraction::Json { record: true, .. }));
+
+    // And through the binary, refused where nothing is a document.
+    let out = Command::new(env!("CARGO_BIN_EXE_tdy")).args(["draft", "--records"]).args(&files).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\n  price "));
+    let out = Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["draft", "--records", corpus().join("2025-01.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--records"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// A top-level key that is a scalar in one document and an object in
+/// another is present in both; the comment names the shape conflict.
+#[test]
+fn a_key_that_is_a_scalar_here_and_an_object_there_is_present_in_both() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":1,"g":"plain"}"#),
+        ("b.json", r#"{"id":2,"g":{"nh":{"v":3}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let g = sql.lines().find(|l| l.trim_start().starts_with("g ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(!g.contains(" of 2 file(s)"), "{g}");
+    assert!(g.contains("TEXT") && g.contains("an object in 1"), "{g}");
+}
+
+/// A leaf under a key every file has is null where absent — the pointer finds
+/// nothing — so the comment says that rather than inviting `if_missing`; a
+/// leaf under a key some files lack keeps the plain count.
+#[test]
+fn a_leaf_under_a_key_every_file_has_is_null_where_absent() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":"a","games":{"nh":{"v":80}},"extra":{"x":1}}"#),
+        ("b.json", r#"{"id":"b","games":{"nl":{"v":10}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let nh = sql.lines().find(|l| l.trim_start().starts_with("games_nh_v ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(nh.contains("in 1 of 2 file(s); null where absent"), "{nh}");
+    let x = sql.lines().find(|l| l.trim_start().starts_with("extra_x ")).unwrap();
+    assert!(x.contains("in 1 of 2 file(s)") && !x.contains("null where absent"), "{x}");
+    // Unedited, the leaves under `games` fit both files; `extra_x` is the
+    // one edit the comments call for.
+    let edited = sql.replace("pointer = '/x')", "pointer = '/x', if_missing = 'null')");
+    fits_every_file(&edited, &files);
 }

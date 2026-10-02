@@ -165,13 +165,17 @@ pub enum MemberStatus {
 pub struct SourceBinding {
     pub column: String,
     pub source: String,
+    /// Where inside `source`'s JSON value the column is read, when the
+    /// member's spec opens it with a `pointer`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<String>,
 }
 
 /// One reason a member does not fit, with every field a caller could act on.
 #[derive(Debug, Serialize)]
 pub struct Problem {
     /// no_candidate | long_form | ambiguous | untypable | ambiguous_separator |
-    /// ambiguous_format | collides | ambiguous_frame | contradicts | error
+    /// ambiguous_format | collides | nothing_at_pointer | ambiguous_frame | contradicts | error
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<String>,
@@ -274,6 +278,13 @@ fn problem_of_gap(g: &Gap) -> Problem {
             field: Some(source.clone()),
             ..base
         },
+        Gap::NothingAtPointer { want, source, pointer, .. } => Problem {
+            kind: "nothing_at_pointer".into(),
+            want: Some(want.clone()),
+            choices: vec![source.clone()],
+            field: Some(pointer.clone()),
+            ..base
+        },
         Gap::Collides { other, source, .. } => Problem {
             kind: "collides".into(),
             choices: vec![other.clone(), source.clone()],
@@ -292,7 +303,8 @@ fn problems_of_error(e: &FitError) -> Vec<Problem> {
             want: Some(what.clone()),
             tried: Vec::new(),
             header: Vec::new(),
-            choices: choices.clone(),
+            // Each the sidecar setting that would choose it, usable as written.
+            choices: choices.iter().map(|c| crate::fit::frame_setting(field, c)).collect(),
             field: Some(field.clone()),
             long_form: None,
         }],
@@ -1122,6 +1134,11 @@ pub async fn fit_pile(
                             sc.provenance.model.as_deref().unwrap_or("a model"),
                         ));
                     }
+                    // A record read beside an empty array is a judgement the
+                    // file, not the spec, records — unless a person wrote it.
+                    if sc.provenance.method != InferenceMethod::Manual {
+                        rs.extend(crate::fit::empty_array_reason(&spec, &p, limits));
+                    }
                     (!rs.is_empty()).then(|| rs.join("; "))
                 };
                 let review = merge_reason(review, unit_review);
@@ -1155,6 +1172,7 @@ pub async fn fit_pile(
                         .map(|c| SourceBinding {
                             column: c.name.clone(),
                             source: c.source_name().to_string(),
+                            pointer: c.pointer.clone(),
                         })
                         .collect(),
                     review: review.clone(),
@@ -1250,6 +1268,7 @@ pub async fn fit_pile(
                         .map(|c| SourceBinding {
                             column: c.name.clone(),
                             source: c.source_name().to_string(),
+                            pointer: c.pointer.clone(),
                         })
                         .collect(),
                     review: fitted.review.clone(),
@@ -1434,7 +1453,7 @@ pub fn render_pile_text(r: &PileReport) -> String {
                 let sources: Vec<String> = m
                     .sources
                     .iter()
-                    .map(|s| format!("{}<-{:?}", s.column, s.source))
+                    .map(|s| format!("{}<-{:?}{}", s.column, s.source, s.pointer.as_deref().unwrap_or("")))
                     .collect();
                 let word = match (m.review.is_some(), m.accepted) {
                     (true, true) => "accepted",

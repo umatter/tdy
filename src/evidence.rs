@@ -275,6 +275,10 @@ fn describe_extraction(spec: &ParseSpec) -> String {
     use crate::spec::Extraction;
     let mut parts = vec![spec.extraction.format_name().to_string()];
     match &spec.extraction {
+        Extraction::Json { pointer, record: true, .. } => {
+            parts.extend(pointer.as_ref().map(|p| format!("pointer {p:?}")));
+            parts.push("record".into());
+        }
         Extraction::Json { pointer: Some(p), .. } => parts.push(format!("pointer {p:?}")),
         Extraction::Excel { sheet_name: Some(s), .. } => parts.push(format!("sheet {s:?}")),
         Extraction::Lines { pattern, .. } => parts.push(format!("pattern {pattern:?}")),

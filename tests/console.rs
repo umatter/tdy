@@ -1205,3 +1205,20 @@ async fn draft_to_another_directory_writes_globs_that_fit_from_there() {
     let Payload::Fitted(r) = o.payload else { panic!("{}", o.text) };
     assert_eq!(r.members.len(), 1, "{}", o.text);
 }
+
+/// `.draft … --records` is the same function as `tdy draft --records`, and
+/// says the same thing.
+#[tokio::test]
+async fn draft_records_text_equals_the_binary() {
+    let d = tempfile::TempDir::new().unwrap();
+    std::fs::write(d.path().join("a.json"), r#"{"id":"a","price":5,"buyPrices":[{"value":100}]}"#).unwrap();
+    std::fs::write(d.path().join("b.json"), r#"{"id":"b","price":7,"buyPrices":[{"value":200}]}"#).unwrap();
+    let cli = tdy(d.path(), &["draft", "--records", "a.json", "b.json"]);
+    assert!(cli.status.success(), "{}", String::from_utf8_lossy(&cli.stderr));
+    let mut s = session(d.path()).await;
+    let o = s.run(".draft a.json b.json --records", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert_eq!(o.text, String::from_utf8_lossy(&cli.stdout));
+    assert!(o.text.contains("\n  price "), "{}", o.text);
+    assert!(o.echo.ends_with("--records"), "{}", o.echo);
+}

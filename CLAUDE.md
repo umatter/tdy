@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 951 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 999 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -747,6 +747,71 @@ The streamed width is measured only over the rows `skip_rows` keeps (`stream::me
 wider than the table had given the streamed table phantom `col_N` columns. A 103 MB / 3M-row
 CSV profiles at 19 MB peak RSS, 4.9 s; its `count(*)` stayed at 76 MB peak across that change.
 
+**A document is a record (2026-10-02).** `docs/design/2026-10-02-json-records.md`. About
+7,900 of the corpus's 8,136 JSON files hold one object each, and tdy declined them or read a
+one-element array inside them as the table. `Extraction::Json` gains `record` (serialised only
+when true, so no existing sidecar changes): the object at `pointer` (the root when absent) is
+ONE row, its keys in the document's own order — `src/jsondoc.rs` is a small ordered parse,
+because serde_json is built without `preserve_order` and turning it on would reorder every map
+in the tree. Anything but an object there is named and refused; it is never implied. The
+sniffer writes it only for a root object with no array in it; one with arrays keeps its array
+reading (`messy()` on a document whose point is its `rows` must not start returning one row)
+and its note names the record reading. In `fit` the record is one more **frame**: for a root
+object the candidates are the record first, then `json_record_pointers`' arrays, through the
+same `fit_by_elimination` — so villagerdb's `1-up-cap.json` is the item, by elimination of its
+three arrays, not a one-row table of buy prices; two fitting are `AmbiguousFrame` naming
+`record = true` and `pointer = "…"`; a root object with no array is fitted directly with no
+elimination note. A target column reaches a nested field with `OPTIONS(pointer = '/nh/x')`
+(`TargetColumn::pointer`): `matches` binds the top-level key, `fit::pointed_values` reads each
+candidate through `engine::json_pointer_value` — the executor's own function — and the
+pointed-at values are what is type-checked; the plan carries it as `ColumnSpec.pointer`, so no
+executor code is new. One key opened at two pointers is two columns (the collision check keys on
+`(position, pointer)`); a NOT NULL column whose pointer finds nothing is refused naming the row;
+`conform` enforces a declared pointer as it enforces `epoch`; `target_hash` hashes it only when
+declared. `region_read_hint` answers `None` for JSON — a blank line in pretty-printed JSON is
+not a table boundary. `tdy draft` reads a pile's root-object documents as records unless every
+one is sniffed onto an array at the same pointer: top-level scalars, and every scalar leaf down
+to depth 4 named from its path (`games_nh_sellprice_value`) with `matches` and `pointer`
+written; a top-level array is one TEXT column of JSON; an array further down cannot be a column
+(a pointer onto one is an error) and is named in a NOTE; types are the sniffer's guess over
+every value in the pile, in sample-sized chunks widened together; the grouping note compares
+top-level keys, since which games a villager appears in is one key's contents. The pile is
+`testdata/json_records/` (`20_json_records.py`), and `tests/records.rs` asserts its sums.
+Review fixes (same day) that a change here must not undo: "no array anywhere" counts EMPTY
+arrays — `{"status":"ok","count":0,"rows":[]}` is zero records, so the sniffer declines it
+naming the array, and `fit` falls back to the record frame only when the target binds the
+envelope's keys (`sniff::empty_array_record_frame`) — and any member read as one record that
+holds an empty array **waits on a person** (`fit::empty_array_reason`, from a plan and a reused
+non-manual sidecar alike), because the elimination never saw that array's zero-row reading: a
+"no results" month beside siblings settled on `pointer = "/rows"` was served as one row of
+envelope data; a root object whose every value is an
+object is read with a 0.25 doubt, since it may be a map of records; when no frame of a root
+object fits, the gap report is the frame that bound the most declared columns, ties to the
+sniffer's own (`FrameCandidates::ranked`), so neither an API dump's real gap nor a record's is
+buried under another frame's "no column binds"; `jsondoc`'s duplicate
+check is a key-to-slot map (a scan made a 200,000-key object take 342 s; 3.9 s to sniff now);
+a NOT NULL column whose pointer finds nothing is its own gap (`Gap::NothingAtPointer`). In the
+draft, `tdy draft --records` forces the record reading where every document is read through
+the same array (which otherwise keeps the array draft, with a NOTE); a top-level key merges
+into the same-named column a root array or NDJSON file gave; and a leaf under a key every file
+has is "null where absent", not an invitation to `if_missing`. Swept against villagerdb
+(release build, symlinked scratch copies): draft → `if_missing = 'null'` only where the draft's
+plain "in N of M" asks for it (2 for villagers — `birthday`, `collab`; **none** for items) →
+fit → `count(*)` equal to the file count, values pinned against the sources and, for items,
+three sums equal to a Python pass over the files. **483 villagers**: draft 1.0 s, fit 2.9 s,
+refit 0.9 s, count 0.6 s, under 60 MB. **7,443 items**: draft 1.4 s / 43 MB, first fit 92 s /
+1.4 GB, refit 32 s, `count(*)` 24 s / 1.1 GB, `--json fit --dry-run` 31 s, console `.ls` 17 s.
+None of that is quadratic: it is one 47 KB sidecar per member (121 columns, each typed one
+spelling out its whole NA vocabulary) — 335 MB of TOML parsed and fingerprints checked on
+every refit, query and listing (`.ls` takes as long with the target moved away). That is the
+shared-spec slice the design page defers, not something to optimise around here. Known limits:
+a JSON document over the 4 MiB probe cap cannot be fitted ("EOF while parsing a string at …
+column 4194304" — the probe reads a bounded prefix, which is no document); an integer past
+u64 or a decimal past f64's digits is rendered through f64 (`1e20`) on every JSON path, and
+serde_json's `arbitrary_precision`, which would keep the text, changes how every
+`serde_json::Value` number serialises through anything else (a `Value` written as TOML became a
+table), so it was tried and reverted.
+
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
 2,290 files each with one isolated deviation from RFC 4180) through Pollock's
@@ -770,11 +835,16 @@ fixture in `testdata/` — that is what `12_late_surprises.py` is. The 2026-09-0
 findings live in `gap_reports/AUDIT_FINDINGS.md` (gitignored, like every `gap_reports/`
 report); its fixtures are `15_audit_defects.py` (below).
 
-Current state (re-swept 2026-10-01 in release, at 46436b3: 3 tests passed in 796 s, no
-panic or hang): of 9,881 files, 4,019 are read confidently (41%), 4,868 read unsure (49%)
-and 994 declined (10%); the four declined xlsx are still Office `~$` owner-lock stubs,
+Current state (re-swept 2026-10-02 in release, with a document read as a record: 3 tests
+passed in 750 s, no panic or hang): of 9,881 files, 5,009 are read confidently (51%), 4,868
+read unsure (49%) and 4 declined; those four are xlsx, still Office `~$` owner-lock stubs,
 which is correct. **0 of 1,374 real CSVs declined** (15 before the type-verification work).
-The rise from the 2026-09-04 survey's 3,868 confident files has one cause, traced per file
+The 990 JSON documents the 2026-10-01 sweep declined ("no array of records") are one
+object each and are now read as one record; the 4,443 unsure JSON files are unchanged by
+design — a lone document that also holds an array keeps its array reading and its doubt,
+and it is a pile's target that chooses the record (json: 3,693 read, 4,443 unsure, 0
+declined). The 2026-10-01 sweep at 46436b3 had 4,019 confident and 994 declined.
+The rise from the 2026-09-04 survey's 3,868 confident files to that 4,019 has one cause, traced per file
 over all 1,385 csv/tsv files: all 138 that rose did so between 2026-09-04 and 2026-09-08,
 each losing exactly the doubt "nearly every column typed as text", which the September
 audit restricted to files whose column names tdy had to invent (`!named_by_file`), and no
@@ -999,7 +1069,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (285) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (303) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end

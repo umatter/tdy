@@ -1,0 +1,13 @@
+{
+  "id": "cardboard-box",
+  "name": "Cardboard Box",
+  "category": "Furniture",
+  "games": {
+    "nl": {
+      "sellPrice": {
+        "currency": "bells",
+        "value": 75
+      }
+    }
+  }
+}

@@ -65,6 +65,7 @@ enum ColOpt {
     RoundHalfAway,
     YearPivot(u8),
     Epoch(crate::spec::EpochUnit),
+    Pointer(String),
 }
 
 /// A per-column `OPTIONS(...)` entry.
@@ -77,6 +78,14 @@ fn column_option(o: &SqlOption) -> std::result::Result<ColOpt, String> {
         .ok_or_else(|| format!("column option `{key}` must be a quoted string"))?;
     match key.as_str() {
         "matches" => Ok(ColOpt::Matches(split_globs(&text))),
+        // Where inside the bound key's value the column's value lives. An
+        // RFC 6901 pointer always starts with `/` here: the empty pointer
+        // (the whole value) is what an undeclared pointer already means.
+        "pointer" if text.starts_with('/') => Ok(ColOpt::Pointer(text)),
+        "pointer" => Err(format!(
+            "pointer = {text:?} must start with `/`: it is an RFC 6901 JSON Pointer into the \
+             value of the key this column binds, e.g. '/nh/sellPrice/value'"
+        )),
         "if_missing" => match text.to_ascii_lowercase().as_str() {
             // Only null. A default *value* would be data the file never
             // contained, invented at plan time, which is exactly the class of
@@ -129,7 +138,8 @@ fn column_option(o: &SqlOption) -> std::result::Result<ColOpt, String> {
              file that lacks it), round ('half_away' to round a value with more fractional \
              digits than the scale instead of refusing it), year_pivot ('N', the century \
              window of a two-digit year), epoch ('seconds', 'milliseconds', 'microseconds' \
-             or 'excel_days', a count read as a date)."
+             or 'excel_days', a count read as a date), pointer ('/a/b', where inside a JSON \
+             value the column's value lives)."
         )),
     }
 }
@@ -199,6 +209,14 @@ pub struct TargetColumn {
     /// serial for `excel_days`), and that is the only reading tried for it.
     /// Only on a DATE or TIMESTAMP column. Part of `target_hash`.
     pub epoch: Option<crate::spec::EpochUnit>,
+    /// `pointer = '/a/b'`: an RFC 6901 pointer **into** the value of the
+    /// top-level key this column binds (by `matches` or its own name). The
+    /// planner writes it as the member's `ColumnSpec.pointer`, so the
+    /// executor's existing semantics apply: resolving to nothing is a null,
+    /// landing on an object or an array is an error. Only meaningful for a
+    /// JSON member, and refused at fit time on anything else. Part of
+    /// `target_hash`.
+    pub pointer: Option<String>,
 }
 
 /// How a file's header cell is matched to a declared column name.
@@ -368,6 +386,7 @@ impl Target {
             let mut round = false;
             let mut year_pivot: Option<u8> = None;
             let mut epoch: Option<crate::spec::EpochUnit> = None;
+            let mut pointer: Option<String> = None;
             let mut twice: Vec<&str> = Vec::new();
             for opt in &c.options {
                 match &opt.option {
@@ -387,6 +406,11 @@ impl Target {
                                 Ok(ColOpt::Epoch(u)) => {
                                     if epoch.replace(u).is_some() {
                                         twice.push("epoch");
+                                    }
+                                }
+                                Ok(ColOpt::Pointer(p)) => {
+                                    if pointer.replace(p).is_some() {
+                                        twice.push("pointer");
                                     }
                                 }
                                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
@@ -443,6 +467,7 @@ impl Target {
                         round,
                         year_pivot,
                         epoch,
+                        pointer,
                     })
                 }
                 Err(e) => errs.push(format!("column `{cname}`: {e}")),
@@ -1243,6 +1268,27 @@ mod tests {
         let e = Target::parse("CREATE TABLE t (a DECIMAL(14,2) OPTIONS(round = 'banker')) WITH (files = '*.csv')")
             .expect_err("one mode");
         assert!(format!("{e:#}").contains("half_away"), "{e:#}");
+    }
+
+    /// `pointer` says where in a bound JSON value the column's value
+    /// lives: parsed beside `matches`, refused unless it is an RFC 6901
+    /// pointer, refused when said twice.
+    #[test]
+    fn pointer_is_declarable_once_and_must_be_a_pointer() {
+        let g = t("CREATE TABLE s (sell BIGINT OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value'), \
+                   id TEXT) WITH (files = '*.json')");
+        assert_eq!(g.columns[0].pointer.as_deref(), Some("/nh/sellPrice/value"));
+        assert_eq!(g.columns[0].matches, ["games"]);
+        assert_eq!(g.columns[1].pointer, None);
+        for (ddl, want) in [
+            ("a TEXT OPTIONS(pointer = 'nh/x')", "must start with `/`"),
+            ("a TEXT OPTIONS(pointer = '')", "must start with `/`"),
+            ("a TEXT OPTIONS(pointer = '/x', pointer = '/y')", "pointer is set more than once"),
+            ("a TEXT OPTIONS(pointer = '/x') OPTIONS(pointer = '/x')", "pointer is set more than once"),
+        ] {
+            let e = Target::parse(&format!("CREATE TABLE s ({ddl}) WITH (files = '*.json')")).expect_err(ddl);
+            assert!(format!("{e:#}").contains(want), "{ddl}: {e:#}");
+        }
     }
 
     /// `year_pivot` and `epoch` declare a reading of a DATE or TIMESTAMP

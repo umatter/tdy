@@ -1222,7 +1222,7 @@ impl Highlights {
                 "ambiguous" => h.implicated.extend(
                     p.choices.iter().map(|c| c.split(" (column ").next().unwrap_or(c).to_string()),
                 ),
-                "untypable" | "ambiguous_separator" | "ambiguous_format" | "collides" => {
+                "untypable" | "ambiguous_separator" | "ambiguous_format" | "collides" | "nothing_at_pointer" => {
                     h.implicated.extend(p.choices.iter().cloned())
                 }
                 _ => {}
