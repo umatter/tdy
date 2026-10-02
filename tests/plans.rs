@@ -379,3 +379,101 @@ async fn the_console_prunes_through_the_same_function() {
     assert!(o.text.contains("--prune-sidecars: 9 moved into the lock and removed"), "{}", o.text);
     assert_eq!(sidecars(dir.path()), Vec::<String>::new());
 }
+
+fn no_llm() -> tdy::config::Config {
+    tdy::config::load(&tdy::config::Overrides { backend: Some("none".into()), model: None, base_url: None }).unwrap()
+}
+
+/// `tdy check TARGET --against FILE` on a member with no sidecar checks the
+/// plan the lock holds for it, and says that is where it came from.
+#[test]
+fn check_against_a_lock_held_member_checks_the_lock_plan() {
+    let (dir, t) = staged(true);
+    fit(&t);
+    let jan = dir.path().join("2025-01.csv");
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", jan.to_str().unwrap()]);
+    let text = ok(&out);
+    assert!(text.contains("2025-01.csv: CONFORMS — plan held in "), "{text}");
+    assert!(text.contains("sales_ok.tdy.lock (spec b3:"), "{text}");
+    assert!(text.contains("1 of 1 file(s) conform to `sales_ok`."), "{text}");
+
+    let out = tdy(&["--json", "check", t.to_str().unwrap(), "--against", jan.to_str().unwrap()]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["files"][0]["verdict"], "conforms", "{v}");
+    assert_eq!(v["files"][0]["plan"], "lock", "{v}");
+
+    // Changed since it was planned: not the plan a query would use.
+    let mut body = std::fs::read(&jan).unwrap();
+    body.extend_from_slice(b"31.01.2025;Mitte;1'000.00\n");
+    std::fs::write(&jan, body).unwrap();
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", jan.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success());
+    assert!(text.contains("2025-01.csv: STALE — the file has changed since its plan was recorded in "), "{text}");
+}
+
+/// `tdy validate FILE` on a member with no sidecar says its plan is held in
+/// the target's lock — and checks that plan against the file.
+#[test]
+fn validate_on_a_lock_held_member_names_the_lock() {
+    let (dir, t) = staged(true);
+    fit(&t);
+    let jan = dir.path().join("2025-01.csv");
+    let text = ok(&tdy(&["validate", jan.to_str().unwrap()]));
+    assert!(text.contains("2025-01.csv: ok"), "{text}");
+    assert!(
+        text.contains("note: no sidecar — its plan is held in the lock of ") && text.contains("sales_ok.tdy.sql (spec b3:"),
+        "{text}"
+    );
+
+    let out = tdy(&["validate", jan.to_str().unwrap(), "--stamp"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "stamping a sidecar that does not exist");
+    assert!(err.contains("has no sidecar to stamp: its plan is held in the lock of"), "{err}");
+    assert!(err.contains("method = \"manual\""), "{err}");
+}
+
+/// `tdy profile` of a lock-held member reads it with the plan the lock
+/// holds, and says so.
+#[test]
+fn profile_of_a_lock_held_member_reads_the_lock_plan() {
+    let (dir, t) = staged(true);
+    fit(&t);
+    let jan = dir.path().join("2025-01.csv");
+    let p = tdy::profile::profile_file(&jan, &tdy::profile::Request::default(), no_llm().limits).unwrap();
+    assert_eq!(p.frame, "the lock of sales_ok.tdy.sql", "{}", p.frame);
+    let text = ok(&tdy(&["profile", jan.to_str().unwrap()]));
+    assert!(text.contains("frame: the lock of sales_ok.tdy.sql"), "{text}");
+}
+
+/// The console: `.ls` names a lock-held member's plan without a sidecar to
+/// read, and `.accept` shows the evidence for a plan the lock holds.
+#[tokio::test]
+async fn the_console_lists_and_accepts_lock_held_members() {
+    let (dir, t) = cents_pile();
+    fit(&t);
+    let mut s = tdy::console::Session::new(dir.path(), no_llm()).unwrap();
+    let o = s.run(".ls", None).await;
+    assert!(o.ok, "{}", o.text);
+    let line = o.text.lines().find(|l| l.starts_with("2025-03.csv")).unwrap();
+    assert!(line.ends_with("plan in the lock"), "{}", o.text);
+    let entries = tdy::console::list_dir(dir.path()).unwrap();
+    let march = entries.iter().find(|e| e.name == "2025-03.csv").unwrap();
+    assert_eq!(march.status, tdy::console::EntryStatus::InLock);
+
+    let o = s.run(".accept sales.tdy.sql 2025-03.csv", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.starts_with("evidence for 2025-03.csv (nothing written):\n"), "{}", o.text);
+    assert!(o.text.contains("  plan: held in the lock (spec b3:"), "{}", o.text);
+    let o = s.run(".accept sales.tdy.sql 2025-03.csv", None).await;
+    assert!(o.ok && o.text.starts_with("accepted 2025-03.csv"), "{}", o.text);
+    ok(&query(&t, "SELECT count(*) FROM dataset('@')"));
+
+    // Changed bytes: `.ls` says stale, as it does for a stale sidecar.
+    let p = dir.path().join("2025-01.csv");
+    let mut body = std::fs::read(&p).unwrap();
+    body.extend_from_slice(b"28.01.2025;Mitte;1.00\n");
+    std::fs::write(&p, body).unwrap();
+    let entries = tdy::console::list_dir(dir.path()).unwrap();
+    assert_eq!(entries.iter().find(|e| e.name == "2025-01.csv").unwrap().status, tdy::console::EntryStatus::Stale);
+}

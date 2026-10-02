@@ -2051,3 +2051,22 @@ fn the_profile_context_draws_columns_then_a_columns_shapes() {
     let dotted = screen(&mut w, 140, 40).into_iter().find(|l| l.contains("99.99.9999")).unwrap();
     assert!(dotted.contains(" 6 ") && dotted.contains("6.0%") && dotted.contains("01.03.2025"), "{dotted}");
 }
+
+/// A member whose plan the lock holds has no sidecar to open: the member
+/// view says where its plan is, and that writing a sidecar overrides it.
+#[test]
+fn the_member_view_says_a_lock_held_plan_is_in_the_lock() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = member("2025-01.csv", MemberStatus::Fits);
+    m.in_lock = true;
+    member_with_raw(&mut w, &d, m, raw_of(&["Datum;Region;Betrag"]));
+    let lines = screen(&mut w, 120, 34);
+    let text = lines.join("\n");
+    assert!(text.contains("plan held in the lock — a sidecar for this member overrides it"), "{text}");
+
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    member_with_raw(&mut w, &d, member("2025-01.csv", MemberStatus::Fits), raw_of(&["Datum;Region;Betrag"]));
+    let text = screen(&mut w, 120, 34).join("\n");
+    assert!(!text.contains("plan held in the lock"), "a sidecar-held member says nothing new:\n{text}");
+}

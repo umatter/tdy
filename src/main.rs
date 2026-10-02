@@ -261,8 +261,25 @@ fn check_json(
 
     let mut out = Vec::new();
     let mut bad = 0usize;
+    let lock = tdy::lockfile::Lock::load(target_path).ok().flatten();
+    let plans = tdy::plans::Plans::new(target_path, lock.as_ref());
     for f in files {
         use tdy::sidecar::SidecarStatus;
+        if let Some((file, plan)) = tdy::commands::lock_held(target_path, &plans, f)? {
+            let v = judge(&plan.spec, target, false);
+            let mismatches: Vec<String> = v.mismatches().iter().map(|m| m.message()).collect();
+            let verdict = if plan.is_fresh(&file)? { v.label().to_ascii_lowercase() } else { "stale".into() };
+            if verdict != "conforms" {
+                bad += 1;
+            }
+            out.push(serde_json::json!({
+                "path": f.display().to_string(),
+                "verdict": verdict,
+                "plan": "lock",
+                "mismatches": mismatches,
+            }));
+            continue;
+        }
         let entry = match tdy::sidecar::load(f) {
             Ok(SidecarStatus::Fresh(sc)) => {
                 let v = judge(&sc.spec, target, false);

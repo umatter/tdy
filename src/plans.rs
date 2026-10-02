@@ -323,6 +323,23 @@ pub fn find_holding_lock(file: &Path, sheet: Option<&str>, region: Option<u32>) 
     None
 }
 
+/// A typed member reference — `book.xlsx#Q1`, `report.csv#2` — that no
+/// sidecar declares, split by asking which reading a lock beside it holds a
+/// plan for ([`find_holding_lock`]). `None` when no reading is held, or
+/// when two are (the caller then reports about the name as typed).
+pub fn resolve_held(text: &str) -> Option<(PathBuf, Option<String>, Option<u32>)> {
+    let held = |m: &MemberRef| {
+        let f = Path::new(&m.path);
+        (m.sheet.is_some() || m.region.is_some())
+            && f.is_file()
+            && find_holding_lock(f, m.sheet.as_deref(), m.region).is_some()
+    };
+    match MemberRef::resolve(text, held) {
+        Ok(Some(m)) => Some((PathBuf::from(m.path), m.sheet, m.region)),
+        _ => None,
+    }
+}
+
 /// `items.tdy.lock` -> `items.tdy.sql`
 pub fn target_of_lock(lock: &Path) -> PathBuf {
     let name = lock.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

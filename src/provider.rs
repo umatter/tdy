@@ -856,10 +856,20 @@ pub fn validate_command(path: &Path, cfg: &Config, restamp: bool) -> Result<()> 
 pub fn validate_quiet(path: &Path, cfg: &Config, restamp: bool) -> Result<Vec<String>> {
     // `path` may be a member reference: `book.xlsx#Q1` is one sheet of a
     // workbook, whose sidecar is `book.xlsx#Q1.tdy.toml` beside it.
-    let (file, sheet, region) = sidecar::resolve_ref(path)?;
+    let (mut file, mut sheet, mut region) = sidecar::resolve_ref(path)?;
+    if !file.is_file() {
+        if let Some(held) = crate::plans::resolve_held(&path.to_string_lossy()) {
+            (file, sheet, region) = held;
+        }
+    }
     let (path, sheet) = (file.as_path(), sheet.as_deref());
     let sc_path = sidecar::sidecar_path_for(path, sheet, region);
     if !sc_path.exists() {
+        // A member of a `plans = 'lock'` target has no sidecar: its plan is
+        // the one the target's lock holds, and that is what is validated.
+        if let Some((target, lock)) = crate::plans::find_holding_lock(path, sheet, region) {
+            return validate_lock_held(path, sheet, region, &target, &lock, cfg, restamp);
+        }
         bail!(
             "no sidecar at {}; run `tdy sniff {}` first",
             sc_path.display(),
@@ -906,6 +916,47 @@ pub fn validate_quiet(path: &Path, cfg: &Config, restamp: bool) -> Result<Vec<St
             Ok(sc.spec.notes.clone())
         }
     }
+}
+
+/// `tdy validate` of a member whose plan a target's lock holds: the plan is
+/// checked against the file exactly as a sidecar's is, and the first note
+/// says where it lives. There is no sidecar to stamp.
+fn validate_lock_held(
+    path: &Path,
+    sheet: Option<&str>,
+    region: Option<u32>,
+    target: &Path,
+    lock: &crate::lockfile::Lock,
+    cfg: &Config,
+    restamp: bool,
+) -> Result<Vec<String>> {
+    let plans = crate::plans::Plans::new(target, Some(lock));
+    let dir = crate::lockfile::target_dir(target);
+    let rel = path.canonicalize()?.strip_prefix(dir.canonicalize()?)?.to_string_lossy().replace('\\', "/");
+    let m = crate::member::MemberRef { path: rel, sheet: sheet.map(str::to_string), region };
+    let Some(plan) = plans.plan_for(path, &m)? else {
+        bail!("no sidecar at {}", sidecar::sidecar_path_for(path, sheet, region).display())
+    };
+    let held = format!("its plan is held in the lock of {} (spec {})", target.display(), crate::plans::short_id(plan.lock_id().unwrap_or_default()));
+    if restamp {
+        bail!(
+            "{} has no sidecar to stamp: {held}. To give this member a plan of its own, write it a \
+             sidecar with method = \"manual\"; `tdy fit {}` re-proves the lock's.",
+            path.display(),
+            target.display()
+        );
+    }
+    if !plan.is_fresh(path)? {
+        bail!(
+            "{} has changed since its plan was recorded ({held}). Re-run `tdy fit {}`.",
+            path.display(),
+            target.display()
+        );
+    }
+    engine::preview(&plan.spec, path, cfg.limits, 200)?;
+    let mut notes = vec![format!("no sidecar — {held}")];
+    notes.extend(plan.notes());
+    Ok(notes)
 }
 
 /// Helper used by tests: query straight against a spec without sidecars.
