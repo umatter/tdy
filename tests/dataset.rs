@@ -1313,9 +1313,10 @@ fn acceptance_is_per_sheet_member() {
 
 fn cents_pile() -> (TempDir, PathBuf) {
     let dir = TempDir::new().unwrap();
+    // Five rows a month: the magnitude check judges a member only from five values.
     let month = |m: &str, base: u32, factor: u32| {
         let mut s = String::from("Datum;Region;Betrag\n");
-        for (i, region) in ["Ost", "West", "Nord", "Sued"].iter().enumerate() {
+        for (i, region) in ["Ost", "West", "Nord", "Sued", "Mitte"].iter().enumerate() {
             s.push_str(&format!("28.{m}.2025;{region};{}.00\n", (base + 10 * i as u32) * factor));
         }
         s
@@ -1362,6 +1363,64 @@ fn a_member_in_a_different_unit_waits_on_a_person_and_is_accepted_by_name() {
     assert!(out.status.success());
     let lock = std::fs::read_to_string(dir.path().join("sales.tdy.lock")).unwrap();
     assert_eq!(lock.matches("accepted = true").count(), 1, "{lock}");
+}
+
+/// A pile of `(file, rows of price)` as one-column-of-money CSVs and the
+/// target that declares them.
+fn price_pile(members: &[(&str, &[u64])]) -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    for (name, prices) in members {
+        let mut s = String::from("id;price\n");
+        for (i, p) in prices.iter().enumerate() {
+            s.push_str(&format!("{i};{p}\n"));
+        }
+        std::fs::write(dir.path().join(name), s).unwrap();
+    }
+    let t = dir.path().join("t.tdy.sql");
+    std::fs::write(&t, "CREATE TABLE t (id BIGINT NOT NULL, price BIGINT NOT NULL) WITH (files = '*.csv');").unwrap();
+    (dir, t)
+}
+
+/// A one-row file has no typical value: its "median" is that row. Six such
+/// files at 1, 10, ... 100000 are ordinary variation between small files, not
+/// six units, and the pile is served whole.
+#[test]
+fn a_pile_of_one_row_members_is_not_judged_for_magnitude() {
+    let (_dir, t) = price_pile(&[
+        ("a.csv", &[1]),
+        ("b.csv", &[10]),
+        ("c.csv", &[100]),
+        ("d.csv", &[1000]),
+        ("e.csv", &[10000]),
+        ("f.csv", &[100000]),
+    ]);
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("REVIEW"), "{text}");
+    let sql = format!("SELECT count(*), sum(price) FROM dataset('{}')", t.display());
+    let out = tdy(&["query", &sql]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains('6') && text.contains("111111"), "{text}");
+}
+
+/// Three members with five rows each at one scale, and a fourth with one row
+/// a thousand times larger. The small member is outside what the check can
+/// judge: a single value says nothing about its file's typical one, so it
+/// neither waits on a person nor moves the pile's reference.
+#[test]
+fn a_one_row_member_among_judged_ones_is_outside_the_check() {
+    let (_dir, t) = price_pile(&[
+        ("a.csv", &[100, 110, 120, 130, 140]),
+        ("b.csv", &[105, 115, 125, 135, 145]),
+        ("c.csv", &[95, 105, 115, 125, 135]),
+        ("d.csv", &[120_000]),
+    ]);
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("REVIEW"), "{text}");
 }
 
 /// Two members cannot say which is out of scale; the check needs three.
