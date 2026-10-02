@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 945 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 947 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -999,7 +999,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (281) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (283) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end
