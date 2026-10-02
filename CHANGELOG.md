@@ -90,6 +90,13 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   was served as `0.09743057599473336`. Those values now read as the nearest
   double, so a float64 column written with 17 digits can change in its last
   digit. Nothing else that a double held moves.
+- **The sniffer and `tdy draft` never type float64 for a value a double cannot
+  hold.** A column holding an integer past 64 bits beside fractions is TEXT,
+  as a column of such integers already was; one holding a value with more than
+  17 significant digits is `DECIMAL(38, s)` when it fits and TEXT otherwise,
+  with a note naming the value. A JSON pile whose `v` was an identifier past
+  64 bits in one document and `0.5` in another drafted `v DOUBLE` and served
+  `1.2345678901234568e22`; it now drafts TEXT, as its CSV twin did.
 - **A number outside a double's range is refused in a float64 column**, naming
   the row: `1E400` read as `inf` and `1e-400` as `0` — in a CSV always, and in
   JSON once the reader kept the literal. A zero written as a zero is a zero.

@@ -349,3 +349,31 @@ fn a_small_decimal_written_plainly_lands_in_a_decimal_column() {
     let q = tdy(&["query", &format!("SELECT big FROM dataset('{}')", u.display())]);
     assert!(out(&q).contains("| 10000000000000000 |"), "{}", out(&q));
 }
+
+// ---------------------------------------------------------------------------
+// typing: never float64 for a value a double cannot hold
+// ---------------------------------------------------------------------------
+
+/// The reviewer's pile: one document's `v` is past 64 bits, the other's is
+/// 0.5. The CSV draft of the same pile says TEXT; the JSON draft said DOUBLE
+/// and served 1.2345678901234568e22.
+#[test]
+fn a_draft_never_declares_double_for_a_value_a_double_cannot_hold() {
+    let dir = TempDir::new().unwrap();
+    let a = write(&dir, "a.json", "{\"id\":1,\"v\":12345678901234567890123}");
+    let b = write(&dir, "b.json", "{\"id\":2,\"v\":0.5}");
+    let sql = tdy::draft::draft_target(&[a, b], tdy::config::Limits::default()).unwrap();
+    let v = sql.lines().find(|l| l.trim_start().starts_with("v ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(v.contains("TEXT"), "{sql}");
+}
+
+/// `amount_lossy` (19 significant digits) sniffs as an exact decimal and
+/// queries as written.
+#[test]
+fn a_long_json_decimal_sniffs_as_an_exact_decimal() {
+    let dir = TempDir::new().unwrap();
+    let p = write(&dir, "d.ndjson", "{\"x\":1234567.891234567891}\n{\"x\":2.5}\n");
+    let q = tdy(&["query", &format!("SELECT CAST(x AS VARCHAR) x FROM messy('{}')", p.display())]);
+    let text = out(&q);
+    assert!(text.contains("1234567.891234567891"), "{text}");
+}

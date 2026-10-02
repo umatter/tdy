@@ -2391,6 +2391,45 @@ fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGues
                 note: n,
             };
         }
+        // A double holds 17 significant digits and an integer only up to
+        // 2^53 exactly: a column holding more is never float64, which would
+        // read it rounded. An integer past i64 stays text, as a column of
+        // them does; a long decimal is exact in DECIMAL(38, s) when it fits.
+        let counts: Vec<(&str, (usize, usize, bool))> = sample
+            .iter()
+            .filter_map(|v| numfmt::digit_counts(v, fmt.decimal, fmt.thousands).map(|c| (*v, c)))
+            .collect();
+        if let Some((v, _)) = counts.iter().find(|(_, (_, _, past_i64))| *past_i64) {
+            return text(
+                Some(format!(
+                    "kept as text: {v:?} is an integer past a 64-bit integer's range, which a \
+                     float64 column would round"
+                )),
+                0.0,
+            );
+        }
+        if let Some((v, (_, sig, _))) = counts.iter().find(|(_, (_, sig, _))| *sig > 17) {
+            let widest = counts.iter().map(|(_, (int, _, _))| *int).max().unwrap_or(0);
+            if widest + max_scale <= 38 {
+                return TypeGuess {
+                    dtype: DType::Decimal { precision: 38, scale: max_scale as i8 },
+                    parse,
+                    penalty,
+                    note: Some(format!(
+                        "read as decimal({max_scale}): {v:?} has {sig} significant digits, more \
+                         than a float64 holds — scale inferred from the first {TYPE_SAMPLE} rows; \
+                         any later value with more fractional digits is rounded half away from zero"
+                    )),
+                };
+            }
+            return text(
+                Some(format!(
+                    "kept as text: {v:?} has {sig} significant digits, more than a float64 holds, \
+                     and the column does not fit decimal(38, s)"
+                )),
+                0.0,
+            );
+        }
         if fmt.thousands.is_none() && fmt.decimal.is_none() {
             parse.thousands_separator = None;
             parse.decimal_separator = None;
@@ -2740,6 +2779,30 @@ mod tests {
         let g = guess_type(&["1'234.50", "12'000.00"], "v", false);
         assert!(matches!(g.dtype, DType::Decimal { scale: 2, .. }));
         assert_eq!(g.parse.thousands_separator, Some('\''));
+    }
+
+    /// A double holds 17 significant digits. A column holding more, or an
+    /// integer past i64, is never typed float64: it would be read rounded.
+    #[test]
+    fn a_value_a_double_cannot_hold_is_never_typed_float64() {
+        // 19 significant digits: an exact decimal fits.
+        let g = guess_type(&["1234567.891234567891", "0.005", "-0.25"], "x", false);
+        assert_eq!(g.dtype, DType::Decimal { precision: 38, scale: 12 }, "{:?}", g.note);
+        let note = g.note.unwrap();
+        assert!(note.contains("1234567.891234567891") && note.contains("19 significant digits"), "{note}");
+        // An integer past i64 beside a fraction stays text, as an
+        // oversized integer column does.
+        let g = guess_type(&["12345678901234567890123", "0.5"], "v", false);
+        assert_eq!(g.dtype, DType::Utf8);
+        let note = g.note.unwrap();
+        assert!(note.contains("12345678901234567890123") && note.contains("64-bit"), "{note}");
+        // Too many digits for DECIMAL(38, s): text.
+        let forty = format!("{}.5", "9".repeat(39));
+        let g = guess_type(&[&forty, "0.25"], "v", false);
+        assert_eq!(g.dtype, DType::Utf8, "{:?}", g.note);
+        // Leading zeros and trailing fractional zeros do not count.
+        let g = guess_type(&["0.10", "1.50000000000000000000", "0.00000000000000000012345"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
     }
 
     #[test]

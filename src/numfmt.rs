@@ -351,6 +351,35 @@ pub fn frac_digits_with(v: &str, decimal: Option<char>, thousands: Option<char>)
     }
 }
 
+/// A numeric literal's digits under a convention: (integer digits after any
+/// leading zeros, significant digits, whether it is an integer past i64).
+/// Significant digits are counted on the literal: leading zeros and trailing
+/// fractional zeros do not count (`0.10` is one, `1.500` two), nor do
+/// separators or a sign. `None` for a value that is not plain digits once
+/// the convention's separators are taken out.
+pub fn digit_counts(v: &str, decimal: Option<char>, thousands: Option<char>) -> Option<(usize, usize, bool)> {
+    let s = core(v)?;
+    let dec = match decimal {
+        Some(d) => Some(d),
+        None if thousands == Some('.') => None,
+        None => Some('.'),
+    };
+    let (int, frac) = match dec.and_then(|d| s.split_once(d)) {
+        Some((i, f)) => (i, f),
+        None => (s, ""),
+    };
+    let int: String = int.chars().filter(|&c| Some(c) != thousands).collect();
+    if int.is_empty() || !int.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let past_i64 = frac.is_empty() && !dec.is_some_and(|d| s.contains(d)) && !fits_i64(&int);
+    let frac = frac.trim_end_matches('0');
+    let int_digits = int.trim_start_matches('0').len();
+    let all: String = int.chars().chain(frac.chars()).collect();
+    let sig = all.trim_start_matches('0').len();
+    Some((int_digits, sig, past_i64))
+}
+
 /// Is every value plainly integral (no separators, no fraction)?
 pub fn all_integral(values: &[&str]) -> bool {
     values.iter().all(|v| {

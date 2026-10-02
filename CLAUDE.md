@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 1015 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 1024 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -844,7 +844,17 @@ i64 stays text or fits a declared `DECIMAL(38,0)`; a long decimal parses exactly
 serde_json would print in exponent form keeps its written text too (`0.00000123`, not
 `1.23e-6`; `0.000000000000000001`, not `1e-18`), because a `DECIMAL` column refuses exponent
 form and main refused those values for that reason; a literal written with an exponent keeps
-serde_json's rendering as before. Cost: the common
+serde_json's rendering as before. And **typing never chooses float64 for a value a double
+cannot hold** (`sniff::guess_type`, so the sniffer and the draft alike, CSV and JSON): a numeric
+column holding an integer past i64 beside fractions is TEXT, as a column of such integers
+already was, and one holding a literal of more than 17 significant digits
+(`numfmt::digit_counts` — leading zeros and trailing fractional zeros do not count) is
+`DECIMAL(38, s)` when its widest integer part plus the scale fits 38, TEXT otherwise, each with
+a note naming the value. It rests on the sniffer's sample (and, in a draft, every value): a long
+literal only past the sample, in a column already typed float64, is still read rounded. Swept
+before landing over 9,678 files (every corpus csv/tsv/json/ndjson/jsonl and every fixture): one
+real file moved (`emissions.csv`, two columns of 18-digit floats → `DECIMAL(38,20)`) and one
+fixture (`json_shapes_precision.ndjson`, three columns → DECIMAL). Cost: the common
 decimal (≤15 significant digits written, a power of ten within ±22) is laid out directly,
 pinned against serde_json over random decimals, since there serde_json's parse is one exactly
 rounded operation; anything else asks serde_json. A 100 MB NDJSON `count(*)` went 4.5 s →
@@ -1113,7 +1123,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (310) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (313) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end

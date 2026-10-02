@@ -55,7 +55,8 @@ json_shapes_precision.ndjson
     amount_lossy[0] was written as a JSON *number* with 19 significant digits.
     Python's json (this generator's own check) and serde_json round it to
     1234567.8912345679; tdy's reader keeps the text as written, and the
-    sniffer types the column float64, so a query shows the double.
+    sniffer types the column decimal(38,12) (19 significant digits are more
+    than a float64 holds), so a query shows it as written.
 
 json_shapes_wrapped.json
     {"meta":{...},"warnings":null,"data":[...]} - needs pointer "/data".
