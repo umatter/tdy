@@ -306,7 +306,7 @@ pub fn verify_types(
         return;
     }
     let total = v.rows;
-    for (i, _why) in v.failing {
+    for (i, why) in v.failing {
         let Some(off) = v.offenders.iter().find(|o| o.column == i) else {
             continue;
         };
@@ -326,14 +326,21 @@ pub fn verify_types(
         let was = col.dtype.clone();
         col.dtype = DType::Utf8;
         col.parse = ValueParsing::default();
+        // Say what the cast said: a value outside a double's range is a
+        // number, just not one a float64 can hold.
+        let what = if was == DType::Float64 && why.contains("outside a double's range") {
+            "outside a double's range".to_string()
+        } else {
+            format!("not {}", type_word(&was))
+        };
         spec.notes.push(format!(
-            "column `{}`: kept as text — {} of {} values are not {}: {}. \
+            "column `{}`: kept as text — {} of {} values are {}: {}. \
              If those are strays rather than data, drop them with a \
              `drop_rows_matching` transform and narrow the type by hand.",
             col.name,
             count,
             total,
-            type_word(&was),
+            what,
             shown.join(", ")
         ));
     }
@@ -2855,6 +2862,20 @@ mod tests {
         let g = guess_type(&["1e-400", "2.5e3"], "v", false);
         assert_eq!(g.dtype, DType::Utf8);
         assert!(g.note.as_deref().unwrap_or("").contains("outside a double's range"), "{:?}", g.note);
+    }
+
+    /// i64's own bounds are in range; one past them is not.
+    #[test]
+    fn i64_bounds_beside_a_fraction_are_not_past_i64() {
+        for v in ["-9223372036854775808", "9223372036854775807"] {
+            let g = guess_type(&[v, "0.5"], "v", false);
+            assert!(!g.note.as_deref().unwrap_or("").contains("64-bit"), "{v}: {:?}", g.note);
+        }
+        for v in ["-9223372036854775809", "9223372036854775808"] {
+            let g = guess_type(&[v, "0.5"], "v", false);
+            assert_eq!(g.dtype, DType::Utf8, "{v}");
+            assert!(g.note.as_deref().unwrap_or("").contains("64-bit"), "{v}: {:?}", g.note);
+        }
     }
 
     #[test]

@@ -393,3 +393,38 @@ fn a_sixteen_digit_value_a_double_cannot_hold_is_not_float64() {
         assert!(text.contains(want) && !text.contains("9007199254740992"), "{}: {}", p.display(), out(&q));
     }
 }
+
+/// A file of `n` floats, one per row under a header `x`, with data row
+/// `at` (1-based) replaced: far enough in that the sniffer's sample does not
+/// see it, so only the whole-file verification can.
+fn floats_with(dir: &TempDir, name: &str, n: usize, at: usize, odd: &str, ndjson: bool) -> PathBuf {
+    let mut body = if ndjson { String::new() } else { String::from("x\n") };
+    for i in 1..=n {
+        let v = if i == at { odd.to_string() } else { format!("{}.{}", i % 977, (i * 7919) % 1000) };
+        if ndjson {
+            body.push_str(&format!("{{\"x\":{v}}}\n"));
+        } else {
+            body.push_str(&v);
+            body.push('\n');
+        }
+    }
+    write(dir, name, &body)
+}
+
+fn sniffed(p: &Path) -> serde_json::Value {
+    let o = tdy(&["--json", "sniff", "--no-llm", "--force", p.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", out(&o));
+    serde_json::from_slice(&o.stdout).unwrap()
+}
+
+/// Past the sample, a value outside a double's range widens the column with
+/// the cast's own words, not "not a number".
+#[test]
+fn a_late_value_outside_a_doubles_range_is_named_as_such() {
+    let dir = TempDir::new().unwrap();
+    let p = floats_with(&dir, "late.csv", 20_000, 10_001, "1e-400", false);
+    let v = sniffed(&p);
+    let notes = v["notes"].to_string();
+    assert!(notes.contains("are outside a double's range") && notes.contains("row 10001"), "{notes}");
+    assert!(!notes.contains("not a number"), "{notes}");
+}
