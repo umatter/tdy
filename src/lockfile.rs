@@ -66,12 +66,85 @@ pub struct Member {
     /// the declaration change.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub accepted: bool,
+    /// The plan this member reads, by id in the lock's spec table — set
+    /// only for a `plans = 'lock'` target's member that has no sidecar file.
+    /// For such a member this id, not `spec_digest`, is what an acceptance
+    /// is tied to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<String>,
+    /// Notes particular to this member's fit, which follow the shared notes
+    /// its spec entry carries — the frame elimination over *this* file, the
+    /// split of *this* file. Only a lock-held plan has any here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 impl Member {
     /// The form a person reads and types.
     pub fn name(&self) -> String {
-        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone(), region: self.region }.name()
+        self.member_ref().name()
+    }
+
+    pub fn member_ref(&self) -> crate::member::MemberRef {
+        crate::member::MemberRef { path: self.path.clone(), sheet: self.sheet.clone(), region: self.region }
+    }
+
+    /// The digest this member's acceptance was given to: its lock-held
+    /// plan's id, or its sidecar's fingerprint.
+    pub fn recorded_digest(&self) -> &str {
+        match &self.spec {
+            Some(id) => id,
+            None => &self.spec_digest,
+        }
+    }
+}
+
+/// One distinct plan, held once in the lock for every member that uses it.
+///
+/// The provenance a sidecar's `[provenance]` would carry, less anything
+/// about one file or one moment: `created_at` is the lock's own, and
+/// `sampled_bytes` is a fact about one file's sample.
+#[derive(Debug, Clone, Serialize)]
+pub struct LockedSpec {
+    /// `plans::spec_id` of `spec`: blake3 of its canonical serialisation
+    /// with `notes` cleared.
+    pub id: String,
+    pub method: crate::spec::InferenceMethod,
+    pub tool_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_version: Option<String>,
+    /// Laid out as a sidecar's `[spec]` table.
+    #[serde(flatten)]
+    pub spec: crate::spec::ParseSpec,
+}
+
+/// By hand, because `flatten` swallows unknown keys: the entry's own keys
+/// are taken out of the table and the rest must be a `ParseSpec` under its
+/// own `deny_unknown_fields`, so a key nobody knows is refused here exactly
+/// as it is in a sidecar.
+impl<'de> Deserialize<'de> for LockedSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error;
+        let mut t = toml::Table::deserialize(d)?;
+        let mut text = |k: &str, required: bool| -> std::result::Result<Option<String>, D::Error> {
+            match t.remove(k) {
+                Some(toml::Value::String(s)) => Ok(Some(s)),
+                Some(other) => Err(D::Error::custom(format!("`{k}` must be a string, not {other}"))),
+                None if required => Err(D::Error::custom(format!("a [[spec]] entry needs `{k}`"))),
+                None => Ok(None),
+            }
+        };
+        let id = text("id", true)?.unwrap_or_default();
+        let method = text("method", true)?.unwrap_or_default();
+        let tool_version = text("tool_version", true)?.unwrap_or_default();
+        let model = text("model", false)?;
+        let prompt_version = text("prompt_version", false)?;
+        let method = crate::spec::InferenceMethod::deserialize(toml::Value::String(method)).map_err(D::Error::custom)?;
+        let spec = crate::spec::ParseSpec::deserialize(toml::Value::Table(t))
+            .map_err(|e| D::Error::custom(format!("plan {id}: {e}")))?;
+        Ok(LockedSpec { id, method, tool_version, model, prompt_version, spec })
     }
 }
 
@@ -86,11 +159,20 @@ pub struct Lock {
     pub target_hash: String,
     pub tool_version: String,
     pub created_at: String,
+    /// The distinct plans of a `plans = 'lock'` target's members. Empty —
+    /// and absent from the file — otherwise.
+    #[serde(default, rename = "spec", skip_serializing_if = "Vec::is_empty")]
+    pub specs: Vec<LockedSpec>,
     #[serde(default, rename = "member")]
     pub members: Vec<Member>,
 }
 
+/// The version of a lock that holds no plans: what tdy has always written.
 pub const LOCK_VERSION: u32 = 1;
+/// The version of a lock with a spec table. A tdy that does not know it
+/// refuses it by number, which is the lock's behaviour for any version it
+/// does not know.
+pub const LOCK_VERSION_PLANS: u32 = 2;
 
 /// `sales.tdy.sql` -> `sales.tdy.lock`
 pub fn lock_path(target_file: &Path) -> PathBuf {
@@ -183,17 +265,72 @@ impl Lock {
         }
         let text = std::fs::read_to_string(&p)
             .with_context(|| format!("cannot read {}", p.display()))?;
-        let lock: Lock = toml::from_str(&text)
+        // The version is read first, on its own, so a lock from a newer tdy
+        // is refused by number rather than by whichever of its fields this
+        // build happens not to know.
+        #[derive(Deserialize)]
+        struct Version {
+            lock_version: u32,
+        }
+        let v: Version = toml::from_str(&text)
             .with_context(|| format!("{} is not a valid lock file", p.display()))?;
-        if lock.lock_version != LOCK_VERSION {
+        if v.lock_version != LOCK_VERSION && v.lock_version != LOCK_VERSION_PLANS {
             anyhow::bail!(
                 "{} was written by a different version of tdy (lock_version {}, this build \
-                 understands {LOCK_VERSION}). Re-run `tdy fit`.",
+                 understands {LOCK_VERSION} and {LOCK_VERSION_PLANS}). Re-run `tdy fit`.",
                 p.display(),
-                lock.lock_version
+                v.lock_version
             );
         }
+        let lock: Lock = toml::from_str(&text)
+            .with_context(|| format!("{} is not a valid lock file", p.display()))?;
+        lock.check_plans().with_context(|| format!("{} is not a valid lock file", p.display()))?;
         Ok(Some(lock))
+    }
+
+    /// `lock_version = 2` exactly when there is a spec table to read.
+    pub fn version_for(specs: &[LockedSpec]) -> u32 {
+        if specs.is_empty() {
+            LOCK_VERSION
+        } else {
+            LOCK_VERSION_PLANS
+        }
+    }
+
+    /// The spec table and the members that name it agree: the version says
+    /// whether there is a table, ids are unique, and every member's `spec`
+    /// names an entry. A lock is text, and a member naming a plan the lock
+    /// does not hold would otherwise surface as a confusing failure later.
+    fn check_plans(&self) -> Result<()> {
+        let names_a_plan = self.members.iter().any(|m| m.spec.is_some());
+        if self.lock_version == LOCK_VERSION && (!self.specs.is_empty() || names_a_plan) {
+            anyhow::bail!(
+                "lock_version 1 holds no plans, and this lock has a spec table or a member naming \
+                 one. Re-run `tdy fit`."
+            );
+        }
+        let mut ids: BTreeSet<&str> = BTreeSet::new();
+        for e in &self.specs {
+            if !ids.insert(e.id.as_str()) {
+                anyhow::bail!("the plan {} is listed twice. Re-run `tdy fit`.", e.id);
+            }
+        }
+        for m in &self.members {
+            if let Some(id) = &m.spec {
+                if !ids.contains(id.as_str()) {
+                    anyhow::bail!(
+                        "member {} names plan {id} and the lock holds no such plan. Re-run `tdy fit`.",
+                        m.name()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The spec table entry with this id.
+    pub fn spec(&self, id: &str) -> Option<&LockedSpec> {
+        self.specs.iter().find(|e| e.id == id)
     }
 
     pub fn save(&self, target_file: &Path) -> Result<PathBuf> {
@@ -608,6 +745,8 @@ mod tests {
             spec_digest: String::new(),
             review: None,
             accepted: false,
+            spec: None,
+            notes: Vec::new(),
         }
     }
 
@@ -619,6 +758,7 @@ mod tests {
             target_hash: "b3:t".into(),
             tool_version: "0".into(),
             created_at: "now".into(),
+            specs: Vec::new(),
             members: vec![m("a.xlsx", Some("Q1")), m("b.csv", None)],
         };
         let text = toml::to_string_pretty(&lock).unwrap();
@@ -658,6 +798,7 @@ mod tests {
             target_hash: target_hash(&target),
             tool_version: "0".into(),
             created_at: "now".into(),
+            specs: Vec::new(),
             members: vec![fresh(None), fresh(Some("Q1"))],
         };
         let d1 = drift(&lock, &target, &t).unwrap();
@@ -690,6 +831,7 @@ mod tests {
             target_hash: target_hash(&target),
             tool_version: "0".into(),
             created_at: "now".into(),
+            specs: Vec::new(),
             members: vec![fresh("Q1"), fresh("Q2")],
         };
         assert!(drift(&lock, &target, &t).unwrap().is_empty(), "two sheets of one file are two members");
@@ -707,6 +849,7 @@ mod tests {
             target_hash: target_hash(&target),
             tool_version: "0".into(),
             created_at: "now".into(),
+            specs: Vec::new(),
             members: vec![fresh_region(1), fresh_region(2)],
         };
         assert!(drift(&region_lock, &target, &t).unwrap().is_empty(), "two regions of one file are two members");
@@ -739,7 +882,7 @@ mod tests {
     fn a_region_member_round_trips_and_mixed_granularity_covers_regions() {
         let mut r2 = m("report.csv", None);
         r2.region = Some(2);
-        let lock = Lock { lock_version: LOCK_VERSION, target: "t".into(), target_hash: "b3:t".into(), tool_version: "0".into(), created_at: "now".into(), members: vec![r2.clone(), m("b.csv", None)] };
+        let lock = Lock { lock_version: LOCK_VERSION, target: "t".into(), target_hash: "b3:t".into(), tool_version: "0".into(), created_at: "now".into(), specs: Vec::new(), members: vec![r2.clone(), m("b.csv", None)] };
         let text = toml::to_string_pretty(&lock).unwrap();
         assert_eq!(text.matches("region = 2").count(), 1, "{text}");
         let back: Lock = toml::from_str(&text).unwrap();
@@ -975,5 +1118,114 @@ mod tests {
         // And the table-level one moves the hash both ways.
         assert_ne!(h(date, date, ""), h(date, date, ", provenance = 'true'"), "provenance");
         assert_eq!(h(date, date, ""), h(date, date, ", provenance = 'false'"), "provenance off is absent");
+    }
+
+    fn plan() -> crate::spec::ParseSpec {
+        use crate::spec::*;
+        ParseSpec {
+            extraction: Extraction::Json { lines: false, pointer: None, record: true },
+            transforms: vec![],
+            columns: vec![ColumnSpec {
+                name: "price".into(),
+                source: Some("games".into()),
+                dtype: DType::Int64,
+                nullable: true,
+                parse: ValueParsing { na_values: vec!["".into(), "n/a".into()], ..Default::default() },
+                pointer: Some("/nh/sellPrice/value".into()),
+            }],
+            confidence: Some(0.9),
+            notes: vec!["`price` <- \"games\"".into()],
+        }
+    }
+
+    /// A lock that holds no plan is exactly the lock tdy wrote before plans
+    /// could live in one — version 1, byte for byte — so every existing lock
+    /// and every target that does not opt in is untouched.
+    #[test]
+    fn a_lock_without_plans_is_version_1_byte_for_byte() {
+        let mut a = m("2025-01.csv", None);
+        a.spec_digest = "b3:s".into();
+        let mut b = m("2025-03.csv", None);
+        b.review = Some("why".into());
+        b.accepted = true;
+        let lock = Lock {
+            lock_version: Lock::version_for(&[]),
+            target: "t".into(),
+            target_hash: "b3:t".into(),
+            tool_version: "0".into(),
+            created_at: "now".into(),
+            specs: Vec::new(),
+            members: vec![a, b],
+        };
+        assert_eq!(lock.lock_version, 1);
+        let text = toml::to_string_pretty(&lock).unwrap();
+        assert_eq!(
+            text,
+            "lock_version = 1\ntarget = \"t\"\ntarget_hash = \"b3:t\"\ntool_version = \"0\"\ncreated_at = \"now\"\n\n\
+             [[member]]\npath = \"2025-01.csv\"\nblake3 = \"b3:x\"\nbytes = 1\nspec_digest = \"b3:s\"\n\n\
+             [[member]]\npath = \"2025-03.csv\"\nblake3 = \"b3:x\"\nbytes = 1\nreview = \"why\"\naccepted = true\n"
+        );
+    }
+
+    /// A lock holding plans: one `[[spec]]` entry per distinct plan, the
+    /// ParseSpec laid out as a sidecar's `[spec]` table, each member naming
+    /// its entry. It round-trips through the file, and anything a hand could
+    /// break in it is refused by `load` with the file named.
+    #[test]
+    fn a_lock_with_a_spec_table_is_version_2_and_round_trips() {
+        let d = tempfile::TempDir::new().unwrap();
+        let t = d.path().join("items.tdy.sql");
+        let id = crate::plans::spec_id(&plan()).unwrap();
+        let entry = LockedSpec {
+            id: id.clone(),
+            method: crate::spec::InferenceMethod::Heuristic,
+            tool_version: "0".into(),
+            model: None,
+            prompt_version: None,
+            spec: plan(),
+        };
+        let mut a = m("acorn.json", None);
+        a.spec = Some(id.clone());
+        let mut b = m("zori.json", None);
+        b.spec = Some(id.clone());
+        b.notes = vec!["frame proved by elimination".into()];
+        let specs = vec![entry];
+        let lock = Lock {
+            lock_version: Lock::version_for(&specs),
+            target: "items".into(),
+            target_hash: "b3:t".into(),
+            tool_version: "0".into(),
+            created_at: "now".into(),
+            specs,
+            members: vec![a, b],
+        };
+        assert_eq!(lock.lock_version, 2);
+        lock.save(&t).unwrap();
+        let text = std::fs::read_to_string(lock_path(&t)).unwrap();
+        assert!(text.contains("lock_version = 2"), "{text}");
+        assert!(text.contains("[[spec]]") && text.contains(&format!("id = \"{id}\"")), "{text}");
+        assert!(text.contains("[spec.extraction]") && text.contains("[[spec.columns]]"), "laid out as a sidecar's [spec]:\n{text}");
+        assert_eq!(text.matches(&format!("spec = \"{id}\"")).count(), 2, "{text}");
+        assert_eq!(text.matches("notes = [").count(), 2, "the entry's notes and zori's own:\n{text}");
+
+        let back = Lock::load(&t).unwrap().unwrap();
+        assert_eq!(back.specs.len(), 1);
+        assert_eq!(crate::plans::spec_id(&back.specs[0].spec).unwrap(), id);
+        assert_eq!(back.members[1].notes, vec!["frame proved by elimination".to_string()]);
+        assert_eq!(back.members[0].spec.as_deref(), Some(id.as_str()));
+
+        let refused = |body: String, want: &str| {
+            std::fs::write(lock_path(&t), body).unwrap();
+            let e = Lock::load(&t).expect_err(want);
+            let msg = format!("{e:#}");
+            assert!(msg.contains(want), "{want}: {msg}");
+            assert!(msg.contains("items.tdy.lock"), "names the file: {msg}");
+        };
+        refused(text.replacen("bytes = 1\n", "bytes = 1\nsurprise = 1\n", 1), "surprise");
+        refused(text.replacen(&format!("spec = \"{id}\""), "spec = \"b3:nothing\"", 1), "holds no such plan");
+        refused(text.replace("format = \"json\"", "format = \"json\"\nlocale = \"de\""), "locale");
+        refused(text.replace("lock_version = 2", "lock_version = 1"), "lock_version 1");
+        refused(text.replace("lock_version = 2", "lock_version = 3"), "lock_version 3");
+        refused(text.replacen("[[spec]]", "[[spec]]\nunknown = 1", 1), "unknown");
     }
 }

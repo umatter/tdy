@@ -1191,6 +1191,8 @@ pub async fn fit_pile(
                     spec_digest: lockfile::spec_digest_for(&p, sheet, region),
                     review,
                     accepted: is_accepted,
+                    spec: None,
+                    notes: Vec::new(),
                 });
                 break 'member;
             }
@@ -1294,6 +1296,8 @@ pub async fn fit_pile(
                     spec_digest: lockfile::spec_digest_for(&p, sheet, region),
                     review: fitted.review.clone(),
                     accepted: is_accepted,
+                    spec: None,
+                    notes: Vec::new(),
                 });
             }
             Err(e) => {
@@ -1386,6 +1390,7 @@ pub async fn fit_pile(
             target_hash: lockfile::target_hash(&target),
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
             created_at: crate::sidecar::now_rfc3339(),
+            specs: Vec::new(),
             members: lock_members,
         };
         let p = lock.save(target_path)?;
