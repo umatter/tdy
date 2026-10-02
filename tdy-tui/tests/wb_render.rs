@@ -98,6 +98,8 @@ fn pile_report(members: Vec<MemberReport>) -> PileReport {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     }
 }
 
@@ -127,6 +129,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         notes: vec![],
         problems: vec![],
         proposals: vec![],
+        in_lock: false,
     }
 }
 
@@ -412,6 +415,8 @@ fn the_pile_context_lists_members_with_status_words() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome {
@@ -457,6 +462,8 @@ fn a_dry_run_pile_report_marks_the_header() {
         dry_run: true,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome {
@@ -519,6 +526,8 @@ fn the_member_context_shows_gap_beside_raw_and_the_menu() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -572,6 +581,8 @@ fn the_confirm_overlay_shows_the_diff() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -724,6 +735,8 @@ fn pile_scrolls_past_the_first_member_with_page_down() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -771,6 +784,8 @@ fn member_raw_head_scrolls_with_page_down() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -1071,6 +1086,8 @@ fn every_context_renders_at_hostile_sizes() {
             dry_run: true,
             columns: vec![],
             drift: vec![],
+            lock_plans: None,
+            pruned: None,
         };
         w.apply(
             Outcome {
@@ -1243,6 +1260,8 @@ fn pile_status_hint_names_refit() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -1308,6 +1327,8 @@ fn member_status_hint_names_digit_shortcuts() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },

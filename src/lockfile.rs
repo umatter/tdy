@@ -389,12 +389,12 @@ pub fn spec_digest(data_file: &Path) -> String {
 /// member's sidecar is per sheet, and a stacked member's is per region
 /// (`sidecar::sidecar_path_for`), so both must be named to find the right
 /// one.
+///
+/// A plan held in the lock has no such file; its digest is its id, and
+/// [`crate::plans::Plans::current_digest`] is the one function that says
+/// which applies to a member.
 pub fn spec_digest_for(data_file: &Path, sheet: Option<&str>, region: Option<u32>) -> String {
-    let p = crate::sidecar::sidecar_path_for(data_file, sheet, region);
-    match std::fs::read(&p) {
-        Ok(bytes) => format!("b3:{}", blake3::hash(&bytes).to_hex()),
-        Err(_) => String::new(),
-    }
+    crate::plans::sidecar_digest(data_file, sheet, region)
 }
 
 impl Drift {
@@ -440,6 +440,9 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
 
     let dir = target_dir(target_file);
     let on_disk = resolve(target, target_file)?;
+    // Built only if an accepted member needs its plan's digest: it parses
+    // and identifies the lock's spec table, once per distinct plan.
+    let mut plans: Option<crate::plans::Plans> = None;
     let locked_files: BTreeSet<&str> = lock.members.iter().map(|m| m.path.as_str()).collect();
 
     // Two sheets of one workbook, or two regions of one file, are distinct
@@ -526,12 +529,17 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
         // conformance plus the dry run still gate it on every load. What an
         // edit must not survive is an acceptance, because the acceptance was
         // given to the spec as it read then.
+        // The digest is the sidecar's when the member has one, and the lock
+        // entry's identity, recomputed, when the lock holds its plan — so a
+        // sidecar written over a lock-held plan, or an edited spec table,
+        // retracts an acceptance exactly as an edited sidecar does.
         for m in members {
-            if m.accepted
-                && !m.spec_digest.is_empty()
-                && spec_digest_for(&p, m.sheet.as_deref(), m.region) != m.spec_digest
-            {
-                out.push(Drift::SpecEdited(m.name()));
+            let recorded = m.recorded_digest();
+            if m.accepted && !recorded.is_empty() {
+                let plans = plans.get_or_insert_with(|| crate::plans::Plans::new(target_file, Some(lock)));
+                if plans.current_digest(&p, m) != recorded {
+                    out.push(Drift::SpecEdited(m.name()));
+                }
             }
         }
     }

@@ -67,6 +67,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         notes: vec![],
         problems: vec![],
         proposals: vec![],
+        in_lock: false,
     }
 }
 
@@ -102,6 +103,8 @@ fn pile_report(target_file: &str, members: Vec<MemberReport>) -> PileReport {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     }
 }
 

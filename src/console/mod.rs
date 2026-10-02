@@ -927,6 +927,7 @@ impl Session {
                 propose,
                 progress: progress.cloned(),
                 root: Some(&self.root),
+                prune_sidecars: false,
             },
         )
         .await?;

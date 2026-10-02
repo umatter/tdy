@@ -317,6 +317,9 @@ impl McpServer {
                 // tree; a confined fit refuses them instead of writing
                 // sidecars out there.
                 root: Some(&self.root),
+                // Deleting files is not a thing an agent is handed by a
+                // fit; pruning is the CLI's and the console's.
+                prune_sidecars: false,
             },
         )
         .await?;

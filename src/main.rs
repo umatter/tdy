@@ -327,6 +327,7 @@ async fn fit_dataset(
             // is that a file is being sent to a model.
             progress: Some(tdy::progress::stderr_sink()),
             root: None,
+            prune_sidecars: false,
         },
     )
     .await;
