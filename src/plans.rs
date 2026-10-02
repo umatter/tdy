@@ -139,8 +139,11 @@ pub struct Plans<'a> {
     lock: Option<&'a Lock>,
     lock_path: PathBuf,
     held: HashMap<&'a str, std::result::Result<Held, String>>,
-    index: HashMap<(&'a str, Option<&'a str>, Option<u32>), &'a Member>,
+    index: HashMap<MemberKey<'a>, &'a Member>,
 }
+
+/// A lock member's (path, sheet, region), borrowed.
+type MemberKey<'a> = (&'a str, Option<&'a str>, Option<u32>);
 
 struct Held {
     spec: Arc<ParseSpec>,
@@ -299,7 +302,13 @@ fn sidecar_plan(file: &Path, sheet: Option<&str>, region: Option<u32>) -> Result
 pub fn find_holding_lock(file: &Path, sheet: Option<&str>, region: Option<u32>) -> Option<(PathBuf, Lock)> {
     let canon = file.canonicalize().ok()?;
     let mut dir = canon.parent().map(Path::to_path_buf);
-    for _ in 0..4 {
+    // The target as the caller would spell it — beside the file as it was
+    // named, or `..` above it — for messages; `canon` is for matching.
+    let mut spelled = file.parent().map(Path::to_path_buf).unwrap_or_default();
+    for level in 0..4 {
+        if level > 0 {
+            spelled = spelled.join("..");
+        }
         let d = dir?;
         let mut locks: Vec<PathBuf> = std::fs::read_dir(&d)
             .into_iter()
@@ -315,7 +324,8 @@ pub fn find_holding_lock(file: &Path, sheet: Option<&str>, region: Option<u32>) 
             let Ok(rel) = canon.strip_prefix(&d) else { continue };
             let rel = rel.to_string_lossy().replace('\\', "/");
             if lock.member(&rel, sheet, region).is_some_and(|m| m.spec.is_some()) {
-                return Some((target, lock));
+                let name = target.file_name().map(PathBuf::from).unwrap_or_default();
+                return Some((spelled.join(name), lock));
             }
         }
         dir = d.parent().map(Path::to_path_buf);

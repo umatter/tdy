@@ -760,6 +760,137 @@ itself. A comment in the target does *not* invalidate anything: the lock
 fingerprints what the declaration **means**, not its bytes, because the point
 of writing it in SQL is that it reads like documentation.
 
+### Target options
+
+Everything a target's `WITH (…)` clause may say. An option outside this table is
+refused, as is one set twice (`files` and `exclude` excepted: they are lists).
+The last column says whether changing the option voids the proofs in the lock
+(`target_hash`): an option about what the data *means* does; one about where
+tdy keeps its work does not.
+
+| Option | Values | Default | What it says | Voids proofs |
+|---|---|---|---|---|
+| `files` | comma-separated globs, relative to the target | — | which files are members | yes |
+| `exclude` | globs, or member names (`book.xlsx#Cover`, `report.csv#3`) | none | members left out on purpose | yes |
+| `match` | `'normalized'`, `'exact'` | `'normalized'` | how a header cell is compared with `matches` | yes |
+| `date_order` | `'dmy'`, `'mdy'`, `'ymd'` | none | which reading wins when a date's two readings disagree | yes |
+| `decimal_separator` | `'.'`, `','` | none | which character is the decimal point in these files | yes |
+| `timezone` | a fixed offset (`'+02:00'`, `'UTC'`) | none | the offset every `TIMESTAMP WITH TIME ZONE` column carries | yes |
+| `verify` | `'full'`, `'head'` | `'full'` | how much of a member is read to prove its values | yes |
+| `provenance` | `'true'`, `'false'` | `'false'` | add `_member` and `_row` to what `dataset()` returns | yes |
+| `plans` | `'sidecars'`, `'lock'` | `'sidecars'` | where each member's plan is kept — see below | **no** |
+
+### Where plans live: `plans = 'lock'`
+
+By default every member's plan is its own sidecar, `<file>.tdy.toml`, beside it.
+For a dozen monthly exports that is the right place: each one is a file you can
+read, diff and hand-edit. For a pile of thousands of small files that share one
+plan it is the wrong one. The 7,443 one-record JSON documents in villagerdb's
+`items/` fit one drafted target of 121 columns, and as sidecars that is 7,443
+copies of one plan — 348 MB of TOML, parsed again on every query.
+
+`plans = 'lock'` keeps each distinct plan once, in the lock, and nothing else
+changes: every member is planned, proved and dry-run exactly as before, and the
+same files give the same answer.
+
+```
+$ tdy fit sales_ok.tdy.sql
+sales_ok: 9 file(s) match, 3 declared column(s)
+
+  2025-01.csv              fits      month<-"Datum"  region<-"Region"  amount<-"Betrag"
+  …
+  2025-10.xlsx             fits      month<-"Date"  region<-"Region"  amount<-"Amount"
+  2025-12.csv              fits      month<-"Datum"  region<-"Region"  amount<-"Betrag"
+
+9 of 9 file(s) fit `sales_ok`.
+plans: 9 member(s) share 3 plan(s), held in the lock
+wrote sales_ok.tdy.lock
+```
+
+No sidecar is written. The lock becomes `lock_version = 2`: a `[[spec]]` entry
+per distinct plan, laid out exactly as a sidecar's `[spec]` table and keyed by
+the blake3 of its canonical form (notes aside), and each member naming the one
+it reads:
+
+```toml
+[[spec]]
+id = "b3:fea19b72ebc49ab519b51c7f33b06f0630c242b4f510c4a39de33523e7405ae5"
+method = "heuristic"
+tool_version = "0.3.1"
+notes = [
+    '`month` <- "Datum"',
+    '`region` <- "Region"',
+    '`amount` <- "Betrag"',
+]
+
+[spec.extraction]
+format = "delimited"
+…
+
+[[member]]
+path = "2025-01.csv"
+blake3 = "ce0e328449c9c25940b9cc3f479222607cecb099df0c11688bbea69342e18efc"
+bytes = 119
+spec = "b3:fea19b72ebc49ab519b51c7f33b06f0630c242b4f510c4a39de33523e7405ae5"
+```
+
+A refit takes each plan from the lock and re-proves it against the target once
+per plan; `dataset()` parses, validates and proves each plan once and reads every
+member through one shared copy. On villagerdb, the same build and machine, two
+runs each, `plans = 'sidecars'` against `plans = 'lock'`:
+
+| | sidecars | lock |
+|---|---|---|
+| `SELECT count(*) FROM dataset(…)` | 23.7–24.0 s, 1.15 GB | 5.2–5.4 s, 78 MB |
+| refit | 25.7–25.8 s, 1.44 GB | 6.0–6.1 s, 421 MB |
+| console `.ls` | 16.8–17.4 s | 0.56 s |
+| first fit | 95–114 s, 1.30 GB | 58.8–59.1 s, 407 MB |
+| on disk | 348 MB of sidecars + a 1.6 MB lock | a 2.8 MB lock |
+
+Every count and sum came out the same under both, and equal to a Python pass
+over the files.
+
+What stays the same:
+
+- **A sidecar still wins.** A member that has one reads it, and its lock entry
+  names no plan. Writing a sidecar with `method = "manual"` is how one member
+  gets a plan of its own; it is proved like any other and never overwritten.
+- **Switching deletes nothing.** Tool-written sidecars left from before the
+  declaration are reused as they always were. `tdy fit TARGET --prune-sidecars`
+  plans each such member afresh and moves it into the lock only when the plan is
+  identical, after the lock is written:
+
+  ```
+  plans: 9 member(s) share 3 plan(s), held in the lock
+  --prune-sidecars: 9 moved into the lock and removed, 0 kept (hand-written), 0 kept (differs from the plan this fit proved)
+  ```
+- **Drift, review and acceptance mean what they meant.** A changed file is drift
+  and its member alone is re-planned; an acceptance of a lock-held plan is tied
+  to that plan's id, so a sidecar written over it asks again. A lock is derived
+  state: a plan edited in it no longer hashes to its id, and `dataset()` refuses
+  it by name.
+- **The other doors know.** `tdy check T --against FILE`, `tdy validate`,
+  `tdy profile`, `.accept`, `.ls` and the workbench all read a lock-held plan:
+
+  ```
+  $ tdy check sales_ok.tdy.sql --against 2025-01.csv
+  sales_ok.tdy.sql: `sales_ok`, 3 column(s)
+
+  2025-01.csv: CONFORMS — plan held in sales_ok.tdy.lock (spec b3:fea19b72ebc4…)
+
+  1 of 1 file(s) conform to `sales_ok`.
+
+  $ tdy validate 2025-01.csv
+  2025-01.csv: ok
+    note: no sidecar — its plan is held in the lock of sales_ok.tdy.sql (spec b3:fea19b72ebc4…)
+  ```
+
+`tdy draft` writes `plans = 'lock'` for a pile of 200 files or more, and `tdy
+fit` on a sidecar target that has just written 200 sidecars of one plan says so
+once on stderr. A tdy older than this one refuses a `lock_version = 2` lock by
+number; `messy('file')` is a question about a file, not a member, and is
+untouched.
+
 ### When a file needs a human
 
 Some things no proof can settle. `2025-07.csv` holds integer cents: it parses,

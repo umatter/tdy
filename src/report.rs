@@ -1645,12 +1645,15 @@ struct FittedMember {
 /// and every member of it shares one `Arc`.
 #[derive(Default)]
 struct Interner {
-    seen: HashMap<blake3::Hash, (String, std::sync::Arc<ParseSpec>)>,
+    seen: HashMap<blake3::Hash, IdentifiedPlan>,
 }
+
+/// A plan's identity and its one shared copy.
+type IdentifiedPlan = (String, std::sync::Arc<ParseSpec>);
 
 impl Interner {
     /// `spec` without notes.
-    fn intern(&mut self, spec: ParseSpec) -> Result<(String, std::sync::Arc<ParseSpec>)> {
+    fn intern(&mut self, spec: ParseSpec) -> Result<IdentifiedPlan> {
         let key = blake3::hash(&serde_json::to_vec(&spec).context("serialising a plan")?);
         if let Some((id, shared)) = self.seen.get(&key) {
             return Ok((id.clone(), shared.clone()));

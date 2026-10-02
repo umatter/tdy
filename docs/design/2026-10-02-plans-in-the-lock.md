@@ -1,6 +1,7 @@
 # Plans in the lock: one spec for a pile of files that share it
 
-*Design, 2026-10-02. Status: agreed for implementation. The slice
+*Design, 2026-10-02. Status: implemented 2026-10-02 (branch `plans-in-lock`);
+measured as §7 asks — see CLAUDE.md, "Plans in the lock". The slice
 `2026-10-02-json-records.md` deferred; this page is where it lands.*
 
 ## 1. Why, measured
