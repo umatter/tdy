@@ -123,10 +123,18 @@ pub fn target_hash(t: &Target) -> String {
         // A fill declared or retracted changes what queries return for a
         // member that lacks the column, so it must void the proofs.
         h.update(if c.if_missing_null { b"~" } else { b"." });
-        h.update(if c.round { b"r" } else { b"." });
+        // Everything below was added after 0.2.0, and each is hashed only
+        // when declared: absent, nothing is hashed, so a target declaring
+        // none of them hashes exactly as 0.2.0 hashed it and every lock
+        // written before these options existed keeps its proofs
+        // (`a_target_without_the_new_options_hashes_as_0_2_0_did`). Each
+        // marker sits inside its column's segment, so a declaration stays
+        // attributable to the column that made it.
+        if c.round {
+            h.update(b"r");
+        }
         // A declared reading changes what a value means: 45 is 1945 or 2045,
-        // 45000 is a count or a date. Absent, nothing is hashed, so every
-        // lock written before these options existed keeps its proofs.
+        // 45000 is a count or a date.
         if let Some(p) = c.year_pivot {
             h.update(format!("y{p}").as_bytes());
         }
@@ -148,19 +156,17 @@ pub fn target_hash(t: &Target) -> String {
     }
     h.update(
         format!(
-            "{:?}{:?}{:?}{:?}{:?}{:?}",
-            t.match_mode,
-            t.date_order,
-            t.verify,
-            t.timezone,
-            t.decimal_separator,
-            // Turning provenance on adds two columns to what every query sees,
-            // so the proofs taken against the narrower shape are no longer
-            // about this dataset.
-            t.provenance
+            "{:?}{:?}{:?}{:?}{:?}",
+            t.match_mode, t.date_order, t.verify, t.timezone, t.decimal_separator
         )
         .as_bytes(),
     );
+    // Turning provenance on adds two columns to what every query sees, so the
+    // proofs taken against the narrower shape are no longer about this
+    // dataset. Hashed only when on, for the reason above.
+    if t.provenance {
+        h.update(b"\x1fprovenance");
+    }
     format!("b3:{}", h.finalize().to_hex())
 }
 
@@ -905,5 +911,44 @@ mod tests {
         )
         .unwrap();
         assert_ne!(target_hash(&a), target_hash(&b));
+    }
+
+    /// A lock written by the published 0.2.0 must keep its proofs under a
+    /// later build when the target declares none of the options added since.
+    /// The literal is the `target_hash` that tdy 0.2.0 (built from the
+    /// `v0.2.0` tag, release profile) wrote into `sales_ok.tdy.lock` after
+    /// `tdy fit sales_ok.tdy.sql` on a scratch copy of
+    /// `testdata/drifting_exports`, 2026-10-02. Before this was pinned,
+    /// `round` and `provenance` were hashed even when absent, and every 0.2.0
+    /// lock was refused as out of date.
+    #[test]
+    fn a_target_without_the_new_options_hashes_as_0_2_0_did() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/drifting_exports/sales_ok.tdy.sql");
+        let target = Target::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(
+            target_hash(&target),
+            "b3:014431e4f12fe82b8b243fc42299e7c3bd405d9b0a0731589e4052823d4dc837"
+        );
+    }
+
+    /// Hashed only when declared, but still a fact about *its* column: two
+    /// targets that differ only in which column declares an option are two
+    /// different datasets.
+    #[test]
+    fn a_declared_option_is_attributed_to_its_column() {
+        let h = |a: &str, b: &str, with: &str| {
+            target_hash(&t(&format!("CREATE TABLE t (a {a}, b {b}) WITH (files = '*.csv'{with})")))
+        };
+        let dec = "DECIMAL(14,2)";
+        let on = "DECIMAL(14,2) OPTIONS(round = 'half_away')";
+        assert_ne!(h(on, dec, ""), h(dec, on, ""), "round");
+        let date = "DATE";
+        let yp = "DATE OPTIONS(year_pivot = '30')";
+        assert_ne!(h(yp, date, ""), h(date, yp, ""), "year_pivot");
+        let ep = "DATE OPTIONS(epoch = 'seconds')";
+        assert_ne!(h(ep, date, ""), h(date, ep, ""), "epoch");
+        // And the table-level one moves the hash both ways.
+        assert_ne!(h(date, date, ""), h(date, date, ", provenance = 'true'"), "provenance");
+        assert_eq!(h(date, date, ""), h(date, date, ", provenance = 'false'"), "provenance off is absent");
     }
 }
