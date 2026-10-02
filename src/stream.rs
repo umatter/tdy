@@ -328,7 +328,14 @@ enum Source {
     /// NDJSON. `header` comes from [`discover_ndjson`]; a record's values are
     /// emitted in that order, with a missing key an empty string, exactly as
     /// the materialising path does it.
-    Ndjson { rdr: Box<dyn BufRead + Send>, buf: Vec<u8>, header: Vec<String>, line_no: usize },
+    Ndjson {
+        rdr: Box<dyn BufRead + Send>,
+        buf: Vec<u8>,
+        header: Vec<String>,
+        /// Key to column, so a wide record is placed in one pass.
+        index: std::collections::HashMap<String, usize>,
+        line_no: usize,
+    },
 }
 
 /// Read one line, without its terminator. `Ok(false)` at end of input.
@@ -388,8 +395,7 @@ fn header_of(extraction: &Extraction) -> Result<Option<Vec<String>>> {
 fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usize)> {
     let mut rdr = open_input(path, None, opts)?;
     let mut buf = Vec::with_capacity(4096);
-    let mut header: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut keys = crate::engine::JsonHeader::default();
     let mut records = 0usize;
     let mut objects = 0usize;
     let mut line_no = 0usize;
@@ -400,7 +406,7 @@ fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usiz
         if line.trim().is_empty() {
             continue;
         }
-        let parsed: serde_json::Value = match serde_json::from_str(line.as_ref()) {
+        let parsed = match crate::jsondoc::Node::parse(line.as_ref()) {
             Ok(v) => v,
             Err(e) => {
                 // "Truncated last line" is a different diagnosis from "broken
@@ -418,13 +424,9 @@ fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usiz
             }
         };
         records += 1;
-        if let serde_json::Value::Object(map) = &parsed {
+        if let crate::jsondoc::Node::Object(entries) = &parsed {
             objects += 1;
-            for k in map.keys() {
-                if seen.insert(k.clone()) {
-                    header.push(k.clone());
-                }
-            }
+            keys.add(entries);
         }
     }
 
@@ -437,9 +439,9 @@ fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usiz
         );
     }
     if objects == 0 {
-        header = vec!["value".to_string()];
+        return Ok((vec!["value".to_string()], records));
     }
-    Ok((header, records))
+    Ok((keys.names, records))
 }
 
 /// Whether any further non-blank line exists. Consumes the rest of the input,
@@ -508,11 +510,13 @@ impl Source {
                     .map(|h| h.to_vec())
                     .ok_or_else(|| anyhow!("internal: NDJSON opened without a header"))?;
                 let names = header.clone();
+                let index = header.iter().enumerate().map(|(i, k)| (k.clone(), i)).collect();
                 (
                     Source::Ndjson {
                         rdr: input,
                         buf: Vec::with_capacity(4096),
                         header,
+                        index,
                         line_no: 0,
                     },
                     Some(names),
@@ -670,21 +674,26 @@ impl Source {
                 }
                 Ok(None)
             }
-            Source::Ndjson { rdr, buf, header, line_no } => {
+            Source::Ndjson { rdr, buf, header, index, line_no } => {
                 while read_line(rdr.as_mut(), buf)? {
                     *line_no += 1;
                     let line = text_of(buf);
                     if line.trim().is_empty() {
                         continue;
                     }
-                    let v: serde_json::Value = serde_json::from_str(line.as_ref())
+                    let v = crate::jsondoc::Node::parse(line.as_ref())
                         .map_err(|e| anyhow!("invalid JSON on line {}: {e}", line_no))?;
-                    return Ok(Some(match &v {
-                        serde_json::Value::Object(map) => header
-                            .iter()
-                            .map(|k| map.get(k).map(crate::engine::json_scalar).unwrap_or_default())
-                            .collect(),
-                        other => vec![crate::engine::json_scalar(other)],
+                    return Ok(Some(match v {
+                        crate::jsondoc::Node::Object(entries) => {
+                            let mut row = vec![String::new(); header.len()];
+                            for (k, v) in entries {
+                                if let Some(&i) = index.get(&k) {
+                                    row[i] = v.into_cell();
+                                }
+                            }
+                            row
+                        }
+                        other => vec![other.into_cell()],
                     }));
                 }
                 Ok(None)

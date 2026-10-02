@@ -24,6 +24,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use crate::config::Limits;
 use crate::detect;
 use crate::engine::{self, ExtractOpts, RawTable};
+use crate::jsondoc::Node;
 use crate::numfmt;
 use crate::sample::{FileSample, FormatGuess, CONTINUES_MARKER};
 use crate::spec::{
@@ -1035,10 +1036,10 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
     drop(bytes);
     let trimmed = text.trim_start();
 
-    let (lines, pointer, record) = match serde_json::from_str::<serde_json::Value>(&text) {
+    let (lines, pointer, record) = match Node::parse(&text) {
         Ok(doc) => match &doc {
-            serde_json::Value::Array(_) => (false, None, false),
-            serde_json::Value::Object(_) => {
+            Node::Array(_) => (false, None, false),
+            Node::Object(_) => {
                 // The records array may be nested — `{"data": {"items": [...]}}`
                 // is as common in API dumps as a top-level one.
                 let mut found = Vec::new();
@@ -1056,18 +1057,17 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
                     // `{"ace": {...}, "bob": {...}}` is as likely a map of
                     // records keyed by name. Read (no value is wrong), never
                     // confidently.
-                    if let serde_json::Value::Object(map) = &doc {
-                        if map.len() >= 2 && map.values().all(serde_json::Value::is_object) {
-                            let keys: Vec<String> = map.keys().take(2).map(|k| format!("`{k}`")).collect();
-                            doubts.add(
-                                0.25,
-                                format!(
-                                    "every top-level value is an object — this may be a map of records \
-                                     keyed by {}, … rather than one record",
-                                    keys.join(", ")
-                                ),
-                            );
-                        }
+                    let map = doc.sorted_entries();
+                    if map.len() >= 2 && map.iter().all(|(_, v)| v.is_object()) {
+                        let keys: Vec<String> = map.iter().take(2).map(|(k, _)| format!("`{k}`")).collect();
+                        doubts.add(
+                            0.25,
+                            format!(
+                                "every top-level value is an object — this may be a map of records \
+                                 keyed by {}, … rather than one record",
+                                keys.join(", ")
+                            ),
+                        );
                     }
                     (false, None, true)
                 } else {
@@ -1130,13 +1130,13 @@ fn empty_array_message(pointer: &str) -> String {
 
 /// The first empty array in a document, by the same walk (and the same
 /// depth bound) [`find_record_arrays`] makes for non-empty ones.
-fn first_empty_array(v: &serde_json::Value, prefix: &mut String, depth: usize) -> Option<String> {
+fn first_empty_array(v: &Node, prefix: &mut String, depth: usize) -> Option<String> {
     if depth > 6 {
         return None;
     }
     match v {
-        serde_json::Value::Array(a) if a.is_empty() => Some(prefix.clone()),
-        serde_json::Value::Object(map) => map.iter().find_map(|(k, child)| {
+        Node::Array(a) if a.is_empty() => Some(prefix.clone()),
+        Node::Object(_) => v.sorted_entries().into_iter().find_map(|(k, child)| {
             let mark = prefix.len();
             prefix.push('/');
             prefix.push_str(&escape_pointer_token(k));
@@ -1149,14 +1149,14 @@ fn first_empty_array(v: &serde_json::Value, prefix: &mut String, depth: usize) -
 }
 
 /// Every empty array in a document, by the same bounded walk.
-pub(crate) fn empty_arrays(v: &serde_json::Value, prefix: &mut String, depth: usize, out: &mut Vec<String>) {
+pub(crate) fn empty_arrays(v: &Node, prefix: &mut String, depth: usize, out: &mut Vec<String>) {
     if depth > 6 || out.len() > 64 {
         return;
     }
     match v {
-        serde_json::Value::Array(a) if a.is_empty() => out.push(prefix.clone()),
-        serde_json::Value::Object(map) => {
-            for (k, child) in map {
+        Node::Array(a) if a.is_empty() => out.push(prefix.clone()),
+        Node::Object(_) => {
+            for (k, child) in v.sorted_entries() {
                 let mark = prefix.len();
                 prefix.push('/');
                 prefix.push_str(&escape_pointer_token(k));
@@ -1172,7 +1172,7 @@ pub(crate) fn empty_arrays(v: &serde_json::Value, prefix: &mut String, depth: us
 pub(crate) fn empty_arrays_in(path: &Path, limits: Limits) -> Vec<String> {
     let Ok(bytes) = crate::fileio::read_all(path, limits.max_file_bytes) else { return Vec::new() };
     let (text, _) = crate::sample::decode_text(&bytes, None);
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let Ok(doc) = Node::parse(&text) else { return Vec::new() };
     let mut out = Vec::new();
     empty_arrays(&doc, &mut String::new(), 0, &mut out);
     out
@@ -1185,7 +1185,7 @@ pub(crate) fn empty_arrays_in(path: &Path, limits: Limits) -> Vec<String> {
 pub(crate) fn empty_array_record_frame(path: &Path, limits: Limits) -> Option<(ParseSpec, String)> {
     let bytes = crate::fileio::read_all(path, limits.max_file_bytes).ok()?;
     let (text, _) = crate::sample::decode_text(&bytes, None);
-    let doc = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let doc = Node::parse(&text).ok()?;
     if !doc.is_object() {
         return None;
     }
@@ -1236,7 +1236,7 @@ pub(crate) fn json_record_pointers(path: &Path, limits: Limits) -> Vec<String> {
         return Vec::new();
     };
     let (text, _) = crate::sample::decode_text(&bytes, None);
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(doc) = Node::parse(&text) else {
         return Vec::new();
     };
     if !doc.is_object() {
@@ -1250,7 +1250,7 @@ pub(crate) fn json_record_pointers(path: &Path, limits: Limits) -> Vec<String> {
 
 /// Walk the document for arrays that could be the records array.
 fn find_record_arrays(
-    v: &serde_json::Value,
+    v: &Node,
     prefix: &mut String,
     out: &mut Vec<ArrayCandidate>,
     depth: usize,
@@ -1261,7 +1261,7 @@ fn find_record_arrays(
         return;
     }
     match v {
-        serde_json::Value::Array(a) if !a.is_empty() => {
+        Node::Array(a) if !a.is_empty() => {
             out.push(ArrayCandidate {
                 pointer: prefix.clone(),
                 len: a.len(),
@@ -1269,8 +1269,8 @@ fn find_record_arrays(
                 depth,
             });
         }
-        serde_json::Value::Object(map) => {
-            for (k, child) in map {
+        Node::Object(_) => {
+            for (k, child) in v.sorted_entries() {
                 let mark = prefix.len();
                 prefix.push('/');
                 prefix.push_str(&escape_pointer_token(k));

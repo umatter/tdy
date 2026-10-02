@@ -97,20 +97,17 @@ pub(crate) fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<Str
     if t.is_empty() {
         return Ok(String::new());
     }
-    let v: serde_json::Value = serde_json::from_str(t)
+    let v = crate::jsondoc::Node::parse(t)
         .map_err(|e| anyhow!("row {row}: `pointer` needs a JSON value here, and {t:?} is not one: {e}"))?;
-    let found = if ptr.is_empty() { Some(&v) } else { v.pointer(ptr) };
-    match found {
-        None | Some(serde_json::Value::Null) => Ok(String::new()),
-        Some(serde_json::Value::String(s)) => Ok(s.clone()),
-        Some(serde_json::Value::Bool(b)) => Ok(b.to_string()),
-        Some(serde_json::Value::Number(n)) => Ok(n.to_string()),
-        Some(other) => bail!(
+    match v.pointer(ptr) {
+        None | Some(crate::jsondoc::Node::Null) => Ok(String::new()),
+        Some(other @ (crate::jsondoc::Node::Array(_) | crate::jsondoc::Node::Object(_))) => bail!(
             "row {row}: `pointer` {ptr:?} lands on {} — a column cannot hold one, and \
              leaving it as JSON text is the state a pointer exists to leave. Point at a \
              value inside it",
-            if other.is_array() { "an array" } else { "an object" }
+            other.kind()
         ),
+        Some(scalar) => Ok(scalar.cell()),
     }
 }
 
@@ -1004,9 +1001,10 @@ fn extract_json(
     pointer: Option<&str>,
     opts: &ExtractOpts,
 ) -> Result<RawTable> {
+    use crate::jsondoc::Node;
     let text = read_text(path, None, opts)?;
     let mut truncated = false;
-    let records: Vec<serde_json::Value> = if lines {
+    let records: Vec<Node> = if lines {
         let mut out = Vec::new();
         for (i, l) in text.lines().enumerate() {
             if l.trim().is_empty() {
@@ -1016,7 +1014,7 @@ fn extract_json(
                 truncated = true;
                 break;
             }
-            let parsed: serde_json::Value = serde_json::from_str(l).map_err(|e| {
+            let parsed = Node::parse(l).map_err(|e| {
                 let last = text.lines().filter(|x| !x.trim().is_empty()).count() == i + 1;
                 if last && e.is_eof() {
                     anyhow!(
@@ -1033,17 +1031,13 @@ fn extract_json(
         }
         out
     } else {
-        let doc: serde_json::Value =
-            serde_json::from_str(&text).context("invalid JSON document")?;
+        let doc = Node::parse(&text).context("invalid JSON document")?;
         let node = match pointer {
-            Some(p) => doc
-                .pointer(p)
-                .ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?
-                .clone(),
+            Some(p) => doc.into_pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,
             None => doc,
         };
         match node {
-            serde_json::Value::Array(mut a) => {
+            Node::Array(mut a) => {
                 if let Some(m) = opts.max_rows {
                     if a.len() > m {
                         a.truncate(m);
@@ -1055,23 +1049,17 @@ fn extract_json(
             other => bail!(
                 "expected a JSON array of records{}, found {}",
                 pointer.map(|p| format!(" at pointer {p:?}")).unwrap_or_default(),
-                json_kind(&other)
+                other.kind()
             ),
         }
     };
 
-    // Union of keys, first-seen order.
-    let mut header: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut keys = JsonHeader::default();
     let mut objects = 0usize;
     for rec in &records {
-        if let serde_json::Value::Object(map) = rec {
+        if let Node::Object(entries) = rec {
             objects += 1;
-            for k in map.keys() {
-                if seen.insert(k.clone()) {
-                    header.push(k.clone());
-                }
-            }
+            keys.add(entries);
         }
     }
 
@@ -1086,21 +1074,53 @@ fn extract_json(
         );
     }
     if objects == 0 {
-        header = vec!["value".to_string()];
+        keys = JsonHeader::default();
+        keys.names.push("value".to_string());
     }
 
     let rows: Vec<Vec<String>> = records
-        .iter()
+        .into_iter()
         .map(|rec| match rec {
-            serde_json::Value::Object(map) => header
-                .iter()
-                .map(|k| map.get(k).map(json_scalar).unwrap_or_default())
-                .collect(),
-            other => vec![json_scalar(other)],
+            Node::Object(entries) => keys.row(entries),
+            other => vec![other.into_cell()],
         })
         .collect();
 
-    Ok(RawTable::with_header(header, rows, truncated))
+    Ok(RawTable::with_header(keys.names, rows, truncated))
+}
+
+/// The header of a JSON record set: the union of every record's keys, in
+/// first-seen order — and within one record in key order, since that is the
+/// order `serde_json::Value` handed them over in before tdy had its own
+/// reader, and a header must not reorder because the reader changed.
+#[derive(Default)]
+pub(crate) struct JsonHeader {
+    pub(crate) names: Vec<String>,
+    index: std::collections::HashMap<String, usize>,
+}
+
+impl JsonHeader {
+    /// Add one record's keys.
+    pub(crate) fn add(&mut self, entries: &[(String, crate::jsondoc::Node)]) {
+        let mut new: Vec<&str> =
+            entries.iter().map(|(k, _)| k.as_str()).filter(|k| !self.index.contains_key(*k)).collect();
+        new.sort_unstable();
+        for k in new {
+            self.index.insert(k.to_string(), self.names.len());
+            self.names.push(k.to_string());
+        }
+    }
+
+    /// One record as a row under this header: a missing key is empty.
+    pub(crate) fn row(&self, entries: Vec<(String, crate::jsondoc::Node)>) -> Vec<String> {
+        let mut row = vec![String::new(); self.names.len()];
+        for (k, v) in entries {
+            if let Some(&i) = self.index.get(&k) {
+                row[i] = v.into_cell();
+            }
+        }
+        row
+    }
 }
 
 /// `record = true`: the object at `pointer` (the root when absent) is one
@@ -1113,8 +1133,8 @@ fn extract_json_record(path: &Path, pointer: Option<&str>, opts: &ExtractOpts) -
     let doc = crate::jsondoc::Node::parse(&text).context("invalid JSON document")?;
     let at = |p: Option<&str>| p.map(|p| format!(" at pointer {p:?}")).unwrap_or_default();
     let node = match pointer {
-        Some(p) => doc.pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,
-        None => &doc,
+        Some(p) => doc.into_pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,
+        None => doc,
     };
     let crate::jsondoc::Node::Object(entries) = node else {
         bail!(
@@ -1129,30 +1149,8 @@ fn extract_json_record(path: &Path, pointer: Option<&str>, opts: &ExtractOpts) -
             }
         );
     };
-    let header: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
-    let row: Vec<String> = entries.iter().map(|(_, v)| json_scalar(&v.to_value())).collect();
+    let (header, row): (Vec<String>, Vec<String>) = entries.into_iter().map(|(k, v)| (k, v.into_cell())).unzip();
     Ok(RawTable::with_header(header, vec![row], false))
-}
-
-pub(crate) fn json_scalar(v: &serde_json::Value) -> String {
-    match v {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        nested => serde_json::to_string(nested).unwrap_or_default(),
-    }
-}
-
-fn json_kind(v: &serde_json::Value) -> &'static str {
-    match v {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "a boolean",
-        serde_json::Value::Number(_) => "a number",
-        serde_json::Value::String(_) => "a string",
-        serde_json::Value::Array(_) => "an array",
-        serde_json::Value::Object(_) => "an object",
-    }
 }
 
 // ---------------------------------------------------------------------------

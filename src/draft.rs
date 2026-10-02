@@ -724,7 +724,7 @@ impl JsonLeaves {
         for (k, v) in entries {
             *self.key_files.entry(k.clone()).or_default() += 1;
             if let crate::jsondoc::Node::Object(_) = v {
-                let text = crate::engine::json_scalar(&v.to_value());
+                let text = v.cell();
                 self.object_tops.entry(k.clone()).or_default().push((label.to_string(), text));
             }
         }
@@ -930,8 +930,7 @@ fn walk(
 ) {
     use crate::jsondoc::Node;
     match v {
-        Node::Scalar(s) => found.push((path.clone(), crate::engine::json_scalar(s), false)),
-        Node::Array(_) if path.len() == 1 => found.push((path.clone(), crate::engine::json_scalar(&v.to_value()), true)),
+        Node::Array(_) if path.len() == 1 => found.push((path.clone(), v.cell(), true)),
         Node::Array(_) => {
             arrays.insert(path.join("/"));
         }
@@ -945,6 +944,7 @@ fn walk(
                 path.pop();
             }
         }
+        scalar => found.push((path.clone(), scalar.cell(), false)),
     }
 }
 
