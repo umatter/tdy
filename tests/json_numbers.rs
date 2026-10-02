@@ -460,6 +460,9 @@ fn a_late_literal_a_double_cannot_hold_widens_the_column() {
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(column_type(&v, "x"), serde_json::json!({"type": "float64"}));
     assert!(v["notes"].to_string().contains("NOT checked against the whole file"), "{v}");
+    // ...and says what the query will NOT say: a long literal in a float64
+    // column parses, and is read rounded.
+    assert!(v["notes"].to_string().contains("no double holds") && v["notes"].to_string().contains("read rounded"), "{v}");
 }
 
 /// A pile where one file holds a literal no double is, past its sample, and

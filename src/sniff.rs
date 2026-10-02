@@ -143,7 +143,9 @@ pub fn sniff_opts(
         res.spec.notes.push(
             "types were inferred from a sample and NOT checked against the whole file \
              (--quick): a value further in may not fit, and the query will say so when it \
-             reaches one. Re-run `tdy sniff` without --quick to check."
+             reaches one — except a literal no double holds (more than 17 significant digits, \
+             or an integer past 2^53 no double equals) in a float64 column, which parses and is \
+             read rounded without a word. Re-run `tdy sniff` without --quick to check."
                 .to_string(),
         );
     }
