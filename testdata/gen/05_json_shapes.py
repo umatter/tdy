@@ -52,9 +52,10 @@ json_shapes_precision.ndjson
     survive as decimal(19,12) mantissa 1234567891234567891.
     ratio[0] must survive as decimal(38,34) mantissa
     1000000000000000055511151231257827.
-    amount_lossy[0] was written as a JSON *number* and is already f64-rounded
-    to 1234567.8912345679 before any spec runs - it must not be typed as an
-    exact decimal.
+    amount_lossy[0] was written as a JSON *number* with 19 significant digits.
+    Python's json (this generator's own check) and serde_json round it to
+    1234567.8912345679; tdy's reader keeps the text as written, and the
+    sniffer types the column float64, so a query shows the double.
 
 json_shapes_wrapped.json
     {"meta":{...},"warnings":null,"data":[...]} - needs pointer "/data".

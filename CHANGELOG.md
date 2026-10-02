@@ -68,6 +68,21 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 - **The inference prompt is `infer-v6`**: the sidecar schema it carries gained
   `record`. Sidecars record the version in their provenance.
 
+### Fixed
+
+- **A JSON number keeps the digits it was written with.** tdy read JSON data
+  through serde_json, which holds a number as a 64-bit integer or a double, so
+  `{"id": 12345678901234567890123}` read as `1.2345678901234568e+22`, an
+  integer past u64 as its nearest double, and a thirty-digit amount lost its
+  tail — silently, on every JSON path (arrays, NDJSON on both executors, a
+  document read as one record, a column's `pointer`, the sniffer and
+  `tdy draft`). JSON data is now read by tdy's own reader, which keeps each
+  number's text: a number a double held exactly reads exactly as before
+  (`1e3` is still `1000.0`), one it did not reads as the file wrote it. Such
+  an identifier now fits a `DECIMAL(38, 0)` or `TEXT` column, and a long
+  amount lands exactly in `DECIMAL(p, s)`. A number past a double's range
+  (`1E400`) is read as written where the whole document used to be refused.
+
 ### What a pile of one-object documents costs, and what is deferred
 
 Measured on villagerdb's 7,443 item documents (release build): the first
