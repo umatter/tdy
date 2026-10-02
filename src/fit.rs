@@ -106,6 +106,9 @@ pub enum Gap {
         formats: Vec<String>,
         example: String,
     },
+    /// A NOT NULL column whose declared `pointer` finds nothing (or a null)
+    /// in the value it binds, at a row of this file.
+    NothingAtPointer { column: String, source: String, pointer: String, want: String, row: usize },
     /// Two declared columns both bind the same column of the file.
     ///
     /// tdy has no computed columns, so the two would be byte-identical: a
@@ -122,7 +125,8 @@ impl Gap {
             | Gap::Untypable { column, .. }
             | Gap::AmbiguousSeparator { column, .. }
             | Gap::AmbiguousFormat { column, .. }
-            | Gap::Collides { column, .. } => column,
+            | Gap::Collides { column, .. }
+            | Gap::NothingAtPointer { column, .. } => column,
         }
     }
 
@@ -220,6 +224,11 @@ impl Gap {
                     formats.iter().map(|f| format!("{f:?}")).collect::<Vec<_>>().join(" and ")
                 )
             }
+            Gap::NothingAtPointer { column, source, pointer, want, row } => format!(
+                "`{column}` ({want}): pointer {pointer:?} finds nothing (or a null) in {source:?} at \
+                 row {row}, and the column is NOT NULL\n    \
+                 declare it nullable if this member may lack it"
+            ),
             Gap::Collides { column, other, source } => format!(
                 "`{column}` and `{other}` both bind {source:?} — the same column of the file, \
                  twice\n    tdy has no computed columns, so both would hold identical \
@@ -1261,7 +1270,7 @@ const RECORD_FRAME: &str = "the document as one record";
 const JSON_FRAME_FIELDS: &str = "record or pointer";
 
 /// One candidate as the sidecar setting that would choose it by hand.
-fn frame_setting(field: &str, choice: &str) -> String {
+pub(crate) fn frame_setting(field: &str, choice: &str) -> String {
     if choice == RECORD_FRAME {
         return "record = true".into();
     }
@@ -1709,15 +1718,12 @@ fn fit_framed(
         // as a type failure on an empty string.
         if let (Some(p), false, Some(ptr)) = (&pointed, tc.nullable, &tc.pointer) {
             if let Some(i) = p.iter().position(|v| v.trim().is_empty()) {
-                gaps.push(Gap::Untypable {
+                gaps.push(Gap::NothingAtPointer {
                     column: tc.name.clone(),
                     source: source.clone(),
+                    pointer: ptr.clone(),
                     want: render(&tc.dtype),
-                    why: format!(
-                        "row {}: pointer {ptr:?} finds nothing (or a null) in {source:?}, and the \
-                         column is NOT NULL; declare it nullable if this member may lack it",
-                        i + 1
-                    ),
+                    row: i + 1,
                 });
                 continue;
             }

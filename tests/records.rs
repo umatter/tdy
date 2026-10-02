@@ -143,3 +143,22 @@ fn draft_then_the_edits_it_names_then_fit_then_query() {
     let cells: Vec<&str> = row.split('|').map(str::trim).filter(|c| !c.is_empty()).collect();
     assert_eq!(cells, ["7", "1780", "255"], "{text}");
 }
+
+/// `--json`: an ambiguous frame's choices are the settings that choose,
+/// each usable as written.
+#[test]
+fn ambiguous_frame_choices_are_settings() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("both.json"),
+        r#"{"id":"top","name":"Report","rows":[{"id":"a","name":"Ann"},{"id":"b","name":"Bo"}]}"#,
+    )
+    .unwrap();
+    let t = dir.path().join("t.tdy.sql");
+    std::fs::write(&t, "CREATE TABLE t (id TEXT NOT NULL, name TEXT NOT NULL) WITH (files = '*.json');\n").unwrap();
+    let out = tdy(&["--json", "fit", t.to_str().unwrap(), "--dry-run"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let p = &v["members"][0]["problems"][0];
+    assert_eq!(p["kind"], "ambiguous_frame", "{v:#}");
+    assert_eq!(p["choices"], serde_json::json!(["record = true", "pointer = \"/rows\""]), "{v:#}");
+}

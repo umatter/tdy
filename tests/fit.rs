@@ -1686,6 +1686,9 @@ fn a_not_null_column_whose_pointer_resolves_to_nothing_refuses_the_member() {
     let e = fit(&dir.path().join("old.json"), &t, Limits::default()).expect_err("no /nh in this one");
     let m = format!("{e}");
     assert!(m.contains("sell_price") && m.contains("finds nothing") && m.contains("row 1"), "{m}");
+    // The header leads with the pointer, not with a type failure.
+    assert!(m.contains("`sell_price` (BIGINT): pointer \"/nh/sellPrice/value\" finds nothing"), "{m}");
+    assert!(!m.contains("whose values cannot produce that type"), "{m}");
 
     // Nullable, the same document fits, with a null.
     let t = Target::parse(

@@ -175,7 +175,7 @@ pub struct SourceBinding {
 #[derive(Debug, Serialize)]
 pub struct Problem {
     /// no_candidate | long_form | ambiguous | untypable | ambiguous_separator |
-    /// ambiguous_format | collides | ambiguous_frame | contradicts | error
+    /// ambiguous_format | collides | nothing_at_pointer | ambiguous_frame | contradicts | error
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<String>,
@@ -278,6 +278,13 @@ fn problem_of_gap(g: &Gap) -> Problem {
             field: Some(source.clone()),
             ..base
         },
+        Gap::NothingAtPointer { want, source, pointer, .. } => Problem {
+            kind: "nothing_at_pointer".into(),
+            want: Some(want.clone()),
+            choices: vec![source.clone()],
+            field: Some(pointer.clone()),
+            ..base
+        },
         Gap::Collides { other, source, .. } => Problem {
             kind: "collides".into(),
             choices: vec![other.clone(), source.clone()],
@@ -296,7 +303,8 @@ fn problems_of_error(e: &FitError) -> Vec<Problem> {
             want: Some(what.clone()),
             tried: Vec::new(),
             header: Vec::new(),
-            choices: choices.clone(),
+            // Each the sidecar setting that would choose it, usable as written.
+            choices: choices.iter().map(|c| crate::fit::frame_setting(field, c)).collect(),
             field: Some(field.clone()),
             long_form: None,
         }],
