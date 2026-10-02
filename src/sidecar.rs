@@ -432,7 +432,7 @@ mod tests {
 
     fn minimal() -> ParseSpec {
         ParseSpec {
-            extraction: Extraction::Json { lines: true, pointer: None },
+            extraction: Extraction::Json { lines: true, pointer: None, record: false },
             transforms: vec![],
             columns: vec![ColumnSpec {
                 name: "a".into(),

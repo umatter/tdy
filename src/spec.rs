@@ -189,9 +189,16 @@ pub enum Extraction {
         #[serde(default)]
         lines: bool,
         /// RFC 6901 JSON Pointer to the array of records within the
-        /// document (ignored when `lines` is true).
+        /// document (ignored when `lines` is true). With `record`, to the
+        /// one object that is the record.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pointer: Option<String>,
+        /// true = the value at `pointer` (the document's root when absent)
+        /// is ONE object, read as one row whose columns are its keys in
+        /// document order. Never implied: an object where an array of
+        /// records is expected is an error unless this says otherwise.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        record: bool,
     },
 }
 
@@ -1216,7 +1223,14 @@ impl ParseSpec {
                 }
                 Err(e) => errs.push(format!("lines pattern is not a valid regex: {e}")),
             },
-            Extraction::Json { lines, pointer } => {
+            Extraction::Json { lines, pointer, record } => {
+                if *record && *lines {
+                    errs.push(
+                        "json: `record = true` reads the document as ONE object and `lines = true` \
+                         reads one record per line; a file is one or the other"
+                            .into(),
+                    );
+                }
                 if let Some(p) = pointer {
                     if *lines {
                         errs.push("json: `pointer` is meaningless when `lines` is true".into());
@@ -1838,10 +1852,34 @@ mod tests {
     #[test]
     fn json_pointer_shape_is_checked() {
         let mut s = minimal_spec();
-        s.extraction = Extraction::Json { lines: false, pointer: Some("data".into()) };
+        s.extraction = Extraction::Json { lines: false, pointer: Some("data".into()), record: false };
         assert!(errs(&s).iter().any(|e| e.contains("RFC 6901")));
-        s.extraction = Extraction::Json { lines: true, pointer: Some("/data".into()) };
+        s.extraction = Extraction::Json { lines: true, pointer: Some("/data".into()), record: false };
         assert!(errs(&s).iter().any(|e| e.contains("meaningless")));
+    }
+
+    /// `record` reads one object; `lines` reads one record per line. The two
+    /// are different documents, and a spec claiming both is refused.
+    #[test]
+    fn a_record_is_not_a_line_of_ndjson() {
+        let mut s = minimal_spec();
+        s.extraction = Extraction::Json { lines: true, pointer: None, record: true };
+        assert!(errs(&s).iter().any(|e| e.contains("record") && e.contains("lines")), "{:?}", errs(&s));
+        s.extraction = Extraction::Json { lines: false, pointer: Some("/data".into()), record: true };
+        assert!(s.validate().is_ok(), "{:?}", s.validate());
+    }
+
+    /// An existing sidecar serialises exactly as before: `record` is written
+    /// only when it is true.
+    #[test]
+    fn record_false_is_not_written() {
+        let mut s = minimal_spec();
+        s.extraction = Extraction::Json { lines: false, pointer: None, record: false };
+        let t = toml::to_string(&s).unwrap();
+        assert!(!t.contains("record"), "{t}");
+        s.extraction = Extraction::Json { lines: false, pointer: None, record: true };
+        let t = toml::to_string(&s).unwrap();
+        assert!(t.contains("record = true"), "{t}");
     }
 
     #[test]

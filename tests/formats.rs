@@ -211,7 +211,7 @@ fn json_pointer_nested_values_and_missing_keys() {
         ]}"#,
     );
     let s = spec(
-        Extraction::Json { lines: false, pointer: Some("/data".into()) },
+        Extraction::Json { lines: false, pointer: Some("/data".into()), record: false },
         vec![],
         vec![col("id", DType::Int64), col("tags", DType::Utf8), col("extra", DType::Utf8)],
     );
@@ -219,6 +219,50 @@ fn json_pointer_nested_values_and_missing_keys() {
     assert_eq!(ints(&b, 0), vec![Some(1), Some(2)]);
     assert_eq!(strings(&b, 1), vec![r#"["a","b"]"#, "<null>"]);
     assert_eq!(strings(&b, 2), vec!["<null>", "late"]);
+}
+
+/// `record = true`: a document that is one object is one row. Hand-written,
+/// as a sidecar would say it, with a column reaching into a nested object
+/// through the `pointer` the sidecar has had since the shape slice.
+#[test]
+fn a_document_that_is_one_object_reads_as_one_row() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(
+        &dir,
+        "1-up-cap.json",
+        r#"{"id":"1-up-cap","name":"1-up Cap","games":{"nh":{"sellPrice":{"currency":"bells","value":80}}}}"#,
+    );
+    let mut sell = col_from("sell", "games", DType::Int64);
+    sell.pointer = Some("/nh/sellPrice/value".into());
+    let mut missing = col_from("nl_sell", "games", DType::Int64);
+    missing.pointer = Some("/nl/sellPrice/value".into());
+    let s = spec(
+        Extraction::Json { lines: false, pointer: None, record: true },
+        vec![],
+        vec![col("id", DType::Utf8), col("name", DType::Utf8), sell, missing],
+    );
+    s.validate().unwrap();
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(b.num_rows(), 1);
+    assert_eq!(strings(&b, 0), vec!["1-up-cap"]);
+    assert_eq!(strings(&b, 1), vec!["1-up Cap"]);
+    assert_eq!(ints(&b, 2), vec![Some(80)]);
+    assert_eq!(ints(&b, 3), vec![None], "a pointer that resolves to nothing is null");
+}
+
+/// `pointer` still selects where the object is.
+#[test]
+fn a_record_under_a_pointer_reads_that_object() {
+    let dir = TempDir::new().unwrap();
+    let p = dir_file(&dir, "wrapped.json", r#"{"meta":{"v":2},"data":{"id":7,"label":"x"}}"#);
+    let s = spec(
+        Extraction::Json { lines: false, pointer: Some("/data".into()), record: true },
+        vec![],
+        vec![col("id", DType::Int64), col("label", DType::Utf8)],
+    );
+    let b = spec_to_batch(&s, &p).unwrap();
+    assert_eq!(ints(&b, 0), vec![Some(7)]);
+    assert_eq!(strings(&b, 1), vec!["x"]);
 }
 
 #[test]
@@ -230,7 +274,7 @@ fn ndjson_keeps_large_integers_exact() {
         "{\"id\":9007199254740993}\n{\"id\":9223372036854775807}\n",
     );
     let s = spec(
-        Extraction::Json { lines: true, pointer: None },
+        Extraction::Json { lines: true, pointer: None, record: false },
         vec![],
         vec![col("id", DType::Int64)],
     );

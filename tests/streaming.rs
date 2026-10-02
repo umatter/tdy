@@ -555,7 +555,7 @@ fn the_streaming_limit_applies_to_a_source_with_no_counting_pass() {
 fn unstreamable_shapes_are_declined_rather_than_guessed() {
     // A JSON document has to be parsed whole before its records exist.
     let json = ParseSpec {
-        extraction: Extraction::Json { lines: false, pointer: None },
+        extraction: Extraction::Json { lines: false, pointer: None, record: false },
         transforms: vec![],
         columns: vec![],
         confidence: Some(1.0),
@@ -859,7 +859,7 @@ fn a_late_ndjson_key_still_becomes_a_column() {
     let p = write(&dir, "late_key.ndjson", &body);
 
     let s = ParseSpec {
-        extraction: Extraction::Json { lines: true, pointer: None },
+        extraction: Extraction::Json { lines: true, pointer: None, record: false },
         transforms: vec![],
         columns: vec![
             col("a", DType::Int64),
@@ -882,7 +882,7 @@ fn a_late_ndjson_key_still_becomes_a_column() {
 #[test]
 fn a_json_array_is_not_streamed() {
     let array = ParseSpec {
-        extraction: Extraction::Json { lines: false, pointer: None },
+        extraction: Extraction::Json { lines: false, pointer: None, record: false },
         transforms: vec![],
         columns: vec![],
         confidence: Some(1.0),
@@ -891,7 +891,7 @@ fn a_json_array_is_not_streamed() {
     assert!(!stream::can_stream(&array));
 
     let pointed = ParseSpec {
-        extraction: Extraction::Json { lines: true, pointer: Some("/data".into()) },
+        extraction: Extraction::Json { lines: true, pointer: Some("/data".into()), record: false },
         transforms: vec![],
         columns: vec![],
         confidence: Some(1.0),

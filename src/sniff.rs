@@ -1076,7 +1076,7 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
         Err(e) => bail!("file has a .json-ish extension but does not parse as JSON: {e}"),
     };
 
-    let extraction = Extraction::Json { lines, pointer };
+    let extraction = Extraction::Json { lines, pointer, record: false };
     let table = engine::extract(&extraction, path, &ExtractOpts::capped(limits, PROBE_ROWS))
         .with_context(|| format!("probing {}", path.display()))?;
     finish(extraction, vec![], table, 0.95, doubts, &std::collections::HashSet::new())

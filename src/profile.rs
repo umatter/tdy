@@ -297,7 +297,7 @@ pub fn profile_member(
     };
     let mut notes = Vec::new();
     let mut candidates = Vec::new();
-    if let Extraction::Json { lines: false, pointer } = &mut frame.extraction {
+    if let Extraction::Json { lines: false, pointer, .. } = &mut frame.extraction {
         match &req.pointer {
             Some(want) => {
                 *pointer = Some(want.clone());

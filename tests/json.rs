@@ -138,7 +138,7 @@ fn a_pointer_reads_a_field_out_of_a_nested_object() {
         pointer: pointer.map(String::from),
     };
     let spec = ParseSpec {
-        extraction: Extraction::Json { lines: true, pointer: None },
+        extraction: Extraction::Json { lines: true, pointer: None, record: false },
         transforms: vec![],
         columns: vec![
             col("id", None, None, DType::Int64),
@@ -166,7 +166,7 @@ fn a_pointer_that_does_not_resolve_is_a_null() {
     let p = dir.path().join("n.ndjson");
     std::fs::write(&p, "{\"a\":{\"x\":1}}\n{\"a\":{}}\n").unwrap();
     let spec = ParseSpec {
-        extraction: Extraction::Json { lines: true, pointer: None },
+        extraction: Extraction::Json { lines: true, pointer: None, record: false },
         transforms: vec![],
         columns: vec![ColumnSpec {
             name: "x".into(),
@@ -194,7 +194,7 @@ fn a_pointer_onto_a_container_is_refused() {
     let p = dir.path().join("n.ndjson");
     std::fs::write(&p, "{\"a\":{\"inner\":{\"deep\":1}}}\n").unwrap();
     let spec = ParseSpec {
-        extraction: Extraction::Json { lines: true, pointer: None },
+        extraction: Extraction::Json { lines: true, pointer: None, record: false },
         transforms: vec![],
         columns: vec![ColumnSpec {
             name: "inner".into(),

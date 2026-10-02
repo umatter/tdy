@@ -542,14 +542,14 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     // ranking of them a guess. The declared table turns the guess into a
     // search: try every candidate, and the answer is the one that fits —
     // provably, if it is alone in doing so.
-    if let Extraction::Json { lines: false, pointer: Some(_) } = &draft.extraction {
+    if let Extraction::Json { lines: false, pointer: Some(_), record: false } = &draft.extraction {
         let pointers = sniff::json_record_pointers(path, limits);
         if pointers.len() > 1 {
             let candidates = pointers
                 .iter()
                 .map(|ptr| {
                     let mut d = draft.clone();
-                    d.extraction = Extraction::Json { lines: false, pointer: Some(ptr.clone()) };
+                    d.extraction = Extraction::Json { lines: false, pointer: Some(ptr.clone()), record: false };
                     (ptr.clone(), d)
                 })
                 .collect();
@@ -1401,6 +1401,9 @@ fn describe_frame(spec: &ParseSpec) -> String {
     let mut parts = vec![spec.extraction.format_name().to_string()];
     if let Extraction::Json { pointer: Some(p), .. } = &spec.extraction {
         parts.push(format!("pointer {p:?}"));
+    }
+    if let Extraction::Json { record: true, .. } = &spec.extraction {
+        parts.push("record".into());
     }
     if let Extraction::Excel { sheet_name: Some(sh), .. } = &spec.extraction {
         parts.push(format!("sheet {sh:?}"));
