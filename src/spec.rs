@@ -818,13 +818,14 @@ pub fn two_digit_year_note(c: &ColumnSpec) -> Option<String> {
 }
 
 /// The count unit a column is read in, however the spec says it:
-/// `epoch = "…"`, or `format = "%s"` alone, which is chrono's own specifier
-/// for epoch seconds. One answer for review and conformance alike, so `%s`
-/// with no `epoch` is not a way around either.
+/// `epoch = "…"`, or a `format` that reads `%s`, chrono's own specifier for
+/// epoch seconds, wherever it sits (`%s` alone, `%s%.3f`). One answer for
+/// review and conformance alike, so `%s` with no `epoch` is not a way around
+/// either. `%S`, the seconds field of a clock time, is a different specifier.
 pub fn effective_epoch(c: &ColumnSpec) -> Option<EpochUnit> {
     match &c.dtype {
         DType::Date { format } | DType::Timestamp { format, .. } => {
-            c.parse.epoch.or((format == "%s").then_some(EpochUnit::Seconds))
+            c.parse.epoch.or(format.contains("%s").then_some(EpochUnit::Seconds))
         }
         _ => c.parse.epoch,
     }
@@ -1865,5 +1866,24 @@ mod tests {
         }
         let errs = s.validate().unwrap_err();
         assert!(errs.iter().any(|e| e.contains("region") && e.contains("start")), "{errs:?}");
+    }
+
+    #[test]
+    fn any_format_reading_percent_s_is_epoch_seconds() {
+        // `%s` is chrono's epoch-seconds specifier wherever it sits in the
+        // format: `%s%.3f` reads seconds with a fraction and is the same
+        // judgement as `%s` alone. `%S` is the seconds *field* of a clock
+        // time and is not.
+        let col = |format: &str| ColumnSpec {
+            name: "ts".into(),
+            source: None,
+            dtype: DType::Timestamp { format: format.into(), timezone: None },
+            nullable: true,
+            parse: ValueParsing::default(),
+            pointer: None,
+        };
+        assert_eq!(effective_epoch(&col("%s")), Some(EpochUnit::Seconds));
+        assert_eq!(effective_epoch(&col("%s%.3f")), Some(EpochUnit::Seconds));
+        assert_eq!(effective_epoch(&col("%Y-%m-%d %H:%M:%S")), None);
     }
 }
