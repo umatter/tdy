@@ -36,6 +36,12 @@ pub const THRESHOLD: f64 = 10.0;
 /// Fewer members than this and no member can be called the odd one out.
 pub const MIN_MEMBERS: usize = 3;
 
+/// A member contributes a typical value for a column only with at least this
+/// many non-null values in it. The median of fewer is a value, not a typical
+/// one: a one-row file's "median" is that row, and a pile of small files
+/// differs by ordinary variation, not by unit.
+pub const MIN_ROWS: usize = 5;
+
 impl Outlier {
     /// The review reason: what was measured, against what, and the question
     /// a person has to answer.
@@ -60,7 +66,8 @@ fn fmt(x: f64) -> String {
 }
 
 /// The median absolute value of every numeric column of a typed batch,
-/// nulls ignored. A column with no values has no median and is absent.
+/// nulls ignored. A column with fewer than [`MIN_ROWS`] values has no typical
+/// value and is absent.
 pub fn medians(batch: &datafusion::arrow::record_batch::RecordBatch) -> Medians {
     use datafusion::arrow::array::{Array, Decimal128Array, Float64Array, Int64Array};
     use datafusion::arrow::datatypes::DataType;
@@ -83,6 +90,9 @@ pub fn medians(batch: &datafusion::arrow::record_batch::RecordBatch) -> Medians 
             }
             _ => continue,
         };
+        if vals.len() < MIN_ROWS {
+            continue;
+        }
         if let Some(m) = median(&mut vals) {
             out.insert(field.name().to_string(), m);
         }
@@ -134,6 +144,7 @@ pub fn outliers(members: &[Medians], threshold: f64) -> Vec<Outlier> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn m(pairs: &[(&str, f64)]) -> Medians {
         pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
@@ -172,6 +183,45 @@ mod tests {
         let out = outliers(&members, 10.0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].member, 3);
+    }
+
+    fn int_batch(vals: Vec<Option<i64>>) -> datafusion::arrow::record_batch::RecordBatch {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        let schema = Arc::new(Schema::new(vec![Field::new("amount", DataType::Int64, true)]));
+        datafusion::arrow::record_batch::RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vals))]).unwrap()
+    }
+
+    #[test]
+    fn a_member_needs_five_values_to_have_a_typical_one() {
+        let four = int_batch(vec![Some(1), Some(2), Some(3), Some(4)]);
+        assert!(medians(&four).is_empty(), "the median of four is a value, not a typical one");
+        // Nulls are not values: five rows with one null is four.
+        let nulled = int_batch(vec![Some(1), Some(2), None, Some(4), Some(5)]);
+        assert!(medians(&nulled).is_empty());
+        let five = int_batch(vec![Some(1), Some(2), Some(3), Some(4), Some(5)]);
+        assert_eq!(medians(&five).get("amount"), Some(&3.0));
+    }
+
+    /// A member under the floor has no median, so it is neither judged nor
+    /// counted: the same three members flag at five rows and not at four.
+    #[test]
+    fn a_member_under_the_floor_is_not_flagged_and_one_at_it_is() {
+        let scaled = |n: usize| {
+            let rows = |v: i64| int_batch(vec![Some(v); n]);
+            vec![medians(&rows(100)), medians(&rows(100)), medians(&rows(10_000))]
+        };
+        assert!(outliers(&scaled(MIN_ROWS - 1), 10.0).is_empty());
+        let out = outliers(&scaled(MIN_ROWS), 10.0);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].member, 2);
+        // And the small member does not count toward MIN_MEMBERS either.
+        let mixed = vec![
+            medians(&int_batch(vec![Some(100); 5])),
+            medians(&int_batch(vec![Some(100); 5])),
+            medians(&int_batch(vec![Some(100_000); 4])),
+        ];
+        assert!(outliers(&mixed, 10.0).is_empty(), "two contributing members judge nothing");
     }
 
     #[test]

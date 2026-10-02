@@ -1038,9 +1038,10 @@ async fn ls_reports_a_workbooks_sheet_specs_split_into_regions() {
 #[tokio::test]
 async fn accept_step_one_shows_a_reason_that_lives_in_the_lock() {
     let d = tempfile::TempDir::new().unwrap();
+    // Five rows a month: the magnitude check judges a member only from five values.
     let month = |m: &str, base: u32, factor: u32| {
         let mut s = String::from("Datum;Region;Betrag\n");
-        for (i, region) in ["Ost", "West", "Nord", "Sued"].iter().enumerate() {
+        for (i, region) in ["Ost", "West", "Nord", "Sued", "Mitte"].iter().enumerate() {
             s.push_str(&format!("28.{m}.2025;{region};{}.00\n", (base + 10 * i as u32) * factor));
         }
         s
