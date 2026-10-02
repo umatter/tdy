@@ -963,6 +963,7 @@ pub async fn fit_pile(
     let mut to_prune: Vec<PathBuf> = Vec::new();
     let mut pruned = Pruned::default();
     let mut sidecars_written: Vec<usize> = Vec::new();
+    let mut interner = Interner::default();
 
     let total = units.len();
     for (index, u) in units.iter().enumerate() {
@@ -1194,7 +1195,17 @@ pub async fn fit_pile(
                     });
                     break 'member;
                 }
-                if let Err(e) = crate::engine::dry_run(&spec, &p, limits) {
+                // The dry run (`engine::dry_run` is this preview of 200
+                // rows). When it read the whole member, its batch is what
+                // the magnitude pass below would read again: kept as the
+                // member's medians instead — for a pile of one-record
+                // documents, that pass was a second dry run of every member.
+                let dry = crate::engine::preview_whole(&spec, &p, limits, 200);
+                let medians = match &dry {
+                    Ok((batch, true)) => Some(crate::magnitude::medians(batch)),
+                    _ => None,
+                };
+                if let Err(e) = dry {
                     failed += 1;
                     reports.push(MemberReport {
                         path: rel.clone(),
@@ -1297,6 +1308,7 @@ pub async fn fit_pile(
                     path: p.clone(),
                     blake3: blake3.clone(),
                     digest: digest.clone(),
+                    medians,
                 });
                 lock_members.push(Member {
                     path: rel.clone(),
@@ -1339,7 +1351,6 @@ pub async fn fit_pile(
                 // tool-written sidecar is rewritten in place, as ever) —
                 // nothing is deleted without `--prune-sidecars`.
                 let in_lock = lock_mode && (!sidecar_file || prune_this.is_some());
-                let id = if in_lock { Some(crate::plans::spec_id(&fitted.spec)?) } else { None };
                 if !opts.dry_run && !in_lock {
                     crate::sidecar::save_member(&p, sheet, region, &fitted.spec, provenance_of(method, model.clone()))?;
                     sidecars_written.push(fitted_specs.len());
@@ -1347,6 +1358,17 @@ pub async fn fit_pile(
                 let (blake3, bytes) = match fingerprint.take() {
                     Some(fp) => fp,
                     None => crate::sidecar::hash_file(&p)?,
+                };
+                // The plan, without its notes (they are this member's), and
+                // for a lock-held plan its id and the one copy every member
+                // with that plan shares.
+                let report_notes = fitted.spec.notes.clone();
+                let notes = std::mem::take(&mut fitted.spec.notes);
+                let (id, spec) = if in_lock {
+                    let (id, spec) = interner.intern(fitted.spec)?;
+                    (Some(id), spec)
+                } else {
+                    (None, std::sync::Arc::new(fitted.spec))
                 };
                 let digest = match &id {
                     Some(id) => id.clone(),
@@ -1365,7 +1387,7 @@ pub async fn fit_pile(
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
                     region,
-                    window: spec_window(&fitted.spec),
+                    window: spec_window(&spec),
                     rows,
                     rows_sheet: rows_sheet.clone(),
                     status,
@@ -1376,14 +1398,14 @@ pub async fn fit_pile(
                         }
                         .into(),
                     ),
-                    sources: bindings(&fitted.spec),
+                    sources: bindings(&spec),
                     review: fitted.review.clone(),
                     accepted: is_accepted,
                     notes: {
                         // On the report, not in the spec: the refusal is a
                         // fact about *this* fit, and the plan just recorded
                         // is the one that replaced the refused one.
-                        let mut ns = fitted.spec.notes.clone();
+                        let mut ns = report_notes;
                         ns.extend(refused.clone());
                         ns
                     },
@@ -1391,14 +1413,13 @@ pub async fn fit_pile(
                     proposals: Vec::new(),
                     in_lock,
                 });
-                let notes = std::mem::take(&mut fitted.spec.notes);
-                let spec = std::sync::Arc::new(fitted.spec);
                 fitted_specs.push(FittedMember {
                     report: reports.len() - 1,
                     spec: spec.clone(),
                     path: p.clone(),
                     blake3: blake3.clone(),
                     digest: digest.clone(),
+                    medians: None,
                 });
                 lock_members.push(Member {
                     path: rel.clone(),
@@ -1478,9 +1499,12 @@ pub async fn fit_pile(
     if fitted_specs.len() >= crate::magnitude::MIN_MEMBERS {
         let mut medians: Vec<crate::magnitude::Medians> = Vec::with_capacity(fitted_specs.len());
         for f in &fitted_specs {
-            medians.push(match crate::engine::preview(&f.spec, &f.path, limits, MAGNITUDE_ROWS) {
-                Ok(batch) => crate::magnitude::medians(&batch),
-                Err(_) => crate::magnitude::Medians::new(),
+            medians.push(match &f.medians {
+                Some(m) => m.clone(),
+                None => match crate::engine::preview(&f.spec, &f.path, limits, MAGNITUDE_ROWS) {
+                    Ok(batch) => crate::magnitude::medians(&batch),
+                    Err(_) => crate::magnitude::Medians::new(),
+                },
             });
         }
         for o in crate::magnitude::outliers(&medians, crate::magnitude::THRESHOLD) {
@@ -1607,6 +1631,35 @@ struct FittedMember {
     blake3: String,
     /// What an acceptance of this member's plan is tied to now.
     digest: String,
+    /// Its typical values, when its dry run already read all of it.
+    medians: Option<crate::magnitude::Medians>,
+}
+
+/// One copy and one identity per distinct plan a fit records in the lock.
+///
+/// The identity is `plans::spec_id` — the sidecar serialiser's bytes, and
+/// computing it costs what serialising a sidecar costs. A plan already seen
+/// is recognised by a far cheaper serialisation of the same value: equal
+/// JSON is an equal spec, and an equal spec has the equal identity, so the
+/// identity is computed once per distinct plan rather than once per member,
+/// and every member of it shares one `Arc`.
+#[derive(Default)]
+struct Interner {
+    seen: HashMap<blake3::Hash, (String, std::sync::Arc<ParseSpec>)>,
+}
+
+impl Interner {
+    /// `spec` without notes.
+    fn intern(&mut self, spec: ParseSpec) -> Result<(String, std::sync::Arc<ParseSpec>)> {
+        let key = blake3::hash(&serde_json::to_vec(&spec).context("serialising a plan")?);
+        if let Some((id, shared)) = self.seen.get(&key) {
+            return Ok((id.clone(), shared.clone()));
+        }
+        let id = crate::plans::spec_id(&spec)?;
+        let shared = std::sync::Arc::new(spec);
+        self.seen.insert(key, (id.clone(), shared.clone()));
+        Ok((id, shared))
+    }
 }
 
 /// A member whose plan the lock is to hold.

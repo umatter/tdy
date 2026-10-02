@@ -2905,6 +2905,21 @@ pub fn preview(
     limits: Limits,
     max_rows: usize,
 ) -> Result<RecordBatch> {
+    preview_whole(spec, path, limits, max_rows).map(|(batch, _)| batch)
+}
+
+/// [`preview`], and whether the batch is everything the spec reads from
+/// the file: extraction ended before its cap (so it saw the end of the
+/// data, and a `skip_rows` tail was applied) and nothing was cut after the
+/// transforms. When it is, a preview of any larger size is this same
+/// batch — which is what lets `tdy fit`'s magnitude pass reuse a member's
+/// dry run instead of reading the member again.
+pub fn preview_whole(
+    spec: &ParseSpec,
+    path: &Path,
+    limits: Limits,
+    max_rows: usize,
+) -> Result<(RecordBatch, bool)> {
     let slack = spec
         .transforms
         .iter()
@@ -2918,9 +2933,11 @@ pub fn preview(
     let opts = ExtractOpts::capped(limits, extract_rows);
     let mut table = extract(&spec.extraction, path, &opts)
         .with_context(|| format!("extracting {}", path.display()))?;
+    let extracted = table.rows.len();
     apply_spec_transforms(&mut table, &spec.transforms)?;
+    let whole = !table.truncated && extracted < extract_rows && table.rows.len() <= max_rows;
     table.rows.truncate(max_rows);
-    to_record_batch(spec, &mut table)
+    Ok((to_record_batch(spec, &mut table)?, whole))
 }
 
 fn run(spec: &ParseSpec, path: &Path, opts: &ExtractOpts) -> Result<RecordBatch> {
@@ -2939,6 +2956,31 @@ pub fn dry_run(spec: &ParseSpec, path: &Path, limits: Limits) -> Result<RecordBa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `preview_whole` says the batch is the whole member only when it is:
+    /// a short file is, and then a larger preview is the same batch; a file
+    /// longer than the preview is not.
+    #[test]
+    fn preview_whole_is_true_only_when_nothing_was_left_unread() {
+        let d = tempfile::tempdir().unwrap();
+        let spec_of = |p: &Path| {
+            let sample = crate::sample::build(p, 16 * 1024, Limits::default()).unwrap();
+            crate::sniff::sniff_opts(p, &sample, Limits::default(), crate::sniff::SniffOpts { verify: false }).unwrap().spec
+        };
+        let short = d.path().join("short.csv");
+        std::fs::write(&short, (0..150).fold(String::from("a;b\n"), |s, i| s + &format!("{i};x\n"))).unwrap();
+        let spec = spec_of(&short);
+        let (batch, whole) = preview_whole(&spec, &short, Limits::default(), 200).unwrap();
+        assert!(whole);
+        assert_eq!(batch, preview(&spec, &short, Limits::default(), 2000).unwrap());
+
+        let long = d.path().join("long.csv");
+        std::fs::write(&long, (0..300).fold(String::from("a;b\n"), |s, i| s + &format!("{i};x\n"))).unwrap();
+        let spec = spec_of(&long);
+        let (batch, whole) = preview_whole(&spec, &long, Limits::default(), 200).unwrap();
+        assert!(!whole);
+        assert_eq!(batch.num_rows(), 200);
+    }
 
     fn json_file(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let d = tempfile::tempdir().unwrap();
