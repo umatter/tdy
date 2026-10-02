@@ -835,11 +835,16 @@ fixture in `testdata/` — that is what `12_late_surprises.py` is. The 2026-09-0
 findings live in `gap_reports/AUDIT_FINDINGS.md` (gitignored, like every `gap_reports/`
 report); its fixtures are `15_audit_defects.py` (below).
 
-Current state (re-swept 2026-10-01 in release, at 46436b3: 3 tests passed in 796 s, no
-panic or hang): of 9,881 files, 4,019 are read confidently (41%), 4,868 read unsure (49%)
-and 994 declined (10%); the four declined xlsx are still Office `~$` owner-lock stubs,
+Current state (re-swept 2026-10-02 in release, with a document read as a record: 3 tests
+passed in 750 s, no panic or hang): of 9,881 files, 5,009 are read confidently (51%), 4,868
+read unsure (49%) and 4 declined; those four are xlsx, still Office `~$` owner-lock stubs,
 which is correct. **0 of 1,374 real CSVs declined** (15 before the type-verification work).
-The rise from the 2026-09-04 survey's 3,868 confident files has one cause, traced per file
+The 990 JSON documents the 2026-10-01 sweep declined ("no array of records") are one
+object each and are now read as one record; the 4,443 unsure JSON files are unchanged by
+design — a lone document that also holds an array keeps its array reading and its doubt,
+and it is a pile's target that chooses the record (json: 3,693 read, 4,443 unsure, 0
+declined). The 2026-10-01 sweep at 46436b3 had 4,019 confident and 994 declined.
+The rise from the 2026-09-04 survey's 3,868 confident files to that 4,019 has one cause, traced per file
 over all 1,385 csv/tsv files: all 138 that rose did so between 2026-09-04 and 2026-09-08,
 each losing exactly the doubt "nearly every column typed as text", which the September
 audit restricted to files whose column names tdy had to invent (`!named_by_file`), and no
