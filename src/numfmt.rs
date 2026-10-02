@@ -351,33 +351,103 @@ pub fn frac_digits_with(v: &str, decimal: Option<char>, thousands: Option<char>)
     }
 }
 
-/// A numeric literal's digits under a convention: (integer digits after any
-/// leading zeros, significant digits, whether it is an integer past i64).
-/// Significant digits are counted on the literal: leading zeros and trailing
-/// fractional zeros do not count (`0.10` is one, `1.500` two), nor do
-/// separators or a sign. `None` for a value that is not plain digits once
-/// the convention's separators are taken out.
-pub fn digit_counts(v: &str, decimal: Option<char>, thousands: Option<char>) -> Option<(usize, usize, bool)> {
-    let s = core(v)?;
+/// A numeric literal read under a convention, for deciding whether a float64
+/// can hold it. `None` for anything that is not one sign, digits with the
+/// convention's separators, and an optional `e`/`E` exponent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Literal {
+    /// The literal with the thousands separators taken out and the decimal
+    /// separator as `.` — what a double is parsed from.
+    pub canonical: String,
+    /// Integer digits, leading zeros not counted.
+    pub int_digits: usize,
+    /// Fractional digits as written, trailing zeros included (a DECIMAL's
+    /// scale must hold every written digit).
+    pub frac_digits: usize,
+    /// Significant digits: no leading zeros, no trailing fractional zeros.
+    pub significant: usize,
+    /// Written with an exponent.
+    pub exponent: bool,
+    /// An integer (no fraction, no exponent) outside i64, sign included.
+    pub past_i64: bool,
+}
+
+pub fn literal(v: &str, decimal: Option<char>, thousands: Option<char>) -> Option<Literal> {
+    let t = v.trim();
+    let (sign, body) = match t.as_bytes().first() {
+        Some(b'-') => ("-", &t[1..]),
+        Some(b'+') => ("", &t[1..]),
+        _ => ("", t),
+    };
+    let (mantissa, exp) = match body.find(['e', 'E']) {
+        Some(i) => (&body[..i], Some(&body[i + 1..])),
+        None => (body, None),
+    };
+    if let Some(e) = exp {
+        let d = e.strip_prefix(['+', '-']).unwrap_or(e);
+        if d.is_empty() || !d.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
     let dec = match decimal {
         Some(d) => Some(d),
         None if thousands == Some('.') => None,
         None => Some('.'),
     };
-    let (int, frac) = match dec.and_then(|d| s.split_once(d)) {
-        Some((i, f)) => (i, f),
-        None => (s, ""),
+    let (int, frac) = match dec.and_then(|d| mantissa.split_once(d)) {
+        Some((i, f)) => (i, Some(f)),
+        None => (mantissa, None),
     };
     let int: String = int.chars().filter(|&c| Some(c) != thousands).collect();
+    let frac = frac.unwrap_or("");
     if int.is_empty() || !int.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let past_i64 = frac.is_empty() && !dec.is_some_and(|d| s.contains(d)) && !fits_i64(&int);
-    let frac = frac.trim_end_matches('0');
-    let int_digits = int.trim_start_matches('0').len();
-    let all: String = int.chars().chain(frac.chars()).collect();
-    let sig = all.trim_start_matches('0').len();
-    Some((int_digits, sig, past_i64))
+    let had_point = dec.is_some_and(|d| mantissa.contains(d));
+    let past_i64 = !had_point && exp.is_none() && !fits_i64(&format!("{sign}{int}"));
+    let trimmed = frac.trim_end_matches('0');
+    let all: String = int.chars().chain(trimmed.chars()).collect();
+    let mut canonical = format!("{sign}{int}");
+    if had_point && !frac.is_empty() {
+        canonical.push('.');
+        canonical.push_str(frac);
+    }
+    if let Some(e) = exp {
+        canonical.push('e');
+        canonical.push_str(e);
+    }
+    Some(Literal {
+        canonical,
+        int_digits: int.trim_start_matches('0').len(),
+        frac_digits: frac.len(),
+        significant: all.trim_start_matches('0').len(),
+        exponent: exp.is_some(),
+        past_i64,
+    })
+}
+
+/// What a float64 column would hold for this literal, when that is not the
+/// literal: the shortest rendering of its double, if the two denote
+/// different decimals. `None` when the double gives the literal back — and,
+/// without parsing, for 15 significant digits or fewer, which a double always
+/// gives back. A literal outside a double's range is the cast's refusal, not
+/// this.
+impl Literal {
+    pub fn float_reads_as(&self) -> Option<String> {
+        if self.significant <= 15 {
+            return None;
+        }
+        let x: f64 = self.canonical.parse().ok()?;
+        if !x.is_finite() {
+            return None;
+        }
+        let shortest = format!("{x:e}");
+        if crate::jsondoc::same_decimal(&self.canonical, &shortest) {
+            None
+        } else {
+            Some(format!("{x}"))
+        }
+    }
 }
 
 /// Is every value plainly integral (no separators, no fraction)?

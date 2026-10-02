@@ -538,7 +538,7 @@ fn decimal_of(s: &str) -> Option<Decimal> {
 }
 
 /// Whether two decimal texts denote the same real number.
-fn same_decimal(a: &str, b: &str) -> bool {
+pub(crate) fn same_decimal(a: &str, b: &str) -> bool {
     match (decimal_of(a), decimal_of(b)) {
         (Some(x), Some(y)) => x == y,
         _ => false,

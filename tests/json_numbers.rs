@@ -377,3 +377,19 @@ fn a_long_json_decimal_sniffs_as_an_exact_decimal() {
     let text = out(&q);
     assert!(text.contains("1234567.891234567891"), "{text}");
 }
+
+/// 2^53 + 1 beside a fraction, CSV and NDJSON: served as written, not as
+/// 9007199254740992.0; an exponent literal a double cannot hold is text.
+#[test]
+fn a_sixteen_digit_value_a_double_cannot_hold_is_not_float64() {
+    let dir = TempDir::new().unwrap();
+    let c = write(&dir, "c.csv", "x\n9007199254740993\n0.5\n");
+    let n = write(&dir, "n.ndjson", "{\"x\":9007199254740993}\n{\"x\":0.5}\n");
+    let e = write(&dir, "e.ndjson", "{\"x\":1.2345678901234567891e5}\n{\"x\":2.5}\n");
+    for (p, want) in [(&c, "9007199254740993"), (&n, "9007199254740993"), (&e, "1.2345678901234567891e5")] {
+        let q = tdy(&["query", &format!("SELECT CAST(x AS VARCHAR) x FROM messy('{}')", p.display())]);
+        // stdout only: the sniff's note names the double it avoided.
+        let text = String::from_utf8_lossy(&q.stdout).to_string();
+        assert!(text.contains(want) && !text.contains("9007199254740992"), "{}: {}", p.display(), out(&q));
+    }
+}

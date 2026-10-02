@@ -2391,15 +2391,17 @@ fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGues
                 note: n,
             };
         }
-        // A double holds 17 significant digits and an integer only up to
-        // 2^53 exactly: a column holding more is never float64, which would
-        // read it rounded. An integer past i64 stays text, as a column of
-        // them does; a long decimal is exact in DECIMAL(38, s) when it fits.
-        let counts: Vec<(&str, (usize, usize, bool))> = sample
+        // A literal is safe for float64 only if its double gives it back:
+        // the shortest rendering of the parsed value is the same decimal.
+        // A column holding one that does not is never float64, which would
+        // read it as a neighbouring number. An integer past i64 stays text,
+        // as a column of them does; anything else is exact in
+        // DECIMAL(38, s) when it fits.
+        let lits: Vec<(&str, numfmt::Literal)> = sample
             .iter()
-            .filter_map(|v| numfmt::digit_counts(v, fmt.decimal, fmt.thousands).map(|c| (*v, c)))
+            .filter_map(|v| numfmt::literal(v, fmt.decimal, fmt.thousands).map(|l| (*v, l)))
             .collect();
-        if let Some((v, _)) = counts.iter().find(|(_, (_, _, past_i64))| *past_i64) {
+        if let Some((v, _)) = lits.iter().find(|(_, l)| l.past_i64) {
             return text(
                 Some(format!(
                     "kept as text: {v:?} is an integer past a 64-bit integer's range, which a \
@@ -2408,24 +2410,24 @@ fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGues
                 0.0,
             );
         }
-        if let Some((v, (_, sig, _))) = counts.iter().find(|(_, (_, sig, _))| *sig > 17) {
-            let widest = counts.iter().map(|(_, (int, _, _))| *int).max().unwrap_or(0);
+        if let Some((v, reads)) = lits.iter().find_map(|(v, l)| l.float_reads_as().map(|r| (*v, r))) {
+            let widest = lits.iter().map(|(_, l)| l.int_digits).max().unwrap_or(0);
             if widest + max_scale <= 38 {
                 return TypeGuess {
                     dtype: DType::Decimal { precision: 38, scale: max_scale as i8 },
                     parse,
                     penalty,
                     note: Some(format!(
-                        "read as decimal({max_scale}): {v:?} has {sig} significant digits, more \
-                         than a float64 holds — scale inferred from the first {TYPE_SAMPLE} rows; \
-                         any later value with more fractional digits is rounded half away from zero"
+                        "read as decimal({max_scale}): {v:?} would read back from a float64 as \
+                         {reads} — scale inferred from the first {TYPE_SAMPLE} rows; any later \
+                         value with more fractional digits is rounded half away from zero"
                     )),
                 };
             }
             return text(
                 Some(format!(
-                    "kept as text: {v:?} has {sig} significant digits, more than a float64 holds, \
-                     and the column does not fit decimal(38, s)"
+                    "kept as text: {v:?} would read back from a float64 as {reads}, and the \
+                     column does not fit decimal(38, s)"
                 )),
                 0.0,
             );
@@ -2471,6 +2473,28 @@ fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGues
     if sample.iter().any(|v| v.contains(['e', 'E']))
         && sample.iter().all(|v| v.trim().parse::<f64>().map(|f| f.is_finite()).unwrap_or(false))
     {
+        // In the cast's own words: a literal a double overflows or
+        // underflows is refused there, so it is not a float64 here.
+        if let Some(v) = sample.iter().find(|v| {
+            let x: f64 = v.trim().parse().unwrap_or(0.0);
+            x == 0.0 && v.split(['e', 'E']).next().is_some_and(|m| m.bytes().any(|b| matches!(b, b'1'..=b'9')))
+        }) {
+            return text(Some(format!("kept as text: {v:?} is outside a double's range")), 0.0);
+        }
+        // DECIMAL cannot parse an exponent, so a literal a double cannot
+        // give back has no exact home but text.
+        if let Some((v, reads)) = sample
+            .iter()
+            .find_map(|v| numfmt::literal(v, None, None).and_then(|l| l.float_reads_as()).map(|r| (*v, r)))
+        {
+            return text(
+                Some(format!(
+                    "kept as text: {v:?} would read back from a float64 as {reads}, and a decimal \
+                     column cannot hold an exponent"
+                )),
+                0.0,
+            );
+        }
         return TypeGuess {
             dtype: DType::Float64,
             parse: with_na(ValueParsing::default()),
@@ -2789,7 +2813,7 @@ mod tests {
         let g = guess_type(&["1234567.891234567891", "0.005", "-0.25"], "x", false);
         assert_eq!(g.dtype, DType::Decimal { precision: 38, scale: 12 }, "{:?}", g.note);
         let note = g.note.unwrap();
-        assert!(note.contains("1234567.891234567891") && note.contains("19 significant digits"), "{note}");
+        assert!(note.contains("1234567.891234567891") && note.contains("1234567.8912345679"), "{note}");
         // An integer past i64 beside a fraction stays text, as an
         // oversized integer column does.
         let g = guess_type(&["12345678901234567890123", "0.5"], "v", false);
@@ -2803,6 +2827,34 @@ mod tests {
         // Leading zeros and trailing fractional zeros do not count.
         let g = guess_type(&["0.10", "1.50000000000000000000", "0.00000000000000000012345"], "v", false);
         assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+    }
+
+    /// The test is a round trip, not a digit count: a literal is safe for
+    /// float64 only if the shortest rendering of its double is the same
+    /// decimal. 16 digits can fail it, and 17 can pass it.
+    #[test]
+    fn a_literal_is_float64_only_if_it_survives_the_round_trip() {
+        // 2^53 + 1: sixteen digits, served as 9007199254740992.0.
+        let g = guess_type(&["9007199254740993", "0.5"], "v", false);
+        assert_eq!(g.dtype, DType::Decimal { precision: 38, scale: 1 }, "{:?}", g.note);
+        assert!(g.note.as_deref().unwrap_or("").contains("9007199254740992"), "{:?}", g.note);
+        let g = guess_type(&["0.12345678901234567", "0.5"], "v", false);
+        assert_eq!(g.dtype, DType::Decimal { precision: 38, scale: 17 }, "{:?}", g.note);
+        // Exponent form a double cannot hold: DECIMAL cannot parse `e`.
+        let g = guess_type(&["1.2345678901234567891e5", "2.5"], "v", false);
+        assert_eq!(g.dtype, DType::Utf8, "{:?}", g.note);
+        assert!(g.note.as_deref().unwrap_or("").contains("1.2345678901234567891e5"), "{:?}", g.note);
+        // Machine-written shortest doubles (Python repr, JavaScript) stay.
+        let g = guess_type(&["0.15084917392450192", "53.58820043066892", "-35233.45", "1.7976931348623157e308"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        let g = guess_type(&["0.15084917392450192", "53.58820043066892", "-35233.45"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        let g = guess_type(&["1.5e-7", "2.5e10", "6.02214076e23"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        // Outside a double's range, in the cast's words.
+        let g = guess_type(&["1e-400", "2.5e3"], "v", false);
+        assert_eq!(g.dtype, DType::Utf8);
+        assert!(g.note.as_deref().unwrap_or("").contains("outside a double's range"), "{:?}", g.note);
     }
 
     #[test]
