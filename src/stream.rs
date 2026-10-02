@@ -950,14 +950,14 @@ pub struct Verification {
     /// `narrowed` so the caller can still say *why* the column was left as
     /// text instead of going silent.
     pub narrow_fractional: Vec<usize>,
-    /// Float64 columns holding a literal its double does not give back —
-    /// one a float64 column would read as a neighbouring number.
+    /// Float64 columns holding a literal no double is — more than 17
+    /// significant digits, or an integer past 2^53 no double equals.
     pub inexact_floats: Vec<InexactFloat>,
 }
 
-/// A float64 column the file proves is not one: its first literal whose
-/// double comes back as another decimal, and the exact home every value in
-/// the file has, if any.
+/// A float64 column the file proves is not one: its first literal no double
+/// is (more than 17 significant digits, or an integer past 2^53 that is not
+/// exactly a double), and the exact home every value in the file has, if any.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InexactFloat {
     pub column: usize,
@@ -973,7 +973,7 @@ pub struct InexactFloat {
 }
 
 /// One float64 column's literals, audited as they stream past: the first
-/// that a double does not give back, and whether a DECIMAL could hold them
+/// no double is, and whether a DECIMAL could hold them
 /// all. Bounded: a few counters, whatever the file's length.
 #[derive(Debug, Clone)]
 struct FloatAudit {
@@ -1000,16 +1000,35 @@ impl FloatAudit {
     /// `row` is 1-based. Anything that is not a numeric literal (a missing
     /// marker, a stray) is the parse's business, not this.
     fn observe(&mut self, v: &str, row: usize) {
-        let Some(l) = crate::numfmt::literal(v, self.decimal, self.thousands) else { return };
+        // The common case in one tight pass over the bytes: no exponent, at
+        // most 17 digits, and an integer only up to 15 (below 2^53) — a
+        // literal some double is, whatever its shape. Digits are counted
+        // with leading zeros, which can only overstate a DECIMAL's width.
+        let (mut int, mut frac, mut point, mut exp) = (0usize, 0usize, false, false);
+        let dec = self.decimal.unwrap_or('.');
+        for &c in v.as_bytes() {
+            match c {
+                b'0'..=b'9' if point => frac += 1,
+                b'0'..=b'9' => int += 1,
+                b'e' | b'E' => exp = true,
+                _ if char::from(c) == dec && self.thousands != Some(dec) => point = true,
+                _ => {}
+            }
+        }
+        if !exp && int + frac <= 17 && (point || int <= 15) {
+            self.max_int = self.max_int.max(int);
+            self.max_frac = self.max_frac.max(frac);
+            return;
+        }
+        let Some(l) = crate::numfmt::shape(v, self.decimal, self.thousands) else { return };
         self.max_int = self.max_int.max(l.int_digits);
         self.max_frac = self.max_frac.max(l.frac_digits);
         if l.exponent || l.past_i64 {
             self.decimal_home = false;
         }
-        if self.first.is_none() {
-            if let Some(reads) = l.float_reads_as() {
-                self.first = Some((row, v.trim().to_string(), reads));
-            }
+        if self.first.is_none() && l.float_unsafe() {
+            let reads = crate::numfmt::float_reads_as(v, self.decimal, self.thousands);
+            self.first = Some((row, v.trim().to_string(), reads));
         }
     }
 
@@ -1242,9 +1261,10 @@ pub fn verify(
     let mut trackers: HashMap<usize, NarrowTracker> =
         narrow_positions.iter().map(|&(_, orig)| (orig, NarrowTracker::new())).collect();
 
-    // A float64 column parses whether or not its double is the number the
+    // A float64 column parses whether or not a double can be the number the
     // file wrote, so the typed column cannot say; its raw literals can. Each
-    // is read a second time, as untouched text, beside the typed column.
+    // is read a second time, as untouched text, beside the typed column, and
+    // scanned (numfmt::shape: bytes, no float arithmetic).
     let mut float_positions: Vec<(usize, usize)> = Vec::new();
     let mut audits: HashMap<usize, FloatAudit> = HashMap::new();
     for (i, c) in spec.columns.iter().enumerate() {
