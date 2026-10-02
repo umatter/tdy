@@ -193,6 +193,19 @@ duckdb, polars — all transparent), `zcat`, zip member selection, tar extractio
 **Messy → clean:** the export arrives as `daten.csv.gz` or as one CSV inside a
 zip, and every tool in the pipeline has to be taught to unwrap it.
 
+**`partial`** since 2026-09-07 — a compressed file is read. `fileio::materialize`
+recognises gzip, zstd, bzip2 and xz by their magic bytes, never the extension (a
+`.csv` that is really gzip counts), and decompresses each into one copy per file
+per run in a process-lifetime cache that `fileio::clear_cache` removes at exit,
+bounded by `[limits].max_decompressed_bytes` *before* the copy exists. Every byte
+reader and the one workbook opener go through it, so sampling, both executors and
+drift see an ordinary file; the sidecar fingerprints the compressed bytes and
+records `compressed = "gzip"`. Still `partial`, for the other half of the
+entry's own example: **one CSV inside a zip** is not read. zip, like lz4, is
+refused by name (`fileio::refuse_if_compressed`), so a zip-of-CSVs still cannot
+be a dataset member, and there is no member selection inside an archive, nor tar.
+The verdict as first written, and the history between:
+
 **`gap`, and bigger than it looks** — tdy reads zip internals for xlsx/xlsb/ods
 (that is what `xlmoney` and `xlguard` do) but a `.csv.gz` is not readable, and a
 zip-of-CSVs cannot be a dataset member.
@@ -1018,6 +1031,18 @@ trailing `%`, a footnote `*`.
 **Messy → clean:** `(1,234.50)` means **−1234.50**; `1234.50-` means −1234.50;
 `1,234.50 CR` means −1234.50 in most ledgers and +1234.50 in some.
 
+**`spec`** since 0.2.1 — `parse.negative = "parentheses" | "trailing_minus"`
+(`NegativeStyle`) says what a sign marker means, a `strip` that would eat one
+fails at execution naming the row, and the sniffer notes the shape and never
+infers it; details below. The other spellings the entry names are declarable
+with what already exists, because `replace` (literal substrings) runs before the
+sign step: `replace = [{ from = " CR", to = "-" }, { from = " DR", to = "" }]`
+beside `negative = "trailing_minus"` reads `1,234.50 CR` as −1234.50 and
+`2,000.00 DR` as 2000.00 — or the other way round, for the ledgers that mean it
+the other way, which is why it is declared — and `{ from = "−", to = "-" }`
+folds a U+2212 minus (both probed). A leading `+` already parses. The verdict as
+first written:
+
 **`gap` — and the finding that touches the one rule.** Measured on this machine:
 
 ```
@@ -1067,8 +1092,9 @@ The same command that produced `+1234.50` above now produces:
 | C |  -300.00 |
 ```
 
-CR/DR suffixes remain undeclarable, and are the obvious third `NegativeStyle`
-if a file ever asks for one.
+CR/DR suffixes were recorded here as undeclarable; they are reachable through
+`replace` pairs and `trailing_minus`, as the verdict above says. A third
+`NegativeStyle` for them would only shorten the declaration.
 
 ### E6 · Percent handling
 **Also called:** `str.rstrip('%').astype(float)/100`, `Percentage` type (Power
@@ -2157,7 +2183,7 @@ rather than leaving implicit in the code.
 
 | Part | `spec` | `sql` | `partial` | `gap` | `out`/`rule` | entries |
 |---|---|---|---|---|---|---|
-| A · Physical decoding | 3 | – | 2 | 1 | 1 | 7 |
+| A · Physical decoding | 3 | – | 3 | – | 1 | 7 |
 | B · Dialect & framing | 8 | – | 2 | 1 | – | 11 |
 | C · Table framing | 9 | – | 2 | 1 | 3 | 16 |
 | D · Shape | 5 | 3 | – | 1 | – | 9 |
@@ -2169,14 +2195,15 @@ rather than leaving implicit in the code.
 | J · Combining | 1 | 1 | 1 | – | 2 | 5 |
 | K · Validation | 2 | – | 1 | – | 4 | 7 |
 | L · Process | 4 | – | – | 1 | – | 5 |
-| **Total** | **56** | **16** | **12** | **8** | **17** | **110** |
+| **Total** | **56** | **16** | **13** | **7** | **17** | **110** |
 
 Two `gap`s became `spec` on 2026-09-06 — **E5** signed-number conventions and
 **G2** fill-up — and this table counts the state after them. Recounted
 2026-10-02, after **C7** and **E6** (2026-10-01) and **C9** and **E14**
-(2026-10-02) moved from `partial` to `spec`; the `gap` total, printed as 7, was 8
-by its own rows. The twelve `partial`s: A4, A5, B10, B11, C6, C16, E13, E15,
-E20, G3, J4, K5.
+(2026-10-02) moved from `partial` to `spec`, and **A6** from `gap` to `partial`
+(compressed files are read; a CSV inside a zip is not). E5's verdict line now
+says `spec` too, as this table already counted it. The thirteen `partial`s: A4,
+A5, A6, B10, B11, C6, C16, E13, E15, E20, G3, J4, K5.
 
 (Counted from the verdict line of each numbered entry; C15's split verdict is
 counted in the entry total but in neither column.)
@@ -2218,6 +2245,8 @@ would mean producing a value the file does not contain.
    DataFusion lacks `PIVOT`.
 7. **A6 · Compressed inputs.** `.csv.gz` and zipped monthly exports are the
    ordinary shipping format for the pile `dataset()` is designed to read.
+   *Compressed files done, 2026-09-07* (gzip, zstd, bzip2, xz); a CSV inside a
+   zip is still refused.
 
 8. **B10 · Multiple tables in one file.** *Moved up from tier 3 by the
    literature pass:* 5.1% of real-world CSVs, more in spreadsheets, and a solved
