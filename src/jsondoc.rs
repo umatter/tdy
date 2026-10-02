@@ -18,7 +18,7 @@
 //! and the same "is this the end of the input" classification
 //! ([`ParseError::is_eof`]) the NDJSON truncated-last-line diagnosis rests on.
 //!
-//! **A number cell keeps its digits.** [`render_number`] is the whole rule: a
+//! **A number cell keeps its digits.** [`render`] is the whole rule: a
 //! number that serde_json held exactly renders exactly as serde_json renders
 //! it (`1.0`, `1e3` → `1000.0`, `-0` → `-0.0`), so ordinary data reads byte
 //! for byte as it always did; a number it did not hold exactly renders as the
@@ -31,7 +31,7 @@ use std::fmt;
 pub(crate) enum Node {
     Null,
     Bool(bool),
-    /// A number, as its cell renders it ([`render_number`]).
+    /// A number, as its cell renders it ([`render`]).
     Number(Num),
     String(String),
     Array(Vec<Node>),
@@ -40,14 +40,28 @@ pub(crate) enum Node {
     Object(Vec<(String, Node)>),
 }
 
-/// A JSON number: the text its cell holds, and whether that is the source's
-/// own text because the double serde_json would have produced does not
-/// denote the number the file wrote.
+/// A JSON number as the file wrote it. Its cell text is [`render`]'s,
+/// worked out only when a cell is asked for: a pass that only wants the keys
+/// (NDJSON's header discovery, the sniffer's walks) never renders one.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Num {
-    text: String,
-    #[cfg_attr(not(test), allow(dead_code))]
-    verbatim: bool,
+    src: String,
+}
+
+impl Num {
+    fn cell(&self) -> String {
+        match render(&self.src) {
+            Rendered::Same | Rendered::Verbatim => self.src.clone(),
+            Rendered::Text(t) => t,
+        }
+    }
+
+    fn into_cell(self) -> String {
+        match render(&self.src) {
+            Rendered::Same | Rendered::Verbatim => self.src,
+            Rendered::Text(t) => t,
+        }
+    }
 }
 
 /// How deep arrays and objects may nest: serde_json's own limit, so a
@@ -177,13 +191,13 @@ impl Node {
     }
 
     /// The value as a cell holds it: null is empty, a string is itself, a
-    /// number is [`render_number`]'s text, and an array or object is compact
+    /// number is [`render`]'s text, and an array or object is compact
     /// JSON text ([`Node::to_json`]).
     pub(crate) fn cell(&self) -> String {
         match self {
             Node::Null => String::new(),
             Node::Bool(b) => b.to_string(),
-            Node::Number(n) => n.text.clone(),
+            Node::Number(n) => n.cell(),
             Node::String(s) => s.clone(),
             nested => nested.to_json(),
         }
@@ -192,7 +206,7 @@ impl Node {
     /// [`Node::cell`], moving a string or number's text rather than copying it.
     pub(crate) fn into_cell(self) -> String {
         match self {
-            Node::Number(n) => n.text,
+            Node::Number(n) => n.into_cell(),
             Node::String(s) => s,
             other => other.cell(),
         }
@@ -212,7 +226,7 @@ impl Node {
             Node::Null => out.push_str("null"),
             Node::Bool(true) => out.push_str("true"),
             Node::Bool(false) => out.push_str("false"),
-            Node::Number(n) => out.push_str(&n.text),
+            Node::Number(n) => out.push_str(&n.cell()),
             Node::String(s) => write_json_string(s, out),
             Node::Array(items) => {
                 out.push('[');
@@ -274,9 +288,28 @@ fn write_json_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// The cell text of a number whose source text is `src` (already checked
-/// against the RFC 8259 grammar), and whether it is that source text
-/// verbatim.
+/// [`render`] as (cell text, verbatim?), for the tests that pin the rule.
+#[cfg(test)]
+fn render_number(src: &str) -> (String, bool) {
+    match render(src) {
+        Rendered::Same => (src.to_string(), false),
+        Rendered::Verbatim => (src.to_string(), true),
+        Rendered::Text(t) => (t, false),
+    }
+}
+
+/// A number's cell.
+enum Rendered {
+    /// serde_json's rendering, which is the source text itself.
+    Same,
+    /// The source text, because serde_json's value was not the number.
+    Verbatim,
+    /// serde_json's rendering, which differs from the source (`1e3`).
+    Text(String),
+}
+
+/// The cell of a number whose source text is `src` (already checked against
+/// the RFC 8259 grammar).
 ///
 /// serde_json holds an integer that fits `u64`/`i64` as one, and anything
 /// else as the nearest `f64`. When that value is the number the file wrote,
@@ -295,30 +328,139 @@ fn write_json_string(s: &str, out: &mut String) {
 /// the double happens to equal it: `100000000000000000000` is an identifier
 /// as often as a quantity, and `1e20` is not what the file said. The one
 /// exception is `-0`, which serde_json holds as `-0.0`, a zero either way.
-pub(crate) fn render_number(src: &str) -> (String, bool) {
+fn render(src: &str) -> Rendered {
     let digits = src.strip_prefix('-').unwrap_or(src);
     let integer_syntax = digits.bytes().all(|b| b.is_ascii_digit());
     // At most 18 digits always fits i64/u64, and serde_json prints such an
     // integer as the digits the grammar already made canonical — except -0.
     if integer_syntax && digits.len() <= 18 && src != "-0" {
-        return (src.to_string(), false);
+        return Rendered::Same;
+    }
+    let exact = |t: String| if t == src { Rendered::Same } else { Rendered::Text(t) };
+    if !integer_syntax {
+        if let Some(cell) = shortest_of_short_decimal(src) {
+            return exact(cell);
+        }
     }
     let Ok(n) = serde_json::from_str::<serde_json::Number>(src) else {
         // Out of a double's range: serde_json refused the whole document.
-        return (src.to_string(), true);
+        return Rendered::Verbatim;
     };
     if n.is_u64() || n.is_i64() {
-        return (n.to_string(), false);
+        return exact(n.to_string());
     }
     if integer_syntax && digits.bytes().any(|b| b != b'0') {
-        return (src.to_string(), true);
+        return Rendered::Verbatim;
     }
     let rendered = n.to_string();
-    if same_decimal(src, &rendered) {
-        (rendered, false)
+    // The common case — a double's own shortest digits, as a double prints
+    // them — needs no decimal arithmetic to know it is exact.
+    if rendered == src || same_decimal(src, &rendered) {
+        exact(rendered)
     } else {
-        (src.to_string(), true)
+        Rendered::Verbatim
     }
+}
+
+/// [`render`]'s fast path, for the decimals ordinary data is made of:
+/// at most 15 significant digits written (trailing zeros included), and a
+/// power of ten serde_json applies within ±22. There serde_json's parse is
+/// one correctly rounded IEEE operation on exact operands (the digits fit
+/// 2^53, the power of ten is exact), and a double holds every decimal of 15
+/// digits distinctly, so the shortest rendering of that double is these
+/// same digits — exact by construction. What remains is laying them out as
+/// serde_json's formatter (zmij) does: fixed notation for a first-digit
+/// exponent in -5..=15 (`1000.0`, `12.34`, `0.0025`), `d.ddde±x` otherwise.
+/// `None` sends the number down the slow path (zero, too many digits, too
+/// large a power). Pinned against the slow path over random decimals.
+fn shortest_of_short_decimal(src: &str) -> Option<String> {
+    let b = src.as_bytes();
+    if !b.iter().any(|&c| matches!(c, b'.' | b'e' | b'E')) {
+        return None;
+    }
+    let negative = b.first() == Some(&b'-');
+    let mut i = usize::from(negative);
+    let int_start = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    let int = &b[int_start..i];
+    let mut frac: &[u8] = &[];
+    if i < b.len() && b[i] == b'.' {
+        let start = i + 1;
+        i = start;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        frac = &b[start..i];
+    }
+    let mut exp: i32 = 0;
+    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
+        i += 1;
+        let neg_exp = b.get(i) == Some(&b'-');
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let digits = &b[i..];
+        if digits.is_empty() || digits.len() > 4 {
+            return None;
+        }
+        for &d in digits {
+            exp = exp * 10 + i32::from(d - b'0');
+        }
+        if neg_exp {
+            exp = -exp;
+        }
+    }
+    let all = || int.iter().chain(frac.iter()).copied();
+    let lead = all().take_while(|&d| d == b'0').count();
+    let written = int.len() + frac.len() - lead;
+    if written == 0 || written > 15 || (exp - frac.len() as i32).abs() > 22 {
+        return None;
+    }
+    let mut digits = [0u8; 15];
+    let mut k = 0;
+    for d in all().skip(lead) {
+        digits[k] = d;
+        k += 1;
+    }
+    while digits[k - 1] == b'0' {
+        k -= 1;
+    }
+    let digits = &digits[..k];
+    let text = |d: &[u8]| std::str::from_utf8(d).expect("ASCII digits").to_string();
+    // The exponent of the first significant digit, as in 1.234e{de}.
+    let de = int.len() as i32 - lead as i32 + exp - 1;
+    let mut out = String::with_capacity(k + 8);
+    if negative {
+        out.push('-');
+    }
+    if (-5..=15).contains(&de) {
+        if k as i32 - 1 <= de {
+            out.push_str(&text(digits));
+            out.extend(std::iter::repeat_n('0', (de - (k as i32 - 1)) as usize));
+            out.push_str(".0");
+        } else if de >= 0 {
+            let point = de as usize + 1;
+            out.push_str(&text(&digits[..point]));
+            out.push('.');
+            out.push_str(&text(&digits[point..]));
+        } else {
+            out.push_str("0.");
+            out.extend(std::iter::repeat_n('0', (-de - 1) as usize));
+            out.push_str(&text(digits));
+        }
+    } else {
+        out.push(digits[0] as char);
+        if k > 1 {
+            out.push('.');
+            out.push_str(&text(&digits[1..]));
+        }
+        out.push('e');
+        out.push(if de >= 0 { '+' } else { '-' });
+        out.push_str(&de.unsigned_abs().to_string());
+    }
+    Some(out)
 }
 
 /// A decimal number reduced to what it denotes: sign, significant digits
@@ -504,8 +646,7 @@ impl<'a> Parser<'a> {
             self.need_digit()?;
             self.digits();
         }
-        let (text, verbatim) = render_number(&self.text[start..self.pos]);
-        Ok(Node::Number(Num { text, verbatim }))
+        Ok(Node::Number(Num { src: self.text[start..self.pos].to_string() }))
     }
 
     /// A string's contents; the opening quote is already consumed.
@@ -735,7 +876,7 @@ mod tests {
     use super::*;
 
     fn num(text: &str) -> Node {
-        Node::Number(Num { text: text.into(), verbatim: false })
+        Node::Number(Num { src: text.into() })
     }
 
     #[test]
@@ -821,6 +962,51 @@ mod tests {
         }
     }
 
+    /// The fast path is the slow path, faster: over random decimals of every
+    /// shape the fast path accepts, its cell is serde_json's rendering.
+    #[test]
+    fn the_fast_path_renders_as_serde_json_does() {
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let mut taken = 0;
+        for _ in 0..300_000 {
+            let digits: String = (0..1 + next(17)).map(|_| char::from(b'0' + next(10) as u8)).collect();
+            let digits = digits.trim_start_matches('0');
+            let digits = if digits.is_empty() { "0" } else { digits };
+            let mut src = String::new();
+            if next(2) == 0 {
+                src.push('-');
+            }
+            let point = next(digits.len() as u64 + 1) as usize;
+            if point == 0 {
+                src.push('0');
+            } else {
+                src.push_str(&digits[..point]);
+            }
+            if point < digits.len() {
+                src.push('.');
+                src.push_str(&digits[point..]);
+            }
+            match next(4) {
+                0 => src.push_str(&format!("e{}", next(40) as i64 - 20)),
+                1 => src.push_str(&format!("E+{}", next(30))),
+                _ => {}
+            }
+            if let Some(fast) = shortest_of_short_decimal(&src) {
+                taken += 1;
+                let n: serde_json::Number = serde_json::from_str(&src).unwrap();
+                assert_eq!(fast, n.to_string(), "{src}");
+                assert!(same_decimal(&src, &fast), "{src}");
+            }
+        }
+        assert!(taken > 100_000, "{taken}");
+    }
+
     /// Exactness is decided on decimal digits, never on floats.
     #[test]
     fn same_decimal_compares_what_the_texts_denote() {
@@ -893,11 +1079,12 @@ mod tests {
                 (Node::Bool(a), V::Bool(b)) => a == b,
                 (Node::String(a), V::String(b)) => a == b,
                 (Node::Number(a), V::Number(b)) => {
-                    if a.verbatim {
+                    let (cell, verbatim) = render_number(&a.src);
+                    if verbatim {
                         *inexact += 1;
-                        true
+                        cell == a.src
                     } else {
-                        a.text == b.to_string()
+                        cell == b.to_string()
                     }
                 }
                 (Node::Array(a), V::Array(b)) => {
