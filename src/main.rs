@@ -191,6 +191,11 @@ enum Command {
         /// type-compatible column is not necessarily the right one.
         #[arg(long)]
         propose: bool,
+        /// On a `plans = 'lock'` target: move each tool-written sidecar whose
+        /// plan this fit proves identically into the lock, and delete it. A
+        /// hand-written (`manual`) sidecar, or one that differs, is kept.
+        #[arg(long)]
+        prune_sidecars: bool,
     },
     /// Check sidecars against a declared target schema.
     ///
@@ -308,14 +313,21 @@ fn check_json(
 /// The orchestration lives in `report::fit_pile`; this renders its report as
 /// text (or JSON with `--json`) and turns "any member failed" into a nonzero
 /// exit, because a gate that exits zero when it found a problem is not a gate.
+/// `tdy fit`'s switches for a whole pile.
+struct FitFlags {
+    dry_run: bool,
+    propose: bool,
+    prune_sidecars: bool,
+    json: bool,
+}
+
 async fn fit_dataset(
     target_path: &std::path::Path,
     cfg: &tdy::config::Config,
-    dry_run: bool,
     accept: &[PathBuf],
-    propose: bool,
-    json: bool,
+    flags: FitFlags,
 ) -> Result<()> {
+    let FitFlags { dry_run, propose, prune_sidecars, json } = flags;
     let r = tdy::report::fit_pile(
         target_path,
         cfg,
@@ -327,7 +339,7 @@ async fn fit_dataset(
             // is that a file is being sent to a model.
             progress: Some(tdy::progress::stderr_sink()),
             root: None,
-            prune_sidecars: false,
+            prune_sidecars,
         },
     )
     .await;
@@ -640,12 +652,16 @@ async fn run() -> Result<()> {
             let opts = tdy::draft::DraftOpts { records };
             print!("{}", tdy::draft::draft_target_with(&files, cfg.limits, opts)?);
         }
-        Command::Fit { target, file, accept, dry_run, propose } => {
+        Command::Fit { target, file, accept, dry_run, propose, prune_sidecars } => {
             let cfg = config::load(&overrides)?;
             match file {
+                Some(_) if prune_sidecars => anyhow::bail!(
+                    "--prune-sidecars applies to a whole pile; drop the FILE to fit every member"
+                ),
                 Some(f) => fit_command(&target, &f, &cfg, dry_run, propose, cli.json).await?,
                 None => {
-                    fit_dataset(&target, &cfg, dry_run, &accept, propose, cli.json).await?
+                    let flags = FitFlags { dry_run, propose, prune_sidecars, json: cli.json };
+                    fit_dataset(&target, &cfg, &accept, flags).await?
                 }
             }
         }

@@ -728,7 +728,10 @@ impl Session {
                 };
                 Outcome { echo, text, payload: Payload::Drafted { ddl, wrote }, ok: true }
             }
-            Command::Fit { target, file: Some(file), dry_run, propose } => {
+            Command::Fit { file: Some(_), prune_sidecars: true, .. } => {
+                bail!("--prune-sidecars applies to a whole pile; drop the FILE to fit every member")
+            }
+            Command::Fit { target, file: Some(file), dry_run, propose, .. } => {
                 let (t, f) = (self.resolve(&target)?, self.resolve(&file)?);
                 let out =
                     crate::commands::fit_one_text(&t, &f, &self.cfg, dry_run, propose, progress).await?;
@@ -743,9 +746,10 @@ impl Session {
                 }
                 Outcome { echo: String::new(), text, payload: Payload::Nothing, ok: out.ok }
             }
-            Command::Fit { target, file: None, dry_run, propose } => {
+            Command::Fit { target, file: None, dry_run, propose, prune_sidecars } => {
                 let t = self.resolve(&target)?;
-                self.fit_pile(&t, &[], dry_run, propose, progress).await?
+                let opts = PileFit { dry_run, propose, prune_sidecars };
+                self.fit_pile(&t, &[], opts, progress).await?
             }
             Command::Check { target, against } => {
                 let t = self.resolve(&target)?;
@@ -816,7 +820,7 @@ impl Session {
                     // members it has just expanded — so nothing here needs
                     // the lock, which step one already proved it can do
                     // without.
-                    let mut o = self.fit_pile(&t, &[PathBuf::from(&member)], false, false, progress).await?;
+                    let mut o = self.fit_pile(&t, &[PathBuf::from(&member)], PileFit::default(), progress).await?;
                     o.text = format!("accepted {member}\n\n{}", o.text);
                     return Ok(o);
                 }
@@ -914,10 +918,10 @@ impl Session {
         &mut self,
         target: &Path,
         accept: &[PathBuf],
-        dry_run: bool,
-        propose: bool,
+        opts: PileFit,
         progress: Option<&progress::Sink>,
     ) -> Result<Outcome> {
+        let PileFit { dry_run, propose, prune_sidecars } = opts;
         let r = crate::report::fit_pile(
             target,
             &self.cfg,
@@ -927,7 +931,7 @@ impl Session {
                 propose,
                 progress: progress.cloned(),
                 root: Some(&self.root),
-                prune_sidecars: false,
+                prune_sidecars,
             },
         )
         .await?;
@@ -1016,6 +1020,14 @@ impl Outcome {
             ok: false,
         }
     }
+}
+
+/// `.fit`'s switches for a whole pile; `Default` is a plain fit.
+#[derive(Default, Clone, Copy)]
+struct PileFit {
+    dry_run: bool,
+    propose: bool,
+    prune_sidecars: bool,
 }
 
 fn describe_command(c: &Command) -> String {
@@ -1431,7 +1443,7 @@ overwrite an existing one). Everything else is a dot-command:
   .sniff FILE [--quick] [--force] [--no-llm] [--hint \"…\"]   infer the sidecar for one file
   .validate FILE [--stamp]                                  check a sidecar against its file
   .draft FILES… [--to NAME.tdy.sql] [--records]             draft a target from a pile
-  .fit TARGET [FILE] [--dry-run] [--propose]                plan every member onto a target
+  .fit TARGET [FILE] [--dry-run] [--propose] [--prune-sidecars]   plan every member onto a target
   .check TARGET [--against FILE…]                           the CI gate
   .accept TARGET MEMBER                                     show the evidence; again to accept
   .output [FILE] [--format parquet|csv] [--force]           route the next result to a file

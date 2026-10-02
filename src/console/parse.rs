@@ -14,7 +14,7 @@ pub enum Command {
     Sniff { file: String, quick: bool, force: bool, no_llm: bool, hint: Option<String> },
     Validate { file: String, stamp: bool },
     Draft { files: Vec<String>, to: Option<String>, records: bool },
-    Fit { target: String, file: Option<String>, dry_run: bool, propose: bool },
+    Fit { target: String, file: Option<String>, dry_run: bool, propose: bool, prune_sidecars: bool },
     Check { target: String, against: Vec<String> },
     Accept { target: String, member: String },
     /// `.output` alone routes back to the screen (file = None).
@@ -220,7 +220,7 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
             Command::Draft { files: a.positional.clone(), to: a.value("--to"), records: a.on("--records") }
         }
         "fit" => {
-            let a = Args::collect("fit", args, &["--dry-run", "--propose"], &[])?;
+            let a = Args::collect("fit", args, &["--dry-run", "--propose", "--prune-sidecars"], &[])?;
             a.at_least(&["TARGET"])?;
             a.at_most(2)?;
             Command::Fit {
@@ -228,6 +228,7 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
                 file: a.positional.get(1).cloned(),
                 dry_run: a.on("--dry-run"),
                 propose: a.on("--propose"),
+                prune_sidecars: a.on("--prune-sidecars"),
             }
         }
         "check" => {
@@ -392,9 +393,9 @@ mod tests {
         assert_eq!(parse(".draft"), Err(ParseError::Missing { command: "draft", what: "FILES" }));
         assert_eq!(
             p(".fit sales.tdy.sql 2025-07.csv --dry-run --propose"),
-            Command::Fit { target: "sales.tdy.sql".into(), file: Some("2025-07.csv".into()), dry_run: true, propose: true }
+            Command::Fit { target: "sales.tdy.sql".into(), file: Some("2025-07.csv".into()), dry_run: true, propose: true, prune_sidecars: false }
         );
-        assert_eq!(p(".fit t.tdy.sql"), Command::Fit { target: "t.tdy.sql".into(), file: None, dry_run: false, propose: false });
+        assert_eq!(p(".fit t.tdy.sql"), Command::Fit { target: "t.tdy.sql".into(), file: None, dry_run: false, propose: false, prune_sidecars: false });
         assert_eq!(
             p(".check t.tdy.sql --against a.csv --against b.csv"),
             Command::Check { target: "t.tdy.sql".into(), against: vec!["a.csv".into(), "b.csv".into()] }

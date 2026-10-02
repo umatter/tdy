@@ -287,3 +287,95 @@ fn a_version_1_lock_still_reads() {
     let q = ok(&query(&t, "SELECT sum(amount) AS total FROM dataset('@')"));
     assert!(q.contains("57340.00"), "{q}");
 }
+
+fn switch_to_lock(t: &Path) {
+    let sql = std::fs::read_to_string(t).unwrap();
+    let with = sql.replace("date_order = 'dmy'\n);", "date_order = 'dmy',\n  plans      = 'lock'\n);");
+    assert_ne!(with, sql);
+    std::fs::write(t, with).unwrap();
+}
+
+/// Switching an existing pile to `plans = 'lock'` deletes nothing: a
+/// tool-written sidecar left from before is reused as it always was.
+/// `--prune-sidecars` is the one way a sidecar leaves — only when the plan
+/// this fit proves is identical, and never a person's.
+#[test]
+fn prune_moves_identical_sidecars_and_keeps_a_hand_written_or_edited_one() {
+    let (dir, t) = staged(false);
+    fit(&t);
+    assert_eq!(sidecars(dir.path()).len(), 9);
+    switch_to_lock(&t);
+
+    let text = fit(&t);
+    assert_eq!(sidecars(dir.path()).len(), 9, "nothing is deleted without the flag");
+    assert!(text.contains("plans: 0 member(s) share 0 plan(s), held in the lock"), "{text}");
+
+    // A person's sidecar, and a tool-written one edited by hand.
+    let feb = tdy::sidecar::sidecar_path(&dir.path().join("2025-02.csv"));
+    let s = std::fs::read_to_string(&feb).unwrap();
+    std::fs::write(&feb, s.replace("method = \"heuristic\"", "method = \"manual\"")).unwrap();
+    let jan = tdy::sidecar::sidecar_path(&dir.path().join("2025-01.csv"));
+    let s = std::fs::read_to_string(&jan).unwrap();
+    let edited = s.replacen("    \"keine\",\n", "", 1);
+    assert_ne!(edited, s);
+    std::fs::write(&jan, &edited).unwrap();
+
+    let out = tdy(&["fit", t.to_str().unwrap(), "--prune-sidecars"]);
+    let text = ok(&out);
+    assert!(
+        text.contains(
+            "--prune-sidecars: 7 moved into the lock and removed, 1 kept (hand-written), 1 kept \
+             (differs from the plan this fit proved)"
+        ),
+        "{text}"
+    );
+    assert_eq!(sidecars(dir.path()), vec!["2025-01.csv.tdy.toml", "2025-02.csv.tdy.toml"]);
+    assert_eq!(std::fs::read_to_string(&jan).unwrap(), edited, "the edited one is untouched");
+    let lock = lock_text(&t);
+    assert_eq!(lock.matches("\nspec = \"b3:").count(), 7, "{lock}");
+    let q = ok(&query(&t, "SELECT sum(amount) AS total FROM dataset('@')"));
+    assert!(q.contains("57340.00"), "{q}");
+
+    // Pruning again finds nothing more to move.
+    let text = ok(&tdy(&["fit", t.to_str().unwrap(), "--prune-sidecars"]));
+    assert!(text.contains("--prune-sidecars: 0 moved"), "{text}");
+}
+
+/// A dry run says what pruning would do and removes nothing.
+#[test]
+fn a_dry_run_prune_removes_nothing() {
+    let (dir, t) = staged(false);
+    fit(&t);
+    switch_to_lock(&t);
+    let text = ok(&tdy(&["fit", t.to_str().unwrap(), "--prune-sidecars", "--dry-run"]));
+    assert!(text.contains("--prune-sidecars: 9 moved into the lock, none removed"), "{text}");
+    assert_eq!(sidecars(dir.path()).len(), 9);
+}
+
+/// On a target that keeps its plans in sidecars there is nowhere to move
+/// them: refused, saying why.
+#[test]
+fn prune_is_refused_on_a_sidecars_target() {
+    let (dir, t) = staged(false);
+    fit(&t);
+    let out = tdy(&["fit", t.to_str().unwrap(), "--prune-sidecars"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(err.contains("keeps its plans in sidecars") && err.contains("plans = 'lock'"), "{err}");
+    assert_eq!(sidecars(dir.path()).len(), 9);
+}
+
+/// The console's `.fit … --prune-sidecars` is the same function.
+#[tokio::test]
+async fn the_console_prunes_through_the_same_function() {
+    let (dir, t) = staged(false);
+    fit(&t);
+    switch_to_lock(&t);
+    let cfg = tdy::config::load(&tdy::config::Overrides { backend: Some("none".into()), model: None, base_url: None })
+        .unwrap();
+    let mut s = tdy::console::Session::new(dir.path(), cfg).unwrap();
+    let o = s.run(".fit sales_ok.tdy.sql --prune-sidecars", None).await;
+    assert!(o.ok, "{}", o.text);
+    assert!(o.text.contains("--prune-sidecars: 9 moved into the lock and removed"), "{}", o.text);
+    assert_eq!(sidecars(dir.path()), Vec::<String>::new());
+}
