@@ -1545,6 +1545,10 @@ fn fit_by_elimination(
     }
 }
 
+/// A position of the file, opened at a pointer (or whole), as one declared
+/// column claims it.
+type Claim<'a> = (usize, Option<&'a str>);
+
 /// Plan a spec onto `target` given the frame to read the file with.
 fn fit_framed(
     path: &Path,
@@ -1564,7 +1568,7 @@ fn fit_framed(
     // claim on the same position is caught rather than duplicated. A
     // position opened at two different `pointer`s is two values, not one
     // claimed twice: `games` holds the sell price and the buy price.
-    let mut claimed: std::collections::HashMap<(usize, Option<&str>), String> = std::collections::HashMap::new();
+    let mut claimed: std::collections::HashMap<Claim<'_>, String> = std::collections::HashMap::new();
     // Declared-absent columns to fill with nulls, as `constant` transforms.
     let mut null_fills: Vec<String> = Vec::new();
     // The framing's own notes travel with the plan. The sniffer's auto-drop of

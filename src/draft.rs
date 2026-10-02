@@ -377,7 +377,7 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
         }
         let mut leaves = JsonLeaves::default();
         for d in &json_docs {
-            match leaves.add(&d.path, &d.label, limits) {
+            match leaves.read_document(&d.path, &d.label, limits) {
                 Ok(()) => {
                     sniffed += 1;
                     files_ok.insert(d.label.clone());
@@ -385,7 +385,7 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
                 Err(e) => failures.push((d.label.clone(), format!("{e:#}"))),
             }
         }
-        file_sets.extend(leaves.file_sets.drain(..));
+        file_sets.append(&mut leaves.file_sets);
         json_notes.extend(leaves.notes());
         leaves.into_columns(&mut columns, &mut day_first, &mut month_first);
     }
@@ -654,14 +654,14 @@ struct JsonLeaf {
 
 impl JsonLeaves {
     /// Read one document as one record and collect its leaves.
-    fn add(&mut self, path: &Path, label: &str, limits: Limits) -> Result<()> {
+    fn read_document(&mut self, path: &Path, label: &str, limits: Limits) -> Result<()> {
         let bytes = crate::fileio::read_all(path, limits.max_file_bytes)?;
         let (text, _) = crate::sample::decode_text(&bytes, None);
         let doc = crate::jsondoc::Node::parse(&text)?;
         let crate::jsondoc::Node::Object(entries) = &doc else {
             anyhow::bail!("expected one JSON object, found {}", doc.kind());
         };
-        let mut found: Vec<(Vec<String>, String, bool)> = Vec::new();
+        let mut found: Found = Vec::new();
         let mut seen_arrays = BTreeSet::new();
         let mut seen_deep = BTreeSet::new();
         for (k, v) in entries {
@@ -679,14 +679,11 @@ impl JsonLeaves {
         // leaves split villagerdb's 483 villagers into five "datasets".
         let names: BTreeSet<String> = entries.iter().map(|(k, _)| crate::sniff::sanitize(k)).collect();
         for (p, value, array) in found {
-            let i = match self.at.get(&p) {
-                Some(i) => *i,
-                None => {
-                    self.leaves.push(JsonLeaf { path: p.clone(), values: Vec::new(), files: Vec::new(), array: false });
-                    self.at.insert(p, self.leaves.len() - 1);
-                    self.leaves.len() - 1
-                }
-            };
+            let leaves = &mut self.leaves;
+            let i = *self.at.entry(p).or_insert_with_key(|p| {
+                leaves.push(JsonLeaf { path: p.clone(), values: Vec::new(), files: Vec::new(), array: false });
+                leaves.len() - 1
+            });
             let leaf = &mut self.leaves[i];
             leaf.values.push(value);
             leaf.array |= array;
@@ -766,7 +763,8 @@ impl JsonLeaves {
                 *month_first |= format.starts_with("%m");
             }
             let pointer = (leaf.path.len() > 1).then(|| {
-                leaf.path[1..].iter().map(|t| format!("/{}", crate::sniff::escape_pointer_token(t))).collect::<String>()
+                let tokens: Vec<String> = leaf.path[1..].iter().map(|t| crate::sniff::escape_pointer_token(t.as_str())).collect();
+                format!("/{}", tokens.join("/"))
             });
             columns.push(DraftColumn {
                 name,
@@ -782,13 +780,17 @@ impl JsonLeaves {
     }
 }
 
+/// The leaves one document holds: (path from the top-level key, the value as
+/// a cell renders it, whether it is a top-level array).
+type Found = Vec<(Vec<String>, String, bool)>;
+
 /// Collect the scalar leaves under one value of a record. `path` starts at
 /// the top-level key. A top-level array is one leaf of JSON text; an array
 /// deeper down, or an object past [`LEAF_DEPTH`], is recorded and skipped.
 fn walk(
     v: &crate::jsondoc::Node,
     path: &mut Vec<String>,
-    found: &mut Vec<(Vec<String>, String, bool)>,
+    found: &mut Found,
     arrays: &mut BTreeSet<String>,
     deep: &mut BTreeSet<String>,
 ) {
