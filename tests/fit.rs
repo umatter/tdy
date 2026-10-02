@@ -1497,3 +1497,52 @@ fn a_hand_written_epoch_under_no_declaration_waits_for_accept() {
     let (ok, text) = tdy_cli(&["query", &sql]);
     assert!(ok && text.contains("2023-03-15"), "{text}");
 }
+
+/// `format = "%s"` with no `epoch` is epoch seconds — chrono's own specifier —
+/// so it is the same judgement as `epoch = "seconds"`: reviewed unless the
+/// target declares `epoch = 'seconds'`, and conforming when it does. It used to
+/// slip past the review (served 2023-11-14T22:13:20 unasked) and to contradict
+/// a declaration it reads identically to.
+#[test]
+fn a_bare_percent_s_is_epoch_seconds_for_review_and_conformance() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let f = dir.path().join("a.csv");
+    std::fs::write(&f, "ts\n1700000000\n1700000060\n").unwrap();
+    let t = dir.path().join("t.tdy.sql");
+    let declared = "CREATE TABLE s (ts TIMESTAMP NOT NULL OPTIONS(epoch = 'seconds')) WITH (files = '*.csv')";
+    std::fs::write(&t, declared).unwrap();
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let sc = tdy::sidecar::sidecar_path(&f);
+    let planned = std::fs::read_to_string(&sc).unwrap();
+    assert!(planned.contains("format = \"%s\"") && planned.contains("epoch = \"seconds\""), "{planned}");
+    let bare: String = planned
+        .lines()
+        .filter(|l| l.trim() != "epoch = \"seconds\"")
+        .map(|l| format!("{l}\n"))
+        .collect::<String>()
+        .replace("method = \"heuristic\"", "method = \"manual\"");
+    std::fs::write(&sc, bare).unwrap();
+    let sql = format!("SELECT min(ts) AS lo FROM dataset('{}')", t.display());
+
+    // The mirror: declared seconds, `%s` alone — conforms, no review, served.
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok && !text.contains("REVIEW") && !text.contains("CONTRADICTS"), "{text}");
+    let (ok, text) = tdy_cli(&["query", &sql]);
+    assert!(ok && text.contains("2023-11-14T22:13:20"), "{text}");
+
+    // Undeclared: the same sidecar waits on a person.
+    std::fs::write(&t, "CREATE TABLE s (ts TIMESTAMP NOT NULL) WITH (files = '*.csv')").unwrap();
+    let (ok, text) = tdy_cli(&["fit", t.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(text.contains("REVIEW: `ts` reads integers as time (epoch = seconds)"), "{text}");
+    assert!(!tdy_cli(&["query", &sql]).0, "served before acceptance");
+
+    // messy() is no pile: unaffected.
+    let (ok, text) = tdy_cli(&["query", &format!("SELECT min(ts) AS lo FROM messy('{}')", f.display())]);
+    assert!(ok && text.contains("2023-11-14T22:13:20"), "{text}");
+
+    assert!(tdy_cli(&["fit", t.to_str().unwrap(), "--accept", "a.csv"]).0);
+    let (ok, text) = tdy_cli(&["query", &sql]);
+    assert!(ok && text.contains("2023-11-14T22:13:20"), "{text}");
+}

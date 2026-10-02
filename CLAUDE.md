@@ -182,7 +182,8 @@ exemption is `fit::review_reasons_for(spec, target)`, used wherever a target is 
 (`fit`, `fit_pile`'s sidecar reuse, the console's `.accept`): it drops a `%y` reason only when
 the target column declares exactly the pivot the spec reads, so a hand-written `%y` under no
 or another declared window still waits on a person. Likewise **any `epoch` in a spec is a
-review reason** ("`datum` reads integers as time (epoch = excel_days), which no value in the
+review reason** — `format = "%s"` alone included, which is epoch seconds
+(`spec::effective_epoch`, the one answer review and conformance both use) ("`datum` reads integers as time (epoch = excel_days), which no value in the
 file states"), dropped only when the target column declares that very unit — so a
 hand-written epoch sidecar that joined a pile silently before 2026-10-02 now waits for one
 `--accept` (or the declaration); a `messy()` query is unaffected, review being a pile

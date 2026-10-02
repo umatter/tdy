@@ -817,6 +817,19 @@ pub fn two_digit_year_note(c: &ColumnSpec) -> Option<String> {
     ))
 }
 
+/// The count unit a column is read in, however the spec says it:
+/// `epoch = "…"`, or `format = "%s"` alone, which is chrono's own specifier
+/// for epoch seconds. One answer for review and conformance alike, so `%s`
+/// with no `epoch` is not a way around either.
+pub fn effective_epoch(c: &ColumnSpec) -> Option<EpochUnit> {
+    match &c.dtype {
+        DType::Date { format } | DType::Timestamp { format, .. } => {
+            c.parse.epoch.or((format == "%s").then_some(EpochUnit::Seconds))
+        }
+        _ => c.parse.epoch,
+    }
+}
+
 /// The first and last year a `%y` column's two-digit years can land in,
 /// under the pivot in force. `None` for a column that reads no `%y`.
 pub fn two_digit_year_window(c: &ColumnSpec) -> Option<(i32, i32)> {

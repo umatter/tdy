@@ -256,7 +256,7 @@ pub fn review_reasons(spec: &ParseSpec) -> Vec<String> {
         }
         // An epoch says a column of integers is time at all — `45000` is a
         // count or 2023-03-15 — and no value in the file states which.
-        if let Some(unit) = c.parse.epoch {
+        if let Some(unit) = crate::spec::effective_epoch(c) {
             out.push(epoch_reason(&c.name, unit));
         }
         if let Some(shift) = c.parse.decimal_shift {
@@ -299,7 +299,7 @@ pub fn review_reasons_for(spec: &ParseSpec, target: &Target) -> Vec<String> {
         .columns
         .iter()
         .filter_map(|c| {
-            let unit = c.parse.epoch?;
+            let unit = crate::spec::effective_epoch(c)?;
             (declared(c)?.epoch == Some(unit)).then(|| epoch_reason(&c.name, unit))
         })
         .collect();

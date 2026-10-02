@@ -168,10 +168,11 @@ fn readings(spec: &ParseSpec, target: &Target) -> Vec<Mismatch> {
         .filter_map(|tc| Some((tc, tc.epoch?)))
         .filter_map(|(tc, declared)| {
             let c = spec.columns.iter().find(|c| c.name == tc.name)?;
-            (c.parse.epoch != Some(declared)).then(|| Mismatch::Reading {
+            let got = crate::spec::effective_epoch(c);
+            (got != Some(declared)).then(|| Mismatch::Reading {
                 column: tc.name.clone(),
                 declared: name(declared),
-                got: c.parse.epoch.map(name),
+                got: got.map(name),
             })
         })
         .collect()

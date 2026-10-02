@@ -1211,7 +1211,8 @@ Details worth knowing:
   `OPTIONS(epoch = '…')`. In a pile, any `epoch` in a member's sidecar is a
   judgement — that a column of integers is time at all — so the member waits
   for `--accept` unless its target column declares that same unit (a sidecar
-  that joined silently before this now asks once); and where the target does
+  that joined silently before this now asks once — `format = "%s"` alone
+  counts as `epoch = "seconds"`, which is what it reads); and where the target does
   declare one, a sidecar reading the column any other way is refused.
 - **`year_pivot` decides the century of a two-digit year.** Under `%y`, a
   year below the pivot is 20xx and one at or above it 19xx:
