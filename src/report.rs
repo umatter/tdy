@@ -1278,7 +1278,10 @@ pub async fn fit_pile(
                     crate::sidecar::save_member(&p, sheet, region, &full, provenance_of(plan.method, plan.model.clone()))?;
                     digest = crate::plans::sidecar_digest(&p, sheet, region);
                 }
-                let is_accepted = carry(previous_entry, &blake3, &review, &digest) || accepted_now.contains(unit);
+                let identity =
+                    identity_for(previous_entry, plan.lock_id(), &spec, plan.method, plan.model.as_deref())?;
+                let is_accepted =
+                    carry(previous_entry, &blake3, &review, identity.as_deref()) || accepted_now.contains(unit);
                 let status = match (&review, is_accepted) {
                     (Some(_), false) => {
                         needs_review += 1;
@@ -1308,7 +1311,7 @@ pub async fn fit_pile(
                     spec: spec.clone(),
                     path: p.clone(),
                     blake3: blake3.clone(),
-                    digest: digest.clone(),
+                    identity: identity.clone(),
                     medians,
                 });
                 lock_members.push(Member {
@@ -1374,8 +1377,9 @@ pub async fn fit_pile(
                     Some(id) => id.clone(),
                     None => crate::plans::sidecar_digest(&p, sheet, region),
                 };
-                let is_accepted =
-                    carry(previous_entry, &blake3, &fitted.review, &digest) || accepted_now.contains(unit);
+                let identity = identity_for(previous_entry, id.as_deref(), &spec, method, model.as_deref())?;
+                let is_accepted = carry(previous_entry, &blake3, &fitted.review, identity.as_deref())
+                    || accepted_now.contains(unit);
                 let status = match (&fitted.review, is_accepted) {
                     (Some(_), false) => {
                         needs_review += 1;
@@ -1418,7 +1422,7 @@ pub async fn fit_pile(
                     spec: spec.clone(),
                     path: p.clone(),
                     blake3: blake3.clone(),
-                    digest: digest.clone(),
+                    identity: identity.clone(),
                     medians: None,
                 });
                 lock_members.push(Member {
@@ -1514,7 +1518,7 @@ pub async fn fit_pile(
                 Some(r) => Some(format!("{r}; {}", o.reason())),
                 None => Some(o.reason()),
             };
-            let is_accepted = carry(plans.entry(&unit), &f.blake3, &review, &f.digest) || accepted_now.contains(&unit);
+            let is_accepted = carry(plans.entry(&unit), &f.blake3, &review, f.identity.as_deref()) || accepted_now.contains(&unit);
             let lock_member = lock_members
                 .iter_mut()
                 .find(|m| m.path == unit.path && m.sheet == unit.sheet && m.region == unit.region)
@@ -1615,8 +1619,8 @@ struct FittedMember {
     spec: std::sync::Arc<ParseSpec>,
     path: PathBuf,
     blake3: String,
-    /// What an acceptance of this member's plan is tied to now.
-    digest: String,
+    /// The identity of its plan, when the previous lock held it ([`carry`]).
+    identity: Option<String>,
     /// Its typical values, when its dry run already read all of it.
     medians: Option<crate::magnitude::Medians>,
 }
@@ -1717,11 +1721,35 @@ fn hold_plans(members: &mut [Member], held: Vec<HeldMember>) -> Vec<lockfile::Lo
 /// same bytes, for the same reason — and, when the lock held its plan,
 /// about that same plan? A lock-held plan's id is what its acceptance was
 /// given to, so a different plan now (a sidecar written over it, a
-/// re-plan) asks again. A sidecar-held member is carried exactly as before.
-fn carry(previous: Option<&Member>, blake3: &str, review: &Option<String>, digest: &str) -> bool {
+/// re-plan) asks again; the same plan written out as a sidecar (the target
+/// switched to `plans = 'sidecars'`) is the same plan and carries. A
+/// sidecar-held member is carried exactly as before.
+fn carry(previous: Option<&Member>, blake3: &str, review: &Option<String>, identity: Option<&str>) -> bool {
     previous.is_some_and(|m| {
-        m.accepted && m.blake3 == blake3 && m.review == *review && m.spec.as_deref().is_none_or(|id| id == digest)
+        m.accepted
+            && m.blake3 == blake3
+            && m.review == *review
+            && m.spec.as_deref().is_none_or(|id| identity == Some(id))
     })
+}
+
+/// The identity of the plan a member has now, for [`carry`] — computed
+/// only when the previous lock held the member's plan, the one case that
+/// compares it (it costs a serialisation of the spec).
+fn identity_for(
+    previous: Option<&Member>,
+    held_id: Option<&str>,
+    spec: &ParseSpec,
+    method: InferenceMethod,
+    model: Option<&str>,
+) -> Result<Option<String>> {
+    if previous.is_none_or(|m| m.spec.is_none()) {
+        return Ok(None);
+    }
+    Ok(Some(match held_id {
+        Some(id) => id.to_string(),
+        None => crate::plans::spec_id(spec, method, model)?,
+    }))
 }
 
 /// Declared column -> the file column that supplies it.

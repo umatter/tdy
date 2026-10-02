@@ -694,3 +694,26 @@ fn a_provenance_edited_in_the_lock_is_refused() {
     assert!(!out.status.success());
     assert!(err.contains("edited by hand"), "{err}");
 }
+
+/// Switching where plans are kept moves an accepted plan without changing
+/// it, so the acceptance stays — lock to sidecars, and sidecars to lock.
+#[test]
+fn switching_storage_keeps_acceptances() {
+    let (dir, t) = cents_pile();
+    fit(&t);
+    ok(&tdy(&["fit", t.to_str().unwrap(), "--accept", "2025-03.csv"]));
+    let sql = std::fs::read_to_string(&t).unwrap();
+    std::fs::write(&t, sql.replace("plans = 'lock'", "plans = 'sidecars'")).unwrap();
+    let text = fit(&t);
+    assert!(!text.contains("REVIEW"), "lock -> sidecars expired the acceptance:\n{text}");
+    assert_eq!(sidecars(dir.path()).len(), 3);
+    assert_eq!(lock_text(&t).matches("accepted = true").count(), 1);
+    ok(&query(&t, "SELECT count(*) FROM dataset('@')"));
+
+    std::fs::write(&t, sql).unwrap();
+    let text = ok(&tdy(&["fit", t.to_str().unwrap(), "--prune-sidecars"]));
+    assert!(!text.contains("REVIEW"), "sidecars -> lock expired the acceptance:\n{text}");
+    assert!(text.contains("3 moved into the lock and removed"), "{text}");
+    assert_eq!(lock_text(&t).matches("accepted = true").count(), 1);
+    ok(&query(&t, "SELECT count(*) FROM dataset('@')"));
+}
