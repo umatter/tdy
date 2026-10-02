@@ -995,6 +995,22 @@ fn extract_lines(
     Ok(RawTable::with_header(names, rows, truncated))
 }
 
+/// The whole text of a JSON *document* (an array of records, or one record),
+/// whatever the caller's row cap.
+///
+/// A capped read takes a 4 MiB prefix and drops the torn last line, which is
+/// right for anything whose records are lines (NDJSON included) and wrong for
+/// a document: it has no records until it is parsed whole, and a prefix of
+/// one is malformed JSON. So a document is read whole even under a cap, as a
+/// workbook is materialised whole — bounded, as every whole read is, by
+/// `[limits].max_file_bytes` (a compressed one by its decompressed copy, which
+/// is what is read), and a document over it is refused by name. The cap then
+/// applies to the parsed records. The bytes are decoded in place
+/// (`decode_owned`), so the text is the only copy of the document held.
+pub(crate) fn read_json_document(path: &Path, limits: Limits) -> Result<String> {
+    read_text(path, None, &ExtractOpts::full(limits))
+}
+
 fn extract_json(
     path: &Path,
     lines: bool,
@@ -1002,7 +1018,8 @@ fn extract_json(
     opts: &ExtractOpts,
 ) -> Result<RawTable> {
     use crate::jsondoc::Node;
-    let text = read_text(path, None, opts)?;
+    // NDJSON keeps the capped prefix; a document is read whole.
+    let text = if lines { read_text(path, None, opts)? } else { read_json_document(path, opts.limits)? };
     let mut truncated = false;
     let records: Vec<Node> = if lines {
         let mut out = Vec::new();
@@ -1032,6 +1049,8 @@ fn extract_json(
         out
     } else {
         let doc = Node::parse(&text).context("invalid JSON document")?;
+        // The tree owns its strings; the text is not needed beside it.
+        drop(text);
         let node = match pointer {
             Some(p) => doc.into_pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,
             None => doc,
@@ -1129,8 +1148,10 @@ impl JsonHeader {
 /// record array. Anything but an object there is named and refused — a
 /// record is never coerced out of an array, a scalar or a null.
 fn extract_json_record(path: &Path, pointer: Option<&str>, opts: &ExtractOpts) -> Result<RawTable> {
-    let text = read_text(path, None, opts)?;
+    // One row whatever the cap, and never a prefix: see `read_json_document`.
+    let text = read_json_document(path, opts.limits)?;
     let doc = crate::jsondoc::Node::parse(&text).context("invalid JSON document")?;
+    drop(text);
     let at = |p: Option<&str>| p.map(|p| format!(" at pointer {p:?}")).unwrap_or_default();
     let node = match pointer {
         Some(p) => doc.into_pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,

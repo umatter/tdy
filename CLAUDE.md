@@ -804,9 +804,7 @@ refit 0.9 s, count 0.6 s, under 60 MB. **7,443 items**: draft 1.4 s / 43 MB, fir
 None of that is quadratic: it is one 47 KB sidecar per member (121 columns, each typed one
 spelling out its whole NA vocabulary) — 335 MB of TOML parsed and fingerprints checked on
 every refit, query and listing (`.ls` takes as long with the target moved away). That is the
-shared-spec slice the design page defers, not something to optimise around here. Known limits:
-a JSON document over the 4 MiB probe cap cannot be fitted ("EOF while parsing a string at …
-column 4194304" — the probe reads a bounded prefix, which is no document).
+shared-spec slice the design page defers, not something to optimise around here.
 
 **JSON data is read by `src/jsondoc.rs`, not serde_json** (2026-10-02). serde_json holds a
 number as u64/i64/f64, so `12345678901234567890123` read as `1.2345678901234568e+22` and a
@@ -989,7 +987,13 @@ Things that only become clear from reading several modules:
   nothing left to promote a header from. A capped table sets `truncated`, and anything
   reasoning about the *end* of the data must not trust it — that is why `SkipRows{tail}` is
   skipped on a truncated table, and why Excel sniffing deliberately does *not* cap (calamine
-  materializes the sheet anyway, and the last row is where "Total" lives).
+  materializes the sheet anyway, and the last row is where "Total" lives). **A JSON document
+  is parsed whole even under a cap, like a workbook** (`engine::read_json_document`, used by
+  `extract_json` for `lines = false`, `extract_json_record`, and every sniffer/draft reader
+  of a document): a prefix of one is malformed JSON, and the cap applies to the parsed
+  records instead, setting `truncated` when it cut any. `[limits].max_file_bytes` is what
+  bounds it, and a document over it is refused by name in the probe as in the query. NDJSON
+  keeps the prefix and the torn-line drop, its records being lines.
 - **Engine pipeline order matters:** extract (all strings) → transforms in spec order →
   projection + typed cast last. Rectangularization is lazy so `skip_rows` can remove title
   rows before the ragged policy applies. `promote_header` fills right only on rows *above*

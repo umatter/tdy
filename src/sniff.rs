@@ -1074,9 +1074,7 @@ pub(crate) fn pick_sheet(path: &Path, sample: &FileSample, limits: Limits) -> Op
 
 fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
     let mut doubts = Doubts::default();
-    let bytes = crate::fileio::read_all(path, limits.max_file_bytes)?;
-    let (text, _) = crate::sample::decode_text(&bytes, None);
-    drop(bytes);
+    let text = crate::engine::read_json_document(path, limits)?;
     let trimmed = text.trim_start();
 
     let (lines, pointer, record) = match Node::parse(&text) {
@@ -1213,8 +1211,7 @@ pub(crate) fn empty_arrays(v: &Node, prefix: &mut String, depth: usize, out: &mu
 
 /// [`empty_arrays`] of a file's document; empty for anything unreadable.
 pub(crate) fn empty_arrays_in(path: &Path, limits: Limits) -> Vec<String> {
-    let Ok(bytes) = crate::fileio::read_all(path, limits.max_file_bytes) else { return Vec::new() };
-    let (text, _) = crate::sample::decode_text(&bytes, None);
+    let Ok(text) = crate::engine::read_json_document(path, limits) else { return Vec::new() };
     let Ok(doc) = Node::parse(&text) else { return Vec::new() };
     let mut out = Vec::new();
     empty_arrays(&doc, &mut String::new(), 0, &mut out);
@@ -1226,8 +1223,7 @@ pub(crate) fn empty_arrays_in(path: &Path, limits: Limits) -> Vec<String> {
 /// still bind the envelope's own keys; that is the target's decision, not a
 /// reading the sniffer makes on its own.
 pub(crate) fn empty_array_record_frame(path: &Path, limits: Limits) -> Option<(ParseSpec, String)> {
-    let bytes = crate::fileio::read_all(path, limits.max_file_bytes).ok()?;
-    let (text, _) = crate::sample::decode_text(&bytes, None);
+    let text = crate::engine::read_json_document(path, limits).ok()?;
     let doc = Node::parse(&text).ok()?;
     if !doc.is_object() {
         return None;
@@ -1290,10 +1286,9 @@ pub(crate) struct ArrayCandidate {
 /// "exactly one produces the declared columns" is a proof by elimination
 /// where "the longest array of objects" was a guess.
 pub(crate) fn json_record_pointers(path: &Path, limits: Limits) -> Vec<String> {
-    let Ok(bytes) = crate::fileio::read_all(path, limits.max_file_bytes) else {
+    let Ok(text) = crate::engine::read_json_document(path, limits) else {
         return Vec::new();
     };
-    let (text, _) = crate::sample::decode_text(&bytes, None);
     let Ok(doc) = Node::parse(&text) else {
         return Vec::new();
     };
