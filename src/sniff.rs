@@ -1246,6 +1246,21 @@ pub(crate) fn empty_array_record_frame(path: &Path, limits: Limits) -> Option<(P
     Some((spec, empty))
 }
 
+/// The words every note uses for a literal no double is (`numfmt::Shape::
+/// float_unsafe`): `"v" would read back from a float64 as …`. The draft
+/// finds such a column by them.
+pub(crate) const NO_DOUBLE: &str = "would read back from a float64 as";
+
+/// The value a note names as one no double is, for column `column`, if the
+/// sniff typed that column away from float64 for that reason.
+pub(crate) fn no_double_value(spec: &ParseSpec, column: &str) -> Option<String> {
+    let prefix = format!("column `{column}`: ");
+    let note = spec.notes.iter().find(|n| n.starts_with(&prefix) && n.contains(NO_DOUBLE))?;
+    let start = note.find('"')? + 1;
+    let len = note[start..].find('"')?;
+    Some(note[start..start + len].to_string())
+}
+
 /// What the sniffer says about a root object with no array in it.
 pub(crate) const RECORD_NOTE: &str = "this document is one object and is read as one record";
 

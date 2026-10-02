@@ -461,3 +461,39 @@ fn a_late_literal_a_double_cannot_hold_widens_the_column() {
     assert_eq!(column_type(&v, "x"), serde_json::json!({"type": "float64"}));
     assert!(v["notes"].to_string().contains("NOT checked against the whole file"), "{v}");
 }
+
+/// A pile where one file holds a literal no double is, past its sample, and
+/// another file is ordinary floats: the draft must not widen the first
+/// file's DECIMAL back to DOUBLE. The unedited draft fits and serves the
+/// written digits — NDJSON and CSV alike.
+#[test]
+fn a_draft_keeps_a_decimal_no_double_holds_beside_a_float_file() {
+    for ext in ["ndjson", "csv"] {
+        let dir = TempDir::new().unwrap();
+        let nd = ext == "ndjson";
+        let odd = "12345678901234567890.123";
+        let a = floats_with(&dir, &format!("a.{ext}"), 20_000, 10_001, odd, nd);
+        let c = write(&dir, &format!("c.{ext}"), if nd { "{\"x\":1.5}\n{\"x\":2.25}\n{\"x\":3.125}\n" } else { "x\n1.5\n2.25\n3.125\n" });
+        let sql = tdy::draft::draft_target(&[a, c], tdy::config::Limits::default()).unwrap();
+        let x = sql.lines().find(|l| l.trim_start().starts_with("x ")).unwrap_or_else(|| panic!("{sql}"));
+        assert!(x.contains("DECIMAL(38,3)"), "{ext}: {sql}");
+        assert!(x.contains(odd) && !x.contains("DOUBLE") && !x.contains("half_away"), "{ext}: {x}");
+        let t = write(&dir, "t.tdy.sql", &sql);
+        let fit = tdy(&["fit", t.to_str().unwrap()]);
+        assert!(fit.status.success(), "{ext}: {}", out(&fit));
+        let q = tdy(&["query", &format!("SELECT CAST(x AS VARCHAR) x FROM dataset('{}') WHERE x > 1000", t.display())]);
+        let text = String::from_utf8_lossy(&q.stdout).to_string();
+        assert!(text.contains(odd), "{ext}: {}", out(&q));
+    }
+}
+
+/// Float beside decimal with no such literal widens to DOUBLE, as before.
+#[test]
+fn an_ordinary_float_and_decimal_pile_still_drafts_double() {
+    let dir = TempDir::new().unwrap();
+    let a = write(&dir, "a.csv", "x;betrag\n1.25;10.50\n2.5;20.75\n");
+    let b = write(&dir, "b.csv", "x;betrag\n1.123;10.512345\n2.5;20.751\n");
+    let sql = tdy::draft::draft_target(&[a, b], tdy::config::Limits::default()).unwrap();
+    let betrag = sql.lines().find(|l| l.trim_start().starts_with("betrag ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(!betrag.contains("no double"), "{betrag}");
+}
