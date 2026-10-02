@@ -1788,3 +1788,38 @@ fn an_array_that_alone_fits_still_wins_over_the_record() {
     );
     assert!(fitted.review.is_none());
 }
+
+/// A document whose only array is empty is declined by the sniffer (zero
+/// records is not one), but in a pile the target still decides: a target
+/// naming the envelope's own keys fits it as one record.
+#[test]
+fn a_target_matching_the_record_still_fits_a_document_whose_array_is_empty() {
+    let dir = record_pile(&[("status.json", r#"{"status":"ok","count":0,"rows":[]}"#)]);
+    let t = Target::parse("CREATE TABLE s (status TEXT NOT NULL, count BIGINT NOT NULL) WITH (files = '*.json')").unwrap();
+    let p = dir.path().join("status.json");
+    let fitted = fit(&p, &t, Limits::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(fitted.spec.extraction, tdy::spec::Extraction::Json { record: true, .. }));
+    assert_eq!(ints_of(&fitted.spec, &p, 1), vec![Some(0)]);
+}
+
+/// When no frame of a root object fits, the gap report is about the frame
+/// the sniffer itself reads: for an API dump that is its array, whose real
+/// gap (`amount` cannot parse "x") the record frame's "no column binds"
+/// would bury.
+#[test]
+fn no_fitting_frame_reports_the_sniffers_own_frame() {
+    let dir = record_pile(&[
+        ("dump.json", r#"{"meta":{"v":1},"rows":[{"id":2,"amount":"x"}]}"#),
+        ("rec.json", r#"{"id":"a","name":"x"}"#),
+    ]);
+    let t = Target::parse("CREATE TABLE t (id BIGINT NOT NULL, amount BIGINT NOT NULL) WITH (files = '*.json')").unwrap();
+    let m = format!("{}", fit(&dir.path().join("dump.json"), &t, Limits::default()).unwrap_err());
+    assert!(m.contains("`amount`") && m.contains("\"x\""), "{m}");
+    assert!(!m.contains("no column of this file binds"), "{m}");
+
+    // The other direction: where the sniffer reads the record, the report
+    // is the record's — `id` holds "a", which is no BIGINT.
+    let t = Target::parse("CREATE TABLE t (id BIGINT NOT NULL) WITH (files = '*.json')").unwrap();
+    let m = format!("{}", fit(&dir.path().join("rec.json"), &t, Limits::default()).unwrap_err());
+    assert!(m.contains("`id`") && m.contains("\"a\""), "{m}");
+}

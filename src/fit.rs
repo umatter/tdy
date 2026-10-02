@@ -547,7 +547,25 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     // 1. The frame. What the sniffer knows about this file's *shape* is about
     //    the file, not about the columns anyone wants, so it is reused whole.
     //    Only its `columns` are discarded.
-    let draft = sniff_draft(path, target, limits)?;
+    let (draft, empty_array) = match sniff_draft(path, target, limits) {
+        Ok(d) => (d, None),
+        // Declined by the sniffer because its only arrays are empty (zero
+        // records); the declared table may still bind the envelope's keys.
+        Err(e) => match sniff::empty_array_record_frame(path, limits) {
+            Some((d, empty)) => (d, Some(empty)),
+            None => return Err(e),
+        },
+    };
+    if let Some(empty) = empty_array {
+        let mut fitted = fit_framed(path, target, limits, draft, Rigour::Full)?;
+        let note = format!(
+            "read as one record: the document's arrays are empty (`{empty}`, zero records), and the \
+             declared table binds the document's own keys"
+        );
+        fitted.notes.push(note.clone());
+        fitted.spec.notes.push(note);
+        return Ok(fitted);
+    }
 
     // A file with several possible frames — a JSON document with several
     // record arrays, a workbook with several sheets — makes the sniffer's
@@ -568,6 +586,13 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
                     d.extraction = Extraction::Json { lines: false, pointer: None, record: true };
                     d
                 };
+                // The sniffer's own frame: its failure is the report when
+                // nothing fits — for an API dump that is its array, whose
+                // real gap the record frame's "no column binds" would bury.
+                let ranked = match pointer {
+                    Some(p) if !*record => pointers.iter().position(|q| q == p).map_or(0, |i| i + 1),
+                    _ => 0,
+                };
                 let mut candidates = vec![(RECORD_FRAME.to_string(), as_record(&draft))];
                 candidates.extend(pointers.iter().map(|ptr| {
                     let mut d = draft.clone();
@@ -586,6 +611,7 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
                         ),
                         field: JSON_FRAME_FIELDS,
                         total: candidates.len(),
+                        ranked,
                         candidates,
                     },
                 );
@@ -602,7 +628,7 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
                 path,
                 target,
                 limits,
-                FrameCandidates { what: "sheets".into(), field: "sheet_name", total: names.len(), candidates },
+                FrameCandidates { what: "sheets".into(), field: "sheet_name", total: names.len(), ranked: 0, candidates },
             );
         }
     }
@@ -1252,6 +1278,9 @@ struct FrameCandidates {
     field: &'static str,
     /// How many frames exist, counting ones already eliminated at framing.
     total: usize,
+    /// Which candidate is the sniffer's own frame: its failure is the one
+    /// reported when no candidate fits.
+    ranked: usize,
     candidates: Vec<(String, ParseSpec)>,
 }
 
@@ -1510,12 +1539,14 @@ fn fit_by_elimination(
     fc: FrameCandidates,
 ) -> Result<Fitted, FitError> {
     let mut survivors: Vec<&(String, ParseSpec)> = Vec::new();
+    let mut ranked_error: Option<FitError> = None;
     let mut first_error: Option<FitError> = None;
-    for cand in &fc.candidates {
+    for (i, cand) in fc.candidates.iter().enumerate() {
         match fit_framed(path, target, limits, cand.1.clone(), Rigour::Gates) {
             Ok(_) => survivors.push(cand),
+            // The sniffer's own frame's failure is the representative one.
+            Err(e) if i == fc.ranked => ranked_error = Some(e),
             Err(e) => {
-                // The ranked candidate's failure is the representative one.
                 if first_error.is_none() {
                     first_error = Some(e);
                 }
@@ -1524,7 +1555,7 @@ fn fit_by_elimination(
     }
 
     match survivors.as_slice() {
-        [] => Err(first_error.expect("candidates was non-empty")),
+        [] => Err(ranked_error.or(first_error).expect("candidates was non-empty")),
         [(label, d)] => {
             let mut fitted = fit_framed(path, target, limits, d.clone(), Rigour::Full)?;
             fitted.notes.push(format!(
