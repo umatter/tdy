@@ -477,3 +477,80 @@ async fn the_console_lists_and_accepts_lock_held_members() {
     let entries = tdy::console::list_dir(dir.path()).unwrap();
     assert_eq!(entries.iter().find(|e| e.name == "2025-01.csv").unwrap().status, tdy::console::EntryStatus::Stale);
 }
+
+/// `n` one-row CSVs that share one plan, and a target over them.
+fn many(n: usize, plans: &str) -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    for i in 0..n {
+        std::fs::write(dir.path().join(format!("m{i:04}.csv")), format!("Datum;Region;Betrag\n28.01.2025;Ost;{i}.00\n"))
+            .unwrap();
+    }
+    let t = dir.path().join("many.tdy.sql");
+    std::fs::write(
+        &t,
+        format!(
+            "CREATE TABLE many (month DATE NOT NULL OPTIONS(matches='Datum'), region TEXT NOT NULL \
+             OPTIONS(matches='Region'), amount DECIMAL(14,2) NOT NULL OPTIONS(matches='Betrag')) \
+             WITH (files = '*.csv', date_order = 'dmy'{plans});"
+        ),
+    )
+    .unwrap();
+    (dir, t)
+}
+
+const HINT: &str = "Declaring plans = 'lock' in the target's WITH clause keeps it once, in the lock.";
+
+/// A sidecar pile that just wrote 200 sidecars of one plan says once, on
+/// stderr, that the option exists; the pile text a script reads is
+/// untouched, and a smaller pile, a lock pile or a refit say nothing.
+#[test]
+fn a_fit_that_writes_200_sidecars_of_one_plan_names_the_option_once() {
+    let (dir, t) = many(200, "");
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = ok(&out);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(err.matches(HINT).count(), 1, "{err}");
+    assert!(err.contains("note: 200 of the sidecars this fit wrote hold one plan."), "{err}");
+    assert!(!text.contains("plans = 'lock'"), "never in the pile text:\n{text}");
+    assert_eq!(sidecars(dir.path()).len(), 200);
+
+    let again = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(!String::from_utf8_lossy(&again.stderr).contains(HINT), "a refit writes no sidecar");
+
+    let (_d, t) = many(199, "");
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(!String::from_utf8_lossy(&out.stderr).contains(HINT));
+
+    let (d, t) = many(200, ", plans = 'lock'");
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = ok(&out);
+    assert!(!String::from_utf8_lossy(&out.stderr).contains(HINT));
+    assert!(text.contains("plans: 200 member(s) share 1 plan(s), held in the lock"), "{text}");
+    assert_eq!(sidecars(d.path()), Vec::<String>::new());
+}
+
+/// `tdy draft` over a pile of 200 files or more declares `plans = 'lock'`,
+/// with a comment line above the clause; the draft still parses. Under 200
+/// it says nothing about plans.
+#[test]
+fn draft_declares_plans_in_the_lock_for_a_pile_of_200() {
+    let (dir, _) = many(200, "");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "csv"))
+        .collect();
+    files.sort();
+    let sql = tdy::draft::draft_target(&files, tdy::config::Limits::default()).unwrap();
+    let target = tdy::target::Target::parse(&sql).unwrap_or_else(|e| panic!("{sql}\n{e:#}"));
+    assert_eq!(target.plans, tdy::target::PlanStore::Lock, "{sql}");
+    let with = sql.find("\nWITH (").unwrap();
+    let above = sql[..with].lines().last().unwrap();
+    assert!(above.starts_with("-- ") && above.contains("200 files"), "a comment line above the clause:\n{sql}");
+    assert!(sql.contains("  plans = 'lock'"), "{sql}");
+
+    let sql = tdy::draft::draft_target(&files[..199], tdy::config::Limits::default()).unwrap();
+    assert!(!sql.contains("plans"), "{sql}");
+    assert_eq!(tdy::target::Target::parse(&sql).unwrap().plans, tdy::target::PlanStore::Sidecars);
+}
