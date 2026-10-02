@@ -114,7 +114,7 @@ pub fn refuse_if_compressed(path: &Path, head: &[u8]) -> Result<()> {
 }
 
 /// `5.0 kB`, `1.2 MB`, `4.3 GB` — a size the way a person reads it.
-fn human_bytes(n: u64) -> String {
+pub(crate) fn human_bytes(n: u64) -> String {
     let n = n as f64;
     if n >= 1e9 {
         format!("{:.1} GB", n / 1e9)
@@ -342,11 +342,11 @@ pub fn read_all(path: &Path, max_bytes: u64, max_decompressed: u64) -> Result<Ve
         .with_context(|| format!("cannot stat {}", real.display()))?;
     if meta.len() > max_bytes {
         bail!(
-            "{} is {:.1} GB, above the {:.1} GB limit for in-memory parsing \
+            "{} is {}, above the {} limit for in-memory parsing \
              (raise [limits].max_file_bytes in the config if you really mean it)",
             path.display(),
-            meta.len() as f64 / 1e9,
-            max_bytes as f64 / 1e9
+            human_bytes(meta.len()),
+            human_bytes(max_bytes)
         );
     }
     std::fs::read(real).with_context(|| format!("cannot read {}", real.display()))
