@@ -196,12 +196,13 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
             // "manual"`), where it is visible and reviewable.
             if plan.edited() {
                 anyhow::bail!(
-                    "{}'s plan {} in {} was edited by hand: it no longer hashes to its id. \
+                    "{}'s plan {} in {} was edited by hand: it no longer hashes to its id{}. \
                      A member's plan is changed by writing it a sidecar (method = \"manual\"), \
                      not by editing the lock — run `tdy fit {}` to rebuild it",
                     m.name(),
                     crate::plans::short_id(plan.lock_id().unwrap_or_default()),
                     lockfile::lock_path(target_file).display(),
+                    crate::plans::written_by_note(&lock),
                     target_file.display()
                 );
             }

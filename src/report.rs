@@ -1016,11 +1016,11 @@ pub async fn fit_pile(
         let mut fresh = None;
         if let Some(plan) = &loaded {
             if plan.edited() {
-                refused = Some(
+                refused = Some(format!(
                     "the lock's plan for this member no longer hashes to its id (the lock was \
-                     edited by hand); re-planned"
-                        .into(),
-                );
+                     edited by hand){}; re-planned",
+                    previous.as_ref().map(crate::plans::written_by_note).unwrap_or_default()
+                ));
             } else if let crate::plans::State::AsLocked { blake3, bytes } = &plan.state {
                 let fp = crate::sidecar::hash_file(&p)?;
                 if fp.0 == *blake3 && fp.1 == *bytes {
@@ -1043,7 +1043,8 @@ pub async fn fit_pile(
                     let planned = plan_member(u, &p, &target, cfg, opts.progress.as_ref()).await;
                     let same = match (&planned, &loaded) {
                         (Ok(pl), Some(plan)) => {
-                            crate::plans::spec_id(&pl.fitted.spec).ok() == crate::plans::spec_id(&plan.spec).ok()
+                            crate::plans::spec_id(&pl.fitted.spec, pl.method, pl.model.as_deref()).ok()
+                                == crate::plans::spec_id(&plan.spec, plan.method, plan.model.as_deref()).ok()
                         }
                         _ => false,
                     };
@@ -1325,7 +1326,6 @@ pub async fn fit_pile(
                 if keep_in_lock {
                     held.push(HeldMember {
                         member: lock_members.len() - 1,
-                        report: reports.len() - 1,
                         id: plan.lock_id().unwrap_or_default().to_string(),
                         spec,
                         method: plan.method,
@@ -1365,7 +1365,7 @@ pub async fn fit_pile(
                 let report_notes = fitted.spec.notes.clone();
                 let notes = std::mem::take(&mut fitted.spec.notes);
                 let (id, spec) = if in_lock {
-                    let (id, spec) = interner.intern(fitted.spec)?;
+                    let (id, spec) = interner.intern(fitted.spec, method, model.as_deref())?;
                     (Some(id), spec)
                 } else {
                     (None, std::sync::Arc::new(fitted.spec))
@@ -1436,7 +1436,6 @@ pub async fn fit_pile(
                 if let Some(id) = id {
                     held.push(HeldMember {
                         member: lock_members.len() - 1,
-                        report: reports.len() - 1,
                         id,
                         spec,
                         method,
@@ -1529,24 +1528,11 @@ pub async fn fit_pile(
         needs_review = reports.iter().filter(|r| r.status == MemberStatus::NeedsReview).count();
     }
 
-    // Lock-held plans, each recorded once. A member whose identical plan
-    // came with a different provenance (a model framed it, a sibling's was
-    // the sniffer's) cannot share that entry without one of them misstating
-    // where its plan came from — and the review a model's frame needs rides
-    // on that provenance — so it keeps its plan in a sidecar instead.
-    let failed_before_lock = failed;
-    let (specs, conflicts) = hold_plans(&mut lock_members, held)?;
-    for c in conflicts {
-        if !opts.dry_run && failed_before_lock == 0 {
-            let m = &mut lock_members[c.member];
-            let p = dir.join(&m.path);
-            let mut full = (*c.spec).clone();
-            full.notes = c.notes;
-            crate::sidecar::save_member(&p, m.sheet.as_deref(), m.region, &full, provenance_of(c.method, c.model))?;
-            m.spec_digest = crate::plans::sidecar_digest(&p, m.sheet.as_deref(), m.region);
-        }
-        reports[c.report].in_lock = false;
-    }
+    // Lock-held plans, each recorded once. The id covers the provenance,
+    // so a plan a model framed and the identical one the sniffer found are
+    // two entries — neither misstates where it came from, and the review a
+    // model's frame needs keeps riding on it.
+    let specs = hold_plans(&mut lock_members, held);
     let lock_plans = lock_mode.then(|| LockPlans {
         members: lock_members.iter().filter(|m| m.spec.is_some()).count(),
         specs: specs.len(),
@@ -1653,12 +1639,15 @@ type IdentifiedPlan = (String, std::sync::Arc<ParseSpec>);
 
 impl Interner {
     /// `spec` without notes.
-    fn intern(&mut self, spec: ParseSpec) -> Result<IdentifiedPlan> {
-        let key = blake3::hash(&serde_json::to_vec(&spec).context("serialising a plan")?);
+    fn intern(&mut self, spec: ParseSpec, method: InferenceMethod, model: Option<&str>) -> Result<IdentifiedPlan> {
+        let mut h = blake3::Hasher::new();
+        h.update(&serde_json::to_vec(&spec).context("serialising a plan")?);
+        h.update(format!("\x1f{method:?}\x1f{model:?}").as_bytes());
+        let key = h.finalize();
         if let Some((id, shared)) = self.seen.get(&key) {
             return Ok((id.clone(), shared.clone()));
         }
-        let id = crate::plans::spec_id(&spec)?;
+        let id = crate::plans::spec_id(&spec, method, model)?;
         let shared = std::sync::Arc::new(spec);
         self.seen.insert(key, (id.clone(), shared.clone()));
         Ok((id, shared))
@@ -1667,9 +1656,8 @@ impl Interner {
 
 /// A member whose plan the lock is to hold.
 struct HeldMember {
-    /// Index into the lock's members and into the reports.
+    /// Index into the lock's members.
     member: usize,
-    report: usize,
     id: String,
     spec: std::sync::Arc<ParseSpec>,
     method: InferenceMethod,
@@ -1684,16 +1672,12 @@ struct HeldMember {
 /// member keeps only what follows them (`Member::notes`), so the whole list
 /// is the entry's notes then the member's, in order and losslessly. For
 /// villagerdb that is 121 binding notes stored once and one frame note per
-/// file. A member whose plan is identical to an entry's but whose
-/// provenance is not comes back as a conflict, for its caller to keep in a
-/// sidecar.
-fn hold_plans(members: &mut [Member], held: Vec<HeldMember>) -> Result<(Vec<lockfile::LockedSpec>, Vec<HeldMember>)> {
+/// file. Every member of a group has the same provenance: the id covers it.
+fn hold_plans(members: &mut [Member], held: Vec<HeldMember>) -> Vec<lockfile::LockedSpec> {
     let mut order: Vec<String> = Vec::new();
     let mut groups: HashMap<String, Vec<HeldMember>> = HashMap::new();
-    let mut conflicts = Vec::new();
     for h in held {
         match groups.get_mut(&h.id) {
-            Some(g) if g[0].method != h.method || g[0].model != h.model => conflicts.push(h),
             Some(g) => g.push(h),
             None => {
                 order.push(h.id.clone());
@@ -1726,7 +1710,7 @@ fn hold_plans(members: &mut [Member], held: Vec<HeldMember>) -> Result<(Vec<lock
             spec,
         });
     }
-    Ok((specs, conflicts))
+    specs
 }
 
 /// Was this member's judgement accepted in the previous lock, about the

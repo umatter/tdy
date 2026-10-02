@@ -1183,7 +1183,7 @@ mod tests {
     fn a_lock_with_a_spec_table_is_version_2_and_round_trips() {
         let d = tempfile::TempDir::new().unwrap();
         let t = d.path().join("items.tdy.sql");
-        let id = crate::plans::spec_id(&plan()).unwrap();
+        let id = crate::plans::spec_id(&plan(), crate::spec::InferenceMethod::Heuristic, None).unwrap();
         let entry = LockedSpec {
             id: id.clone(),
             method: crate::spec::InferenceMethod::Heuristic,
@@ -1218,7 +1218,7 @@ mod tests {
 
         let back = Lock::load(&t).unwrap().unwrap();
         assert_eq!(back.specs.len(), 1);
-        assert_eq!(crate::plans::spec_id(&back.specs[0].spec).unwrap(), id);
+        assert_eq!(crate::plans::spec_id(&back.specs[0].spec, back.specs[0].method, None).unwrap(), id);
         assert_eq!(back.members[1].notes, vec!["frame proved by elimination".to_string()]);
         assert_eq!(back.members[0].spec.as_deref(), Some(id.as_str()));
 

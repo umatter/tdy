@@ -23,18 +23,35 @@ use crate::member::MemberRef;
 use crate::spec::{InferenceMethod, ParseSpec, Sidecar};
 
 /// The identity of a plan: blake3 over the spec's canonical serialisation —
-/// the sidecar's own serialiser — with `notes` cleared.
+/// the sidecar's own serialiser — with `notes` cleared, then the method and
+/// the model that produced it.
 ///
 /// Notes are free text about one fit of one file ("frame proved by
 /// elimination: of 4 candidate frames…"), never machine-interpreted; they
 /// are the only thing that differed across the 7,443 villagerdb plans.
 /// Everything else — extraction, transforms, every column, `confidence` — is
-/// what the plan *does*, and two members share a plan exactly when those
-/// bytes are equal.
-pub fn spec_id(spec: &ParseSpec) -> Result<String> {
+/// what the plan *does*. The provenance is in the identity too, because it
+/// is part of what is recorded: a model's frame is a judgement whose review
+/// is reconstructed from it, so the same spec from the sniffer and from a
+/// model are two records, and an edit of either provenance field no longer
+/// hashes to the id. Two members share an entry exactly when the spec's
+/// bytes and the provenance are equal.
+///
+/// The bytes are the `toml` crate's printing (`a_known_plan_has_a_known_id`
+/// pins one): a different printer would make every lock-held plan read as
+/// edited, which is why a refusal names the tdy that wrote the lock.
+pub fn spec_id(spec: &ParseSpec, method: InferenceMethod, model: Option<&str>) -> Result<String> {
     let bare = ParseSpec { notes: Vec::new(), ..spec.clone() };
     let text = toml::to_string_pretty(&bare).context("serialising a spec to identify it")?;
-    Ok(format!("b3:{}", blake3::hash(text.as_bytes()).to_hex()))
+    let mut h = blake3::Hasher::new();
+    h.update(text.as_bytes());
+    h.update(b"\x1fmethod=");
+    h.update(crate::console::method_label(&method).as_bytes());
+    if let Some(m) = model {
+        h.update(b"\x1fmodel=");
+        h.update(m.as_bytes());
+    }
+    Ok(format!("b3:{}", h.finalize().to_hex()))
 }
 
 /// Where a member's plan was read from.
@@ -128,6 +145,21 @@ impl Plan {
     }
 }
 
+/// Said beside an id that no longer matches its plan: when the lock was
+/// written by another tdy, its printer may be what differs, not the plan.
+pub fn written_by_note(lock: &Lock) -> String {
+    let here = env!("CARGO_PKG_VERSION");
+    if lock.tool_version == here {
+        String::new()
+    } else {
+        format!(
+            " (the lock was written by tdy {}, this is {here}: the plan may have been recorded \
+             by another tdy rather than edited — a refit records it again)",
+            lock.tool_version
+        )
+    }
+}
+
 /// `b3:9c1f…` — enough of an id to tell two apart in a message.
 pub fn short_id(id: &str) -> String {
     id.chars().take(3 + 12).collect::<String>() + "…"
@@ -168,7 +200,7 @@ impl<'a> Plans<'a> {
                         short_id(&e.id),
                         errs.join("\n- ")
                     )),
-                    Ok(()) => spec_id(&e.spec).map_err(|x| format!("{x:#}")).map(|digest| Held {
+                    Ok(()) => spec_id(&e.spec, e.method, e.model.as_deref()).map_err(|x| format!("{x:#}")).map(|digest| Held {
                         spec: Arc::new(e.spec.clone()),
                         digest,
                         method: e.method,
@@ -434,14 +466,14 @@ mod tests {
     #[test]
     fn spec_identity_ignores_notes_and_nothing_else() {
         let a = spec();
-        let id = spec_id(&a).unwrap();
+        let id = spec_id(&a, InferenceMethod::Heuristic, None).unwrap();
         assert!(id.starts_with("b3:") && id.len() == 3 + 64, "{id}");
 
         let mut notes = a.clone();
         notes.notes = vec!["frame proved by elimination: of 4 candidate frames".into()];
-        assert_eq!(spec_id(&notes).unwrap(), id, "notes are not part of a plan's identity");
+        assert_eq!(spec_id(&notes, InferenceMethod::Heuristic, None).unwrap(), id, "notes are not part of a plan's identity");
         notes.notes.clear();
-        assert_eq!(spec_id(&notes).unwrap(), id);
+        assert_eq!(spec_id(&notes, InferenceMethod::Heuristic, None).unwrap(), id);
 
         let mut changed: Vec<(&str, ParseSpec)> = Vec::new();
         let mut s = a.clone();
@@ -466,9 +498,31 @@ mod tests {
         s.transforms.push(Transform::FillDown { columns: vec!["price".into()], direction: Default::default() });
         changed.push(("transforms", s));
         for (what, s) in changed {
-            assert_ne!(spec_id(&s).unwrap(), id, "{what} changed and the identity did not");
+            assert_ne!(spec_id(&s, InferenceMethod::Heuristic, None).unwrap(), id, "{what} changed and the identity did not");
         }
     }
+
+    /// Identical plans from the same provenance share an entry; the same
+    /// spec framed by a model is a different plan record, because the review
+    /// a model's frame needs rides on its provenance.
+    #[test]
+    fn identity_covers_the_provenance() {
+        let a = spec();
+        let h = spec_id(&a, InferenceMethod::Heuristic, None).unwrap();
+        assert_ne!(spec_id(&a, InferenceMethod::Llm, Some("x")).unwrap(), h);
+        assert_ne!(spec_id(&a, InferenceMethod::Llm, Some("x")).unwrap(), spec_id(&a, InferenceMethod::Llm, Some("y")).unwrap());
+        assert_ne!(spec_id(&a, InferenceMethod::Manual, None).unwrap(), h);
+    }
+
+    /// The id is the `toml` crate's printing of the spec: pinned, so an
+    /// upgrade that prints the same spec differently is noticed here rather
+    /// than as every lock-held plan "edited by hand".
+    #[test]
+    fn a_known_plan_has_a_known_id() {
+        assert_eq!(spec_id(&spec(), InferenceMethod::Heuristic, None).unwrap(), PINNED_ID);
+    }
+
+    const PINNED_ID: &str = "b3:efd3b20d54247a89887160e6471e53fcc4c19442fa68980991780971ac7b40d5";
 
     #[test]
     fn the_target_of_a_lock_is_its_sql() {

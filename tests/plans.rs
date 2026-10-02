@@ -617,3 +617,80 @@ fn a_lock_plan_for_another_block_or_sheet_is_refused() {
         assert!(q.contains(" 51 ") && q.contains("62440.00"), "{said}: {q}");
     }
 }
+
+/// Re-record the plan `member` names as framed by a model: what a lock
+/// written by a fit with a backend holds, id and all.
+fn as_model_framed(t: &Path, member: &str) -> String {
+    let mut lock = tdy::lockfile::Lock::load(t).unwrap().unwrap();
+    let old = lock.member(member, None, None).unwrap().spec.clone().unwrap();
+    let e = lock.specs.iter_mut().find(|e| e.id == old).unwrap();
+    e.method = tdy::spec::InferenceMethod::Llm;
+    e.model = Some("x".into());
+    let new = tdy::plans::spec_id(&e.spec, e.method, e.model.as_deref()).unwrap();
+    e.id = new.clone();
+    for m in lock.members.iter_mut().filter(|m| m.spec.as_deref() == Some(old.as_str())) {
+        m.spec = Some(new.clone());
+    }
+    lock.save(t).unwrap();
+    new
+}
+
+/// The same spec from another provenance is another entry, never a member
+/// squeezed into an entry that misstates where its plan came from — with or
+/// without `--prune-sidecars`, and nothing a fit writes is deleted.
+#[test]
+fn the_same_plan_from_another_provenance_is_its_own_entry() {
+    let (dir, t) = staged(true);
+    fit(&t);
+    let model = as_model_framed(&t, "2025-01.csv");
+
+    // Without prune: March changes, is re-planned by the sniffer, and its
+    // plan is recorded beside the model's rather than inside it.
+    let march = dir.path().join("2025-03.csv");
+    let mut body = std::fs::read(&march).unwrap();
+    body.extend_from_slice(b"31.03.2025;Mitte;1'000.00\n");
+    std::fs::write(&march, body).unwrap();
+    let text = fit(&t);
+    assert!(text.contains("REVIEW"), "the model's frame still asks:\n{text}");
+    let lock = tdy::lockfile::Lock::load(&t).unwrap().unwrap();
+    let m3 = lock.member("2025-03.csv", None, None).unwrap();
+    assert!(m3.spec.is_some() && m3.spec.as_deref() != Some(model.as_str()), "{m3:?}");
+    assert_eq!(lock.member("2025-01.csv", None, None).unwrap().spec.as_deref(), Some(model.as_str()));
+    assert_eq!(sidecars(dir.path()), Vec::<String>::new());
+
+    // With prune: a tool-written sidecar for February moves into the lock
+    // as the sniffer's plan, and the file is gone because the lock holds it.
+    ok(&tdy(&["fit", t.to_str().unwrap(), dir.path().join("2025-02.csv").to_str().unwrap()]));
+    assert_eq!(sidecars(dir.path()), vec!["2025-02.csv.tdy.toml"]);
+    let text = ok(&tdy(&["fit", t.to_str().unwrap(), "--prune-sidecars"]));
+    assert!(text.contains("--prune-sidecars: 1 moved into the lock and removed"), "{text}");
+    assert_eq!(sidecars(dir.path()), Vec::<String>::new());
+    let lock = tdy::lockfile::Lock::load(&t).unwrap().unwrap();
+    let feb = lock.member("2025-02.csv", None, None).unwrap();
+    assert_eq!(feb.spec, m3_spec(&lock), "February shares March's plan, not the model's");
+    let out = tdy(&["check", t.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("has no spec") && err.contains("waiting on a human"), "{err}");
+}
+
+fn m3_spec(lock: &tdy::lockfile::Lock) -> Option<String> {
+    lock.member("2025-03.csv", None, None).unwrap().spec.clone()
+}
+
+/// Provenance is part of what is recorded: a model-framed plan edited to
+/// read as the sniffer's would drop the review its frame needs. Refused as
+/// an edit, like any other.
+#[test]
+fn a_provenance_edited_in_the_lock_is_refused() {
+    let (_dir, t) = staged(true);
+    fit(&t);
+    as_model_framed(&t, "2025-01.csv");
+    let text = lock_text(&t);
+    let edited = text.replacen("method = \"llm\"\n", "method = \"heuristic\"\n", 1).replacen("model = \"x\"\n", "", 1);
+    assert_ne!(edited, text, "{text}");
+    std::fs::write(tdy::lockfile::lock_path(&t), edited).unwrap();
+    let out = query(&t, "SELECT count(*) FROM dataset('@')");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(err.contains("edited by hand"), "{err}");
+}
