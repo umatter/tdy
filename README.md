@@ -885,15 +885,31 @@ column; the pointer then follows the sidecar's existing rules: one that finds
 nothing is a null — so a NOT NULL column refuses the member, naming the row —
 one that lands on an object or an array is an error, and there is no wildcard
 and no fan-out. It must start with `/`, may be said once, is refused on a
-member not read as JSON, and is part of the lock's fingerprint. A key one
-document lacks altogether is a column that member does not have, so it needs
+member not read as JSON, and is part of the lock's fingerprint. A declared
+pointer is enforced: a member whose sidecar reads that column through another
+pointer, or through none, does not conform. A sidecar may still add a pointer
+the target does not declare, as it may an `epoch`. A key one document lacks
+altogether is a column that member does not have, so it needs
 `if_missing = 'null'` like any other. When a document both is a record and
 holds an array that produces the declared table, the fit is refused with both
 settings that would choose (`record = true`, `pointer = "/rows"`). `tdy draft`
 over such a pile drafts every scalar leaf down to four levels as a column
 named from its path, with the `matches` and `pointer` already written, and
-counts per file which documents have it (`-- in 3468 of 7443 file(s)`); an
-array inside a record is never descended into.
+counts per file which documents have it — `-- in 3468 of 7443 file(s); null
+where absent` when the key above it is in every file, since the pointer then
+finds nothing rather than a missing column; an array inside a record is never
+descended into. A pile whose documents are all read through the same array is
+drafted from that array, as before, with a note; `tdy draft --records` drafts
+one row per document instead.
+
+Two shapes are not taken for records. A root object whose only arrays are
+empty (`{"status":"ok","count":0,"rows":[]}`) is zero records, so `tdy sniff`
+declines it, naming the array and `record = true` as the way to say otherwise
+(a pile's target still decides: a declared table that binds the envelope's
+own keys reads it as one record). And a root object whose every value is an
+object (`{"ace":{…},"bob":{…}}`) may be a map of records keyed by name: it is
+read as one record, at a confidence below the flag line, with a note saying
+so.
 
 When the layout cannot be enumerated at all — a log line, a report format no
 delimiter sniff can frame — and a backend is configured, `tdy fit` asks the

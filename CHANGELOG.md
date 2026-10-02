@@ -28,21 +28,33 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   keep their proofs. `tdy fit` shows the binding as
   `sell<-"games"/nh/sellPrice/value`, and `--json` gives each source binding a
   `pointer`.
+- **`tdy draft --records`** (and `.draft … --records` in the console) drafts
+  one row per root-object JSON document even where every document is also
+  read through the same array, which the plain draft keeps and now says so.
 - **`tdy draft` over JSON documents** drafts each as one record: top-level
   scalars, and every scalar leaf down to four levels as a column named from
   its path (`games_nh_sellprice_value`) with `matches` and `pointer` written,
-  typed over every value in the pile and counted per file. A top-level array is
-  one TEXT column of its JSON; an array further in is named in a note, not
-  drafted. A pile whose documents are all read through an array at the same
-  pointer keeps the draft it had.
+  typed over every value in the pile and counted per file — "null where
+  absent" when its top-level key is in every file, so it needs no
+  `if_missing` (villagerdb's 7,443 items draft and fit with no edit at all).
+  A top-level array is one TEXT column of its JSON; an array further in is
+  named in a note, not drafted. A pile whose documents are all read through an
+  array at the same pointer keeps the draft it had, with a note naming
+  `--records`.
 
 ### Changed
 
 - **A root JSON object with no array in it is read** — `tdy sniff`,
   `messy()` and `tdy draft` read it as one record (note: "this document is one
   object and is read as one record") where they declined it with "this JSON
-  document contains no array of records". A root object that holds arrays is
-  read exactly as before, and its note now also names the record reading.
+  document contains no array of records". That includes a `.json` file holding
+  one NDJSON line, which is one valid document. "No array" counts empty ones: a
+  root object whose only arrays are empty (`{"status":"ok","count":0,
+  "rows":[]}`) is zero records and is still declined, now naming the array and
+  `record = true`. A root object whose every value is an object may be a map of
+  records and is read below the flag line, with a note. A root object that
+  holds arrays is read exactly as before, and its note now also names the
+  record reading.
 - **A root object with a single record array is fitted by elimination.**
   `tdy fit` used to read the one array directly; it now tries the document as
   one record beside it, so its plan carries a "frame proved by elimination"
@@ -52,6 +64,19 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   look for stacked tables inside one.
 - **The inference prompt is `infer-v6`**: the sidecar schema it carries gained
   `record`. Sidecars record the version in their provenance.
+
+### What a pile of one-object documents costs, and what is deferred
+
+Measured on villagerdb's 7,443 item documents (release build): the first
+`tdy fit` takes 92 s and 1.4 GB, a refit 32 s, and every query over
+`dataset()` 24 s and 1.1 GB, because each member keeps its own sidecar — 47 KB
+for 121 columns — and each is parsed and fingerprinted on every refit, query
+and listing (`.ls` takes 17 s). 483 villager documents take 3 s to fit and
+0.6 s to query. Deferred, each its own slice: one spec shared across a pile's
+members; one row per element of an array inside a record (fan-out);
+`--accept` for many members at once (it is per member); and a partial lock —
+one malformed document still blocks the whole pile, by design. A JSON
+document larger than the 4 MiB probe cannot be fitted, as before.
 
 ## 0.3.1 — 2026-10-02
 

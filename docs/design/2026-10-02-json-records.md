@@ -53,6 +53,25 @@ Keeping the second row's reading is deliberate: `messy('report.json')` on a
 document whose point is its `rows` array must not start returning one row. The
 doubt already says a person should look.
 
+Two refinements, from review (2026-10-02):
+
+- **"No array anywhere" counts empty arrays.** A root object whose only arrays
+  are empty (`{"status":"ok","count":0,"rows":[]}`, the ordinary "no results"
+  export) is zero records, not one: declined, naming the first empty array and
+  `record = true` as the way to say the document is the record. In a pile the
+  target still decides: `fit` tries the record frame and fits it when the
+  declared table binds the envelope's keys.
+- **A map of records is not read confidently.** Two or more top-level keys
+  whose every value is an object (`{"ace":{…},"bob":{…}}`) is read as one
+  record — no value is wrong — with a 0.25 doubt (below the flag line) and the
+  note "every top-level value is an object — this may be a map of records
+  keyed by `ace`, `bob`, … rather than one record".
+- **`tdy draft --records`** (console: `.draft … --records`) forces the
+  document-as-record reading for every root-object JSON file of a pile, for
+  the case the draft would otherwise read through an array every document
+  holds at the same pointer (§6). Refused when no file is a root-object
+  document.
+
 ## 4. In a pile, the target decides
 
 `fit` already tries a declared table against every enumerable frame — record
@@ -98,15 +117,28 @@ sell_price BIGINT OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value')
 
 `tdy draft` over JSON documents:
 
-- a document sniffed as one record contributes its top-level keys as columns,
-  and every **scalar leaf** under a nested object down to depth 4 as a column
-  named from its path (`games_nh_sellprice_value`), declared with `matches` for
-  the top-level key and `pointer` for the rest;
-- a nested **array** is not descended into; its key is drafted as one TEXT
-  column of JSON, with a comment saying so;
+- a root-object document contributes its top-level keys as columns, and every
+  **scalar leaf** under a nested object down to depth 4 as a column named
+  from its path (`games_nh_sellprice_value`), declared with `matches` for the
+  top-level key and `pointer` for the rest — every root-object document of the
+  pile, unless every one of them is sniffed onto an array at the same pointer
+  (an API dump's `rows`), which keeps the array draft with a NOTE naming
+  `tdy draft --records`;
+- a nested **array** is not descended into: at the top level its key is one
+  TEXT column of JSON, with a comment saying so; further in it cannot be a
+  column at all (a pointer onto an array is an error), so it is named in a
+  header NOTE with how many files hold it, and not drafted (as built: the
+  first wording here drafted it as a TEXT column, which the unedited draft
+  could not fit);
 - presence is counted per file as today, so a leaf that exists in 3,100 of
-  7,444 documents says "in 3100 of 7444 file(s)" and the person adds
-  `if_missing = 'null'` — the draft reports, it does not declare absence;
+  7,444 documents says "in 3100 of 7444 file(s)" — and, where its top-level
+  key is in every file, "; null where absent", since the pointer then finds
+  nothing and no `if_missing` is needed; a leaf under a key some files lack
+  keeps the plain count and the person adds `if_missing = 'null'` — the
+  draft reports, it does not declare absence;
+- a top-level key one root array or NDJSON file of the pile also has is one
+  column, not two; a key that is a scalar in some documents and an object in
+  others is present in all of them (the object's JSON text is the cell);
 - `regions_of` is not run over JSON text (a blank line inside pretty-printed
   JSON is not a table boundary).
 
