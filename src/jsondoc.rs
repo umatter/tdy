@@ -879,4 +879,75 @@ mod tests {
             }
         }
     }
+
+    /// The proof that the reader changed nothing it was not meant to: every
+    /// JSON fixture, read both ways, agrees on structure, strings and every
+    /// number serde_json held exactly; a number it did not hold is the
+    /// source's text, and nothing else differs. A file one refuses, both do.
+    #[test]
+    fn every_json_fixture_reads_as_serde_json_read_it_but_for_inexact_numbers() {
+        fn same(ours: &Node, theirs: &serde_json::Value, inexact: &mut usize) -> bool {
+            use serde_json::Value as V;
+            match (ours, theirs) {
+                (Node::Null, V::Null) => true,
+                (Node::Bool(a), V::Bool(b)) => a == b,
+                (Node::String(a), V::String(b)) => a == b,
+                (Node::Number(a), V::Number(b)) => {
+                    if a.verbatim {
+                        *inexact += 1;
+                        true
+                    } else {
+                        a.text == b.to_string()
+                    }
+                }
+                (Node::Array(a), V::Array(b)) => {
+                    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same(x, y, inexact))
+                }
+                (Node::Object(a), V::Object(b)) => {
+                    a.len() == b.len()
+                        && ours.sorted_entries().into_iter().zip(b).all(|((k, x), (l, y))| k == l && same(x, y, inexact))
+                }
+                _ => false,
+            }
+        }
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if matches!(
+                    p.extension().and_then(|e| e.to_str()),
+                    Some("json" | "ndjson" | "jsonl")
+                ) && !p.to_string_lossy().ends_with(".tdy.json")
+                {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata"), &mut files);
+        assert!(files.len() >= 20, "{files:?}");
+        let (mut docs, mut inexact) = (0usize, 0usize);
+        for p in &files {
+            let bytes = std::fs::read(p).unwrap();
+            let (text, _) = crate::sample::decode_text(&bytes, None);
+            // A document, and each line, since an NDJSON file is both a
+            // refused document and a set of documents.
+            let mut texts: Vec<&str> = vec![&text];
+            texts.extend(text.lines().filter(|l| !l.trim().is_empty()));
+            for t in texts {
+                match (Node::parse(t), serde_json::from_str::<serde_json::Value>(t)) {
+                    (Ok(a), Ok(b)) => {
+                        docs += 1;
+                        assert!(same(&a, &b, &mut inexact), "{}: {t:.200}", p.display());
+                    }
+                    (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "{}", p.display()),
+                    (a, b) => panic!("{}: ours {a:?}, serde_json {b:?}", p.display()),
+                }
+            }
+        }
+        assert!(docs >= 40, "{docs}");
+        // json_shapes_precision.ndjson's amount_lossy, line 1, is the one.
+        assert_eq!(inexact, 1);
+    }
 }
