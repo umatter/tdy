@@ -1,0 +1,13 @@
+{
+  "id": "acorn",
+  "name": "Acorn",
+  "category": "Crafting",
+  "games": {
+    "nh": {
+      "sellPrice": {
+        "currency": "bells",
+        "value": 200
+      }
+    }
+  }
+}

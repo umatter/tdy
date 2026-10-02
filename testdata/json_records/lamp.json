@@ -1,0 +1,13 @@
+{
+  "name": "Lamp",
+  "category": "Furniture",
+  "id": "lamp",
+  "games": {
+    "nh": {
+      "sellPrice": {
+        "currency": "bells",
+        "value": 1200
+      }
+    }
+  }
+}

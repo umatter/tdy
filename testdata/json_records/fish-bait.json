@@ -1,0 +1,10 @@
+{
+  "id": "fish-bait",
+  "name": "Fish Bait",
+  "category": "Tools",
+  "games": {
+    "nh": {
+      "orderable": false
+    }
+  }
+}

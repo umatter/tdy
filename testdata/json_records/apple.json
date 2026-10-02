@@ -1,0 +1,19 @@
+{
+  "id": "apple",
+  "name": "Apple",
+  "category": "Food",
+  "games": {
+    "nh": {
+      "sellPrice": {
+        "currency": "bells",
+        "value": 100
+      }
+    },
+    "nl": {
+      "sellPrice": {
+        "currency": "bells",
+        "value": 100
+      }
+    }
+  }
+}
