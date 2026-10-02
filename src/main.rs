@@ -268,7 +268,13 @@ fn check_json(
         if let Some((file, plan)) = tdy::commands::lock_held(target_path, &plans, f)? {
             let v = judge(&plan.spec, target, false);
             let mismatches: Vec<String> = v.mismatches().iter().map(|m| m.message()).collect();
-            let verdict = if plan.is_fresh(&file)? { v.label().to_ascii_lowercase() } else { "stale".into() };
+            let verdict = if plan.edited() {
+                "edited".into()
+            } else if plan.is_fresh(&file)? {
+                v.label().to_ascii_lowercase()
+            } else {
+                "stale".into()
+            };
             if verdict != "conforms" {
                 bad += 1;
             }

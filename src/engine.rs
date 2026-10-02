@@ -2908,12 +2908,13 @@ pub fn preview(
     preview_whole(spec, path, limits, max_rows).map(|(batch, _)| batch)
 }
 
-/// [`preview`], and whether the batch is everything the spec reads from
-/// the file: extraction ended before its cap (so it saw the end of the
-/// data, and a `skip_rows` tail was applied) and nothing was cut after the
-/// transforms. When it is, a preview of any larger size is this same
-/// batch — which is what lets `tdy fit`'s magnitude pass reuse a member's
-/// dry run instead of reading the member again.
+/// [`preview`], and whether the batch is the one a larger preview —
+/// `preview(…, 2000)` — would give: extraction ended before its row cap
+/// and was not marked truncated, and nothing was cut after the transforms.
+/// That is a statement about rows, not about the file: a text file over
+/// the 4 MiB read cap is still only its prefix, and so is a `preview` of
+/// any size. It is what lets `tdy fit`'s magnitude pass reuse a member's
+/// dry run instead of reading the member again, getting the same batch.
 pub fn preview_whole(
     spec: &ParseSpec,
     path: &Path,

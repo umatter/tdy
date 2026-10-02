@@ -858,7 +858,9 @@ What stays the same:
 - **Switching deletes nothing.** Tool-written sidecars left from before the
   declaration are reused as they always were. `tdy fit TARGET --prune-sidecars`
   plans each such member afresh and moves it into the lock only when the plan is
-  identical, after the lock is written:
+  identical, after the lock is written. Planning afresh is a real plan: a member
+  whose frame a model proposed may consult the model again (and cost what that
+  costs).
 
   ```
   plans: 9 member(s) share 3 plan(s), held in the lock
@@ -887,8 +889,10 @@ What stays the same:
 
 `tdy draft` writes `plans = 'lock'` for a pile of 200 files or more, and `tdy
 fit` on a sidecar target that has just written 200 sidecars of one plan says so
-once on stderr. A tdy older than this one refuses a `lock_version = 2` lock by
-number; `messy('file')` is a question about a file, not a member, and is
+once on stderr. tdy 0.3.x cannot read a `lock_version = 2` lock: it fails on
+the first field it does not know ("… is not a valid lock file: TOML parse error
+… unknown field `spec`"), or on the target first ("unknown WITH option
+`plans`"). `messy('file')` is a question about a file, not a member, and is
 untouched.
 
 ### When a file needs a human

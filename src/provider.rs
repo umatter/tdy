@@ -946,6 +946,15 @@ fn validate_lock_held(
             target.display()
         );
     }
+    if plan.edited() {
+        bail!(
+            "{}: {held}, and that plan was edited by hand: it no longer hashes to its id{}. \
+             Re-run `tdy fit {}` to rebuild the lock.",
+            path.display(),
+            crate::plans::written_by_note(lock),
+            target.display()
+        );
+    }
     if !plan.is_fresh(path)? {
         bail!(
             "{} has changed since its plan was recorded ({held}). Re-run `tdy fit {}`.",

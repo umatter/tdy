@@ -154,6 +154,19 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
         if let Some((file, plan)) = lock_held(target_path, &plans, f)? {
             let shown = f.display();
             let verdict = judge(&plan.spec, &target, false);
+            if plan.edited() {
+                writeln!(
+                    text,
+                    "\n{shown}: EDITED — its plan in {} was edited by hand: it no longer hashes to \
+                     its id{}, and a query refuses it.\n  Run `tdy fit {}` to rebuild the lock; give \
+                     the member a sidecar (method = \"manual\") to change its plan.",
+                    plan.whereabouts(),
+                    plans.lock().map(crate::plans::written_by_note).unwrap_or_default(),
+                    target_path.display()
+                )?;
+                bad += 1;
+                continue;
+            }
             if !plan.is_fresh(&file)? {
                 writeln!(
                     text,

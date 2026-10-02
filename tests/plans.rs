@@ -765,3 +765,23 @@ fn fitting_one_file_of_a_lock_pile_says_its_sidecar_overrides_the_lock() {
     assert!(text.contains("overrides the lock's plan for this member until `tdy fit"), "{text}");
     assert_eq!(sidecars(dir.path()), vec!["2025-01.csv.tdy.toml"]);
 }
+
+/// `check --against` and `validate` say about an edited lock plan what
+/// `dataset()` says: refused, edited by hand — never CONFORMS or ok.
+#[test]
+fn check_and_validate_refuse_an_edited_lock_plan() {
+    let (dir, t) = staged(true);
+    fit(&t);
+    let text = lock_text(&t);
+    let edited = text.replacen("\"keine\",\n]\nthousands_separator", "\"keine\",\n    \"1'100.00\",\n]\nthousands_separator", 1);
+    assert_ne!(edited, text);
+    std::fs::write(tdy::lockfile::lock_path(&t), edited).unwrap();
+    let jan = dir.path().join("2025-01.csv");
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", jan.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success() && !text.contains("CONFORMS"), "{text}");
+    assert!(text.contains("EDITED") && text.contains("edited by hand"), "{text}");
+    let out = tdy(&["validate", jan.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("edited by hand"), "{err}");
+}

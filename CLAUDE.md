@@ -823,8 +823,12 @@ none; its `ParseSpec` is recorded once in the lock's `[[spec]]` table (`lockfile
 `id`, method, model, tool and prompt version — no `created_at`, which is the lock's own, nor
 `sampled_bytes`, a fact about one file — and the spec flattened beside them, laid out as a
 sidecar's `[spec]`), and the member names it (`Member.spec`). `plans::spec_id` is blake3 over
-the sidecar serialiser's output with `notes` cleared, written `b3:<hex>`; notes are per fit of
-one file and the only thing that differed across villagerdb's 7,443 plans. An entry carries
+the sidecar serialiser's output with `notes` cleared, then the method and the model, written
+`b3:<hex>`; notes are per fit of one file and the only thing that differed across villagerdb's
+7,443 plans. The provenance is in the id because the review a model's frame needs is rebuilt
+from it: the same spec from the sniffer and from a model are two entries, and a provenance
+edited in the lock no longer hashes to the id (`a_known_plan_has_a_known_id` pins the toml
+printer; a mismatch in a lock another tdy wrote says so, `plans::written_by_note`). An entry carries
 the notes every one of its members begins with and each member keeps only the tail
 (`Member.notes`), so the whole list is lossless and in order — storing each member's 122
 notes would have been a 43 MB lock. `LockedSpec` deserialises **by hand**: `#[serde(flatten)]`
@@ -832,12 +836,16 @@ swallows unknown keys, and an unknown key in an entry must be refused exactly as
 `lock_version = 2` exactly when there is a spec table (`Lock::version_for`), so a lock without
 one is version 1 byte for byte; `Lock::load` reads the version alone first and refuses any
 other by number, refuses a version-1 lock carrying plans and a member naming a plan the lock
-does not hold.
+does not hold. (0.3.1 does not get as far as the number: it fails on the unknown `spec`
+field, and on `plans` in the target before that.)
 
 The rule every caller asks — "what is this member's spec?" — is written once,
 `plans::Plans::plan_for`: **the member's sidecar file wins when it exists** (through
 `sidecar::load_member`, every old check intact; a refused one is an error, never a fall-back
-to the lock), else the plan its lock entry names. `Plans::new` validates and identifies each
+to the lock), else the plan its lock entry names — **and only if that plan reads the member's own sheet and
+block** (`reads_its_own_member`, the checks `load_member` makes of a sheet or region sidecar):
+a `spec =` line is text, and two swapped lines made one block read twice with exit 0.
+`Plans::new` validates and identifies each
 distinct entry once and indexes the members; `report::fit_pile` (reuse), `lockfile::drift`
 (`SpecEdited`, via `Plans::current_digest`), `dataset::resolve`, `commands::check_text` and
 `main::check_json` (`commands::lock_held`), `provider::validate_quiet`, `profile`
@@ -849,9 +857,12 @@ question about a file, not a member.
 Load-bearing details. A lock-held plan's freshness is `plans::State::AsLocked` — the bytes
 the lock recorded — so `dataset()`, which has just run `drift`, pays no second hash. An
 acceptance of a lock-held plan is tied to its **id** (`Member::recorded_digest`; its
-`spec_digest` stays empty), and `report::carry` carries it only while the plan's digest is
-that id — a sidecar written over it asks again, at query time and at the next fit; a
-sidecar-held member carries exactly as before. `Plan::edited`: an entry whose content no
+`spec_digest` stays empty), and `report::carry` carries it only while the identity of the plan
+the member has now (`identity_for`, computed only in that case) is that id — the same plan
+written out as a sidecar by a switch to `'sidecars'` carries, a different one asks again; a
+sidecar-held member carries exactly as before. A sidecar that appears beside a lock-held
+member after the fit is `Drift::SidecarOverrides` (one `exists()` per such member) until a
+pile fit records the member as sidecar-held; `tdy fit T FILE` says so when it writes one. `Plan::edited`: an entry whose content no
 longer hashes to its id was changed in the lock, which is derived state — `dataset()` refuses
 it (after conformance, so a non-conforming edit says "no longer produces"), and `fit`
 re-plans it with a note. Under `plans = 'lock'` a member that *has* a sidecar keeps it (a
@@ -859,9 +870,7 @@ stale or refused tool-written one is rewritten in place, as ever): nothing is de
 by `--prune-sidecars`, which plans the member afresh, moves it only when `spec_id` matches,
 counts moved / kept (manual) / kept (differs), deletes **after** `Lock::save`, and is refused
 on a sidecars target. Under `plans = 'sidecars'` a plan read from an old lock is written back
-out as a sidecar. A plan whose id an entry already has but whose provenance differs (a model
-framed it) cannot share that entry without misstating where it came from — and the review a
-model's frame needs rides on provenance — so it keeps a sidecar (`hold_plans` conflicts).
+out as a sidecar.
 `fit_pile` identifies a fresh plan through `Interner`: a JSON serialisation recognises a plan
 already seen (equal JSON, equal value, equal identity) so the TOML identity is computed and
 the spec held once per distinct plan — per member it cost what serialising a sidecar costs,

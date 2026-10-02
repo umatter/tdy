@@ -169,9 +169,9 @@ pub struct Lock {
 
 /// The version of a lock that holds no plans: what tdy has always written.
 pub const LOCK_VERSION: u32 = 1;
-/// The version of a lock with a spec table. A tdy that does not know it
-/// refuses it by number, which is the lock's behaviour for any version it
-/// does not know.
+/// The version of a lock with a spec table. This build refuses a version it
+/// does not know by number; 0.3.x, which parsed the whole lock first, fails
+/// on the `spec` field it does not know before it reads the version.
 pub const LOCK_VERSION_PLANS: u32 = 2;
 
 /// `sales.tdy.sql` -> `sales.tdy.lock`

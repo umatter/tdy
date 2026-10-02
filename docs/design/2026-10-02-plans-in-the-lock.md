@@ -113,8 +113,12 @@ file with no sidecar is sniffed as it always was.
 
 `lock_version = 2` is written only when the lock holds a spec table; a lock
 without one stays version 1 and reads as before. A tdy that does not know
-version 2 refuses it by number, which is the lock's existing behaviour for an
-unknown version.
+version 2 refuses it — though not by number, as this page first said: 0.3.1
+reads the whole lock before the version and fails on the first field it does
+not know, "… is not a valid lock file: TOML parse error at line 14, column 3 …
+unknown field `spec`, expected one of `lock_version`, `target`, …" (and on a
+target that declares the option, earlier: "unknown WITH option `plans`"). This
+build and later read the version first and refuse an unknown one by number.
 
 ## 5. Hints, not surprises
 

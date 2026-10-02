@@ -73,9 +73,17 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 ### Changed
 
 - **A lock that holds plans is `lock_version = 2`, which tdy 0.3.x does not
-  read** — it refuses it by number and asks for `tdy fit`. A lock with no spec
-  table is still version 1, byte for byte, so a target that does not declare
-  `plans = 'lock'` writes and reads exactly the lock it did.
+  read.** 0.3.1 fails on it before it gets to the version: `tdy query`, `tdy
+  check` and even `tdy fit` print "… is not a valid lock file: TOML parse error
+  at line 14, column 3 … unknown field `spec`, expected one of `lock_version`,
+  `target`, …", so going back to 0.3.x means removing the lock (and the
+  `plans` option, which 0.3.1 refuses first: "unknown WITH option `plans`").
+  This build reads the version first and refuses an unknown one by number. A
+  lock with no spec table is still version 1, byte for byte, so a target that
+  does not declare `plans = 'lock'` writes and reads exactly the lock it did.
+  Version-2 locks written from this branch record `tool_version = "0.3.1"` —
+  the version that cannot read them; the release that carries this bumps the
+  version.
 - **A refit proves conformance once per member**, not twice, and a member whose
   dry run read all of it is not read again for the magnitude check — a refit of
   the 7,443 items with sidecars is 26 s where it was 31 s.
