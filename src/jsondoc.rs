@@ -136,11 +136,18 @@ impl<'de> Visitor<'de> for NodeVisitor {
         Ok(Node::Array(items))
     }
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Node, A::Error> {
+        // Key to slot, beside the ordered entries: a duplicate keeps its
+        // first position and takes the last value, in O(1) per key. A scan
+        // of the entries so far made a 200,000-key object take minutes.
         let mut entries: Vec<(String, Node)> = Vec::new();
+        let mut slot: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         while let Some((k, v)) = map.next_entry::<String, Node>()? {
-            match entries.iter_mut().find(|(have, _)| *have == k) {
-                Some(slot) => slot.1 = v,
-                None => entries.push((k, v)),
+            match slot.get(&k) {
+                Some(&i) => entries[i].1 = v,
+                None => {
+                    slot.insert(k.clone(), entries.len());
+                    entries.push((k, v));
+                }
             }
         }
         Ok(Node::Object(entries))
@@ -161,6 +168,24 @@ mod tests {
         let text = r#"{"z":1,"a":{"y":2.5,"b":[true,null]},"m":"x"}"#;
         let v: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(Node::parse(text).unwrap().to_value(), v);
+    }
+
+    /// The duplicate-key check must not scan the keys so far: a 200,000-key
+    /// object took 342 s that way.
+    #[test]
+    fn a_wide_object_parses_in_linear_time() {
+        let mut text = String::from(r#"{"id":1,"blob":{"#);
+        for i in 0..200_000 {
+            if i > 0 {
+                text.push(',');
+            }
+            text.push_str(&format!("\"k{i}\":{i}"));
+        }
+        text.push_str("}}");
+        let t = std::time::Instant::now();
+        let n = Node::parse(&text).unwrap();
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+        assert_eq!(n.pointer("/blob/k199999"), Some(&Node::Scalar(199_999.into())));
     }
 
     #[test]
