@@ -907,7 +907,9 @@ way), ambiguous date orders drop confidence below the escalation threshold, lead
 and oversized integers stay text, money becomes `decimal`, and a decimal value with more
 fractional digits than the declared scale is refused unless the target column declares
 `round = 'half_away'` (`spec::Rounding`; a sniffed sidecar's unset `round` still means
-half-away, with its note), and a JSON number keeps the digits it was written with.
+half-away, with its note), and a JSON number keeps its value, and its written digits wherever
+a double could not hold them or would print them in exponent form (`-0` is still `-0.0`, `1E+2`
+still `100.0`).
 
 ## Architecture
 

@@ -18,7 +18,9 @@
 //! and the same "is this the end of the input" classification
 //! ([`ParseError::is_eof`]) the NDJSON truncated-last-line diagnosis rests on.
 //!
-//! **A number cell keeps its digits.** [`render`] is the whole rule: a
+//! **A number keeps its value, and its written digits wherever a double could
+//! not hold them or would print them in exponent form.** [`render`] is the
+//! whole rule: a
 //! number that serde_json held exactly renders exactly as serde_json renders
 //! it (`1.0`, `1e3` → `1000.0`, `-0` → `-0.0`); a number it did not hold
 //! exactly renders as the text the file wrote. Only numbers that used to come
@@ -543,6 +545,36 @@ fn same_decimal(a: &str, b: &str) -> bool {
     }
 }
 
+/// An object's keys by hash: the slot of the first key with each hash.
+#[derive(Default)]
+struct KeySlots {
+    hasher: std::collections::hash_map::RandomState,
+    first: std::collections::HashMap<u64, usize>,
+}
+
+impl KeySlots {
+    fn hash(&self, key: &str) -> u64 {
+        use std::hash::BuildHasher;
+        self.hasher.hash_one(key)
+    }
+
+    fn insert(&mut self, key: &str, slot: usize) {
+        let h = self.hash(key);
+        self.first.entry(h).or_insert(slot);
+    }
+
+    /// The slot holding `key`, if any. A hash shared with another key — a
+    /// 64-bit collision — is settled by scanning, so it is never wrong.
+    fn find(&self, entries: &[(String, Node)], key: &str) -> Option<usize> {
+        let &i = self.first.get(&self.hash(key))?;
+        if entries[i].0 == key {
+            Some(i)
+        } else {
+            entries.iter().position(|(k, _)| k == key)
+        }
+    }
+}
+
 struct Parser<'a> {
     src: &'a [u8],
     text: &'a str,
@@ -820,11 +852,15 @@ impl<'a> Parser<'a> {
 
     fn object(&mut self, depth: usize) -> Result<Node, ParseError> {
         // A duplicate keeps its first position and takes the last value. Up
-        // to a few keys a scan is cheapest; past that a key-to-slot map, as a
-        // scan of the entries so far made a 200,000-key object take minutes.
+        // to a few keys a scan is cheapest; past that a map from the key's
+        // hash to its slot, as a scan of the entries so far made a
+        // 200,000-key object take minutes. The map holds hashes, not copies
+        // of the keys (sniffing a million-key object peaked at 278 MB with
+        // copies, 204 MB without); a hash that lands on another key falls
+        // back to a scan.
         const SCAN: usize = 16;
         let mut entries: Vec<(String, Node)> = Vec::new();
-        let mut slot: Option<std::collections::HashMap<String, usize>> = None;
+        let mut slot: Option<KeySlots> = None;
         self.skip_ws();
         match self.src.get(self.pos) {
             None => return Err(self.eof("EOF while parsing an object")),
@@ -850,18 +886,22 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             let v = self.value(depth)?;
             let existing = match &slot {
-                Some(map) => map.get(&key).copied(),
+                Some(slots) => slots.find(&entries, &key),
                 None => entries.iter().position(|(k, _)| *k == key),
             };
             match existing {
                 Some(i) => entries[i].1 = v,
                 None => {
-                    if let Some(map) = &mut slot {
-                        map.insert(key.clone(), entries.len());
+                    if let Some(slots) = &mut slot {
+                        slots.insert(&key, entries.len());
                     }
                     entries.push((key, v));
                     if slot.is_none() && entries.len() > SCAN {
-                        slot = Some(entries.iter().enumerate().map(|(i, (k, _))| (k.clone(), i)).collect());
+                        let mut slots = KeySlots::default();
+                        for (i, (k, _)) in entries.iter().enumerate() {
+                            slots.insert(k, i);
+                        }
+                        slot = Some(slots);
                     }
                 }
             }
@@ -925,6 +965,21 @@ mod tests {
         let Some(Node::Object(blob)) = n.pointer("/blob") else { panic!() };
         assert_eq!(blob.len(), 200_000);
         assert_eq!(blob[5].0, "k5", "and keeps its first position");
+    }
+
+    /// Two keys sharing a hash cannot be told apart by the map; the scan
+    /// it falls back to can. Forced here by pointing one key's hash at the
+    /// other's slot.
+    #[test]
+    fn a_hash_collision_between_keys_falls_back_to_a_scan() {
+        let entries = vec![("a".to_string(), Node::Null), ("b".to_string(), Node::Bool(true))];
+        let mut slots = KeySlots::default();
+        slots.insert("a", 0);
+        let hb = slots.hash("b");
+        slots.first.insert(hb, 0); // "b" now collides with "a"
+        assert_eq!(slots.find(&entries, "a"), Some(0));
+        assert_eq!(slots.find(&entries, "b"), Some(1));
+        assert_eq!(slots.find(&entries[..1], "b"), None);
     }
 
     #[test]

@@ -1283,10 +1283,12 @@ Details worth knowing:
   string of JSON. Any depth, and the same source may be opened more than once.
   An unresolvable pointer is a null; one landing on an object or array is an
   error, since the column would go back to holding JSON.
-- **A JSON number keeps the digits it was written with.** One a double holds
-  exactly reads as it always has (`1e3` is `1000.0`); one it does not — an
-  identifier past 64 bits, a thirty-digit amount — reads as the file wrote it,
-  never as its nearest double, so it can land in `TEXT` or `DECIMAL(p, s)`.
+- **A JSON number keeps its value, and its written digits wherever a double
+  could not hold them.** One a double holds exactly reads as it always has
+  (`1e3` is `1000.0`); one it does not — an identifier past 64 bits, a
+  thirty-digit amount — reads as the file wrote it, never as its nearest
+  double, so it can land in `TEXT` or `DECIMAL(p, s)`; and `0.00000123` stays
+  `0.00000123`, not `1.23e-6`.
 - **`epoch = "seconds" | "milliseconds" | "microseconds"`** reads an integer
   timestamp. Seconds also work with `format = "%s"` alone, which is what
   chrono's specifier already means; the option exists for the scales it does

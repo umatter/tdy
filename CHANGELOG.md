@@ -70,7 +70,8 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
 ### Fixed
 
-- **A JSON number keeps the digits it was written with.** tdy read JSON data
+- **A JSON number keeps its value, and its written digits wherever a double
+  could not hold them.** tdy read JSON data
   through serde_json, which holds a number as a 64-bit integer or a double, so
   `{"id": 12345678901234567890123}` read as `1.2345678901234568e+22`, an
   integer past u64 as its nearest double, and a thirty-digit amount lost its

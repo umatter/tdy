@@ -218,7 +218,12 @@ fn bigint_and_a_short_scale_are_still_refused() {
     let dir = pile();
     let t = write(&dir, "t.tdy.sql", "CREATE TABLE t (id BIGINT NOT NULL) WITH (files = '*.ndjson')");
     let fit = tdy(&["fit", t.to_str().unwrap()]);
-    assert!(!fit.status.success(), "{}", out(&fit));
+    let text = out(&fit);
+    assert!(!fit.status.success(), "{text}");
+    assert!(
+        text.contains("cannot parse \"12345678901234567890123\"") && text.contains("too large"),
+        "the refusal names the value and why: {text}"
+    );
 
     let t = write(&dir, "u.tdy.sql", "CREATE TABLE u (amount DECIMAL(38,10) NOT NULL) WITH (files = '*.ndjson')");
     let fit = tdy(&["fit", t.to_str().unwrap()]);
