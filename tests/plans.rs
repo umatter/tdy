@@ -717,3 +717,51 @@ fn switching_storage_keeps_acceptances() {
     assert_eq!(lock_text(&t).matches("accepted = true").count(), 1);
     ok(&query(&t, "SELECT count(*) FROM dataset('@')"));
 }
+
+/// A sidecar that appears beside a lock-held member is read in place of the
+/// plan the lock names — so until a fit records it, the two disagree, and
+/// that is drift: the query stops and names it. The fit records the member
+/// as sidecar-held, and the query serves what the sidecar reads.
+#[test]
+fn a_sidecar_beside_a_lock_held_member_is_drift_until_a_fit_records_it() {
+    let (dir, t) = staged(true);
+    fit(&t);
+    let april = dir.path().join("2025-04.csv");
+    let lock = tdy::lockfile::Lock::load(&t).unwrap().unwrap();
+    let mut spec = lock.spec(lock.member("2025-04.csv", None, None).unwrap().spec.as_deref().unwrap()).unwrap().spec.clone();
+    spec.transforms.insert(0, tdy::spec::Transform::SkipRows { head: 0, tail: 1 });
+    tdy::sidecar::save(
+        &april,
+        &spec,
+        tdy::sidecar::ProvenanceInfo {
+            method: tdy::spec::InferenceMethod::Manual,
+            model: None,
+            prompt_version: None,
+            sampled_bytes: None,
+        },
+    )
+    .unwrap();
+    let out = query(&t, "SELECT count(*) AS n, sum(amount) AS total FROM dataset('@')");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(err.contains("a sidecar now overrides the lock's plan for 2025-04.csv"), "{err}");
+
+    fit(&t);
+    let q = ok(&query(&t, "SELECT count(*) AS n, sum(amount) AS total FROM dataset('@')"));
+    assert!(q.contains(" 35 ") && q.contains("55910.00"), "{q}");
+    let lock = tdy::lockfile::Lock::load(&t).unwrap().unwrap();
+    let m = lock.member("2025-04.csv", None, None).unwrap();
+    assert!(m.spec.is_none() && !m.spec_digest.is_empty(), "{m:?}");
+}
+
+/// `tdy fit T FILE` under `plans = 'lock'` still writes the file's sidecar,
+/// and says what that does to the pile.
+#[test]
+fn fitting_one_file_of_a_lock_pile_says_its_sidecar_overrides_the_lock() {
+    let (dir, t) = staged(true);
+    fit(&t);
+    let jan = dir.path().join("2025-01.csv");
+    let text = ok(&tdy(&["fit", t.to_str().unwrap(), jan.to_str().unwrap()]));
+    assert!(text.contains("overrides the lock's plan for this member until `tdy fit"), "{text}");
+    assert_eq!(sidecars(dir.path()), vec!["2025-01.csv.tdy.toml"]);
+}

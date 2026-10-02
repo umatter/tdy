@@ -374,6 +374,9 @@ pub enum Drift {
     MixedGranularity(String),
     /// The data is unchanged but its spec was edited after it was fitted.
     SpecEdited(String),
+    /// The lock holds this member's plan, and a sidecar has since appeared
+    /// beside it — which would be read instead, a plan nobody proved here.
+    SidecarOverrides(String),
 }
 
 /// Fingerprint of a member's spec, as stored in its sidecar.
@@ -419,6 +422,10 @@ impl Drift {
             Drift::SpecEdited(p) => format!(
                 "{p}'s spec was edited after it was accepted — the acceptance was given to \
                  the plan as it read then. Re-accept it:  tdy fit <TARGET> --accept {p}"
+            ),
+            Drift::SidecarOverrides(p) => format!(
+                "a sidecar now overrides the lock's plan for {p} — run `tdy fit` to record it \
+                 (or remove the sidecar to keep the lock's)"
             ),
             Drift::TargetChanged => {
                 "the target declaration changed, so every member must be re-fitted — \
@@ -533,6 +540,14 @@ pub fn drift(lock: &Lock, target: &Target, target_file: &Path) -> Result<Vec<Dri
         // entry's identity, recomputed, when the lock holds its plan — so a
         // sidecar written over a lock-held plan, or an edited spec table,
         // retracts an acceptance exactly as an edited sidecar does.
+        // A lock-held member's sidecar is read in place of the plan the lock
+        // names (the sidecar file wins), so one appearing since the fit is a
+        // plan the lock never proved: one `exists()` per lock-held member.
+        for m in &members {
+            if m.spec.is_some() && crate::sidecar::sidecar_path_for(&p, m.sheet.as_deref(), m.region).exists() {
+                out.push(Drift::SidecarOverrides(m.name()));
+            }
+        }
         for m in members {
             let recorded = m.recorded_digest();
             if m.accepted && !recorded.is_empty() {

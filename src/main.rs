@@ -432,7 +432,7 @@ async fn fit_command(
     match tdy::fit::plan(file, &target, cfg, Some(&tdy::progress::stderr_sink())).await {
         Ok(planned) => {
             let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
-            let report = serde_json::json!({
+            let mut report = serde_json::json!({
                 "path": file.display().to_string(),
                 "status": if fitted.review.is_some() { "needs_review" } else { "fits" },
                 "via": match method {
@@ -447,6 +447,9 @@ async fn fit_command(
                 "notes": fitted.spec.notes,
                 "dry_run": dry_run,
             });
+            if !dry_run && target.plans == tdy::target::PlanStore::Lock {
+                report["note"] = serde_json::Value::String(tdy::commands::overrides_note(target_path));
+            }
             if !dry_run {
                 tdy::sidecar::save(
                     file,

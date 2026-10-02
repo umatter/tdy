@@ -312,6 +312,16 @@ pub fn lock_held(
     Ok(plans.plan_for(&file, &m)?.map(|p| (file, p)))
 }
 
+/// What a sidecar written by `tdy fit T FILE` does to a `plans = 'lock'`
+/// pile: the sidecar wins, so it is drift until a pile fit records it.
+pub fn overrides_note(target_path: &Path) -> String {
+    format!(
+        "note: `{0}` keeps its plans in the lock; this sidecar overrides the lock's plan for this \
+         member until `tdy fit {0}` records it (a query refuses it as drift until then)",
+        target_path.display()
+    )
+}
+
 pub struct FitOneOutcome {
     pub text: String,
     pub ok: bool,
@@ -394,6 +404,9 @@ pub async fn fit_one_text(
                 },
             )?;
             writeln!(text, "\nwrote {}", path.display())?;
+            if target.plans == crate::target::PlanStore::Lock {
+                writeln!(text, "{}", overrides_note(target_path))?;
+            }
             Ok(FitOneOutcome { text, ok: true, wrote: Some(path), gaps: false })
         }
         Err(FitError::Gaps(gaps)) => {
