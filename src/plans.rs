@@ -260,6 +260,8 @@ impl<'a> Plans<'a> {
                 short_id(id)
             ),
         };
+        // The sheet and block first: for a sheet or region member it is the
+        // clearer sentence, and the binding below covers every member.
         reads_its_own_member(&held.spec, entry).map_err(|why| {
             anyhow::anyhow!(
                 "{}: the lock's plan {} {why}. A member's plan must be about its own sheet and \
@@ -268,6 +270,16 @@ impl<'a> Plans<'a> {
                 short_id(id)
             )
         })?;
+        if entry.plan_check.as_deref() != Some(plan_check(id, entry).as_str()) {
+            bail!(
+                "{}: the lock's plan {} was not recorded for member {} — the lock was edited, or \
+                 merged by hand; run `tdy fit {}`",
+                self.lock_path.display(),
+                short_id(id),
+                entry.name(),
+                target_of_lock(&self.lock_path).display()
+            );
+        }
         Ok(Some(Plan {
             spec: held.spec.clone(),
             own_notes: entry.notes.clone(),
@@ -335,6 +347,30 @@ fn reads_its_own_member(spec: &ParseSpec, m: &Member) -> std::result::Result<(),
         }
     }
     Ok(())
+}
+
+/// The binding of a lock-held plan to the member it was proved for:
+/// blake3 over the plan id, the member's path, sheet and region, and the
+/// member file's blake3, each field length-prefixed so no two different
+/// members can spell the same input.
+pub fn plan_check(id: &str, m: &Member) -> String {
+    let mut h = blake3::Hasher::new();
+    let mut field = |tag: &str, v: &str| {
+        h.update(format!("{tag}{}:", v.len()).as_bytes());
+        h.update(v.as_bytes());
+    };
+    field("id", id);
+    field("path", &m.path);
+    match &m.sheet {
+        Some(s) => field("sheet", s),
+        None => field("nosheet", ""),
+    }
+    match m.region {
+        Some(r) => field("region", &r.to_string()),
+        None => field("noregion", ""),
+    }
+    field("blake3", &m.blake3);
+    format!("b3:{}", h.finalize().to_hex())
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {

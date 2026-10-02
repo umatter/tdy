@@ -1325,6 +1325,7 @@ pub async fn fit_pile(
                     accepted: is_accepted,
                     spec: None,
                     notes: Vec::new(),
+                    plan_check: None,
                 });
                 if keep_in_lock {
                     held.push(HeldMember {
@@ -1436,6 +1437,7 @@ pub async fn fit_pile(
                     accepted: is_accepted,
                     spec: None,
                     notes: Vec::new(),
+                    plan_check: None,
                 });
                 if let Some(id) = id {
                     held.push(HeldMember {
@@ -1704,6 +1706,7 @@ fn hold_plans(members: &mut [Member], held: Vec<HeldMember>) -> Vec<lockfile::Lo
             let m = &mut members[h.member];
             m.spec = Some(id.clone());
             m.notes = h.notes[keep..].to_vec();
+            m.plan_check = Some(crate::plans::plan_check(&id, m));
         }
         specs.push(lockfile::LockedSpec {
             id,

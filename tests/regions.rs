@@ -75,7 +75,7 @@ fn a_hand_written_lock_over_three_regions_reads_all_and_names_them() {
     tdy::sidecar::save_member(&f, None, Some(2), &spec(RowWindow { start: 5, end: 9, ordinal: 2 }), prov()).unwrap();
     tdy::sidecar::save_member(&f, None, Some(3), &spec(RowWindow { start: 10, end: 14, ordinal: 3 }), prov()).unwrap();
     let (blake3, bytes) = tdy::sidecar::hash_file(&f).unwrap();
-    let member = |n: u32| Member { path: "report.csv".into(), sheet: None, region: Some(n), blake3: blake3.clone(), bytes, spec_digest: tdy::lockfile::spec_digest_for(&f, None, Some(n)), review: None, accepted: false, spec: None, notes: Vec::new() };
+    let member = |n: u32| Member { path: "report.csv".into(), sheet: None, region: Some(n), blake3: blake3.clone(), bytes, spec_digest: tdy::lockfile::spec_digest_for(&f, None, Some(n)), review: None, accepted: false, spec: None, notes: Vec::new(), plan_check: None };
     Lock { lock_version: LOCK_VERSION, target: "q".into(), target_hash: tdy::lockfile::target_hash(&target), tool_version: "test".into(), created_at: "now".into(), specs: Vec::new(), members: vec![member(1), member(2), member(3)] }.save(&t).unwrap();
     let out = tdy(&["query", &format!("SELECT _member, sum(amount) AS total FROM dataset('{}') GROUP BY 1 ORDER BY 1", t.display())]);
     let text = String::from_utf8_lossy(&out.stdout);

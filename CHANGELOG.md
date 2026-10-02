@@ -57,6 +57,13 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   documents a query drops from 24 s / 1.15 GB to 5.3 s / 78 MB, a refit from
   26 s to 6 s, `.ls` from 17 s to 0.6 s, a first fit from about 100 s / 1.3 GB
   to 59 s / 407 MB, and 348 MB of sidecars become a 2.8 MB lock.
+- **Each lock-held member carries `plan_check`**, a blake3 over its plan's id,
+  its path, sheet, region and its file's blake3, written when the fit proves
+  the plan for it. A `spec =` line pointed at another member's plan is
+  refused by name ("the lock's plan … was not recorded for member a.csv — the
+  lock was edited, or merged by hand; run `tdy fit T`"). A version-2 lock
+  written by this branch before the binding existed has none, and every
+  lock-held member of it is refused until `tdy fit` writes the lock again.
 - **`tdy fit TARGET --prune-sidecars`** (and `.fit … --prune-sidecars`): on a
   `plans = 'lock'` target, moves each tool-written sidecar whose plan the fit
   proves identically into the lock and removes it once the lock is written;

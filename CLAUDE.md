@@ -844,7 +844,10 @@ The rule every caller asks — "what is this member's spec?" — is written once
 `sidecar::load_member`, every old check intact; a refused one is an error, never a fall-back
 to the lock), else the plan its lock entry names — **and only if that plan reads the member's own sheet and
 block** (`reads_its_own_member`, the checks `load_member` makes of a sheet or region sidecar):
-a `spec =` line is text, and two swapped lines made one block read twice with exit 0.
+a `spec =` line is text, and two swapped lines made one block read twice with exit 0 — and
+only if the member's `plan_check` (blake3 of the id, path, sheet, region and file blake3,
+`plans::plan_check`, written by `hold_plans`) matches: the sheet/block check alone left a plain
+member pointable at a sibling's conforming plan, read with the sibling's frame.
 `Plans::new` validates and identifies each
 distinct entry once and indexes the members; `report::fit_pile` (reuse), `lockfile::drift`
 (`SpecEdited`, via `Plans::current_digest`), `dataset::resolve`, `commands::check_text` and

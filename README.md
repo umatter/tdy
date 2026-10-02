@@ -814,7 +814,7 @@ it reads:
 
 ```toml
 [[spec]]
-id = "b3:fea19b72ebc49ab519b51c7f33b06f0630c242b4f510c4a39de33523e7405ae5"
+id = "b3:58337d0edfc91805a23fbb94e0cfc706e73a0948c11a85fe87165ea9caceffb6"
 method = "heuristic"
 tool_version = "0.3.1"
 notes = [
@@ -831,10 +831,14 @@ format = "delimited"
 path = "2025-01.csv"
 blake3 = "ce0e328449c9c25940b9cc3f479222607cecb099df0c11688bbea69342e18efc"
 bytes = 119
-spec = "b3:fea19b72ebc49ab519b51c7f33b06f0630c242b4f510c4a39de33523e7405ae5"
+spec = "b3:58337d0edfc91805a23fbb94e0cfc706e73a0948c11a85fe87165ea9caceffb6"
+plan_check = "b3:3acf74cc24d61fa41f0c73dae450572a815b2cf08cb2389a767b31cb220a4340"
 ```
 
-A refit takes each plan from the lock and re-proves it against the target once
+`plan_check` binds the plan to that member and those bytes (a hash of the id,
+the path, sheet, region and the file's blake3): a `spec =` line pointed at a
+sibling's plan is refused by name, where it would otherwise read one file with
+another's frame. A refit takes each plan from the lock and re-proves it against the target once
 per plan; `dataset()` parses, validates and proves each plan once and reads every
 member through one shared copy. On villagerdb, the same build and machine, two
 runs each, `plans = 'sidecars'` against `plans = 'lock'`:
@@ -878,13 +882,13 @@ What stays the same:
   $ tdy check sales_ok.tdy.sql --against 2025-01.csv
   sales_ok.tdy.sql: `sales_ok`, 3 column(s)
 
-  2025-01.csv: CONFORMS — plan held in sales_ok.tdy.lock (spec b3:fea19b72ebc4…)
+  2025-01.csv: CONFORMS — plan held in sales_ok.tdy.lock (spec b3:58337d0edfc9…)
 
   1 of 1 file(s) conform to `sales_ok`.
 
   $ tdy validate 2025-01.csv
   2025-01.csv: ok
-    note: no sidecar — its plan is held in the lock of sales_ok.tdy.sql (spec b3:fea19b72ebc4…)
+    note: no sidecar — its plan is held in the lock of sales_ok.tdy.sql (spec b3:58337d0edfc9…)
   ```
 
 `tdy draft` writes `plans = 'lock'` for a pile of 200 files or more, and `tdy

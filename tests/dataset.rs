@@ -969,6 +969,7 @@ fn a_hand_written_lock_over_two_sheets_reads_both_and_names_them() {
         accepted: false,
         spec: None,
         notes: Vec::new(),
+        plan_check: None,
     };
     Lock {
         lock_version: LOCK_VERSION,

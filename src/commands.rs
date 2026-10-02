@@ -151,7 +151,17 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
     let mut bad = 0usize;
     for f in files {
         use crate::sidecar::SidecarStatus;
-        if let Some((file, plan)) = lock_held(target_path, &plans, f)? {
+        let held = match lock_held(target_path, &plans, f) {
+            Ok(h) => h,
+            // A lock plan refused for this member (edited, or not recorded
+            // for it): what `dataset()` would say, as a line, not an abort.
+            Err(e) => {
+                writeln!(text, "\n{}: REFUSED — {}", f.display(), one_line(&format!("{e:#}")))?;
+                bad += 1;
+                continue;
+            }
+        };
+        if let Some((file, plan)) = held {
             let shown = f.display();
             let verdict = judge(&plan.spec, &target, false);
             if plan.edited() {
@@ -333,6 +343,10 @@ pub fn overrides_note(target_path: &Path) -> String {
          member until `tdy fit {0}` records it (a query refuses it as drift until then)",
         target_path.display()
     )
+}
+
+fn one_line(s: &str) -> String {
+    s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 pub struct FitOneOutcome {

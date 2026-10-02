@@ -630,6 +630,7 @@ fn as_model_framed(t: &Path, member: &str) -> String {
     e.id = new.clone();
     for m in lock.members.iter_mut().filter(|m| m.spec.as_deref() == Some(old.as_str())) {
         m.spec = Some(new.clone());
+        m.plan_check = Some(tdy::plans::plan_check(&new, m));
     }
     lock.save(t).unwrap();
     new
@@ -784,4 +785,96 @@ fn check_and_validate_refuse_an_edited_lock_plan() {
     let out = tdy(&["validate", jan.to_str().unwrap()]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success() && err.contains("edited by hand"), "{err}");
+}
+
+/// Two plain members with two plans: `b.csv` carries a footer its plan
+/// drops (`skip_rows tail = 1`). 6 rows, 660.00.
+fn footer_pile() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("a.csv"), "Datum;Region;Betrag\n31.01.2025;Ost;100.00\n31.01.2025;West;200.00\n31.01.2025;Nord;300.00\n").unwrap();
+    std::fs::write(dir.path().join("b.csv"), "Datum;Region;Betrag\n28.02.2025;Ost;10.00\n28.02.2025;West;20.00\n28.02.2025;Nord;30.00\nTotal;;60.00\n").unwrap();
+    let t = dir.path().join("t.tdy.sql");
+    std::fs::write(
+        &t,
+        "CREATE TABLE t (\n  month  DATE NOT NULL OPTIONS(matches = 'Datum'),\n  region TEXT NOT NULL OPTIONS(matches = 'Region'),\n  \
+         amount DECIMAL(14,2) NOT NULL OPTIONS(matches = 'Betrag')\n) WITH (files = '*.csv', date_order = 'dmy', plans = 'lock');",
+    )
+    .unwrap();
+    fit(&t);
+    let q = ok(&query(&t, "SELECT count(*) AS n, sum(amount) AS total FROM dataset('@')"));
+    assert!(q.contains(" 6 ") && q.contains("660.00"), "{q}");
+    (dir, t)
+}
+
+/// Assert the lock is refused for `member`, everywhere it is read, and that
+/// a refit puts the pile back as it was.
+fn refused_then_refit(dir: &Path, t: &Path, member: &str, total: &str, rows: &str) {
+    let out = query(t, "SELECT count(*) AS n, sum(amount) AS total FROM dataset('@')");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "served:\n{}", String::from_utf8_lossy(&out.stdout));
+    assert!(err.contains(&format!("was not recorded for member {member}")), "{err}");
+    let out = tdy(&["check", t.to_str().unwrap(), "--against", dir.join(member).to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success() && !text.contains("CONFORMS"), "{text}");
+    assert!(text.contains(&format!("{member}: REFUSED")) && text.contains("was not recorded for member"), "{text}");
+    let text = fit(t);
+    assert!(text.contains("plan refused") && !text.contains(&format!("{member:<24} fits      (existing spec)")), "{text}");
+    let q = ok(&query(t, "SELECT count(*) AS n, sum(amount) AS total FROM dataset('@')"));
+    assert!(q.contains(rows) && q.contains(total), "{q}");
+}
+
+/// A plain member's `spec =` line pointed at a sibling's conforming plan
+/// would be read with the wrong frame — here dropping a.csv's last row as
+/// if it were b.csv's footer. The binding ties a plan to the member and the
+/// bytes it was proved for.
+#[test]
+fn a_plain_member_pointed_at_a_siblings_plan_is_refused() {
+    let (dir, t) = footer_pile();
+    let lock = lock_text(&t);
+    let id_of = |m: &str| {
+        let block = lock.split("[[member]]").find(|b| b.contains(&format!("path = \"{m}\""))).unwrap();
+        block.lines().find(|l| l.starts_with("spec = ")).unwrap().to_string()
+    };
+    let (a, b) = (id_of("a.csv"), id_of("b.csv"));
+    assert_ne!(a, b);
+    let edited = lock;
+    let block_a = edited.split("[[member]]").find(|x| x.contains("path = \"a.csv\"")).unwrap().to_string();
+    std::fs::write(tdy::lockfile::lock_path(&t), edited.replacen(&block_a, &block_a.replace(&a, &b), 1)).unwrap();
+    refused_then_refit(dir.path(), &t, "a.csv", "660.00", " 6 ");
+}
+
+/// A plain member pointed at a region member's plan is refused the same way.
+#[test]
+fn a_plain_member_pointed_at_a_region_plan_is_refused() {
+    let (dir, t) = blocks_and_sheets();
+    repoint(&t, ("2025-01.csv", None, None), ("2025-13.csv", None, Some(2)));
+    refused_then_refit(dir.path(), &t, "2025-01.csv", "62440.00", " 51 ");
+}
+
+/// An entry with its binding deleted is refused — the lock was edited.
+#[test]
+fn a_lock_entry_without_its_binding_is_refused() {
+    let (dir, t) = footer_pile();
+    let lock = lock_text(&t);
+    let first = lock.lines().find(|l| l.starts_with("plan_check = ")).unwrap().to_string();
+    std::fs::write(tdy::lockfile::lock_path(&t), lock.replacen(&format!("{first}\n"), "", 1)).unwrap();
+    let out = query(&t, "SELECT count(*) FROM dataset('@')");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("was not recorded for member"), "{err}");
+    let _ = dir;
+}
+
+/// The binding is to the bytes the plan was proved for — a changed file is
+/// still plain drift, said as drift.
+#[test]
+fn changed_bytes_are_still_drift_not_a_binding_refusal() {
+    let (dir, t) = footer_pile();
+    let mut body = std::fs::read(dir.path().join("a.csv")).unwrap();
+    body.extend_from_slice(b"31.01.2025;Sued;400.00\n");
+    std::fs::write(dir.path().join("a.csv"), body).unwrap();
+    let out = query(&t, "SELECT count(*) FROM dataset('@')");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("a.csv has changed since it was fitted") && !err.contains("was not recorded"), "{err}");
+    let text = fit(&t);
+    assert!(!text.contains("plan refused"), "{text}");
 }

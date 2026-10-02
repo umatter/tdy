@@ -63,8 +63,21 @@ goes:
   blake3 = "…"
   bytes = 173
   spec = "b3:9c1f…"
+  plan_check = "b3:4e07…"      # binds that plan to this member and these bytes
   notes = ["frame proved by elimination: of 2 candidate frames, …"]
   ```
+
+- `plan_check` (added in review) is blake3 over the plan id, the member's
+  path, sheet and region and the file's blake3, length-prefixed field by
+  field, written when `fit` proves the plan for that member. A `spec =` line is
+  text: without the binding, a plain member pointed at a sibling's conforming
+  plan was read with the sibling's frame — `a.csv` lost its last row to
+  `b.csv`'s `skip_rows tail = 1` — where a sidecar's own `source` fingerprint
+  had always prevented that. An entry whose binding is absent or does not
+  match is refused for that member everywhere a lock-held plan is read. The
+  id itself also covers the plan's method and model (also added in review),
+  so identical plans of one provenance share an entry and a provenance edit
+  is an edit.
 
 - per-member `notes` live on the member entry (skipped when empty): they are
   what a refit and the workbench show for that member, and they are the only
@@ -110,6 +123,10 @@ overrides it).
 
 `messy('file')` is untouched: it is a query about a file, not a member, and a
 file with no sidecar is sniffed as it always was.
+
+Every lock-held member entry carries its `plan_check` (§3); a version-2 lock
+written before the binding existed has none, and every lock-held member of it
+is refused until a refit — acceptable for a format no release has carried.
 
 `lock_version = 2` is written only when the lock holds a spec table; a lock
 without one stays version 1 and reads as before. A tdy that does not know

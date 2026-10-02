@@ -365,6 +365,7 @@ fn a_lock_member_outside_the_root_is_refused_at_query_time() {
             accepted: false,
             spec: None,
             notes: Vec::new(),
+            plan_check: None,
         }],
     };
     lock.save(&target_path).unwrap();

@@ -77,6 +77,14 @@ pub struct Member {
     /// split of *this* file. Only a lock-held plan has any here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// Ties `spec` to this member and these bytes: blake3 over the plan id,
+    /// the path, sheet, region and the file's blake3
+    /// (`plans::plan_check`), written when the fit proved the plan for this
+    /// member. A `spec =` line is text; without this, pointing a plain member
+    /// at a sibling's conforming plan read it with the sibling's frame — a
+    /// sidecar's own `source` fingerprint is what prevents that there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_check: Option<String>,
 }
 
 impl Member {
@@ -770,6 +778,7 @@ mod tests {
             accepted: false,
             spec: None,
             notes: Vec::new(),
+            plan_check: None,
         }
     }
 

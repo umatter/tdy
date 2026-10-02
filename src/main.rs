@@ -265,7 +265,20 @@ fn check_json(
     let plans = tdy::plans::Plans::new(target_path, lock.as_ref());
     for f in files {
         use tdy::sidecar::SidecarStatus;
-        if let Some((file, plan)) = tdy::commands::lock_held(target_path, &plans, f)? {
+        let held = match tdy::commands::lock_held(target_path, &plans, f) {
+            Ok(h) => h,
+            Err(e) => {
+                bad += 1;
+                out.push(serde_json::json!({
+                    "path": f.display().to_string(),
+                    "verdict": "refused",
+                    "plan": "lock",
+                    "error": format!("{e:#}"),
+                }));
+                continue;
+            }
+        };
+        if let Some((file, plan)) = held {
             let v = judge(&plan.spec, target, false);
             let mismatches: Vec<String> = v.mismatches().iter().map(|m| m.message()).collect();
             let verdict = if plan.edited() {
