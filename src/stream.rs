@@ -950,6 +950,80 @@ pub struct Verification {
     /// `narrowed` so the caller can still say *why* the column was left as
     /// text instead of going silent.
     pub narrow_fractional: Vec<usize>,
+    /// Float64 columns holding a literal its double does not give back —
+    /// one a float64 column would read as a neighbouring number.
+    pub inexact_floats: Vec<InexactFloat>,
+}
+
+/// A float64 column the file proves is not one: its first literal whose
+/// double comes back as another decimal, and the exact home every value in
+/// the file has, if any.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InexactFloat {
+    pub column: usize,
+    /// 1-based data row.
+    pub row: usize,
+    pub value: String,
+    /// What a float64 would read it as.
+    pub reads_as: String,
+    /// `Some(scale)` when every value fits DECIMAL(38, scale) — no exponent,
+    /// no integer past i64, integer digits plus the widest written fraction
+    /// at most 38; `None` means text.
+    pub decimal_scale: Option<i8>,
+}
+
+/// One float64 column's literals, audited as they stream past: the first
+/// that a double does not give back, and whether a DECIMAL could hold them
+/// all. Bounded: a few counters, whatever the file's length.
+#[derive(Debug, Clone)]
+struct FloatAudit {
+    decimal: Option<char>,
+    thousands: Option<char>,
+    first: Option<(usize, String, String)>,
+    max_int: usize,
+    max_frac: usize,
+    decimal_home: bool,
+}
+
+impl FloatAudit {
+    fn new(parse: &ValueParsing) -> Self {
+        FloatAudit {
+            decimal: parse.decimal_separator,
+            thousands: parse.thousands_separator,
+            first: None,
+            max_int: 0,
+            max_frac: 0,
+            decimal_home: true,
+        }
+    }
+
+    /// `row` is 1-based. Anything that is not a numeric literal (a missing
+    /// marker, a stray) is the parse's business, not this.
+    fn observe(&mut self, v: &str, row: usize) {
+        let Some(l) = crate::numfmt::literal(v, self.decimal, self.thousands) else { return };
+        self.max_int = self.max_int.max(l.int_digits);
+        self.max_frac = self.max_frac.max(l.frac_digits);
+        if l.exponent || l.past_i64 {
+            self.decimal_home = false;
+        }
+        if self.first.is_none() {
+            if let Some(reads) = l.float_reads_as() {
+                self.first = Some((row, v.trim().to_string(), reads));
+            }
+        }
+    }
+
+    fn finish(self, column: usize) -> Option<InexactFloat> {
+        let (row, value, reads_as) = self.first?;
+        let fits = self.decimal_home && self.max_int + self.max_frac <= 38;
+        Some(InexactFloat { column, row, value, reads_as, decimal_scale: fits.then_some(self.max_frac as i8) })
+    }
+}
+
+fn finish_audits(audits: HashMap<usize, FloatAudit>) -> Vec<InexactFloat> {
+    let mut out: Vec<InexactFloat> = audits.into_iter().filter_map(|(i, a)| a.finish(i)).collect();
+    out.sort_by_key(|f| f.column);
+    out
 }
 
 /// Incrementally narrows one `Utf8` column whose probe was empty, from the
@@ -1068,6 +1142,26 @@ impl NarrowTracker {
 /// Feed one batch's raw string values for the narrow candidates into their
 /// trackers. `positions` maps a position in the *read* batch to the column's
 /// index in the original spec.
+/// Audit the raw twins of a batch's float64 columns; `row_base` is how many
+/// data rows came before it.
+fn observe_float_batch(
+    batch: &RecordBatch,
+    positions: &[(usize, usize)],
+    audits: &mut HashMap<usize, FloatAudit>,
+    row_base: usize,
+) {
+    use datafusion::arrow::array::{Array, StringArray};
+    for &(pos, orig) in positions {
+        let Some(arr) = batch.column(pos).as_any().downcast_ref::<StringArray>() else { continue };
+        let Some(audit) = audits.get_mut(&orig) else { continue };
+        for r in 0..arr.len() {
+            if !arr.is_null(r) {
+                audit.observe(arr.value(r), row_base + r + 1);
+            }
+        }
+    }
+}
+
 fn observe_narrow_batch(
     batch: &RecordBatch,
     positions: &[(usize, usize)],
@@ -1148,9 +1242,31 @@ pub fn verify(
     let mut trackers: HashMap<usize, NarrowTracker> =
         narrow_positions.iter().map(|&(_, orig)| (orig, NarrowTracker::new())).collect();
 
+    // A float64 column parses whether or not its double is the number the
+    // file wrote, so the typed column cannot say; its raw literals can. Each
+    // is read a second time, as untouched text, beside the typed column.
+    let mut float_positions: Vec<(usize, usize)> = Vec::new();
+    let mut audits: HashMap<usize, FloatAudit> = HashMap::new();
+    for (i, c) in spec.columns.iter().enumerate() {
+        if c.dtype != DType::Float64 {
+            continue;
+        }
+        float_positions.push((probe.columns.len(), i));
+        audits.insert(i, FloatAudit::new(&c.parse));
+        probe.columns.push(crate::spec::ColumnSpec {
+            name: format!("{}\u{1}raw", c.name),
+            source: Some(c.source_name().to_string()),
+            dtype: DType::Utf8,
+            nullable: true,
+            parse: ValueParsing::default(),
+            pointer: c.pointer.clone(),
+        });
+    }
+
     let mut rows = 0usize;
     let clean = if can_stream(&probe) {
         execute_with(&probe, path, limits, |b| {
+            observe_float_batch(&b, &float_positions, &mut audits, rows);
             rows += b.num_rows();
             observe_narrow_batch(&b, &narrow_positions, &mut trackers);
             Ok(())
@@ -1159,8 +1275,9 @@ pub fn verify(
     } else {
         match crate::engine::execute_batches(&probe, path, limits) {
             Ok(bs) => {
-                rows = bs.iter().map(|b| b.num_rows()).sum();
                 for b in &bs {
+                    observe_float_batch(b, &float_positions, &mut audits, rows);
+                    rows += b.num_rows();
                     observe_narrow_batch(b, &narrow_positions, &mut trackers);
                 }
                 true
@@ -1170,7 +1287,13 @@ pub fn verify(
     };
     if clean {
         let (narrowed, narrow_fractional) = resolve_trackers(trackers);
-        return Ok(Verification { rows, narrowed, narrow_fractional, ..Verification::default() });
+        return Ok(Verification {
+            rows,
+            narrowed,
+            narrow_fractional,
+            inexact_floats: finish_audits(audits),
+            ..Verification::default()
+        });
     }
     analyse(spec, path, limits, narrow)
 }
@@ -1254,6 +1377,13 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits, narrow: &[usize]) -> R
     let mut bad: Vec<Tally> = vec![Tally::default(); spec.columns.len()];
     let mut trackers: HashMap<usize, NarrowTracker> =
         narrow.iter().map(|&i| (i, NarrowTracker::new())).collect();
+    let mut audits: HashMap<usize, FloatAudit> = spec
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.dtype == DType::Float64)
+        .map(|(i, c)| (i, FloatAudit::new(&c.parse)))
+        .collect();
     let mut repeats = 0usize;
     let mut row_base = 0usize;
     // The header cell each column reads from, which is what a repeated header
@@ -1298,6 +1428,11 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits, narrow: &[usize]) -> R
             if let Some(tracker) = trackers.get_mut(&i) {
                 for v in &values {
                     tracker.observe(v);
+                }
+            }
+            if let Some(audit) = audits.get_mut(&i) {
+                for (r, v) in values.iter().enumerate() {
+                    audit.observe(v, row_base + r + 1);
                 }
             }
             if build_column_at(col, &values, row_base).is_ok() {
@@ -1353,6 +1488,7 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits, narrow: &[usize]) -> R
         repeated_header_rows: repeats,
         narrowed,
         narrow_fractional,
+        inexact_floats: finish_audits(audits),
     })
 }
 

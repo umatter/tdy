@@ -302,6 +302,40 @@ pub fn verify_types(
         ));
     }
 
+    // A float64 column whose literals parse but do not all come back from a
+    // double: widened, exactly as a parse failure widens it, to the exact
+    // home every value in the file has — DECIMAL at the widest scale any
+    // value has, or text. A column that also fails to parse is the failure
+    // below's to report.
+    for f in &v.inexact_floats {
+        if v.failing.iter().any(|(i, _)| *i == f.column) {
+            continue;
+        }
+        let Some(col) = spec.columns.get_mut(f.column) else { continue };
+        let why = format!(
+            "{:?} (row {}) would read back from a float64 as {}",
+            f.value, f.row, f.reads_as
+        );
+        match f.decimal_scale {
+            Some(scale) => {
+                col.dtype = DType::Decimal { precision: 38, scale };
+                spec.notes.push(format!(
+                    "column `{}`: read as decimal({scale}) — {why}; the scale is the widest \
+                     any value in the file has",
+                    col.name
+                ));
+            }
+            None => {
+                col.dtype = DType::Utf8;
+                col.parse = ValueParsing::default();
+                spec.notes.push(format!(
+                    "column `{}`: kept as text — {why}, and not every value fits decimal(38, s)",
+                    col.name
+                ));
+            }
+        }
+    }
+
     if v.failing.is_empty() {
         return;
     }

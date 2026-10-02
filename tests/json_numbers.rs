@@ -428,3 +428,36 @@ fn a_late_value_outside_a_doubles_range_is_named_as_such() {
     assert!(notes.contains("are outside a double's range") && notes.contains("row 10001"), "{notes}");
     assert!(!notes.contains("not a number"), "{notes}");
 }
+
+fn column_type(v: &serde_json::Value, name: &str) -> serde_json::Value {
+    v["spec"]["columns"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap()["dtype"].clone()
+}
+
+/// The sample cannot see row 10,001 of 20,000, so the sniffer's guess is
+/// float64; the whole-file verification reads every literal and widens the
+/// column when one would come back from a double as a different number —
+/// DECIMAL when every value fits, naming the row and the value.
+#[test]
+fn a_late_literal_a_double_cannot_hold_widens_the_column() {
+    let dir = TempDir::new().unwrap();
+    for (name, odd, ndjson) in [
+        ("long.csv", "12345678901234567890.123", false),
+        ("twoto53.csv", "9007199254740993", false),
+        ("long.ndjson", "12345678901234567890.123", true),
+        ("twoto53.ndjson", "9007199254740993", true),
+    ] {
+        let p = floats_with(&dir, name, 20_000, 10_001, odd, ndjson);
+        let v = sniffed(&p);
+        assert_eq!(column_type(&v, "x"), serde_json::json!({"type": "decimal", "precision": 38, "scale": 3}), "{name}: {v}");
+        let notes = v["notes"].to_string();
+        assert!(notes.contains("row 10001") && notes.contains(odd), "{name}: {notes}");
+        let q = tdy(&["query", "--frozen", &format!("SELECT CAST(x AS VARCHAR) x FROM messy('{}') WHERE x > 1000", p.display())]);
+        assert!(String::from_utf8_lossy(&q.stdout).contains(odd), "{name}: {}", out(&q));
+    }
+    // --quick skips the whole-file read, and says so.
+    let p = floats_with(&dir, "quick.csv", 20_000, 10_001, "9007199254740993", false);
+    let o = tdy(&["--json", "sniff", "--no-llm", "--force", "--quick", p.to_str().unwrap()]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(column_type(&v, "x"), serde_json::json!({"type": "float64"}));
+    assert!(v["notes"].to_string().contains("NOT checked against the whole file"), "{v}");
+}
