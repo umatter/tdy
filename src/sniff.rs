@@ -1035,55 +1035,71 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
     drop(bytes);
     let trimmed = text.trim_start();
 
-    let (lines, pointer) = match serde_json::from_str::<serde_json::Value>(&text) {
+    let (lines, pointer, record) = match serde_json::from_str::<serde_json::Value>(&text) {
         Ok(doc) => match &doc {
-            serde_json::Value::Array(_) => (false, None),
+            serde_json::Value::Array(_) => (false, None, false),
             serde_json::Value::Object(_) => {
                 // The records array may be nested — `{"data": {"items": [...]}}`
                 // is as common in API dumps as a top-level one.
                 let mut found = Vec::new();
                 find_record_arrays(&doc, &mut String::new(), &mut found, 0);
                 if found.is_empty() {
-                    bail!(
-                        "this JSON document contains no array of records; set \
-                         `pointer` in the sidecar to the array you mean"
-                    );
-                }
-                // Prefer arrays of objects, then longer, then shallower.
-                found.sort_by_key(|c| (!c.of_objects, usize::MAX - c.len, c.depth, c.pointer.clone()));
-                let best = &found[0];
-                if found.len() > 1 {
-                    doubts.add(
-                        0.25,
-                        format!(
-                            "the document has {} candidate record arrays; reading {:?}. \
-                             Set `pointer` in the sidecar to choose a different one.",
-                            found.len(),
+                    // Nothing to be a table of: the document is the record,
+                    // and a directory of them is the table.
+                    doubts.note(RECORD_NOTE);
+                    (false, None, true)
+                } else {
+                    // Prefer arrays of objects, then longer, then shallower.
+                    found.sort_by_key(|c| (!c.of_objects, usize::MAX - c.len, c.depth, c.pointer.clone()));
+                    let best = &found[0];
+                    // The array keeps its reading — `messy('report.json')` on
+                    // a document whose point is its `rows` must not start
+                    // returning one row — but the other reading is named.
+                    if found.len() > 1 {
+                        doubts.add(
+                            0.25,
+                            format!(
+                                "the document has {} candidate record arrays; reading {:?}. \
+                                 Set `pointer` in the sidecar to choose a different one, {RECORD_ALTERNATIVE}.",
+                                found.len(),
+                                best.pointer
+                            ),
+                        );
+                    } else if best.depth > 1 {
+                        doubts.note(format!(
+                            "records read from the nested array at {:?}; {RECORD_ALTERNATIVE}",
                             best.pointer
-                        ),
-                    );
-                } else if best.depth > 1 {
-                    doubts.note(format!("records read from the nested array at {:?}", best.pointer));
+                        ));
+                    } else {
+                        doubts.note(format!("records read from the array at {:?}; {RECORD_ALTERNATIVE}", best.pointer));
+                    }
+                    (false, Some(best.pointer.clone()), false)
                 }
-                (false, Some(best.pointer.clone()))
             }
             _ => bail!("JSON document is a scalar; nothing tabular to extract"),
         },
         Err(_) if trimmed.starts_with('{') || trimmed.starts_with('[') => {
             // Not one valid document: NDJSON.
-            (true, None)
+            (true, None, false)
         }
         Err(e) => bail!("file has a .json-ish extension but does not parse as JSON: {e}"),
     };
 
-    let extraction = Extraction::Json { lines, pointer, record: false };
+    let extraction = Extraction::Json { lines, pointer, record };
     let table = engine::extract(&extraction, path, &ExtractOpts::capped(limits, PROBE_ROWS))
         .with_context(|| format!("probing {}", path.display()))?;
     finish(extraction, vec![], table, 0.95, doubts, &std::collections::HashSet::new())
 }
 
+/// What the sniffer says about a root object with no array in it.
+pub(crate) const RECORD_NOTE: &str = "this document is one object and is read as one record";
+
+/// The other reading of a root object that holds arrays, named beside the one
+/// the sniffer picked.
+const RECORD_ALTERNATIVE: &str = "or the document itself as one record (`record = true`)";
+
 /// RFC 6901: `~` is `~0` and `/` is `~1`.
-fn escape_pointer_token(s: &str) -> String {
+pub(crate) fn escape_pointer_token(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
 }
 
@@ -2435,6 +2451,61 @@ fn dedupe(names: &mut [String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sniff_json_text(body: &str) -> Result<SniffResult> {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("doc.json");
+        std::fs::write(&p, body).unwrap();
+        sniff_json(&p, Limits::default())
+    }
+
+    /// A root object with no array anywhere was declined; it is one record.
+    #[test]
+    fn a_lone_object_is_read_as_one_record() {
+        let r = sniff_json_text(r#"{"id":"ace","name":"Ace","games":{"nh":{"song":"K.K. Parade"}}}"#)
+            .expect("one object is one record");
+        assert!(
+            matches!(r.spec.extraction, Extraction::Json { lines: false, pointer: None, record: true }),
+            "{:?}",
+            r.spec.extraction
+        );
+        let names: Vec<&str> = r.spec.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["id", "name", "games"]);
+        assert!(
+            r.spec.notes.iter().any(|n| n.contains("this document is one object and is read as one record")),
+            "{:?}",
+            r.spec.notes
+        );
+    }
+
+    /// A root object holding arrays keeps today's reading — `messy()` on a
+    /// document whose point is its `rows` array must not start returning one
+    /// row — and the note names the other reading.
+    #[test]
+    fn an_object_with_an_array_keeps_the_array_and_names_the_record() {
+        for body in [
+            r#"{"meta":{"v":1},"rows":[{"a":1},{"a":2}]}"#,
+            r#"{"rows":[{"a":1},{"a":2}],"more":[{"b":1}]}"#,
+        ] {
+            let r = sniff_json_text(body).unwrap();
+            assert!(
+                matches!(&r.spec.extraction, Extraction::Json { pointer: Some(p), record: false, .. } if p == "/rows"),
+                "{body}: {:?}",
+                r.spec.extraction
+            );
+            assert!(
+                r.spec.notes.iter().any(|n| n.contains("or the document itself as one record (`record = true`)")),
+                "{body}: {:?}",
+                r.spec.notes
+            );
+        }
+    }
+
+    /// A scalar document is still nothing tabular.
+    #[test]
+    fn a_scalar_document_is_still_declined() {
+        assert!(sniff_json_text("3").is_err());
+    }
 
     fn rows(v: &[&[&str]]) -> Vec<Vec<String>> {
         v.iter()

@@ -94,7 +94,9 @@ fn the_cli_prints_a_scaffold_and_refuses_an_unreadable_pile() {
 
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("junk.json");
-    std::fs::write(&junk, "{\"not\": \"records\"}").unwrap();
+    // A scalar document: nothing tabular. (A lone object used to stand in
+    // here; it is a record now, and drafts as one.)
+    std::fs::write(&junk, "\"not records\"").unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_tdy"))
         .args(["draft", junk.to_str().unwrap()])
         .output()
