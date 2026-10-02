@@ -387,14 +387,19 @@ impl std::fmt::Display for FitError {
                     choices.len()
                 )?;
                 for c in choices {
-                    writeln!(f, "    {field} = {c:?}")?;
+                    writeln!(f, "    {}", frame_setting(field, c))?;
                 }
+                let settings = if field == JSON_FRAME_FIELDS {
+                    "record = true, or pointer = \"...\"".to_string()
+                } else {
+                    format!("{field} = \"...\"")
+                };
                 writeln!(
                     f,
                     "  Each is a complete, well-typed, different answer, and choosing one \
                      would be a guess.\n  \
                      fix: write the {field} you mean into the sidecar ([spec.extraction] \
-                     {field} = \"...\") and mark it method = \"manual\""
+                     {settings}) and mark it method = \"manual\""
                 )?;
                 Ok(())
             }
@@ -549,28 +554,42 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
     // ranking of them a guess. The declared table turns the guess into a
     // search: try every candidate, and the answer is the one that fits —
     // provably, if it is alone in doing so.
-    if let Extraction::Json { lines: false, pointer: Some(_), record: false } = &draft.extraction {
-        let pointers = sniff::json_record_pointers(path, limits);
-        if pointers.len() > 1 {
-            let candidates = pointers
-                .iter()
-                .map(|ptr| {
+    //
+    // A root object has one more frame than its arrays: the document itself
+    // as one record. It is tried first, so a refusal when nothing fits is
+    // about the reading a one-object pile means; with no array in the
+    // document it is the only frame, and needs no elimination.
+    if let Extraction::Json { lines: false, pointer, record } = &draft.extraction {
+        if *record || pointer.is_some() {
+            let pointers = sniff::json_record_pointers(path, limits);
+            if !pointers.is_empty() {
+                let as_record = |d: &ParseSpec| {
+                    let mut d = d.clone();
+                    d.extraction = Extraction::Json { lines: false, pointer: None, record: true };
+                    d
+                };
+                let mut candidates = vec![(RECORD_FRAME.to_string(), as_record(&draft))];
+                candidates.extend(pointers.iter().map(|ptr| {
                     let mut d = draft.clone();
                     d.extraction = Extraction::Json { lines: false, pointer: Some(ptr.clone()), record: false };
                     (ptr.clone(), d)
-                })
-                .collect();
-            return fit_by_elimination(
-                path,
-                target,
-                limits,
-                FrameCandidates {
-                    what: "record arrays",
-                    field: "pointer",
-                    total: pointers.len(),
-                    candidates,
-                },
-            );
+                }));
+                return fit_by_elimination(
+                    path,
+                    target,
+                    limits,
+                    FrameCandidates {
+                        what: format!(
+                            "frames (the document as one record, and {} record array{})",
+                            pointers.len(),
+                            if pointers.len() == 1 { "" } else { "s" }
+                        ),
+                        field: JSON_FRAME_FIELDS,
+                        total: candidates.len(),
+                        candidates,
+                    },
+                );
+            }
         }
     }
 
@@ -583,7 +602,7 @@ pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitEr
                 path,
                 target,
                 limits,
-                FrameCandidates { what: "sheets", field: "sheet_name", total: names.len(), candidates },
+                FrameCandidates { what: "sheets".into(), field: "sheet_name", total: names.len(), candidates },
             );
         }
     }
@@ -1194,8 +1213,13 @@ pub(crate) fn region_read_hint(path: &Path, sheet: Option<&str>, limits: Limits)
     // dressed up as a correctness one — `sample::guess_format` reads only the
     // extension, no I/O, and is the same predicate `draft` uses for exactly
     // this decision.
-    if crate::sample::guess_format(path) != crate::sample::FormatGuess::Excel {
-        return Some(None);
+    // A JSON document is never split: a blank line inside pretty-printed
+    // JSON is not a table boundary, and a document's frames are its record
+    // and its arrays, which `fit` eliminates between itself.
+    match crate::sample::guess_format(path) {
+        crate::sample::FormatGuess::Excel => {}
+        crate::sample::FormatGuess::Json => return None,
+        _ => return Some(None),
     }
     match engine::excel_sheet_shapes(path, limits) {
         Ok(shapes) if shapes.len() == 1 => Some(Some(shapes[0].name.clone())),
@@ -1204,10 +1228,26 @@ pub(crate) fn region_read_hint(path: &Path, sheet: Option<&str>, limits: Limits)
     }
 }
 
+/// The label of a JSON document's record frame among its candidates.
+const RECORD_FRAME: &str = "the document as one record";
+
+/// The `field` of a JSON root object's frames: either setting settles it.
+const JSON_FRAME_FIELDS: &str = "record or pointer";
+
+/// One candidate as the sidecar setting that would choose it by hand.
+fn frame_setting(field: &str, choice: &str) -> String {
+    if choice == RECORD_FRAME {
+        return "record = true".into();
+    }
+    let field = field.rsplit(" or ").next().unwrap_or(field);
+    format!("{field} = {choice:?}")
+}
+
 /// The enumerable frames of one file, labelled for the messages.
 struct FrameCandidates {
-    /// What kind of thing is being chosen between: "record arrays", "sheets".
-    what: &'static str,
+    /// What kind of thing is being chosen between: "sheets", or a JSON
+    /// document's record frame and record arrays.
+    what: String,
     /// The sidecar field that would settle it by hand.
     field: &'static str,
     /// How many frames exist, counting ones already eliminated at framing.
@@ -1498,7 +1538,7 @@ fn fit_by_elimination(
             Ok(fitted)
         }
         several => Err(FitError::AmbiguousFrame {
-            what: fc.what.into(),
+            what: fc.what,
             field: fc.field.into(),
             choices: several.iter().map(|(l, _)| l.clone()).collect(),
         }),
@@ -1629,6 +1669,24 @@ fn fit_framed(
                 continue;
             }
         };
+        // Nothing at the pointer is a null, so a NOT NULL column refuses the
+        // member — said in the pointer's terms, naming the row, rather than
+        // as a type failure on an empty string.
+        if let (Some(p), false, Some(ptr)) = (&pointed, tc.nullable, &tc.pointer) {
+            if let Some(i) = p.iter().position(|v| v.trim().is_empty()) {
+                gaps.push(Gap::Untypable {
+                    column: tc.name.clone(),
+                    source: source.clone(),
+                    want: render(&tc.dtype),
+                    why: format!(
+                        "row {}: pointer {ptr:?} finds nothing (or a null) in {source:?}, and the \
+                         column is NOT NULL; declare it nullable if this member may lack it",
+                        i + 1
+                    ),
+                });
+                continue;
+            }
+        }
         let values: Vec<&str> = match &pointed {
             Some(p) => p.iter().map(String::as_str).collect(),
             None => raw,
@@ -2555,6 +2613,11 @@ mod tests {
         let fake = dir.path().join("fake.csv");
         std::fs::copy(&src, &fake).unwrap();
         assert_eq!(region_read_hint(&fake, None, Limits::default()), Some(None));
+        // A blank line inside pretty-printed JSON is not a table boundary:
+        // no region discovery runs over a JSON document at all.
+        let json = dir.path().join("doc.json");
+        std::fs::write(&json, "{\n  \"a\": 1,\n\n  \"b\": 2\n}\n").unwrap();
+        assert_eq!(region_read_hint(&json, None, Limits::default()), None);
         // The real extension is unaffected.
         assert_eq!(region_read_hint(&src, None, Limits::default()), Some(Some("Data".to_string())));
     }

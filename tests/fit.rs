@@ -1685,7 +1685,7 @@ fn a_not_null_column_whose_pointer_resolves_to_nothing_refuses_the_member() {
     .unwrap();
     let e = fit(&dir.path().join("old.json"), &t, Limits::default()).expect_err("no /nh in this one");
     let m = format!("{e}");
-    assert!(m.contains("sell_price"), "{m}");
+    assert!(m.contains("sell_price") && m.contains("finds nothing") && m.contains("row 1"), "{m}");
 
     // Nullable, the same document fits, with a null.
     let t = Target::parse(
@@ -1728,4 +1728,63 @@ fn a_pointer_on_a_member_that_is_not_json_is_refused() {
     let e = fit(&dir.path().join("x.csv"), &t, Limits::default()).expect_err("csv has no JSON inside");
     let m = format!("{e}");
     assert!(m.contains("`pointer` reads inside a JSON value, and this file is read as"), "{m}");
+}
+
+/// A root object is a record AND holds an array of records, and both
+/// produce the declared table: two complete, well-typed, different answers
+/// (one row against two). Refused, naming both, with both settings that
+/// settle it.
+#[test]
+fn a_record_and_an_array_that_both_fit_are_an_ambiguous_frame() {
+    let dir = record_pile(&[(
+        "both.json",
+        r#"{"id":"top","name":"Report","rows":[{"id":"a","name":"Ann"},{"id":"b","name":"Bo"}]}"#,
+    )]);
+    let t = Target::parse("CREATE TABLE t (id TEXT NOT NULL, name TEXT NOT NULL) WITH (files = '*.json')").unwrap();
+    let err = fit(&dir.path().join("both.json"), &t, Limits::default()).expect_err("both readings fit");
+    let msg = format!("{err}");
+    assert!(matches!(err, FitError::AmbiguousFrame { .. }), "{msg}");
+    assert!(msg.contains("record = true") && msg.contains("pointer = \"/rows\""), "{msg}");
+}
+
+/// The corpus item's shape: the document is the record, and the one array
+/// inside it (`games.nl.buyPrices`) is not the table. The declaration
+/// eliminates the array, which is a proof — noted, not reviewed.
+#[test]
+fn a_record_that_alone_fits_is_proved_by_elimination() {
+    let dir = record_pile(&[(
+        "cap.json",
+        r#"{"id":"cap","name":"1-up Cap","games":{"nl":{"sellPrice":{"value":80},"buyPrices":[{"currency":"bells","value":320}]}}}"#,
+    )]);
+    let t = Target::parse(
+        "CREATE TABLE items (id TEXT NOT NULL, name TEXT NOT NULL, \
+         sell BIGINT OPTIONS(matches = 'games', pointer = '/nl/sellPrice/value')) WITH (files = '*.json')",
+    )
+    .unwrap();
+    let p = dir.path().join("cap.json");
+    let fitted = fit(&p, &t, Limits::default()).expect("only the record fits");
+    assert!(
+        matches!(fitted.spec.extraction, tdy::spec::Extraction::Json { record: true, pointer: None, .. }),
+        "{:?}",
+        fitted.spec.extraction
+    );
+    assert!(fitted.spec.notes.iter().any(|n| n.contains("elimination")), "{:?}", fitted.spec.notes);
+    assert!(fitted.review.is_none(), "{:?}", fitted.review);
+    assert_eq!(ints_of(&fitted.spec, &p, 2), vec![Some(80)]);
+}
+
+/// The other way round: a document whose point is its array still reads the
+/// array, now proved against the record reading too.
+#[test]
+fn an_array_that_alone_fits_still_wins_over_the_record() {
+    let dir = record_pile(&[("rows.json", r#"{"meta":{"v":1},"rows":[{"id":"a"},{"id":"b"}]}"#)]);
+    let t = Target::parse("CREATE TABLE t (id TEXT NOT NULL) WITH (files = '*.json')").unwrap();
+    let p = dir.path().join("rows.json");
+    let fitted = fit(&p, &t, Limits::default()).expect("only /rows fits");
+    assert!(
+        matches!(&fitted.spec.extraction, tdy::spec::Extraction::Json { record: false, pointer: Some(ptr), .. } if ptr == "/rows"),
+        "{:?}",
+        fitted.spec.extraction
+    );
+    assert!(fitted.review.is_none());
 }
