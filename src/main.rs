@@ -163,6 +163,10 @@ enum Command {
     Draft {
         /// The files the dataset should cover.
         files: Vec<PathBuf>,
+        /// Read every root-object JSON document as one record, even where
+        /// every document is also read through the same array.
+        #[arg(long)]
+        records: bool,
     },
     /// Plan a spec for a file that lands on a declared target schema.
     ///
@@ -630,9 +634,10 @@ async fn run() -> Result<()> {
             let cfg = config::load(&overrides)?;
             tdy::mcp::serve(cfg, root, allow_accept).await?;
         }
-        Command::Draft { files } => {
+        Command::Draft { files, records } => {
             let cfg = config::load(&overrides)?;
-            print!("{}", tdy::draft::draft_target(&files, cfg.limits)?);
+            let opts = tdy::draft::DraftOpts { records };
+            print!("{}", tdy::draft::draft_target_with(&files, cfg.limits, opts)?);
         }
         Command::Fit { target, file, accept, dry_run, propose } => {
             let cfg = config::load(&overrides)?;

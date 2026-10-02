@@ -50,6 +50,10 @@ struct DraftColumn {
     /// For a leaf of a JSON record: the RFC 6901 pointer into the value of
     /// its top-level key (`origins` holds that key, drafted as `matches`).
     pointer: Option<String>,
+    /// A leaf under a top-level key every file has: where the leaf is
+    /// absent the pointer finds nothing and the cell is null, so no
+    /// `if_missing` is needed — the comment says so instead of inviting one.
+    null_where_absent: bool,
 }
 
 /// The widest scale the sniffer gives money it recognises by shape alone
@@ -69,8 +73,14 @@ fn noisy_scale(d: &DType) -> Option<i8> {
 /// [`draft_target_in`] for a target written in the current directory —
 /// the CLI's stdout and the console's `--to` alike.
 pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
+    draft_target_with(files, limits, DraftOpts::default())
+}
+
+/// [`draft_target`] with [`DraftOpts`]: the CLI's `tdy draft [--records]`
+/// and the console's `.draft`, one code path.
+pub fn draft_target_with(files: &[PathBuf], limits: Limits, opts: DraftOpts) -> Result<String> {
     let cwd = std::env::current_dir().ok();
-    draft_target_in(files, cwd.as_deref(), limits)
+    draft_target_opts(files, cwd.as_deref(), limits, opts)
 }
 
 /// The draft, its `files` globs relative to `base`, the directory the
@@ -79,6 +89,19 @@ pub fn draft_target(files: &[PathBuf], limits: Limits) -> Result<String> {
 /// names its members relative to the target and an absolute glob made them
 /// absolute paths `--accept` could not name.
 pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -> Result<String> {
+    draft_target_opts(files, base, limits, DraftOpts::default())
+}
+
+/// What a draft may be told beyond its files.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DraftOpts {
+    /// Read every root-object JSON document as one record, even where every
+    /// document is also read through the same array (`tdy draft --records`).
+    pub records: bool,
+}
+
+/// [`draft_target_in`] with [`DraftOpts`].
+pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits, opts: DraftOpts) -> Result<String> {
     if files.is_empty() {
         anyhow::bail!("nothing to draft from: pass the files the dataset should cover");
     }
@@ -348,10 +371,22 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
     // every file has (villagerdb's items hold `games.nl.buyPrices` in most
     // documents and no array in others).
     let mut json_notes: Vec<String> = Vec::new();
-    let same_array = !json_docs.is_empty()
+    if opts.records && json_docs.is_empty() {
+        anyhow::bail!(
+            "`--records` reads each root-object JSON document as one record, and no file in this \
+             pile is one"
+        );
+    }
+    let same_array = !opts.records
+        && !json_docs.is_empty()
         && json_docs.iter().all(|d| d.array.as_ref().map(|(p, _)| p) == json_docs[0].array.as_ref().map(|(p, _)| p))
         && json_docs[0].array.is_some();
     if same_array {
+        let at = json_docs[0].array.as_ref().map(|(p, _)| p.clone()).unwrap_or_default();
+        json_notes.push(format!(
+            "every document is also one object; this draft reads the array at `{at}` in each. To \
+             draft one row per document instead, run `tdy draft --records …`"
+        ));
         for d in &json_docs {
             let (_, spec) = d.array.as_ref().expect("same_array");
             file_sets.push((d.label.clone(), spec.columns.iter().map(|c| c.name.clone()).collect()));
@@ -387,7 +422,8 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
         }
         file_sets.append(&mut leaves.file_sets);
         json_notes.extend(leaves.notes());
-        leaves.into_columns(&mut columns, &mut day_first, &mut month_first);
+        let files_seen = files_ok.len();
+        leaves.into_columns(&mut columns, &mut day_first, &mut month_first, files_seen);
     }
 
     if sniffed == 0 {
@@ -482,7 +518,8 @@ pub fn draft_target_in(files: &[PathBuf], base: Option<&Path>, limits: Limits) -
         }
         let mut notes: Vec<String> = Vec::new();
         if c.files.len() < files_seen {
-            notes.push(format!("in {} of {files_seen} file(s)", c.files.len()));
+            let absent = if c.null_where_absent { "; null where absent" } else { "" };
+            notes.push(format!("in {} of {files_seen} file(s){absent}", c.files.len()));
         }
         // A column confined to some but not all of one file's own stacked
         // blocks: physical-file presence alone says nothing about this (the
@@ -612,6 +649,7 @@ fn record_columns(
                     None => Vec::new(),
                 },
                 pointer: None,
+                null_where_absent: false,
             }),
         }
     }
@@ -641,6 +679,11 @@ struct JsonLeaves {
     nested_arrays: std::collections::BTreeMap<String, usize>,
     too_deep: std::collections::BTreeMap<String, usize>,
     file_sets: Vec<(String, BTreeSet<String>)>,
+    /// How many documents carry each top-level key, whatever its value.
+    key_files: std::collections::HashMap<String, usize>,
+    /// Each document whose top-level key holds an object: (file, its JSON
+    /// text) — the cell a pointer-less column of that key reads there.
+    object_tops: std::collections::HashMap<String, Vec<(String, String)>>,
 }
 
 struct JsonLeaf {
@@ -678,6 +721,13 @@ impl JsonLeaves {
         // key, and drift there is what `if_missing` is for — grouping by
         // leaves split villagerdb's 483 villagers into five "datasets".
         let names: BTreeSet<String> = entries.iter().map(|(k, _)| crate::sniff::sanitize(k)).collect();
+        for (k, v) in entries {
+            *self.key_files.entry(k.clone()).or_default() += 1;
+            if let crate::jsondoc::Node::Object(_) = v {
+                let text = crate::engine::json_scalar(&v.to_value());
+                self.object_tops.entry(k.clone()).or_default().push((label.to_string(), text));
+            }
+        }
         for (p, value, array) in found {
             let leaves = &mut self.leaves;
             let i = *self.at.entry(p).or_insert_with_key(|p| {
@@ -725,10 +775,66 @@ impl JsonLeaves {
     /// taken — by another column, or by another path that sanitises to the
     /// same spelling — gets the sniffer's dedupe and a comment naming the
     /// path it reads.
-    fn into_columns(self, columns: &mut Vec<DraftColumn>, day_first: &mut bool, month_first: &mut bool) {
+    ///
+    /// A pointer-less leaf (a top-level key) whose name a column of the
+    /// pile's other files already has — a root array or NDJSON file of the
+    /// same shape — is that column, merged; and where the key holds an
+    /// object in some documents, the column reads its JSON text there, so
+    /// those documents count as having it.
+    fn into_columns(self, columns: &mut Vec<DraftColumn>, day_first: &mut bool, month_first: &mut bool, files_seen: usize) {
         let mut taken: std::collections::HashSet<String> = columns.iter().map(|c| c.name.clone()).collect();
-        for leaf in self.leaves {
+        // Columns from the pile's other files, by name: how many files have
+        // a top-level key there, for a leaf's "null where absent".
+        let elsewhere: std::collections::HashMap<String, usize> =
+            columns.iter().filter(|c| c.pointer.is_none()).map(|c| (c.name.clone(), c.files.len())).collect();
+        let mut object_tops = self.object_tops;
+        for mut leaf in self.leaves {
             let base = crate::sniff::sanitize(&leaf.path.join("_"));
+            let mut shape: Option<String> = None;
+            if leaf.path.len() == 1 {
+                if let Some(objects) = object_tops.remove(&leaf.path[0]) {
+                    shape = Some(format!(
+                        "{} in {}, an object in {} — there the cell is its JSON text",
+                        if leaf.array { "an array" } else { "a scalar" },
+                        leaf.files.len(),
+                        objects.len()
+                    ));
+                    for (file, text) in objects {
+                        if !leaf.files.contains(&file) {
+                            leaf.files.push(file);
+                        }
+                        leaf.values.push(text);
+                    }
+                }
+                if let Some(c) = columns.iter_mut().find(|c| c.name == base && c.pointer.is_none()) {
+                    let values: Vec<&str> = leaf.values.iter().map(String::as_str).collect();
+                    let dtype = if leaf.array {
+                        DType::Utf8
+                    } else {
+                        crate::sniff::guess_dtype_all(&values, &base, |a, b| merge(a, b, "the JSON documents").0)
+                            .unwrap_or(DType::Utf8)
+                    };
+                    let (merged, conflict) = merge(&c.dtype, &dtype, "the JSON documents");
+                    c.dtype = merged;
+                    if !c.origins.contains(&leaf.path[0]) {
+                        c.origins.push(leaf.path[0].clone());
+                    }
+                    for f in leaf.files {
+                        if !c.files.contains(&f) {
+                            c.files.push(f);
+                        }
+                    }
+                    let extra: Vec<String> = shape.into_iter().chain(conflict).collect();
+                    if !extra.is_empty() {
+                        let joined = extra.join("; ");
+                        c.caveat = Some(match c.caveat.take() {
+                            Some(prev) => format!("{prev}; {joined}"),
+                            None => joined,
+                        });
+                    }
+                    continue;
+                }
+            }
             let mut name = base.clone();
             let mut n = 2;
             while taken.contains(&name) {
@@ -737,7 +843,7 @@ impl JsonLeaves {
             }
             taken.insert(name.clone());
             let joined = leaf.path.join("/");
-            let mut caveats: Vec<String> = Vec::new();
+            let mut caveats: Vec<String> = shape.into_iter().collect();
             if name != base {
                 caveats.push(format!("reads `{joined}`; `{base}` was already another column"));
             }
@@ -766,6 +872,12 @@ impl JsonLeaves {
                 let tokens: Vec<String> = leaf.path[1..].iter().map(|t| crate::sniff::escape_pointer_token(t.as_str())).collect();
                 format!("/{}", tokens.join("/"))
             });
+            // A key every file has: where this leaf is absent the pointer
+            // finds nothing, a null, and no `if_missing` is needed.
+            let key = &leaf.path[0];
+            let key_presence = self.key_files.get(key).copied().unwrap_or(0)
+                + elsewhere.get(&crate::sniff::sanitize(key)).copied().unwrap_or(0);
+            let null_where_absent = pointer.is_some() && key_presence >= files_seen;
             columns.push(DraftColumn {
                 name,
                 origins: vec![leaf.path[0].clone()],
@@ -775,6 +887,28 @@ impl JsonLeaves {
                 block_sightings: Vec::new(),
                 noisy_files: Vec::new(),
                 pointer,
+                null_where_absent,
+            });
+        }
+        // A key that is an object in some documents and a column of the
+        // pile's other files (a root array, NDJSON) with no scalar sighting
+        // here: the column reads its JSON text in those documents too.
+        for (key, objects) in object_tops {
+            let name = crate::sniff::sanitize(&key);
+            let Some(c) = columns.iter_mut().find(|c| c.name == name && c.pointer.is_none()) else { continue };
+            let note = format!("an object in {} file(s) — there the cell is its JSON text", objects.len());
+            for (file, _) in objects {
+                if !c.files.contains(&file) {
+                    c.files.push(file);
+                }
+            }
+            let (merged, conflict) = merge(&c.dtype, &DType::Utf8, "the JSON documents");
+            c.dtype = merged;
+            let extra: Vec<String> = std::iter::once(note).chain(conflict).collect();
+            let joined = extra.join("; ");
+            c.caveat = Some(match c.caveat.take() {
+                Some(prev) => format!("{prev}; {joined}"),
+                None => joined,
             });
         }
     }

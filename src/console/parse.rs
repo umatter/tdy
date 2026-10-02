@@ -13,7 +13,7 @@ use std::fmt;
 pub enum Command {
     Sniff { file: String, quick: bool, force: bool, no_llm: bool, hint: Option<String> },
     Validate { file: String, stamp: bool },
-    Draft { files: Vec<String>, to: Option<String> },
+    Draft { files: Vec<String>, to: Option<String>, records: bool },
     Fit { target: String, file: Option<String>, dry_run: bool, propose: bool },
     Check { target: String, against: Vec<String> },
     Accept { target: String, member: String },
@@ -215,9 +215,9 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
             Command::Validate { file: a.positional[0].clone(), stamp: a.on("--stamp") }
         }
         "draft" => {
-            let a = Args::collect("draft", args, &[], &["--to"])?;
+            let a = Args::collect("draft", args, &["--records"], &["--to"])?;
             a.at_least(&["FILES"])?;
-            Command::Draft { files: a.positional.clone(), to: a.value("--to") }
+            Command::Draft { files: a.positional.clone(), to: a.value("--to"), records: a.on("--records") }
         }
         "fit" => {
             let a = Args::collect("fit", args, &["--dry-run", "--propose"], &[])?;
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(p(".validate a.csv --stamp"), Command::Validate { file: "a.csv".into(), stamp: true });
         assert_eq!(
             p(".draft 2025-*.csv 2025-*.xlsx --to sales.tdy.sql"),
-            Command::Draft { files: vec!["2025-*.csv".into(), "2025-*.xlsx".into()], to: Some("sales.tdy.sql".into()) }
+            Command::Draft { files: vec!["2025-*.csv".into(), "2025-*.xlsx".into()], to: Some("sales.tdy.sql".into()), records: false }
         );
         assert_eq!(parse(".draft"), Err(ParseError::Missing { command: "draft", what: "FILES" }));
         assert_eq!(

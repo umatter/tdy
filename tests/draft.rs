@@ -440,3 +440,118 @@ fn documents_with_the_same_top_level_keys_are_one_dataset() {
     let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
     assert!(!sql.contains("do not look like ONE dataset"), "{sql}");
 }
+
+/// One-object documents beside a root array and an NDJSON file of the same
+/// shape: each top-level column is drafted once, and the unedited draft fits
+/// all four files (it drafted `id` and `id_2` and collided).
+#[test]
+fn records_beside_arrays_and_ndjson_draft_each_column_once() {
+    let (_d, files) = json_pile(&[
+        ("arr.json", r#"[{"id":3,"name":"c","price":{"v":5}},{"id":4,"name":"d","price":{"v":6}}]"#),
+        ("nd.json", "{\"id\":5,\"name\":\"e\"}\n{\"id\":6,\"name\":\"f\"}\n"),
+        ("one.json", r#"{"id":1,"name":"a","price":{"v":3}}"#),
+        ("two.json", r#"{"id":2,"name":"b","price":{"v":4}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    for dup in ["id_2", "name_2", "price_2"] {
+        assert!(!sql.contains(dup), "{dup}:\n{sql}");
+    }
+    // `nd.json` has no `price`: the draft counts it, it does not declare
+    // the absence, and the one edit its comments call for fits all four.
+    let price = sql.lines().find(|l| l.trim_start().starts_with("price ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(price.contains("in 3 of 4 file(s)"), "{price}");
+    let edited: String = sql
+        .lines()
+        .map(|l| match l.split_once("  --") {
+            Some((decl, c)) if c.contains(" of 4 file(s)") && !c.contains("null where absent") => {
+                let comma = if decl.ends_with(',') { "," } else { "" };
+                let decl = decl.trim_end_matches(',');
+                let decl = match decl.strip_suffix(')') {
+                    Some(h) if decl.contains("OPTIONS(") => format!("{h}, if_missing = 'null')"),
+                    _ => format!("{decl} OPTIONS(if_missing = 'null')"),
+                };
+                format!("{decl}{comma}  --{c}\n")
+            }
+            _ => format!("{l}\n"),
+        })
+        .collect();
+    fits_every_file(&edited, &files);
+}
+
+const SAME_ARRAY: &[(&str, &str)] = &[
+    ("a.json", r#"{"id":"a","name":"Acorn","price":5,"buyPrices":[{"value":100,"currency":"bells"}]}"#),
+    ("b.json", r#"{"id":"b","name":"Box","price":7,"buyPrices":[{"value":200,"currency":"bells"}]}"#),
+];
+
+/// Every document read through the same array drafts the array, as it
+/// always did — and now says that each document is also one object, and how
+/// to draft that reading instead.
+#[test]
+fn a_pile_drafted_through_one_array_says_so_and_names_records() {
+    let (_d, files) = json_pile(SAME_ARRAY);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    assert!(sql.contains("\n  value "), "{sql}");
+    assert!(
+        sql.contains("every document is also one object") && sql.contains("/buyPrices") && sql.contains("tdy draft --records"),
+        "{sql}"
+    );
+}
+
+/// `--records`: one row per document, whatever arrays it holds.
+#[test]
+fn records_drafts_one_row_per_document() {
+    let (_d, files) = json_pile(SAME_ARRAY);
+    let sql = tdy::draft::draft_target_opts(&files, None, Limits::default(), tdy::draft::DraftOpts { records: true }).unwrap();
+    for col in ["\n  id ", "\n  name ", "\n  price "] {
+        assert!(sql.contains(col), "{col}:\n{sql}");
+    }
+    assert!(!sql.contains("\n  value "), "{sql}");
+    let t = fits_every_file(&sql, &files);
+    let fitted = tdy::fit::fit(&files[0], &t, Limits::default()).unwrap();
+    assert!(matches!(fitted.spec.extraction, tdy::spec::Extraction::Json { record: true, .. }));
+
+    // And through the binary, refused where nothing is a document.
+    let out = Command::new(env!("CARGO_BIN_EXE_tdy")).args(["draft", "--records"]).args(&files).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\n  price "));
+    let out = Command::new(env!("CARGO_BIN_EXE_tdy"))
+        .args(["draft", "--records", corpus().join("2025-01.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--records"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// A top-level key that is a scalar in one document and an object in
+/// another is present in both; the comment names the shape conflict.
+#[test]
+fn a_key_that_is_a_scalar_here_and_an_object_there_is_present_in_both() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":1,"g":"plain"}"#),
+        ("b.json", r#"{"id":2,"g":{"nh":{"v":3}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let g = sql.lines().find(|l| l.trim_start().starts_with("g ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(!g.contains(" of 2 file(s)"), "{g}");
+    assert!(g.contains("TEXT") && g.contains("an object in 1"), "{g}");
+}
+
+/// A leaf under a key every file has is null where absent — the pointer finds
+/// nothing — so the comment says that rather than inviting `if_missing`; a
+/// leaf under a key some files lack keeps the plain count.
+#[test]
+fn a_leaf_under_a_key_every_file_has_is_null_where_absent() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":"a","games":{"nh":{"v":80}},"extra":{"x":1}}"#),
+        ("b.json", r#"{"id":"b","games":{"nl":{"v":10}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let nh = sql.lines().find(|l| l.trim_start().starts_with("games_nh_v ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(nh.contains("in 1 of 2 file(s); null where absent"), "{nh}");
+    let x = sql.lines().find(|l| l.trim_start().starts_with("extra_x ")).unwrap();
+    assert!(x.contains("in 1 of 2 file(s)") && !x.contains("null where absent"), "{x}");
+    // Unedited, the leaves under `games` fit both files; `extra_x` is the
+    // one edit the comments call for.
+    let edited = sql.replace("pointer = '/x')", "pointer = '/x', if_missing = 'null')");
+    fits_every_file(&edited, &files);
+}

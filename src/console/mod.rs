@@ -662,7 +662,8 @@ impl Session {
                 let text = crate::commands::profile_text(&file, &p, column.as_deref())?;
                 Outcome::ok(text, Payload::Profile(p))
             }
-            Command::Draft { files, to } => {
+            Command::Draft { files, to, records } => {
+                let opts = crate::draft::DraftOpts { records };
                 let paths = self.expand(&files)?;
                 // The line as actually run: globs and defaults expanded
                 // (design §4) — the file list root-relative and quoted the
@@ -672,7 +673,7 @@ impl Session {
                     ".draft {}{}",
                     paths.iter().map(|p| quote_rel(&self.display_rel(p))).collect::<Vec<_>>().join(" "),
                     to.as_ref().map(|t| format!(" --to {t}")).unwrap_or_default()
-                );
+                ) + if records { " --records" } else { "" };
                 // `draft_target` falls back to naming the table `dataset`
                 // only when the first file it is handed carries no
                 // directory component (see `table_name` in `draft.rs`) —
@@ -704,14 +705,14 @@ impl Session {
                 };
                 let elsewhere = dest.as_ref().and_then(|d| d.parent()).filter(|p| *p != self.cwd.as_path());
                 let ddl = match elsewhere {
-                    Some(base) => crate::draft::draft_target_in(&paths, Some(base), self.cfg.limits)?,
+                    Some(base) => crate::draft::draft_target_opts(&paths, Some(base), self.cfg.limits, opts)?,
                     None => {
                         // `RestoreCwd` (see its doc comment) keeps this
                         // realignment from racing `.cd`'s own, permanent one
                         // in another `Session`, held across the flip, the
                         // call, and the restore.
                         let _restore = RestoreCwd::to(&self.cwd).await?;
-                        crate::draft::draft_target(&rel, self.cfg.limits)?
+                        crate::draft::draft_target_with(&rel, self.cfg.limits, opts)?
                     }
                 };
                 let wrote = match dest {
@@ -1428,7 +1429,7 @@ overwrite an existing one). Everything else is a dot-command:
 
   .sniff FILE [--quick] [--force] [--no-llm] [--hint \"…\"]   infer the sidecar for one file
   .validate FILE [--stamp]                                  check a sidecar against its file
-  .draft FILES… [--to NAME.tdy.sql]                         draft a target from a pile
+  .draft FILES… [--to NAME.tdy.sql] [--records]             draft a target from a pile
   .fit TARGET [FILE] [--dry-run] [--propose]                plan every member onto a target
   .check TARGET [--against FILE…]                           the CI gate
   .accept TARGET MEMBER                                     show the evidence; again to accept
