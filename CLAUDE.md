@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 1032 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 1034 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -861,7 +861,15 @@ TEXT otherwise, each with a note naming the value and what a float64 would read 
 integer past i64 beside fractions is TEXT, as a column of such integers already was. The scale
 of a DECIMAL chosen from the sample is the sample's, and a later longer value is rounded
 half-away with its note, as for every sniffed decimal; one chosen by the whole-file pass is the
-widest scale any value in the file has. `--quick` skips the whole-file pass and says so; a target
+widest scale any value in the file has. In a draft, a column some file typed away from float64
+for such a value is never widened back to DOUBLE by another file's floats (`merge` would):
+`draft::settle_no_double` measures every value of every file holding it as float or decimal —
+DECIMAL(38, widest scale) when all fit, with a comment naming the value and no rounding,
+TEXT with the "settle it" comment otherwise; rounding is declared only when a sighting could not
+be measured (a block framed from a scratch copy). It finds such a column by the sniff note's
+words (`sniff::NO_DOUBLE`, `no_double_value`). Float+decimal with no such value still widens to
+DOUBLE. `--quick` skips the whole-file pass and says so — including that such a literal past the
+sample is then read rounded without a word; a target
 that declares DOUBLE is the person's choice and `fit` does not audit it. Swept against main over
 9,678 files (every corpus csv/tsv/json/ndjson/jsonl and every fixture): one real file moved
 (`emissions.csv`, two columns written with 18 significant digits, `25.62775822916507630000` →

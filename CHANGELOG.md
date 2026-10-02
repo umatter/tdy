@@ -104,7 +104,11 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   what the type means: `0.12345678901234567` stays float64. A JSON pile whose
   `v` was an identifier past 64 bits in one document and `0.5` in another
   drafted `v DOUBLE` and served `1.2345678901234568e22`; it now drafts TEXT,
-  as its CSV twin did. A target that declares DOUBLE is unchanged.
+  as its CSV twin did. Nor does a draft widen such a column back to DOUBLE
+  because another file in the pile holds ordinary floats: it measures every
+  value and drafts `DECIMAL(38, s)` at the widest scale when all fit (no
+  rounding declared), TEXT otherwise. A target that declares DOUBLE is
+  unchanged.
 - **A number outside a double's range is refused in a float64 column**, naming
   the row: `1E400` read as `inf` and `1e-400` as `0` — in a CSV always, and in
   JSON once the reader kept the literal. A zero written as a zero is a zero.
