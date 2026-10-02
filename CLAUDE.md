@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 951 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 984 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -747,6 +747,47 @@ The streamed width is measured only over the rows `skip_rows` keeps (`stream::me
 wider than the table had given the streamed table phantom `col_N` columns. A 103 MB / 3M-row
 CSV profiles at 19 MB peak RSS, 4.9 s; its `count(*)` stayed at 76 MB peak across that change.
 
+**A document is a record (2026-10-02).** `docs/design/2026-10-02-json-records.md`. About
+7,900 of the corpus's 8,136 JSON files hold one object each, and tdy declined them or read a
+one-element array inside them as the table. `Extraction::Json` gains `record` (serialised only
+when true, so no existing sidecar changes): the object at `pointer` (the root when absent) is
+ONE row, its keys in the document's own order — `src/jsondoc.rs` is a small ordered parse,
+because serde_json is built without `preserve_order` and turning it on would reorder every map
+in the tree. Anything but an object there is named and refused; it is never implied. The
+sniffer writes it only for a root object with no array in it; one with arrays keeps its array
+reading (`messy()` on a document whose point is its `rows` must not start returning one row)
+and its note names the record reading. In `fit` the record is one more **frame**: for a root
+object the candidates are the record first, then `json_record_pointers`' arrays, through the
+same `fit_by_elimination` — so villagerdb's `1-up-cap.json` is the item, by elimination of its
+three arrays, not a one-row table of buy prices; two fitting are `AmbiguousFrame` naming
+`record = true` and `pointer = "…"`; a root object with no array is fitted directly with no
+elimination note. A target column reaches a nested field with `OPTIONS(pointer = '/nh/x')`
+(`TargetColumn::pointer`): `matches` binds the top-level key, `fit::pointed_values` reads each
+candidate through `engine::json_pointer_value` — the executor's own function — and the
+pointed-at values are what is type-checked; the plan carries it as `ColumnSpec.pointer`, so no
+executor code is new. One key opened at two pointers is two columns (the collision check keys on
+`(position, pointer)`); a NOT NULL column whose pointer finds nothing is refused naming the row;
+`conform` enforces a declared pointer as it enforces `epoch`; `target_hash` hashes it only when
+declared. `region_read_hint` answers `None` for JSON — a blank line in pretty-printed JSON is
+not a table boundary. `tdy draft` reads a pile's root-object documents as records unless every
+one is sniffed onto an array at the same pointer: top-level scalars, and every scalar leaf down
+to depth 4 named from its path (`games_nh_sellprice_value`) with `matches` and `pointer`
+written; a top-level array is one TEXT column of JSON; an array further down cannot be a column
+(a pointer onto one is an error) and is named in a NOTE; types are the sniffer's guess over
+every value in the pile, in sample-sized chunks widened together; the grouping note compares
+top-level keys, since which games a villager appears in is one key's contents. The pile is
+`testdata/json_records/` (`20_json_records.py`), and `tests/records.rs` asserts its sums.
+Swept against villagerdb (release build, symlinked scratch copies): draft → `if_missing = 'null'`
+on every column the draft counts "in N of M" (37 for villagers, 118 for items, nothing else) →
+fit → `count(*)` equal to the file count, values pinned against the sources and, for items,
+three sums equal to a Python pass over the files. **483 villagers**: draft 1.1 s, fit 2.9 s,
+refit 0.9 s, count 0.6 s, under 60 MB. **7,443 items**: draft 1.4 s / 41 MB, first fit 92 s /
+1.3 GB, refit 31 s, `count(*)` 24 s / 1.1 GB, `--json fit --dry-run` 31 s, console `.ls` 16 s.
+None of that is quadratic: it is one 47 KB sidecar per member (121 columns, each typed one
+spelling out its whole NA vocabulary) — 335 MB of TOML parsed and fingerprints checked on
+every refit, query and listing (`.ls` takes as long with the target moved away). That is the
+shared-spec slice the design page defers, not something to optimise around here.
+
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
 2,290 files each with one isolated deviation from RFC 4180) through Pollock's
@@ -999,7 +1040,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (285) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (299) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end

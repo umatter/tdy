@@ -2,6 +2,57 @@
 
 Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
+## Unreleased
+
+### Added
+
+- **A JSON document that is one object is one record.** `[spec.extraction]`
+  `format = "json"` gains `record = true`: the object at `pointer` (the root
+  when absent) is one row, its keys in the document's own order, nested values
+  as compact JSON text. An array, a scalar or a null there is refused naming
+  what was found; `record` with `lines = true` is refused; it is never implied.
+  A directory of such documents is a dataset like any other pile.
+- **In `tdy fit`, the document is one more frame.** For a root object the
+  candidates are the document as one record, then every record array in it; the
+  one that alone produces the declared table is the frame, proved by
+  elimination and not reviewed — so an item that carries a one-element
+  `buyPrices` array is read as the item. Two that both fit are refused, naming
+  `record = true` and `pointer = "…"` as the settings that choose.
+- **`OPTIONS(pointer = '/a/b')` on a target column**: an RFC 6901 pointer into
+  the value of the key the column binds. `tdy fit` type-checks what it points
+  at and writes it as the member's `ColumnSpec.pointer`; nothing there is a
+  null (a NOT NULL column refuses the member, naming the row), an object or an
+  array there is a gap, and on a member not read as JSON it is refused. Must
+  start with `/`, may be said once, is enforced by `tdy check` like `epoch`,
+  and is part of the lock's fingerprint only when declared, so existing locks
+  keep their proofs. `tdy fit` shows the binding as
+  `sell<-"games"/nh/sellPrice/value`, and `--json` gives each source binding a
+  `pointer`.
+- **`tdy draft` over JSON documents** drafts each as one record: top-level
+  scalars, and every scalar leaf down to four levels as a column named from
+  its path (`games_nh_sellprice_value`) with `matches` and `pointer` written,
+  typed over every value in the pile and counted per file. A top-level array is
+  one TEXT column of its JSON; an array further in is named in a note, not
+  drafted. A pile whose documents are all read through an array at the same
+  pointer keeps the draft it had.
+
+### Changed
+
+- **A root JSON object with no array in it is read** — `tdy sniff`,
+  `messy()` and `tdy draft` read it as one record (note: "this document is one
+  object and is read as one record") where they declined it with "this JSON
+  document contains no array of records". A root object that holds arrays is
+  read exactly as before, and its note now also names the record reading.
+- **A root object with a single record array is fitted by elimination.**
+  `tdy fit` used to read the one array directly; it now tries the document as
+  one record beside it, so its plan carries a "frame proved by elimination"
+  note, and a target the record reading also satisfies is refused as
+  ambiguous rather than read through the array.
+- **`tdy draft` no longer splits a JSON file at blank lines**, nor does a pile
+  look for stacked tables inside one.
+- **The inference prompt is `infer-v6`**: the sidecar schema it carries gained
+  `record`. Sidecars record the version in their provenance.
+
 ## 0.3.1 — 2026-10-02
 
 ### Fixed

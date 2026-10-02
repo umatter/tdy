@@ -896,10 +896,16 @@ plus `json-parse` / `json-stringify` (Miller), `qsv flatten`.
 its source value, at any depth, and the same source may be opened more than
 once. An unresolvable pointer is a null (a key some records lack is the
 ordinary shape of a JSON export); one landing on an object or array is an
-error, since the column would go back to holding JSON text. What is still out
-of reach is an *array* of records nested inside a record — that is **D5**,
-which changes the row count and is a modelling decision rather than a parsing
-one. The argument as first written:
+error, since the column would go back to holding JSON text. Since 2026-10-02
+(`docs/design/2026-10-02-json-records.md`) the declaration reaches it too: a
+target column says `OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value')`,
+`tdy fit` plans it into the sidecar's `pointer`, and `tdy draft` writes one such
+column for every scalar leaf down to four levels. The same slice made a JSON
+document that is **one object** one record (`record = true`) — the
+`json_normalize` of a directory of documents, one row per file — which is where
+most of the corpus's nested fields live. What is still out of reach is an
+*array* nested inside a record — that is **D5**, which changes the row count and
+is a modelling decision rather than a parsing one. The argument as first written:
 
 **`partial`** — `Extraction::Json` produces the union of record keys as columns,
 and a nested value is **serialized back to a JSON string**. That is an honest
@@ -2239,7 +2245,8 @@ would mean producing a value the file does not contain.
 **Tier 2 — files tdy reads but cannot fully clean.**
 
 ~~5. **D6 · Nested JSON fields.**~~ **Done, 2026-09-06** — a per-column RFC
-   6901 `pointer`, at any depth.
+   6901 `pointer`, at any depth; declared in a target since 2026-10-02, with a
+   one-object document read as one record.
 6. **D2 · Pivot (long → wide).** Absent from the spec layer (so a long-format
    member cannot conform to a wide target) and awkward downstream because
    DataFusion lacks `PIVOT`.

@@ -394,7 +394,8 @@ is exactly the silent data loss this tool refuses.
 
 **What tier 1 gets you on its own** (the default, with no backend
 configured): delimited files with title blocks, footers, quoting, mixed line
-endings and any encoding; JSON and NDJSON including a nested records array;
+endings and any encoding; JSON and NDJSON including a nested records array,
+and a JSON document that is one object (read as one record);
 nginx/apache, syslog and ISO-timestamped logs; clean fixed-width reports; and
 single-row Excel headers. What it does *not* do alone is invent structure —
 a two-row merged header that needs unpivoting, a currency prefix that needs a
@@ -834,6 +835,66 @@ fitting sheet, as described above; and a JSON document with several fitting
 record arrays is refused either way, since a record array has no name of its
 own to become a member by.
 
+**A document is a record.** A JSON file that holds one object — an item, a
+villager, a settings dump — is one row, and a directory of them is the table.
+For a root object, the document itself is one more frame beside its arrays,
+and it is tried first: an item that happens to carry a one-element
+`buyPrices` array is read as the item, by elimination, not as a one-row table
+of buy prices. A declared column reaches inside a nested value with
+`pointer`, an RFC 6901 pointer into the value of the key it binds:
+
+```sh
+mkdir items && cd items
+printf '{"id":"acorn","name":"Acorn","games":{"nh":{"sellPrice":{"value":200}}}}' > acorn.json
+printf '{"id":"cap","name":"1-up Cap","games":{"nl":{"sellPrice":{"value":80},"buyPrices":[{"value":320}]}}}' > cap.json
+printf '{"name":"Lamp","id":"lamp","games":{"nh":{"sellPrice":{"value":1200}}}}' > lamp.json
+cat > items.tdy.sql <<'SQL'
+CREATE TABLE items (
+  id      TEXT   NOT NULL,
+  name    TEXT   NOT NULL,
+  nh_sell BIGINT OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value'),
+  nl_sell BIGINT OPTIONS(matches = 'games', pointer = '/nl/sellPrice/value')
+) WITH (files = '*.json');
+SQL
+tdy fit items.tdy.sql
+tdy query "SELECT * FROM dataset('items.tdy.sql')"
+```
+
+```
+items: 3 file(s) match, 4 declared column(s)
+
+  acorn.json               fits      id<-"id"  name<-"name"  nh_sell<-"games"/nh/sellPrice/value  nl_sell<-"games"/nl/sellPrice/value
+  cap.json                 fits      id<-"id"  name<-"name"  nh_sell<-"games"/nh/sellPrice/value  nl_sell<-"games"/nl/sellPrice/value
+  lamp.json                fits      id<-"id"  name<-"name"  nh_sell<-"games"/nh/sellPrice/value  nl_sell<-"games"/nl/sellPrice/value
+
+3 of 3 file(s) fit `items`.
+wrote items.tdy.lock
+
+Query it:  tdy query "SELECT * FROM dataset('items.tdy.sql')"
++-------+----------+---------+---------+
+| id    | name     | nh_sell | nl_sell |
++-------+----------+---------+---------+
+| acorn | Acorn    | 200     |         |
+| cap   | 1-up Cap |         | 80      |
+| lamp  | Lamp     | 1200    |         |
++-------+----------+---------+---------+
+```
+
+`matches` (or the column's own name) binds the top-level key as for any
+column; the pointer then follows the sidecar's existing rules: one that finds
+nothing is a null — so a NOT NULL column refuses the member, naming the row —
+one that lands on an object or an array is an error, and there is no wildcard
+and no fan-out. It must start with `/`, may be said once, is refused on a
+member not read as JSON, and is part of the lock's fingerprint. A key one
+document lacks altogether is a column that member does not have, so it needs
+`if_missing = 'null'` like any other. When a document both is a record and
+holds an array that produces the declared table, the fit is refused with both
+settings that would choose (`record = true`, `pointer = "/rows"`). `tdy draft`
+over such a pile drafts every scalar leaf down to four levels as a column
+named from its path, with the `matches` and `pointer` already written, and
+counts per file which documents have it (`-- in 3468 of 7443 file(s)`); an
+array inside a record is never descended into.
+
 When the layout cannot be enumerated at all — a log line, a report format no
 delimiter sniff can frame — and a backend is configured, `tdy fit` asks the
 model for the **frame only**: extraction and structural transforms. Its
@@ -1191,6 +1252,15 @@ Details worth knowing:
   at execution, and by the whole-file verification at fit time, so a value the
   probe never saw cannot round silently. Rounding is a value change; the
   declaration is what authorises it.
+- **`format = "json"` with `record = true`** reads the object at `pointer`
+  (the document's root when absent) as ONE row: its keys, in the document's
+  own order, are the header, and a nested value is a cell of compact JSON text
+  as it is inside a records array. An array, a scalar or a null there is an
+  error naming what was found, and `record = true` with `lines = true` is
+  refused. It is never implied: a sidecar without it whose pointer lands on an
+  object keeps the error it always had. `tdy sniff` writes it for a root
+  object with no array in it; one that holds arrays is still read as the
+  ranked array, with a note naming the record reading.
 - **A column may declare a JSON `pointer`** (RFC 6901) into its source value,
   so a nested `{"addr": {"city": …}}` becomes a text column instead of a
   string of JSON. Any depth, and the same source may be opened more than once.

@@ -1,7 +1,9 @@
 # A document is a record: JSON files that hold one object
 
-*Design, 2026-10-02. Status: agreed for implementation (taxonomy D6, and the
-largest group of files the corpus survey calls "unsure" or "declined").*
+*Design, 2026-10-02. Status: implemented 2026-10-02 on `json-records` (taxonomy
+D6, and the largest group of files the corpus survey calls "unsure" or
+"declined"); swept against villagerdb's 483 villagers and 7,443 items — the
+numbers are in CLAUDE.md.*
 
 ## 1. Why
 
