@@ -51,7 +51,10 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   one NDJSON line, which is one valid document. "No array" counts empty ones: a
   root object whose only arrays are empty (`{"status":"ok","count":0,
   "rows":[]}`) is zero records and is still declined, now naming the array and
-  `record = true`. A root object whose every value is an object may be a map of
+  `record = true`; in a pile whose target binds the document's own keys it is
+  read as one record, and — like any record read beside an empty array — waits
+  on a person (`--accept`) before `dataset()` serves it, unless its sidecar is
+  hand-written (`method = "manual"`). A root object whose every value is an object may be a map of
   records and is read below the flag line, with a note. A root object that
   holds arrays is read exactly as before, and its note now also names the
   record reading.

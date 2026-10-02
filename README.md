@@ -906,7 +906,8 @@ Two shapes are not taken for records. A root object whose only arrays are
 empty (`{"status":"ok","count":0,"rows":[]}`) is zero records, so `tdy sniff`
 declines it, naming the array and `record = true` as the way to say otherwise
 (a pile's target still decides: a declared table that binds the envelope's
-own keys reads it as one record). And a root object whose every value is an
+own keys reads it as one record — but a record read beside an empty array
+waits on `--accept`, since nothing proved the zero-row reading wrong). And a root object whose every value is an
 object (`{"ace":{…},"bob":{…}}`) may be a map of records keyed by name: it is
 read as one record, at a confidence below the flag line, with a note saying
 so.

@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 996 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 999 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -780,10 +780,15 @@ top-level keys, since which games a villager appears in is one key's contents. T
 Review fixes (same day) that a change here must not undo: "no array anywhere" counts EMPTY
 arrays — `{"status":"ok","count":0,"rows":[]}` is zero records, so the sniffer declines it
 naming the array, and `fit` falls back to the record frame only when the target binds the
-envelope's keys (`sniff::empty_array_record_frame`); a root object whose every value is an
+envelope's keys (`sniff::empty_array_record_frame`) — and any member read as one record that
+holds an empty array **waits on a person** (`fit::empty_array_reason`, from a plan and a reused
+non-manual sidecar alike), because the elimination never saw that array's zero-row reading: a
+"no results" month beside siblings settled on `pointer = "/rows"` was served as one row of
+envelope data; a root object whose every value is an
 object is read with a 0.25 doubt, since it may be a map of records; when no frame of a root
-object fits, the gap report is the sniffer's own frame's (`FrameCandidates::ranked`), so an API
-dump's real gap is not buried under the record frame's "no column binds"; `jsondoc`'s duplicate
+object fits, the gap report is the frame that bound the most declared columns, ties to the
+sniffer's own (`FrameCandidates::ranked`), so neither an API dump's real gap nor a record's is
+buried under another frame's "no column binds"; `jsondoc`'s duplicate
 check is a key-to-slot map (a scan made a 200,000-key object take 342 s; 3.9 s to sniff now);
 a NOT NULL column whose pointer finds nothing is its own gap (`Gap::NothingAtPointer`). In the
 draft, `tdy draft --records` forces the record reading where every document is read through
@@ -1059,7 +1064,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (302) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (303) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end

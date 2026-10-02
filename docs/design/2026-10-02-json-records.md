@@ -60,7 +60,9 @@ Two refinements, from review (2026-10-02):
   export) is zero records, not one: declined, naming the first empty array and
   `record = true` as the way to say the document is the record. In a pile the
   target still decides: `fit` tries the record frame and fits it when the
-  declared table binds the envelope's keys.
+  declared table binds the envelope's keys — but that reading **waits on a
+  person** (§4). An empty array beside the array the sniffer reads is named in
+  its note too.
 - **A map of records is not read confidently.** Two or more top-level keys
   whose every value is an object (`{"ace":{…},"bob":{…}}`) is read as one
   record — no value is wrong — with a 0.25 doubt (below the flag line) and the
@@ -87,6 +89,23 @@ arrays, sheets — and calls exactly one survivor a proof (`fit_by_elimination`)
 - none → the ordinary gap report, for the ranked candidate.
 
 A root object with no array has one candidate and needs no elimination.
+
+An **empty** array is not among the candidates — it has no header to bind, so
+its reading (zero rows) can never "fit" — and that makes the elimination
+incomplete for any document holding one: a "no results" export
+(`{"id":101,"rows":[]}`) beside its siblings' settled `pointer = "/rows"`
+would be read as one plausible row of envelope data. So a member read as one
+record that holds an empty array carries a review reason ("`/rows` is empty —
+zero records; this member is read as one record of the document's own keys.
+Accept only if the document itself is the record", every empty array named),
+and `dataset()` refuses it until `--accept`. A sidecar a person marked
+`method = "manual"` carries none; a document with no array at all is
+unaffected. (Review, 2026-10-02.)
+
+When nothing fits, the gap report is that of the frame that bound the most
+declared columns (fewest "no column binds"), ties going to the sniffer's own
+frame — the API dump's `amount` that cannot parse `"x"`, or a record whose
+pointer lands on a string, rather than a frame that binds nothing.
 
 ## 5. Reaching a nested field
 
