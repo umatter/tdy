@@ -2,6 +2,27 @@
 
 Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
+## 0.3.1 — 2026-10-02
+
+### Fixed
+
+- **The magnitude check no longer judges a member on fewer than five values.**
+  It compares each member's median absolute value per numeric column with the
+  pile's, and a one-row file's "median" is that row, so a pile of small files
+  was flagged on ordinary variation: 5,000 one-row CSVs (`id;name;price`, random
+  prices) fitted, yet 476 of them waited on a person and `dataset()` refused the
+  pile. A member now has a typical value for a column only with at least five
+  non-null values in it (within the bounded head the check already reads); below
+  that it is neither flagged for the column nor counted toward the pile's median
+  or the three members the check needs. The threshold (10×), the reason's
+  wording and its place in the lock are unchanged. The same 5,000-file pile now
+  fits with no review and `dataset()` serves all 5,000 rows. A lock written by
+  0.3.0 for such a pile keeps its recorded review reasons, and `dataset()` keeps
+  refusing it, until the next `tdy fit TARGET`: the reasons are stored in the
+  lock and recomputed only by a fit, which rebuilds every member's entry. Run
+  `tdy fit TARGET` once after upgrading; no sidecar changes, and a member that
+  is still judged and still out of scale is asked about again.
+
 ## 0.3.0 — 2026-10-02
 
 *0.2.1 was never published; its entries, below, ship with 0.3.0.*

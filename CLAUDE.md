@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 947 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 951 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -478,7 +478,7 @@ pile says "file(s)".
 `tests/dataset.rs::acceptance_is_per_sheet_member` is the end-to-end proof that `--accept` takes
 one sheet's judgement and leaves its sibling alone. **The magnitude check** (`src/magnitude.rs`,
 2026-09-07): with three members or more, each member's median absolute value per numeric column
-(a bounded typed head, `engine::preview`) against the median of those medians; 10× above or
+(a bounded typed head, `engine::preview`) against the median of those medians — a member counts for a column only with at least `MIN_ROWS` (5) non-null values in it, because a one-row file's "median" is that row and a pile of small files would be flagged on ordinary variation (0.3.1) — 10× above or
 below is a review reason recorded in the **lock, not the spec** — a fact about the pile — and the
 console's `.accept` reads both places. Medians, not totals, so a partial month is a non-event. **Swept against the corpus**
 (`scripts/sweep_workbooks.py`, 2026-09-07): of 34 multi-sheet xlsx/xlsm workbooks, 18 stay a
@@ -999,7 +999,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (283) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (285) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end
