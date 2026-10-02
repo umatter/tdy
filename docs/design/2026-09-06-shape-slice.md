@@ -81,7 +81,7 @@ of it.
 
 ### D4 — provenance columns are opt-in, and they are part of the target's meaning
 
-`_file` and `_row` do not appear unless a target says `WITH (provenance = true)`,
+`_file` and `_row` do not appear unless a target says `WITH (provenance = 'true')`,
 because a dataset's schema is what the declaration says it is and no column may
 appear that the declaration did not ask for. They are therefore part of
 `target_hash`: turning provenance on voids the existing proofs, exactly as
@@ -201,7 +201,7 @@ values are unique non-numeric labels and the header row's values type
 homogeneously — the mechanical signature of a transposed table. It never applies
 it (D1). `fit` may, by elimination (D2).
 
-### S3 · `source_name`, and `WITH (provenance = true)` — **built, 2026-09-06**
+### S3 · `source_name`, and `WITH (provenance = 'true')` — **built, 2026-09-06**
 
 ```toml
 [[spec.transforms]]
@@ -225,7 +225,7 @@ question is its own document.
 **And separately**, on a target:
 
 ```sql
-CREATE TABLE umsatz (...) WITH (provenance = true);
+CREATE TABLE umsatz (...) WITH (provenance = 'true');
 ```
 
 which adds `_member` (the lock-relative path) and `_row` (1-based within that
@@ -344,7 +344,7 @@ whether the framing they touch regressed.
    With plain transposition followed by `promote_header`, the post-transform
    header *is* the file's own spelling of the labels that ran down the first
    column, so `header_origin` carries them with no special case.
-3. ~~**`WITH (provenance = true)` and `--frozen`.**~~ **Asserted, in
+3. ~~**`WITH (provenance = 'true')` and `--frozen`.**~~ **Asserted, in
    `tests/dataset.rs`** rather than left resting on the invariant. This session
    found twice that an invariant nothing checks is not one, so `_row`'s
    determinism is now a test: every member restarts its numbering at 1, and the

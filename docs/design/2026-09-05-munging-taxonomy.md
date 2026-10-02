@@ -193,6 +193,19 @@ duckdb, polars — all transparent), `zcat`, zip member selection, tar extractio
 **Messy → clean:** the export arrives as `daten.csv.gz` or as one CSV inside a
 zip, and every tool in the pipeline has to be taught to unwrap it.
 
+**`partial`** since 2026-09-07 — a compressed file is read. `fileio::materialize`
+recognises gzip, zstd, bzip2 and xz by their magic bytes, never the extension (a
+`.csv` that is really gzip counts), and decompresses each into one copy per file
+per run in a process-lifetime cache that `fileio::clear_cache` removes at exit,
+bounded by `[limits].max_decompressed_bytes` *before* the copy exists. Every byte
+reader and the one workbook opener go through it, so sampling, both executors and
+drift see an ordinary file; the sidecar fingerprints the compressed bytes and
+records `compressed = "gzip"`. Still `partial`, for the other half of the
+entry's own example: **one CSV inside a zip** is not read. zip, like lz4, is
+refused by name (`fileio::refuse_if_compressed`), so a zip-of-CSVs still cannot
+be a dataset member, and there is no member selection inside an archive, nor tar.
+The verdict as first written, and the history between:
+
 **`gap`, and bigger than it looks** — tdy reads zip internals for xlsx/xlsb/ods
 (that is what `xlmoney` and `xlguard` do) but a `.csv.gz` is not readable, and a
 zip-of-CSVs cannot be a dataset member.
@@ -425,9 +438,15 @@ over the file and takes the **union** of every record's keys, because a key that
 appears only in the last record still has to become a column. Interleaved *line
 grammars* are handled by `Extraction::Lines` with `on_no_match = "skip"`, which
 covers the log case by discarding the other grammars rather than parsing them.
-What has no expression is a file that genuinely contains two record types both of
-which you want — that is two tables in one file, i.e. **B10** again, seen from
-the row direction rather than the block direction.
+Two record types both of which you want are reachable since 2026-09-08 when
+they sit in separate blocks split by blank rows (**B10**): `engine::regions_of`
+finds the blocks, `report::expand_units` makes each its own member
+(`report.csv#2`), and a target's `exclude` drops the blocks that belong to
+another target. Still `partial`: record types *interleaved* row by row — a type
+code in column 1 selecting the layout, three line grammars mixed through one
+log — have no expression that keeps more than one of them, since a member has
+one sidecar and one extraction, and `on_no_match = "skip"` keeps one grammar by
+discarding the others.
 
 ---
 
@@ -600,6 +619,26 @@ positive that wants unpivot.
 **Messy → clean:** twelve sheets named `2014`…`2025`, each an identical table;
 the year exists only as the sheet's name and must become a column. Or: forty
 CSVs whose canton is only in the filename.
+
+**`spec`** since 2026-09-07 — both halves are in. `Transform::SourceName` reads
+the column off the source: `from = "file_stem" | "file_name" | "path" | "sheet" |
+"region"`, with an optional regex whose first capture becomes the value, so the
+year in `umsatz_2025.xlsx`, or in a Hive-style `year=2024/` path segment, is a
+column. It carries no review gate, and a pattern that does not match is an error
+rather than an empty column. The sheet half landed with workbook members: a
+workbook several of whose sheets fit becomes one member per sheet
+(`fit::discover_sheets`, `report::expand_units`; `book.xlsx#2014`), so twelve
+per-year sheets are twelve members and `from = "sheet"` puts the year in each.
+
+What is not there is *planning*: a target cannot say that a column comes from
+the source, so `fit` never writes a `source_name`. A sheet that lacks the
+declared column fails the gates, so the route is to declare the column
+`if_missing = 'null'` (the planner null-fills it, no review), replace that
+`constant` with a `source_name` in each member's sidecar and re-stamp it with
+`tdy validate --stamp`, which marks it `method = "manual"` — probed on a
+two-sheet workbook, which then fits and sums per year. That is hand work per
+member, the same "nothing infers it" that keeps **J4** `partial`; it does not
+make the operator undeclarable. The verdict as it stood on 2026-09-06:
 
 **`partial`** since 2026-09-06 — `Transform::SourceName` closes the *derivable*
 half: `from = "file_stem" | "file_name" | "sheet" | "path"` with an optional
@@ -992,6 +1031,18 @@ trailing `%`, a footnote `*`.
 **Messy → clean:** `(1,234.50)` means **−1234.50**; `1234.50-` means −1234.50;
 `1,234.50 CR` means −1234.50 in most ledgers and +1234.50 in some.
 
+**`spec`** since 0.2.1 — `parse.negative = "parentheses" | "trailing_minus"`
+(`NegativeStyle`) says what a sign marker means, a `strip` that would eat one
+fails at execution naming the row, and the sniffer notes the shape and never
+infers it; details below. The other spellings the entry names are declarable
+with what already exists, because `replace` (literal substrings) runs before the
+sign step: `replace = [{ from = " CR", to = "-" }, { from = " DR", to = "" }]`
+beside `negative = "trailing_minus"` reads `1,234.50 CR` as −1234.50 and
+`2,000.00 DR` as 2000.00 — or the other way round, for the ledgers that mean it
+the other way, which is why it is declared — and `{ from = "−", to = "-" }`
+folds a U+2212 minus (both probed). A leading `+` already parses. The verdict as
+first written:
+
 **`gap` — and the finding that touches the one rule.** Measured on this machine:
 
 ```
@@ -1041,8 +1092,9 @@ The same command that produced `+1234.50` above now produces:
 | C |  -300.00 |
 ```
 
-CR/DR suffixes remain undeclarable, and are the obvious third `NegativeStyle`
-if a file ever asks for one.
+CR/DR suffixes were recorded here as undeclarable; they are reachable through
+`replace` pairs and `trailing_minus`, as the verdict above says. A third
+`NegativeStyle` for them would only shorten the declaration.
 
 ### E6 · Percent handling
 **Also called:** `str.rstrip('%').astype(float)/100`, `Percentage` type (Power
@@ -1140,11 +1192,11 @@ bug, `excel_numeric_to_date()` (janitor), `convert_to_date` (openxlsx),
 `origin="1899-12-30"` (R), 45000 as a date, `DATEVALUE`.
 
 **`partial`** — calamine yields typed datetimes for date-*formatted* cells, so
-the ordinary case works. The uncovered case is a serial number that arrives as a
-plain number, most often after a CSV export from a spreadsheet: `45000` in a CSV
-is `int64`, and nothing suggests it might be 2023-03-15. Detectable heuristically
-(a tight cluster of integers in the 25,000–50,000 band, in a column named
-`datum`/`date`) but only as a *note*, never as a silent conversion.
+the ordinary case works. A serial that arrives as a plain number, most often
+after a CSV export from a spreadsheet (`45000` in a CSV is `int64`), was the
+uncovered case when this was written; it is now noted by the sniffer and
+declarable by a person, as the next two paragraphs say, and never a silent
+conversion. The one case still missing is the 1904 date system, at the end.
 
 The note is in since 2026-10-01 (`sniff::serial_date_note`): an integer column
 with a name token that is or ends with `date`, `datum`, `day`, `tag`, `zeit`,
@@ -1157,7 +1209,7 @@ declare it: in the sidecar type = "date", format = "%s", epoch = "excel_days";
 in a target OPTIONS(epoch = 'excel_days') on a DATE column*. The floor makes the
 1899-12-30 origin exact (serial 60 is the phantom 1900-02-29).
 
-**`spec`** since 2026-10-02 — the reading is declarable. `EpochUnit::ExcelDays`
+Since 2026-10-02 the reading is declarable. `EpochUnit::ExcelDays`
 (`epoch = "excel_days"` beside `format = "%s"`) reads whole days since
 1899-12-30 on a `date` column and a fraction of a day as the time on a
 `timestamp` one, from the digit string by integer arithmetic (the fraction is
@@ -1170,7 +1222,8 @@ refused rather than dropped, and both executors parse through the same
 function. A target declares it per column — `OPTIONS(epoch =
 'excel_days')` on a `DATE` or `TIMESTAMP` — and that becomes the only reading
 `fit` tries for the column, with a note and no review. Still never inferred:
-the sniffer notes, a person declares. What is still missing is the **1904 date
+the sniffer notes, a person declares. Still `partial`, for the case the alias
+list names first: the **1904 date
 system** (classic Mac Excel, serial 0 = 1904-01-01): no unit reads it, and a
 workbook in it is four years and a day off under `excel_days` — calamine
 handles it for date-formatted cells, the CSV case would need its own unit.
@@ -1179,8 +1232,8 @@ handles it for date-formatted cells, the CSV case would need its own unit.
 **Also called:** `YEARCUTOFF=` (SAS), pivot year, `%y` semantics, Y2K windowing,
 `dmy` with 2-digit input (lubridate).
 
-**`partial`** — `%y` parses, and since 2026-10-01 the window is declarable:
-`parse.year_pivot` (0..=100) reads a two-digit year below the pivot as 20xx and
+**`spec`** since 2026-10-02 — `%y` parses, and since 2026-10-01 the window is
+declarable in the sidecar: `parse.year_pivot` (0..=100) reads a two-digit year below the pivot as 20xx and
 one at or above it as 19xx, re-centring the year chrono parsed from its last two
 digits rather than rewriting the value (`engine::recentre_year`, called by the
 one parse function both executors share). Unset is chrono's window exactly —
@@ -1193,7 +1246,7 @@ written it — the model's tier; the sniffer and `fit` choose no `%y` format —
 carries the note *two-digit years are read as
 1970–2069; set `year_pivot` to change*.
 
-**`spec`** since 2026-10-02 — a target declares it: `OPTIONS(year_pivot = '30')`
+Since 2026-10-02 a target declares it too: `OPTIONS(year_pivot = '30')`
 on a `DATE` or `TIMESTAMP` column authorises the two-digit formats — all three
 day/month/year orders for each of `.`, `/` and `-`, and their timestamp forms —
 with that window, `date_order` settling a conflict as it does for `%Y`, and a
@@ -1201,11 +1254,12 @@ member planned under it carries a note and no review — the reviewed
 declaration is the authorisation. Undeclared, `fit` still tries no `%y`
 format, and a column only `%y` reads is a gap naming the option; a
 hand-written `%y` sidecar under a column declaring no window, or another one,
-still waits on a person. The window is never inferred, by design. Still
-missing: two-digit years in spellings the four-digit list does not have either
-(compact `%y%m%d`, month names beside `%y`), and a pile whose members mean
-different windows, which a per-column declaration cannot say — that member
-settles it in its own sidecar, behind review. (The first cut listed only one or
+still waits on a person. The window is never inferred, by design. Not planned
+from a target (they stay hand-written): two-digit years in spellings the
+four-digit list does not have either (compact `%y%m%d`, month names beside
+`%y`), and a pile whose members mean different windows, which a per-column
+declaration cannot say. Both are read by a sidecar that names the format and
+its `year_pivot`, behind review, so the operator itself is met. (The first cut listed only one or
 two orders per separator, so `15-03-24` under a declared `dmy` read as
 2015-03-24 with nothing to disagree with it; every order is tried now.)
 
@@ -1279,9 +1333,12 @@ all become missing *and* their reason must survive.
 **`partial`** — all three can be listed in `na_values` and become null; the
 *reason* is lost. Preserving it needs a second column (`x_missing_reason`), which
 no ingestion tool this catalogue surveyed does automatically and which haven
-solves with tagged NAs that only R understands. Listed for completeness; the
-honest answer for tdy is "declare a second column via **D3**-style extraction,"
-which is another argument for D3.
+solves with tagged NAs that only R understands. Listed for completeness. The
+*code* can be kept without **D3**: two columns may read one source, so `x`
+typed with those `na_values` beside `x_code` as `utf8` over `source = "x"` gives
+a null next to its `-8` (probed). Still `partial`: what survives is the raw code
+beside every value, not a reason — nothing maps `-8` to *refused* only where `x`
+is missing, and there is no tagged-missing type.
 
 ### E21 · Epoch and offset-encoded timestamps
 
@@ -1585,7 +1642,7 @@ keep='last')` (pandas), `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …) = 1`,
 to find that line in the original file; or a union of forty members needs to know
 which member each row came from.
 
-**`spec`** since 2026-09-06 — `WITH (provenance = true)` on a target adds
+**`spec`** since 2026-09-06 — `WITH (provenance = 'true')` on a target adds
 `_member` (the member's lock-relative path) and `_row` (1-based within that
 member) to what `dataset()` returns. Opt-in, since a dataset's schema is what
 the declaration says it is, and part of `target_hash`, since turning it on
@@ -2126,11 +2183,11 @@ rather than leaving implicit in the code.
 
 | Part | `spec` | `sql` | `partial` | `gap` | `out`/`rule` | entries |
 |---|---|---|---|---|---|---|
-| A · Physical decoding | 3 | – | 2 | 1 | 1 | 7 |
+| A · Physical decoding | 3 | – | 3 | – | 1 | 7 |
 | B · Dialect & framing | 8 | – | 2 | 1 | – | 11 |
-| C · Table framing | 7 | – | 4 | 1 | 3 | 16 |
+| C · Table framing | 9 | – | 2 | 1 | 3 | 16 |
 | D · Shape | 5 | 3 | – | 1 | – | 9 |
-| E · Parsing & typing | 15 | – | 5 | 1 | – | 21 |
+| E · Parsing & typing | 17 | – | 3 | 1 | – | 21 |
 | F · Standardisation | 1 | 3 | – | 1 | 5 | 10 |
 | G · Missing data | 4 | 2 | 1 | – | 2 | 9 |
 | H · Rows | 2 | 3 | – | – | – | 5 |
@@ -2138,10 +2195,15 @@ rather than leaving implicit in the code.
 | J · Combining | 1 | 1 | 1 | – | 2 | 5 |
 | K · Validation | 2 | – | 1 | – | 4 | 7 |
 | L · Process | 4 | – | – | 1 | – | 5 |
-| **Total** | **52** | **16** | **16** | **7** | **17** | **110** |
+| **Total** | **56** | **16** | **13** | **7** | **17** | **110** |
 
 Two `gap`s became `spec` on 2026-09-06 — **E5** signed-number conventions and
-**G2** fill-up — and this table counts the state after them.
+**G2** fill-up — and this table counts the state after them. Recounted
+2026-10-02, after **C7** and **E6** (2026-10-01) and **C9** and **E14**
+(2026-10-02) moved from `partial` to `spec`, and **A6** from `gap` to `partial`
+(compressed files are read; a CSV inside a zip is not). E5's verdict line now
+says `spec` too, as this table already counted it. The thirteen `partial`s: A4,
+A5, A6, B10, B11, C6, C16, E13, E15, E20, G3, J4, K5.
 
 (Counted from the verdict line of each numbered entry; C15's split verdict is
 counted in the entry total but in neither column.)
@@ -2158,11 +2220,12 @@ would mean producing a value the file does not contain.
 ~~1. **C8 · Transposition.**~~ **Done, 2026-09-06** — `transpose`, no options,
    before `promote_header`. Detected and reported, never applied: the shape it
    cures and an ordinary wide report are indistinguishable from the file alone.
-~~2. **C9 + H4 · Source identity as data.**~~ **Mostly done, 2026-09-06** —
-   `source_name` reads a column out of the path, and `WITH (provenance = true)`
-   gives a row `_member` and `_row`. What is left is the *sheet* half: a
-   sidecar is per file, so a twelve-sheet workbook still contributes one sheet
-   to a dataset. That belongs with **B10** in its own design conversation.
+~~2. **C9 + H4 · Source identity as data.**~~ **Done, 2026-09-06 and
+   2026-09-07** — `source_name` reads a column out of the path (or the sheet, or
+   the region), and `WITH (provenance = 'true')` gives a row `_member` and `_row`.
+   The *sheet* half landed with workbook members: a workbook with several
+   fitting sheets is one member per sheet. What stays manual is that `fit`
+   never plans a `source_name` (**C9**).
 ~~3. **D3 · Split a column.**~~ **Done, 2026-09-06** — `split_column`, total by
    construction, with a declared `on_short` for an optional tail. It was the
    most common munging operation with no declarative form, it blocked `fit` on
@@ -2175,17 +2238,21 @@ would mean producing a value the file does not contain.
 
 **Tier 2 — files tdy reads but cannot fully clean.**
 
-5. **D6 · Nested JSON fields.** One level of flattening is the boundary, and
-   DataFusion has no JSON functions to finish the job downstream.
+~~5. **D6 · Nested JSON fields.**~~ **Done, 2026-09-06** — a per-column RFC
+   6901 `pointer`, at any depth.
 6. **D2 · Pivot (long → wide).** Absent from the spec layer (so a long-format
    member cannot conform to a wide target) and awkward downstream because
    DataFusion lacks `PIVOT`.
 7. **A6 · Compressed inputs.** `.csv.gz` and zipped monthly exports are the
    ordinary shipping format for the pile `dataset()` is designed to read.
+   *Compressed files done, 2026-09-07* (gzip, zstd, bzip2, xz); a CSV inside a
+   zip is still refused.
 
 8. **B10 · Multiple tables in one file.** *Moved up from tier 3 by the
    literature pass:* 5.1% of real-world CSVs, more in spreadsheets, and a solved
-   research problem (Mondrian) rather than an open one.
+   research problem (Mondrian) rather than an open one. *Stacked tables done,
+   2026-09-08* (regions, one member per block, behind review); side-by-side
+   tables in one sheet remain.
 
 **Tier 3 — small, cheap, occasionally decisive.**
 
@@ -2193,7 +2260,8 @@ would mean producing a value the file does not contain.
 10. **E15 · Quarters and ISO weeks** — or at least a documented `replace` idiom.
 11. ~~**E13 + E21 · Time that does not look like time**~~ — **done**: a sniffer
     note for serials, `epoch` for Unix scales and `excel_days` for serials,
-    declarable in a sidecar and a target; never a silent conversion.
+    declarable in a sidecar and a target; never a silent conversion. The 1904
+    date system for a plain-number serial is the one piece left (**E13**).
 12. **B7 · Multi-character delimiters** — *moved up from "trivial, rare":* 2.7%
     of real CSVs use comma-plus-whitespace, the third most common dialect.
 13. **E17 · Duration type**, **F3 · ordered categoricals**, ~~**C7 · blank-column

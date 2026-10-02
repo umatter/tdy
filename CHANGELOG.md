@@ -2,7 +2,112 @@
 
 Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
-## Unreleased
+## 0.3.0 — 2026-10-02
+
+*0.2.1 was never published; its entries, below, ship with 0.3.0.*
+
+The pile release. 0.2.0 made a single file read correctly; this one is about
+the dataset a pile of them becomes. A member of a dataset may now be one sheet
+of a workbook or one of several tables stacked in a file; compressed exports are
+read rather than refused; the spec language gains the shape operators the
+operator catalogue (`docs/design/2026-09-05-munging-taxonomy.md`) found missing;
+readings no value in a file can establish — a rounding, an epoch unit, the
+century of a two-digit year — are declared in the target rather than guessed;
+and `tdy profile` shows what a column holds. Two more checks ask a person
+before a pile joins: a member in a different unit from its siblings, and a
+reading the target did not declare.
+
+**Upgrading changes what some piles do, deliberately**, and the next section
+lists every such change. As with 0.2.0, a fresh sidecar is not invalidated by
+the upgrade: its file's blake3 still matches, so a `<file>.tdy.toml` written by
+0.2.0 keeps being used — and then re-proved, against the target and by a dry
+run, on every `tdy fit` and every `dataset()` query, which is where most of the
+changes below take effect. A 0.2.0 lock keeps its proofs too, when its target
+declares none of the new options (*Locks*, below).
+
+### Changed — what you will notice upgrading from 0.2.0
+
+- **Rounding onto a declared scale is refused unless the target says so.** In
+  a pile, a value with more fractional digits than its `DECIMAL` column's scale
+  is a gap naming the value, unless the target column declares
+  `OPTIONS(round = 'half_away')` (the one mode, part of `target_hash`). The
+  executor enforces it too, not only the planner: a fitted sidecar carries
+  `parse.round = "error"` unless the column declared rounding, so whole-file
+  verification refuses a late value the probe never saw, naming its row. A
+  sidecar with `round` unset — every sidecar 0.2.0 wrote, and every sniffed one
+  — still rounds half away from zero, and its note says so; `messy()` is
+  unaffected.
+- **An epoch reading in a pile member waits on a person unless the target
+  declares the unit.** Any `epoch = …` in a member's sidecar, or a format
+  reading `%s` (which is epoch seconds), is now a review reason — "`datum`
+  reads integers as time (epoch = …), which no value in the file states" —
+  dropped only when the target column declares that very unit with
+  `OPTIONS(epoch = '<unit>')`. A declared unit is enforced, not advised: a
+  member column read with another unit or none is refused, naming both. A
+  hand-written epoch sidecar that joined a pile silently under 0.2.0 asks for
+  one `--accept` (or the declaration); `messy()` queries are unaffected, since
+  review is a pile concept.
+- **A `%y` date column in a pile waits on a person, naming the century window
+  in force** — declared with `year_pivot`, or chrono's default (00–69 → 20xx,
+  70–99 → 19xx). A target column declaring exactly that window with
+  `OPTIONS(year_pivot = 'N')` authorises it with a note and no review.
+- **Body transforms see rows after the ragged policy on both executors.** This
+  reaches only the materialising executor — which runs a delimited spec the
+  streaming one cannot take, or any spec under `TDY_NO_STREAM=1` — and only a
+  headerless delimited file with a whole-row `drop_rows_matching` or
+  `remove_empty`. The streaming executor always applied `ragged` as it read and
+  is unchanged; a spec that promotes a header was already rectangularised
+  before its body transforms. In that one case the materialising executor
+  tested a row before the policy had judged it. Now, under `ragged = "error"`,
+  a file whose too-wide row such a `drop_rows_matching` removed is refused, as
+  the streaming executor already refused it; under `truncate_extra` the two
+  transforms test the truncated row, so the row count can change to what the
+  streaming executor already returned. The sniffer chooses `pad_nulls`, so a
+  sniffed spec is unaffected.
+- **A sheet's blank body rows are no longer all-NULL records.** They inflated
+  `count(*)` on any sheet with spacer rows. They are dropped past the last
+  framing transform, so a hand-written `skip_rows` still counts the rows it
+  was written against, and `fill_down` leaves a blank row blank rather than
+  filling it into a record.
+- **Members are named relative to the target**, however the glob or
+  `--accept` spells them. An absolute glob used to put absolute paths in the
+  lock, which `--accept` could then name by neither spelling. A lock written
+  that way drifts once: `dataset()` refuses it, naming each member as not in
+  the lock, and the next `tdy fit` re-plans the members under their relative
+  names and asks for their acceptances again.
+- **`transpose` and the plain types refuse stray keys.** serde accepts and
+  drops any key beside the tag of a unit variant, so `op = "transpose"` beside
+  `rows = 5`, or `type = "utf8"` beside a `format`, loaded silently. Both are
+  now refused, naming the field. The JSON Schema is unchanged.
+- **`PROMPT_VERSION` is `infer-v5`** (0.2.0 recorded `infer-v3`): the JSON
+  Schema stated in the prompt carries the spec additions below, the last two
+  bumps for `remove_empty` and `year_pivot`, then `excel_days`. It is recorded
+  in an inferred sidecar's provenance and compared with nothing.
+- **A workbook with several fitting sheets, or a file with several stacked
+  tables, becomes several members in a pile.** 0.2.0 refused the first as an
+  ambiguous frame. Each sheet member is fitted on its own and joins without
+  review; each table split out of a stacked file waits on `--accept` (see
+  *Added — piles*). A single file given to `tdy fit TARGET FILE` still refuses
+  several fitting sheets, and names a stacked split it did not make.
+- **A member 10× above or below its siblings waits on a person.** With three
+  members or more, each member's median absolute value per numeric column is
+  compared with the median of those medians; the reason names the column, both
+  medians and the factor. It lives in the lock, not the sidecar — it is a fact
+  about the pile.
+- **Compressed files are read, not refused.** 0.2.0 read a gzip file as text
+  and returned one confident column of mojibake. gzip, zstd, bzip2 and xz are
+  now decompressed (see *Added*); lz4 and zip are refused by name. A sidecar
+  0.2.0 wrote for a compressed file still matches its fingerprint — that is
+  over the compressed bytes, then and now — so its old frame keeps being used,
+  now over the decompressed text (on a gzip CSV: one text column holding each
+  whole line, at the old low confidence), until the sidecar is deleted or the
+  file re-sniffed with `tdy sniff FILE --force`.
+- **Locks.** A lock written by the published 0.2.0 stays valid when its target
+  declares none of the options added since (`round`, `epoch`, `year_pivot`,
+  `provenance`), and its sidecars are reused as they are. A lock written by an
+  unreleased build between 0.2.0 and 0.3.0 (0.2.1 was never published) is out
+  of date once: `dataset()` refuses it until `tdy fit TARGET`, which reuses the
+  sidecars.
 
 ### Fixed — both found by the Pollock benchmark
 
@@ -36,7 +141,46 @@ from RFC 4180 each turned up two things nothing in the tree had:
   header for nine columns, and inventing names from a mis-parsed row is exactly
   the mis-mapping the design refuses.
 
-### Added
+### Fixed — found since
+
+- **A lock written by 0.2.0 is no longer refused as out of date.** The one
+  code change made while preparing this release. `target_hash` hashed `round`
+  and `provenance` for every target, though its own comment said an absent
+  option hashes nothing, so every 0.2.0 lock failed with "the target
+  declaration changed, so every member must be re-fitted". Every option added
+  since 0.2.0 now contributes to the hash only when declared, inside its own
+  column's segment, and the hash 0.2.0 wrote for
+  `testdata/drifting_exports/sales_ok.tdy.sql` is pinned as a test. A lock
+  written by the 0.2.0 binary over that pile queries unchanged: 36 rows,
+  57,340.00.
+- **Padded title lines in a CSV are skipped as titles.** A leading run of lines
+  whose only filled cell is the first (`Table 1. …;;`, a title padded to the
+  table's width as Excel writes CSV) is skipped as one-field title lines are —
+  only when the row after it is then promoted as the header with two or more
+  filled fields, so a single-column file with a trailing `;`, or a first record
+  with empty fields, reads exactly as before.
+- **The streaming executor measured a table's width over rows `skip_rows`
+  drops**, so a title line wider than the table added phantom columns the
+  materialising executor never had.
+- **A `truncate_extra` refusal names the right cure.** A spec naming a
+  generated `col_N` beyond the modal width is told the policy truncated wider
+  rows and that `pad_nulls` keeps them, on both executors, instead of being
+  pointed at `quote`.
+- **A long-form member is told it is long-form.** A file whose values in one
+  column are the target's declared names is diagnosed as such (`kind =
+  "long_form"`), rather than sent after a `matches` spelling that does not
+  exist — and, being a settled answer, it is no longer sent to the model for
+  another frame.
+- **`tdy draft` declares what its own draft needs.** A `DECIMAL` drafted from a
+  currency-formatted cell holding float noise carries `round = 'half_away'`, so
+  the unedited draft fits the file it came from; a draft written to a target in
+  another directory names its files (a glob relative to the current directory
+  only when they are at or below it, absolute otherwise), for `tdy draft` and
+  the console's `.draft --to` alike.
+- **A sidecar the loader refuses is not discarded in silence.** It is still
+  re-planned, and the member now carries a note saying so.
+
+### Added — reading
 
 - **A per-column JSON `pointer`.** `Extraction::Json` gives the union of every
   record's keys and serialises a nested value back to a JSON string — honest,
@@ -78,6 +222,10 @@ from RFC 4180 each turned up two things nothing in the tree had:
   rounding — an epoch is a count, and `1748736000.5` in a timestamp column is
   something to look at.
 
+  Since then: `epoch = "excel_days"` reads a spreadsheet serial (below), a
+  target can declare the unit, and in a pile an undeclared epoch waits on a
+  person (*Changed*, above).
+
 - **`source_name`: where a file *is* becomes a column.** The period a monthly
   export covers is very often only in its filename, and forty CSVs whose
   canton appears nowhere but their path are an ordinary pile.
@@ -86,7 +234,7 @@ from RFC 4180 each turned up two things nothing in the tree had:
   [[spec.transforms]]
   op = "source_name"
   name = "jahr"
-  from = "file_stem"      # file_stem | file_name | sheet | path
+  from = "file_stem"      # file_stem | file_name | sheet | path | region
   pattern = "(\\d{4})"     # optional: the capture becomes the value
   ```
 
@@ -96,7 +244,8 @@ from RFC 4180 each turned up two things nothing in the tree had:
   invented, so it carries no review. It may only add, never shadow, and a
   pattern that does not match is an **error**: a silently empty `jahr` on one
   member of twelve is invisible in any single file and is exactly what this
-  prevents.
+  prevents. `from = "sheet"` reads the sheet of a sheet member and
+  `from = "region"` the ordinal of a stacked table (see *Added — piles*).
 
   Internally, `RawTable` now carries where it was read from, set by `extract`
   — the only place that knows — rather than a path being threaded through
@@ -104,8 +253,9 @@ from RFC 4180 each turned up two things nothing in the tree had:
   property of the extraction, and passing it separately would be a second
   thing that could disagree with the rows.
 
-- **`WITH (provenance = true)`: a row can say where it came from.** Adds
-  `_member` (the member's lock-relative path) and `_row` (1-based **within
+- **`WITH (provenance = 'true')`: a row can say where it came from.** Adds
+  `_member` (the member's name as the lock records it, relative to the
+  target — `book.xlsx#Q1` for a sheet member) and `_row` (1-based **within
   that member**) to what `dataset()` returns.
 
   tdy proved which files a dataset contains, what shape they land on and what
@@ -203,6 +353,103 @@ from RFC 4180 each turned up two things nothing in the tree had:
   *Library note:* `Transform::FillDown` gained a field, so code constructing
   the variant directly needs `direction: Default::default()`. Sidecars are
   unaffected; the field defaults and is omitted when it is `down`.
+
+- **Compressed inputs.** gzip, zstd, bzip2 and xz — recognised by their bytes,
+  so a `.csv` that is really gzip counts — are decompressed once per run into a
+  process-lifetime cache that every reader, both executors and drift then use,
+  bounded by a new `[limits].max_decompressed_bytes` *before* the copy exists.
+  The sidecar fingerprints the compressed bytes and records
+  `compressed = "gzip"`. The four decoders were already in the tree through
+  `zip`, so the new direct dependencies (`flate2`, `bzip2`, `xz2`, `zstd`) cost
+  no compilation.
+- **`remove_empty` drops all-empty rows** — a delimited row carrying only its
+  delimiters (`;;;`). Rows only: the `columns` list stays the only projection,
+  and an all-empty column gets a sniffer note saying to omit it. Never inferred.
+- **`epoch = "excel_days"` reads a spreadsheet serial** — whole days since
+  1899-12-30 on a `date`, the fraction as the time of day on a `timestamp`,
+  from the digit string by integer arithmetic and rounded to the millisecond (a
+  spreadsheet writes ~15 significant digits). A serial below 61 or past
+  9999-12-31 is refused naming its row, and so is a time of day on a `date`.
+  The sniffer notes an integer column whose name and values read like serial
+  dates, and names the declaration; nothing is converted unasked.
+- **`year_pivot` declares the century of a two-digit year** (0..=100): below
+  the pivot is 20xx, at or above it 19xx. Only on a `date` or `timestamp` whose
+  format reads `%y`.
+- **Two more sniffer notes, nothing converted:** a column of percentages
+  (`45%` — 45 or 0.45 is the author's to say), and the serial-date note above.
+- **A header run is adopted, not only a header row.** Official statistics put
+  title lines and the header in one run, blank rows, then the data; a run
+  directly above a block whose last row has the block's width is that block's
+  header run. Over a promoted header that reads like data it is adopted only as
+  a review reason naming the row read as data.
+
+### Added — piles
+
+- **Workbook members.** A member is a path and an optional sheet: a workbook
+  several of whose sheets produce the declared table becomes one member per
+  sheet (`book.xlsx#Q1`), each fully fitted, with its own sidecar
+  (`book.xlsx#Q1.tdy.toml`) and its own acceptance. Drift stays per file — the
+  file's hash covers every sheet — and a file listed both whole and by sheet is
+  drift. A typed reference is resolved against the members that exist, never
+  split by rule, and one that could mean two members is refused naming both.
+- **Regions: several tables stacked in one file or sheet.** A file or sheet is
+  split at runs of blank lines or rows; each block that passes the gates
+  becomes its own member (`report.csv#2`, `book.xlsx#Q1#2`), and each waits on
+  `--accept`, because a blank row proves a boundary exists, not that the blocks
+  are the same kind of table. Exactly one proper block is a plain member with a
+  note and no review — unless something table-shaped was discarded around it,
+  which is asked about. Runs too small to be tables are named in a note.
+  `tdy draft` splits blocks the same way and drafts each block's columns.
+  Side-by-side tables in one sheet are out of scope.
+- **Declared readings.** A target column can say what no value in the file
+  can: `OPTIONS(round = 'half_away')` on a `DECIMAL`, and
+  `OPTIONS(epoch = '<unit>')` or `OPTIONS(year_pivot = 'N')` on a `DATE` or
+  `TIMESTAMP`. All three are part of `target_hash`. A declaration authorises the reading — `fit` binds through it
+  with a note and no review — and undeclared, `fit` never tries a `%y` format
+  or an epoch: a column only those read is a gap naming the option.
+- **The magnitude check** (*Changed*, above), and two refusals that keep
+  member names unambiguous: a pile in which two members would share one name
+  (a file literally called `report.csv#2` beside a split `report.csv`) is
+  refused whole, and an `exclude` entry matching both a file and a member is
+  refused as ambiguous.
+
+### Added — profiling
+
+- **`tdy profile` says what each column holds**: non-empty and empty counts,
+  distinct values, min and max, the top five, and the *shapes* values take
+  ("94% look like `9999-99-99`, 6% like `99.99.9999`"), over the framed raw
+  table and the whole file. One library function behind four doors:
+  `tdy profile`, the console's `.profile`, `p` in the workbench, and a
+  read-only MCP tool. It streams — about 12 MB peak on a 50 MB CSV — and every
+  bound it hits is stated in the output. A profile is evidence for a person;
+  nothing reads one to change a spec.
+
+### Added — the workbench and the console
+
+- **The workbench draws real widgets from a palette by meaning**: the pile as
+  a table with one column per declared column, green for fits, red for gaps,
+  yellow for review, no lock and dry run; floating help and confirm popups;
+  a header naming the root, the target and its lock state, the backend and a
+  DRY RUN badge; a console that wraps.
+- **Getting around a pile**: `g`/`G` jump between members that need
+  attention, `/` filters the pile to them, a multi-sheet workbook's title names
+  the sheet on show, a region member's names its rows, and a column decision
+  shows the column's first raw values beneath it.
+- **The edit loop closes**: a successful `$EDITOR` round-trip on the target or
+  a member's sidecar re-fits (dry run); a change made elsewhere is named in the
+  status line and never refits on its own.
+- **The console's Up recalls history by what you have typed**, as fish does.
+
+### Library notes
+
+- `Transform` gained `SourceName`, `Transpose {}`, `SplitColumn` and
+  `RemoveEmpty {}`; `FillDown` gained `direction`; `ColumnSpec` gained
+  `pointer`; `ValueParsing` gained `epoch`, `round` and `year_pivot`;
+  `Extraction::Delimited` gained `region` and `Extraction::Excel`
+  `region_ordinal`. Code constructing these directly needs the new fields;
+  sidecars are unaffected, since every new field defaults and is omitted when
+  unset.
+- `rustls` 0.23.45 in the lockfile, for RUSTSEC-2026-0285.
 
 ## 0.2.1 — 2026-09-06
 

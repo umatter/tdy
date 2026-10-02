@@ -857,7 +857,7 @@ decimal_separator = "."
     assert!(text.contains("7848.06"), "Betrag_2 must be the gross column:\n{text}");
 }
 
-/// `WITH (provenance = true)` adds `_member` and `_row` to the dataset.
+/// `WITH (provenance = 'true')` adds `_member` and `_row` to the dataset.
 ///
 /// The gap it closes: tdy proves which files a dataset contains, what shape
 /// they land on, and what a human accepted — and then a row in the result

@@ -1231,7 +1231,7 @@ Details worth knowing:
   a silently empty `year` on one member of twelve is the gap it exists to
   prevent. It may only add, never shadow, and it carries no review gate,
   because the value is *derived* from the path rather than told to tdy.
-- **`WITH (provenance = true)`** on a target adds `_member` (the lock-relative
+- **`WITH (provenance = 'true')`** on a target adds `_member` (the lock-relative
   path) and `_row` (1-based within that member) to what `dataset()` returns.
   Opt-in, because a dataset's schema is what the declaration says it is; and
   part of `target_hash`, so turning it on voids proofs taken against the
