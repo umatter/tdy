@@ -1134,6 +1134,11 @@ pub async fn fit_pile(
                             sc.provenance.model.as_deref().unwrap_or("a model"),
                         ));
                     }
+                    // A record read beside an empty array is a judgement the
+                    // file, not the spec, records — unless a person wrote it.
+                    if sc.provenance.method != InferenceMethod::Manual {
+                        rs.extend(crate::fit::empty_array_reason(&spec, &p, limits));
+                    }
                     (!rs.is_empty()).then(|| rs.join("; "))
                 };
                 let review = merge_reason(review, unit_review);

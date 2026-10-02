@@ -162,3 +162,62 @@ fn ambiguous_frame_choices_are_settings() {
     assert_eq!(p["kind"], "ambiguous_frame", "{v:#}");
     assert_eq!(p["choices"], serde_json::json!(["record = true", "pointer = \"/rows\""]), "{v:#}");
 }
+
+fn fw2() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("jan.json"), r#"{"id":100,"name":"export-jan","rows":[{"id":1,"name":"a"},{"id":2,"name":"b"}]}"#).unwrap();
+    std::fs::write(dir.path().join("feb.json"), r#"{"id":101,"name":"export-feb","rows":[]}"#).unwrap();
+    std::fs::write(
+        dir.path().join("t.tdy.sql"),
+        "CREATE TABLE t (id BIGINT NOT NULL, name TEXT NOT NULL) WITH (files = '*.json');\n",
+    )
+    .unwrap();
+    dir
+}
+
+/// January is ambiguous until a person settles it with `pointer = "/rows"`.
+/// February's `rows` is empty: zero records. The only frame that "fits" it is
+/// the document as one record, because an empty array has no header — so
+/// the elimination left out the zero-row reading, and the record reading is a
+/// judgement: one row of envelope data (101, export-feb) beside January's
+/// records unless a person says the document is the record.
+#[test]
+fn a_record_chosen_beside_an_empty_array_waits_on_a_person() {
+    let dir = fw2();
+    let t = dir.path().join("t.tdy.sql");
+    let first = tdy(&["fit", t.to_str().unwrap()]);
+    assert!(!first.status.success(), "jan is an ambiguous frame");
+    // The person settles January, as the message says.
+    let jan = tdy(&["sniff", dir.path().join("jan.json").to_str().unwrap(), "--no-llm"]);
+    assert!(jan.status.success());
+    let side = dir.path().join("jan.json.tdy.toml");
+    let text = std::fs::read_to_string(&side).unwrap();
+    // The sniffer already reads `/rows`; marking it manual is the person's
+    // choice of that frame.
+    assert!(text.contains("pointer = \"/rows\""), "{text}");
+    let text = text.replace("method = \"heuristic\"", "method = \"manual\"").replace("nullable = true", "nullable = false");
+    std::fs::write(&side, text).unwrap();
+
+    let fit = ok(&tdy(&["fit", t.to_str().unwrap()]));
+    assert!(fit.contains("REVIEW"), "{fit}");
+    assert!(fit.contains("`/rows` is empty — zero records"), "{fit}");
+
+    let sql = format!("SELECT id, name FROM dataset('{}') ORDER BY id", t.display());
+    let refused = tdy(&["query", &sql]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("feb.json"), "{}", String::from_utf8_lossy(&refused.stderr));
+
+    ok(&tdy(&["fit", t.to_str().unwrap(), "--accept", "feb.json"]));
+    let rows = ok(&tdy(&["query", &sql]));
+    for want in ["| 1 ", "| 2 ", "| 101 "] {
+        assert!(rows.contains(want), "{want}:\n{rows}");
+    }
+
+    // A person who writes `record = true` by hand has made the judgement.
+    let feb = dir.path().join("feb.json.tdy.toml");
+    let text = std::fs::read_to_string(&feb).unwrap().replace("method = \"heuristic\"", "method = \"manual\"");
+    assert!(text.contains("record = true"), "{text}");
+    std::fs::write(&feb, text).unwrap();
+    let fit = ok(&tdy(&["fit", t.to_str().unwrap()]));
+    assert!(!fit.contains("REVIEW"), "{fit}");
+}

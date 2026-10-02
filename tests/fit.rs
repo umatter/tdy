@@ -1826,3 +1826,21 @@ fn no_fitting_frame_reports_the_sniffers_own_frame() {
     let m = format!("{}", fit(&dir.path().join("rec.json"), &t, Limits::default()).unwrap_err());
     assert!(m.contains("`id`") && m.contains("\"a\""), "{m}");
 }
+
+/// With no fitting frame, the report is the frame that bound the most
+/// declared columns: here the record, whose real gap is a pointer landing
+/// on the string "plain" — not the `/tags` array's "no column binds".
+#[test]
+fn no_fitting_frame_reports_the_frame_that_bound_most() {
+    let dir = record_pile(&[(
+        "one.json",
+        r#"{"id":1,"a.b_c":5,"a_b":{"c":6},"g":"plain","deep":{"l1":{"l2":{"l3":{"l4":1}}}},"tags":["x"],"o":{"arr":[1]}}"#,
+    )]);
+    let t = Target::parse(
+        "CREATE TABLE t (id BIGINT, g_nh_v BIGINT OPTIONS(matches = 'g', pointer = '/nh/v')) WITH (files = '*.json')",
+    )
+    .unwrap();
+    let m = format!("{}", fit(&dir.path().join("one.json"), &t, Limits::default()).unwrap_err());
+    assert!(m.contains("g_nh_v") && m.contains("plain"), "{m}");
+    assert!(!m.contains("no column of this file binds"), "{m}");
+}

@@ -1077,6 +1077,13 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
                     // The array keeps its reading — `messy('report.json')` on
                     // a document whose point is its `rows` must not start
                     // returning one row — but the other reading is named.
+                    // An empty array beside the one read is zero records,
+                    // and a person choosing between readings should see it.
+                    let mut empties = Vec::new();
+                    empty_arrays(&doc, &mut String::new(), 0, &mut empties);
+                    for e in &empties {
+                        doubts.note(format!("`{e}` is empty — zero records"));
+                    }
                     if found.len() > 1 {
                         doubts.add(
                             0.25,
@@ -1139,6 +1146,36 @@ fn first_empty_array(v: &serde_json::Value, prefix: &mut String, depth: usize) -
         }),
         _ => None,
     }
+}
+
+/// Every empty array in a document, by the same bounded walk.
+pub(crate) fn empty_arrays(v: &serde_json::Value, prefix: &mut String, depth: usize, out: &mut Vec<String>) {
+    if depth > 6 || out.len() > 64 {
+        return;
+    }
+    match v {
+        serde_json::Value::Array(a) if a.is_empty() => out.push(prefix.clone()),
+        serde_json::Value::Object(map) => {
+            for (k, child) in map {
+                let mark = prefix.len();
+                prefix.push('/');
+                prefix.push_str(&escape_pointer_token(k));
+                empty_arrays(child, prefix, depth + 1, out);
+                prefix.truncate(mark);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`empty_arrays`] of a file's document; empty for anything unreadable.
+pub(crate) fn empty_arrays_in(path: &Path, limits: Limits) -> Vec<String> {
+    let Ok(bytes) = crate::fileio::read_all(path, limits.max_file_bytes) else { return Vec::new() };
+    let (text, _) = crate::sample::decode_text(&bytes, None);
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let mut out = Vec::new();
+    empty_arrays(&doc, &mut String::new(), 0, &mut out);
+    out
 }
 
 /// For `fit`: the record frame of a root object the sniffer declines because
@@ -2624,6 +2661,14 @@ mod tests {
         // One object-valued key beside scalars is an ordinary record.
         let r = sniff_json_text(r#"{"id":"ace","games":{"nh":{"song":"x"}}}"#).unwrap();
         assert!(r.confidence >= 0.8, "{}", r.confidence);
+    }
+
+    /// Beside an array that is read, an empty one is named too: it is zero
+    /// records, and a person choosing between the readings should see it.
+    #[test]
+    fn an_empty_array_beside_the_one_read_is_named() {
+        let r = sniff_json_text(r#"{"rows":[],"items":[{"a":1},{"a":2}]}"#).unwrap();
+        assert!(r.spec.notes.iter().any(|n| n.contains("`/rows` is empty — zero records")), "{:?}", r.spec.notes);
     }
 
     /// A scalar document is still nothing tabular.

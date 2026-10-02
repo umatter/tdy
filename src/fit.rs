@@ -553,6 +553,42 @@ pub fn propose(path: &Path, target: &Target, limits: Limits) -> Result<Vec<Propo
 
 /// Plan a spec for `path` that lands on `target`.
 pub fn fit(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitError> {
+    let mut fitted = fit_frames(path, target, limits)?;
+    if let Some(reason) = empty_array_reason(&fitted.spec, path, limits) {
+        fitted.review = Some(match fitted.review.take() {
+            Some(prev) => format!("{prev}; {reason}"),
+            None => reason,
+        });
+    }
+    Ok(fitted)
+}
+
+/// The review reason a document read as one record carries when it holds an
+/// empty array: the elimination never saw that array's reading, zero rows,
+/// because an empty array has no header to bind — so the record reading of
+/// a "no results" export is one plausible row of envelope data unless a
+/// person says the document is the record. `None` for anything else,
+/// including a record document with no empty array. One function for the
+/// plan and for a reused sidecar, since the lock's acceptance carryover
+/// compares the text.
+pub fn empty_array_reason(spec: &ParseSpec, path: &Path, limits: Limits) -> Option<String> {
+    if !matches!(spec.extraction, Extraction::Json { record: true, .. }) {
+        return None;
+    }
+    let empties = sniff::empty_arrays_in(path, limits);
+    if empties.is_empty() {
+        return None;
+    }
+    let named: Vec<String> = empties.iter().map(|e| format!("`{e}`")).collect();
+    Some(format!(
+        "{} {} empty — zero records; this member is read as one record of the document's own \
+         keys. Accept only if the document itself is the record",
+        named.join(", "),
+        if empties.len() == 1 { "is" } else { "are" }
+    ))
+}
+
+fn fit_frames(path: &Path, target: &Target, limits: Limits) -> Result<Fitted, FitError> {
     // 1. The frame. What the sniffer knows about this file's *shape* is about
     //    the file, not about the columns anyone wants, so it is reused whole.
     //    Only its `columns` are discarded.
@@ -1287,8 +1323,8 @@ struct FrameCandidates {
     field: &'static str,
     /// How many frames exist, counting ones already eliminated at framing.
     total: usize,
-    /// Which candidate is the sniffer's own frame: its failure is the one
-    /// reported when no candidate fits.
+    /// Which candidate is the sniffer's own frame: among failures that bound
+    /// equally many declared columns, its error is the one reported.
     ranked: usize,
     candidates: Vec<(String, ParseSpec)>,
 }
@@ -1539,8 +1575,8 @@ enum Rigour {
 /// * several fit — refused. Two frames that both produce the declared columns
 ///   are two different answers, and ranking them would be a guess with a
 ///   plausible wrong number at the end of it.
-/// * none fit — the error for the sniffer's own ranked choice, which is what
-///   the user would have seen anyway.
+/// * none fit — the error of the frame that bound the most declared columns,
+///   ties going to the sniffer's own frame (`ranked`).
 fn fit_by_elimination(
     path: &Path,
     target: &Target,
@@ -1548,23 +1584,25 @@ fn fit_by_elimination(
     fc: FrameCandidates,
 ) -> Result<Fitted, FitError> {
     let mut survivors: Vec<&(String, ParseSpec)> = Vec::new();
-    let mut ranked_error: Option<FitError> = None;
-    let mut first_error: Option<FitError> = None;
+    let mut errors: Vec<(usize, FitError)> = Vec::new();
     for (i, cand) in fc.candidates.iter().enumerate() {
         match fit_framed(path, target, limits, cand.1.clone(), Rigour::Gates) {
             Ok(_) => survivors.push(cand),
-            // The sniffer's own frame's failure is the representative one.
-            Err(e) if i == fc.ranked => ranked_error = Some(e),
-            Err(e) => {
-                if first_error.is_none() {
-                    first_error = Some(e);
-                }
-            }
+            Err(e) => errors.push((i, e)),
         }
     }
 
     match survivors.as_slice() {
-        [] => Err(ranked_error.or(first_error).expect("candidates was non-empty")),
+        // The representative failure is the frame that bound the most
+        // declared columns — its gaps are the real ones (an API dump's
+        // `amount` cannot parse "x"; a record's pointer lands on a string),
+        // where a frame that binds nothing only says "no column binds".
+        // Ties go to the sniffer's own frame, then to the earlier one.
+        [] => Err(errors
+            .into_iter()
+            .min_by_key(|(i, e)| (unbound(e), *i != fc.ranked, *i))
+            .map(|(_, e)| e)
+            .expect("candidates was non-empty")),
         [(label, d)] => {
             let mut fitted = fit_framed(path, target, limits, d.clone(), Rigour::Full)?;
             fitted.notes.push(format!(
@@ -1588,6 +1626,18 @@ fn fit_by_elimination(
 /// A position of the file, opened at a pointer (or whole), as one declared
 /// column claims it.
 type Claim<'a> = (usize, Option<&'a str>);
+
+/// How many declared columns a failed frame could not bind at all: the
+/// measure of how far it got. A frame that bound everything and then failed
+/// on values (or its own gate) bound all of them; one that could not be read
+/// bound none.
+fn unbound(e: &FitError) -> usize {
+    match e {
+        FitError::Gaps(g) => g.iter().filter(|g| matches!(g, Gap::NoCandidate { .. })).count(),
+        FitError::Unreadable(_) => usize::MAX,
+        FitError::Rejected(_) | FitError::DryRun(_) | FitError::AmbiguousFrame { .. } => 0,
+    }
+}
 
 /// Plan a spec onto `target` given the frame to read the file with.
 fn fit_framed(
