@@ -304,3 +304,124 @@ fn a_draft_of_files_outside_the_current_directory_writes_an_absolute_glob() {
     let out = run(&here.path().join("sub"), &["draft", a.to_str().unwrap()]);
     assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("files = '{}/*.csv'", abs.display())), "{sub:?}");
 }
+
+// ---------------------------------------------------------------------------
+// A document is a record: a pile of one-object JSON documents.
+// ---------------------------------------------------------------------------
+
+fn json_pile(docs: &[(&str, &str)]) -> (tempfile::TempDir, Vec<PathBuf>) {
+    let dir = tempfile::tempdir().unwrap();
+    let files = docs
+        .iter()
+        .map(|(n, body)| {
+            let p = dir.path().join(n);
+            std::fs::write(&p, body).unwrap();
+            p
+        })
+        .collect();
+    (dir, files)
+}
+
+fn fits_every_file(sql: &str, files: &[PathBuf]) -> Target {
+    let target = Target::parse(sql).unwrap_or_else(|e| panic!("draft must parse:\n{sql}\n{e:#}"));
+    for p in files {
+        if let Err(e) = tdy::fit::fit(p, &target, Limits::default()) {
+            panic!("{} should fit the draft drawn from it:\n{e}\n--- draft ---\n{sql}", p.display());
+        }
+    }
+    target
+}
+
+const SAME_KEYS: &[(&str, &str)] = &[
+    ("ace.json", r#"{"id":"ace","name":"Ace","birthday":"3-13","games":{"nh":{"song":"K.K. Parade","sellPrice":{"value":80}}}}"#),
+    ("bob.json", r#"{"id":"bob","name":"Bob","birthday":"1-1","games":{"nh":{"song":"K.K. Ska","sellPrice":{"value":120}}}}"#),
+    ("cat.json", "{\n  \"name\": \"Cat\",\n\n  \"id\": \"cat\",\n  \"birthday\": \"7-4\",\n\n  \"games\": {\"nh\": {\"song\": \"Bubblegum\", \"sellPrice\": {\"value\": 5}}}\n}\n"),
+];
+
+/// The round trip over documents: identical keys, the unedited draft fits
+/// every file. The third document is pretty-printed with blank lines in it,
+/// which is not a table boundary: no region split runs over JSON.
+#[test]
+fn the_unedited_draft_of_one_object_documents_fits_every_file() {
+    let (_d, files) = json_pile(SAME_KEYS);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    assert!(!sql.contains("stacked"), "{sql}");
+    let t = fits_every_file(&sql, &files);
+    assert_eq!(t.columns.len(), 5, "{sql}");
+}
+
+/// Every scalar leaf under a nested object is a column named from its path,
+/// bound by `matches` to the top-level key and reached by `pointer`.
+#[test]
+fn leaves_get_a_pointer() {
+    let (_d, files) = json_pile(SAME_KEYS);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let line = |name: &str| {
+        sql.lines().find(|l| l.trim_start().starts_with(&format!("{name} "))).unwrap_or_else(|| panic!("no {name}:\n{sql}")).to_string()
+    };
+    let sell = line("games_nh_sellprice_value");
+    assert!(sell.contains("BIGINT"), "{sell}");
+    assert!(sell.contains("OPTIONS(matches = 'games', pointer = '/nh/sellPrice/value')"), "{sell}");
+    let song = line("games_nh_song");
+    assert!(song.contains("TEXT") && song.contains("pointer = '/nh/song'"), "{song}");
+    // A top-level scalar is an ordinary column.
+    assert!(!line("birthday").contains("pointer"), "{sql}");
+}
+
+/// An array is not descended into: at the top level it is one TEXT column
+/// of JSON, and the comment says so; under a nested object no column can
+/// hold it (a pointer onto an array is an error), and a note says that.
+#[test]
+fn an_array_key_is_one_text_column() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":"a","tags":["x","y"],"games":{"nl":{"buyPrices":[{"value":320}],"sellPrice":{"value":80}}}}"#),
+        ("b.json", r#"{"id":"b","tags":["z"],"games":{"nl":{"sellPrice":{"value":10}}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let tags = sql.lines().find(|l| l.trim_start().starts_with("tags ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(tags.contains("TEXT") && !tags.contains("pointer"), "{tags}");
+    assert!(tags.contains("an array"), "the comment must say so:\n{tags}");
+    assert!(!sql.contains("currency") && !sql.contains("\n  value "), "the record is drafted, not the array:\n{sql}");
+    assert!(sql.contains("games/nl/buyPrices"), "the nested array is named:\n{sql}");
+    assert!(!sql.contains("games_nl_buyprices"), "{sql}");
+    let t = fits_every_file(&sql, &files);
+    // The array's JSON text is the cell.
+    let p = &files[0];
+    let fitted = tdy::fit::fit(p, &t, Limits::default()).unwrap();
+    let b = tdy::provider::spec_to_batch(&fitted.spec, p).unwrap();
+    let i = fitted.spec.columns.iter().position(|c| c.name == "tags").unwrap();
+    let a = b.column(i).as_any().downcast_ref::<datafusion::arrow::array::StringArray>().unwrap();
+    assert_eq!(a.value(0), r#"["x","y"]"#);
+}
+
+/// Presence is counted per file: the draft reports a leaf some documents
+/// lack, it does not declare the absence.
+#[test]
+fn a_leaf_some_documents_lack_is_counted_not_declared() {
+    let (_d, files) = json_pile(&[
+        ("a.json", r#"{"id":"a","games":{"nh":{"sellPrice":{"value":80}}}}"#),
+        ("b.json", r#"{"id":"b","games":{"nl":{"sellPrice":{"value":10}}}}"#),
+        ("c.json", r#"{"id":"c","games":{"nh":{"sellPrice":{"value":5}}}}"#),
+    ]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    let nl = sql.lines().find(|l| l.trim_start().starts_with("games_nl_sellprice_value ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(nl.contains("in 1 of 3 file(s)"), "{nl}");
+    assert!(!nl.contains("if_missing"), "{nl}");
+    let nh = sql.lines().find(|l| l.trim_start().starts_with("games_nh_sellprice_value ")).unwrap();
+    assert!(nh.contains("in 2 of 3 file(s)"), "{nh}");
+}
+
+/// Two paths that sanitise to one name are two columns: the second is
+/// renamed by the usual dedupe, and the comment says which path it reads.
+#[test]
+fn leaf_names_that_collide_are_deduped_and_said() {
+    let (_d, files) = json_pile(&[(
+        "a.json",
+        r#"{"id":"a","games":{"afe":{"song":"x"},"afe+":{"song":"y"}}}"#,
+    )]);
+    let sql = tdy::draft::draft_target(&files, Limits::default()).unwrap();
+    assert!(sql.contains("games_afe_song "), "{sql}");
+    let second = sql.lines().find(|l| l.trim_start().starts_with("games_afe_song_2 ")).unwrap_or_else(|| panic!("{sql}"));
+    assert!(second.contains("pointer = '/afe+/song'") && second.contains("games/afe+/song"), "{second}");
+    fits_every_file(&sql, &files);
+}

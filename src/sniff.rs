@@ -2092,6 +2092,25 @@ fn accounting_shape(sample: &[&str]) -> Option<&'static str> {
     numfmt::infer(&bodies).and(kind)
 }
 
+/// The type the sniffer would give a column holding `values`, over all of
+/// them rather than the first [`TYPE_SAMPLE`]: `tdy draft` collects one leaf
+/// per document across a pile, and a type that only the first five hundred
+/// documents support would refuse the five-hundred-and-first at fit time.
+/// Guessed in sample-sized chunks of the non-missing values and widened with
+/// `widen` across chunks, so each chunk is judged exactly as a sniff judges
+/// a column. `None` when no value is present at all.
+pub(crate) fn guess_dtype_all(
+    values: &[&str],
+    name: &str,
+    mut widen: impl FnMut(&DType, &DType) -> DType,
+) -> Option<DType> {
+    let present: Vec<&str> = values.iter().map(|v| v.trim()).filter(|v| !is_na(v)).collect();
+    present
+        .chunks(TYPE_SAMPLE)
+        .map(|chunk| guess_type(chunk, name, false).dtype)
+        .reduce(|a, b| widen(&a, &b))
+}
+
 fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGuess {
     let sample: Vec<&str> = values
         .iter()
