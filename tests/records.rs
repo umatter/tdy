@@ -48,6 +48,15 @@ fn a_directory_of_documents_is_one_table_with_the_right_sums() {
     let fit = ok(&tdy(&["fit", t.to_str().unwrap()]));
     assert!(fit.contains("7 member(s)") || fit.contains("7 file(s)"), "{fit}");
     assert!(!fit.contains("REVIEW"), "{fit}");
+    // The binding says where inside the key the value was read.
+    assert!(fit.contains(r#"nh_sell<-"games"/nh/sellPrice/value"#), "{fit}");
+    let json = ok(&tdy(&["--json", "fit", t.to_str().unwrap(), "--dry-run"]));
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let acorn = v["members"].as_array().unwrap().iter().find(|m| m["path"] == "acorn.json").unwrap();
+    let nh = acorn["sources"].as_array().unwrap().iter().find(|s| s["column"] == "nh_sell").unwrap();
+    assert_eq!((nh["source"].as_str(), nh["pointer"].as_str()), (Some("games"), Some("/nh/sellPrice/value")), "{nh}");
+    let id = acorn["sources"].as_array().unwrap().iter().find(|s| s["column"] == "id").unwrap();
+    assert!(id.get("pointer").is_none(), "{id}");
 
     let sql = format!(
         "SELECT count(*) n, sum(nh_sell) nh, sum(nl_sell) nl, count(nh_sell) nh_n, count(nl_sell) nl_n \

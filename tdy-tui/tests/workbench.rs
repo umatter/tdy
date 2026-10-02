@@ -59,7 +59,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         rows_sheet: None,
         status,
         via: Some("heuristic".into()),
-        sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
+        sources: vec![SourceBinding { column: "month".into(), source: "Datum".into(), pointer: None }],
         review: (status == MemberStatus::NeedsReview).then(|| {
             "`amount` applies decimal_shift = -2, which changes every value".into()
         }),

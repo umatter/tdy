@@ -165,6 +165,10 @@ pub enum MemberStatus {
 pub struct SourceBinding {
     pub column: String,
     pub source: String,
+    /// Where inside `source`'s JSON value the column is read, when the
+    /// member's spec opens it with a `pointer`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<String>,
 }
 
 /// One reason a member does not fit, with every field a caller could act on.
@@ -1155,6 +1159,7 @@ pub async fn fit_pile(
                         .map(|c| SourceBinding {
                             column: c.name.clone(),
                             source: c.source_name().to_string(),
+                            pointer: c.pointer.clone(),
                         })
                         .collect(),
                     review: review.clone(),
@@ -1250,6 +1255,7 @@ pub async fn fit_pile(
                         .map(|c| SourceBinding {
                             column: c.name.clone(),
                             source: c.source_name().to_string(),
+                            pointer: c.pointer.clone(),
                         })
                         .collect(),
                     review: fitted.review.clone(),
@@ -1434,7 +1440,7 @@ pub fn render_pile_text(r: &PileReport) -> String {
                 let sources: Vec<String> = m
                     .sources
                     .iter()
-                    .map(|s| format!("{}<-{:?}", s.column, s.source))
+                    .map(|s| format!("{}<-{:?}{}", s.column, s.source, s.pointer.as_deref().unwrap_or("")))
                     .collect();
                 let word = match (m.review.is_some(), m.accepted) {
                     (true, true) => "accepted",

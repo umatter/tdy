@@ -119,7 +119,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         rows_sheet: None,
         status,
         via: Some("heuristic".into()),
-        sources: vec![SourceBinding { column: "month".into(), source: "Datum".into() }],
+        sources: vec![SourceBinding { column: "month".into(), source: "Datum".into(), pointer: None }],
         review: (status == MemberStatus::NeedsReview).then(|| {
             "`amount` applies decimal_shift = -2, which changes every value".into()
         }),
@@ -1335,15 +1335,15 @@ fn pile_rows_put_each_binding_under_its_declared_column() {
     let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
     let mut jan = member("2025-01.csv", MemberStatus::Fits);
     jan.sources = vec![
-        SourceBinding { column: "month".into(), source: "Datum".into() },
-        SourceBinding { column: "region".into(), source: "Region".into() },
-        SourceBinding { column: "amount".into(), source: "Betrag".into() },
+        SourceBinding { column: "month".into(), source: "Datum".into(), pointer: None },
+        SourceBinding { column: "region".into(), source: "Region".into(), pointer: None },
+        SourceBinding { column: "amount".into(), source: "Betrag".into(), pointer: None },
     ];
     let mut oct = member("2025-10.xlsx", MemberStatus::Fits);
     oct.sources = vec![
-        SourceBinding { column: "month".into(), source: "Date".into() },
-        SourceBinding { column: "region".into(), source: "Region".into() },
-        SourceBinding { column: "amount".into(), source: "Amount".into() },
+        SourceBinding { column: "month".into(), source: "Date".into(), pointer: None },
+        SourceBinding { column: "region".into(), source: "Region".into(), pointer: None },
+        SourceBinding { column: "amount".into(), source: "Amount".into(), pointer: None },
     ];
     let mut r = pile_report(vec![jan, oct]);
     r.columns = vec![
