@@ -648,7 +648,7 @@ pub(crate) fn read_text_ex(
     opts: &ExtractOpts,
 ) -> Result<(String, bool)> {
     if opts.max_rows.is_none() {
-        let bytes = fileio::read_all(path, opts.limits.max_file_bytes)?;
+        let bytes = fileio::read_all(path, opts.limits.max_file_bytes, opts.limits.max_decompressed_bytes)?;
         let (text, used, had_errors) = crate::sample::decode_owned(bytes, encoding);
         warn_mojibake(path, encoding, &used, had_errors);
         return Ok((text, true));

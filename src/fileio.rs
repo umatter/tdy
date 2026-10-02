@@ -177,6 +177,16 @@ fn inner_name(path: &Path) -> String {
     name
 }
 
+fn over_decompressed(path: &Path, at_least: u64, max_decompressed: u64) -> String {
+    format!(
+        "{} decompresses to more than {}, above [limits].max_decompressed_bytes \
+         ({}); raise it in the config if you really mean it",
+        path.display(),
+        human_bytes(at_least),
+        human_bytes(max_decompressed)
+    )
+}
+
 /// A file as tdy reads it: the file itself, or — for a compressed one — a
 /// decompressed copy in the process's cache, made once per file (keyed by
 /// the compressed bytes' blake3) and bounded by `max_decompressed` before
@@ -190,6 +200,12 @@ pub fn materialize(path: &Path, max_decompressed: u64) -> Result<std::borrow::Co
     let dir = cache_dir()?.join(hash.trim_start_matches("b3:"));
     let copy = dir.join(inner_name(path));
     if copy.is_file() {
+        // A copy made earlier in this process (by a caller with another
+        // ceiling, say) is still bounded by this caller's.
+        let len = std::fs::metadata(&copy).map(|m| m.len()).unwrap_or(0);
+        if len > max_decompressed {
+            bail!("{}", over_decompressed(path, len, max_decompressed));
+        }
         return Ok(Cow::Owned(copy));
     }
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -220,13 +236,7 @@ pub fn materialize(path: &Path, max_decompressed: u64) -> Result<std::borrow::Co
             }
             written += n as u64;
             if written > max_decompressed {
-                bail!(
-                    "{} decompresses to more than {}, above [limits].max_decompressed_bytes \
-                     ({}); raise it in the config if you really mean it",
-                    path.display(),
-                    human_bytes(written),
-                    human_bytes(max_decompressed)
-                );
+                bail!("{}", over_decompressed(path, written, max_decompressed));
             }
             out.write_all(&buf[..n]).with_context(|| format!("writing {}", tmp.display()))?;
         }
@@ -303,8 +313,14 @@ fn read_exact_or_eof(f: &mut File, buf: &mut Vec<u8>) -> Result<()> {
 }
 
 /// Read a whole file, refusing anything above `max_bytes` with an actionable
-/// message instead of an out-of-memory kill.
-pub fn read_all(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+/// message instead of an out-of-memory kill. A compressed file is
+/// decompressed against `max_decompressed` (`[limits].max_decompressed_bytes`)
+/// and its copy is then read against `max_bytes` (`[limits].max_file_bytes`):
+/// two limits, each checked where it means something, each named with its
+/// own value. Passing `max_file_bytes` as the decompression ceiling, as this
+/// once did, let a compressed document past `max_decompressed_bytes` and
+/// printed the wrong number in the refusal of one that was not.
+pub fn read_all(path: &Path, max_bytes: u64, max_decompressed: u64) -> Result<Vec<u8>> {
     let meta = std::fs::metadata(path)
         .with_context(|| format!("cannot stat {}", path.display()))?;
     if meta.is_dir() {
@@ -320,7 +336,7 @@ pub fn read_all(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
         read_exact_or_eof(&mut f, &mut head)?;
         refuse_if_compressed(path, &head)?;
     }
-    let real = materialize(path, max_bytes)?;
+    let real = materialize(path, max_decompressed)?;
     let real: &Path = real.as_ref();
     let meta = std::fs::metadata(real)
         .with_context(|| format!("cannot stat {}", real.display()))?;
@@ -475,12 +491,31 @@ mod tests {
         assert_eq!(materialize(&plain, u64::MAX).unwrap().as_ref(), plain.as_path());
     }
 
+    /// Two limits, each where it means something: the decompression against
+    /// `max_decompressed`, the read of the copy against `max_bytes`, and each
+    /// refusal names its own limit with that limit's value.
+    #[test]
+    fn read_all_honours_both_limits_of_a_compressed_file() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().join("big.csv.gz");
+        let body = "a,b\n".repeat(1000); // 4000 bytes decompressed
+        std::fs::write(&p, gz_of(body.as_bytes())).unwrap();
+        let e = format!("{:#}", read_all(&p, u64::MAX, 2000).unwrap_err());
+        assert!(e.contains("max_decompressed_bytes") && e.contains("(2.0 kB)"), "{e}");
+        let e = format!("{:#}", read_all(&p, 3000, u64::MAX).unwrap_err());
+        assert!(e.contains("max_file_bytes"), "{e}");
+        assert_eq!(read_all(&p, 4000, 4000).unwrap(), body.as_bytes());
+        // The copy now exists in the cache; a tighter ceiling still refuses it.
+        let e = format!("{:#}", read_all(&p, u64::MAX, 2000).unwrap_err());
+        assert!(e.contains("max_decompressed_bytes") && e.contains("(2.0 kB)"), "{e}");
+    }
+
     #[test]
     fn the_readers_see_the_decompressed_bytes() {
         let d = tempfile::TempDir::new().unwrap();
         let p = d.path().join("x.csv.gz");
         std::fs::write(&p, gz_of(b"region,betrag\nZH,10\n")).unwrap();
-        assert_eq!(read_all(&p, u64::MAX).unwrap(), b"region,betrag\nZH,10\n");
+        assert_eq!(read_all(&p, u64::MAX, u64::MAX).unwrap(), b"region,betrag\nZH,10\n");
         let ht = read_head_tail(&p, 6, 4, u64::MAX).unwrap();
         assert_eq!(ht.head, b"region");
         assert_eq!(ht.tail.as_deref(), Some(&b",10\n"[..]));
@@ -504,13 +539,13 @@ mod tests {
         for (name, bytes) in [("x.csv.zst", zst), ("x.csv.bz2", bz), ("x.csv.xz", xz)] {
             let p = d.path().join(name);
             std::fs::write(&p, bytes).unwrap();
-            assert_eq!(read_all(&p, u64::MAX).unwrap(), text, "{name}");
+            assert_eq!(read_all(&p, u64::MAX, u64::MAX).unwrap(), text, "{name}");
             assert!(materialize(&p, u64::MAX).unwrap().ends_with("x.csv"), "{name}");
         }
         for (name, head) in [("x.csv.lz4", &[0x04u8, 0x22, 0x4d, 0x18, 0, 0][..]), ("x.csv.zip", b"PK\x03\x04\x14\x00")] {
             let p = d.path().join(name);
             std::fs::write(&p, head).unwrap();
-            let e = format!("{:#}", read_all(&p, u64::MAX).unwrap_err());
+            let e = format!("{:#}", read_all(&p, u64::MAX, u64::MAX).unwrap_err());
             assert!(e.contains("gzip, zstd, bzip2 and xz"), "{name}: {e}");
             assert!(e.to_lowercase().contains("decompress"), "{name}: {e}");
         }
@@ -625,14 +660,14 @@ mod tests {
     #[test]
     fn read_all_refuses_oversized_files() {
         let (_d, p) = tmpfile(&vec![0u8; 4096]);
-        assert!(read_all(&p, 1024).is_err());
-        assert!(read_all(&p, 8192).is_ok());
+        assert!(read_all(&p, 1024, u64::MAX).is_err());
+        assert!(read_all(&p, 8192, u64::MAX).is_ok());
     }
 
     #[test]
     fn read_all_rejects_a_directory_with_a_clear_message() {
         let d = tempfile::TempDir::new().unwrap();
-        let err = read_all(d.path(), u64::MAX).unwrap_err();
+        let err = read_all(d.path(), u64::MAX, u64::MAX).unwrap_err();
         assert!(format!("{err:#}").contains("directory"));
     }
 

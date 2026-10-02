@@ -1154,6 +1154,9 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
         }
         Err(e) => bail!("file has a .json-ish extension but does not parse as JSON: {e}"),
     };
+    // The probe below reads the document again; this copy is done with, and
+    // keeping it would hold two beside the probe's tree.
+    drop(text);
 
     let extraction = Extraction::Json { lines, pointer, record };
     let table = engine::extract(&extraction, path, &ExtractOpts::capped(limits, PROBE_ROWS))

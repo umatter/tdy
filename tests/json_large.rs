@@ -132,6 +132,10 @@ fn a_capped_read_of_an_array_document_parses_it_whole_and_says_it_cut() {
     let t = engine::extract(&array_spec(None).extraction, &p, &ExtractOpts::capped(Limits::default(), 50)).unwrap();
     assert_eq!(t.rows.len(), 50);
     assert!(t.truncated, "a cut array is a truncated table");
+    // The rows kept are the array's first fifty, in order.
+    let id = t.header.as_ref().unwrap().iter().position(|h| h == "id").unwrap();
+    let ids: Vec<String> = t.rows.iter().map(|r| r[id].clone()).collect();
+    assert_eq!(ids, (0..50).map(|i| i.to_string()).collect::<Vec<_>>());
     // A cap the array fits under is not a cut.
     let all = engine::extract(&array_spec(None).extraction, &p, &ExtractOpts::capped(Limits::default(), N as usize)).unwrap();
     assert_eq!(all.rows.len(), N as usize);
@@ -190,6 +194,15 @@ fn ndjson_keeps_the_prefix() {
     engine::dry_run(&s, &p, Limits::default()).unwrap();
     let err = format!("{:#}", engine::execute(&s, &p, Limits::default()).expect_err("the malformed tail was not read"));
     assert!(err.contains(&format!("line {bad_line}")), "{err}");
+
+    // What tells the two reads apart: under a `max_file_bytes` below the
+    // file's size, a whole read is refused before any record is parsed, while
+    // the prefix a preview reads is within it.
+    let small = Limits { max_file_bytes: 5 * MIB as u64, ..Limits::default() };
+    assert_eq!(engine::preview(&s, &p, small, 10).expect("the preview read more than a prefix").num_rows(), 10);
+    engine::dry_run(&s, &p, small).expect("the dry run read more than a prefix");
+    let err = format!("{:#}", engine::execute(&s, &p, small).expect_err("the whole read ignored the limit"));
+    assert!(err.contains("max_file_bytes"), "{err}");
 }
 
 /// A document over `max_file_bytes` is refused by name under a cap as on
@@ -228,8 +241,19 @@ fn an_array_document_over_4_mib_fits_and_queries() {
     let t = write(dir.path(), "rows.tdy.sql", ARRAY_TARGET);
     let ts = t.to_str().unwrap();
 
-    let single = ok(&tdy(cfg.path(), &["fit", ts, dir.path().join("env.json").to_str().unwrap()]));
-    assert!(single.contains("/rows"), "{single}");
+    let env = dir.path().join("env.json");
+    let single = ok(&tdy(cfg.path(), &["fit", ts, env.to_str().unwrap()]));
+    assert!(single.contains(r#"only "/rows" produces the declared table"#), "{single}");
+    // The sidecar it wrote reads the array at /rows, and reads it right.
+    let sidecar = std::fs::read_to_string(dir.path().join("env.json.tdy.toml")).unwrap();
+    assert!(sidecar.contains(r#"pointer = "/rows""#), "{sidecar}");
+    let sql = format!("SELECT count(*) n, sum(amount) s, max(id) m FROM messy('{}')", env.display());
+    let text = ok(&tdy(cfg.path(), &["query", "--frozen", &sql]));
+    assert_eq!(
+        row_with(&text, &amount_sum().to_string()),
+        [N.to_string(), amount_sum().to_string(), (N - 1).to_string()],
+        "{text}"
+    );
 
     let fit = ok(&tdy(cfg.path(), &["fit", ts]));
     assert!(!fit.contains("GAP") && !fit.contains("REVIEW"), "{fit}");
@@ -309,4 +333,94 @@ fn fit_names_the_limit_for_a_document_over_it() {
     assert!(!out.status.success(), "{all}");
     assert!(all.contains("max_file_bytes"), "{all}");
     assert!(!all.contains("EOF while parsing"), "{all}");
+}
+
+// ---------------------------------------------------------------------------
+// [limits].max_decompressed_bytes
+// ---------------------------------------------------------------------------
+
+fn gzip(path: &Path, body: &[u8]) {
+    let mut enc = flate2::write::GzEncoder::new(std::fs::File::create(path).unwrap(), flate2::Compression::fast());
+    enc.write_all(body).unwrap();
+    enc.finish().unwrap();
+}
+
+fn config(dir: &Path, body: &str) {
+    std::fs::create_dir_all(dir.join("tdy")).unwrap();
+    std::fs::write(dir.join("tdy").join("config.toml"), body).unwrap();
+}
+
+/// A compressed member is fitted with the default limits, so its sidecar
+/// exists; then `max_decompressed_bytes` is lowered below what it
+/// decompresses to. The dry run and the query, both over that sidecar, must
+/// refuse it naming the limit and printing that limit's value — and a raise
+/// of `max_file_bytes` alone must not lift it.
+fn refused_past_the_decompression_limit(name: &str, body: &[u8], target: &str) {
+    let cfg = TempDir::new().unwrap();
+    let dir = TempDir::new().unwrap();
+    gzip(&dir.path().join(name), body);
+    let t = write(dir.path(), "t.tdy.sql", target);
+    let ts = t.to_str().unwrap();
+    ok(&tdy(cfg.path(), &["fit", ts]));
+    let count = format!("SELECT count(*) n FROM dataset('{ts}')");
+    ok(&tdy(cfg.path(), &["query", &count]));
+
+    config(cfg.path(), "[limits]\nmax_decompressed_bytes = 1000000\nmax_file_bytes = 100000000\n");
+    let messy = format!("SELECT count(*) n FROM messy('{}')", dir.path().join(name).display());
+    for args in [vec!["fit", ts, "--dry-run"], vec!["query", &count], vec!["query", "--frozen", &messy]] {
+        let out = tdy(cfg.path(), &args);
+        let all = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(
+            all.contains("max_decompressed_bytes") && all.contains("(1.0 MB)"),
+            "{name}: {args:?} did not refuse naming the limit:\n{all}"
+        );
+        assert!(!all.contains("fits"), "{name}: {args:?}:\n{all}");
+    }
+
+    // Within both limits it still reads.
+    config(cfg.path(), &format!("[limits]\nmax_decompressed_bytes = {}\n", 2 * body.len()));
+    ok(&tdy(cfg.path(), &["fit", ts, "--dry-run"]));
+    ok(&tdy(cfg.path(), &["query", &count]));
+}
+
+#[test]
+fn a_compressed_json_document_is_bounded_by_max_decompressed_bytes() {
+    let mut body = String::from("[");
+    for i in 0..30_000u64 {
+        if i > 0 {
+            body.push(',');
+        }
+        body.push_str(&record(i));
+    }
+    body.push(']');
+    assert!(body.len() > 3 * MIB);
+    refused_past_the_decompression_limit("a.json.gz", body.as_bytes(), ARRAY_TARGET);
+}
+
+#[test]
+fn a_compressed_csv_is_bounded_by_max_decompressed_bytes() {
+    let mut body = String::from("id,region,amount\n");
+    for i in 0..200_000u64 {
+        body.push_str(&format!("{i},ZH,{}\n", i % 100));
+    }
+    assert!(body.len() > 2 * MIB);
+    let target = ARRAY_TARGET.replace("'*.json*'", "'*.csv*'");
+    refused_past_the_decompression_limit("a.csv.gz", body.as_bytes(), &target);
+}
+
+/// The same limit, through the library: the whole read of a compressed
+/// document honours it, as the capped read always did.
+#[test]
+fn the_whole_read_honours_max_decompressed_bytes() {
+    let dir = TempDir::new().unwrap();
+    let gz = dir.path().join("big.json.gz");
+    gzip(&gz, array_text().as_bytes());
+    let tight = Limits { max_decompressed_bytes: MIB as u64, ..Limits::default() };
+    for (what, err) in [
+        ("preview", engine::preview(&array_spec(None), &gz, tight, 10).expect_err("preview")),
+        ("query", engine::execute(&array_spec(None), &gz, tight).expect_err("query")),
+    ] {
+        let msg = format!("{err:#}");
+        assert!(msg.contains("max_decompressed_bytes") && msg.contains("(1.0 MB)"), "{what}: {msg}");
+    }
 }
