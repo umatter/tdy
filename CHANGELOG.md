@@ -112,18 +112,27 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 - **A number outside a double's range is refused in a float64 column**, naming
   the row: `1E400` read as `inf` and `1e-400` as `0` — in a CSV always, and in
   JSON once the reader kept the literal. A zero written as a zero is a zero.
-- **A JSON document over 4 MiB can be fitted, previewed and drafted.** A
-  capped read (the sniffer's probe, `tdy fit`'s gates and dry run, `preview`,
-  `tdy profile --head`) took a 4 MiB prefix of the file, and a prefix of a
-  JSON document is malformed JSON, so all of them failed with "EOF while
-  parsing … column 4194304" on a document a plain query read without
-  complaint. An array of records, or a document read as one record, is now
-  parsed whole under a cap — as a workbook is — and the cap applies to its
-  records. `[limits].max_file_bytes` bounds it (a gzip, zstd, bzip2 or xz
-  document by its decompressed size), and a document over the limit is
-  refused naming it, in the probe as in the query. The cost is a whole parse
-  where there used to be a failure: a probe of a 500 MB array now parses
-  500 MB. NDJSON keeps the 4 MiB prefix, since its records are lines.
+- **A JSON document over 4 MiB can be sniffed, fitted, previewed, drafted and
+  profiled.** A capped read (the sniffer's probe, `tdy fit`'s gates and dry
+  run, `preview`, `tdy profile --head`) took a 4 MiB prefix of the file, and a
+  prefix of a JSON document is malformed JSON, so all of them failed with "EOF
+  while parsing … column 4194304" — `tdy sniff`, `tdy draft`, `tdy fit` and a
+  first `messy()` query with no sidecar included. Only a query over a sidecar
+  that already existed read such a document. An array of records, or a
+  document read as one record, is now parsed whole under a cap — as a workbook
+  is — and the cap applies to its records. `[limits].max_file_bytes` bounds
+  the read and, for a gzip, zstd, bzip2 or xz document,
+  `[limits].max_decompressed_bytes` bounds its decompression; a document over
+  either is refused naming that limit, in the probe as in the query. The cost
+  is a whole parse where there used to be a failure: a probe of a 500 MB array
+  now parses 500 MB. NDJSON keeps the 4 MiB prefix, since its records are
+  lines.
+- **`[limits].max_decompressed_bytes` bounds every whole read of a compressed
+  file.** A whole read decompressed against `max_file_bytes` instead, so a
+  query over an existing sidecar read a compressed JSON document past
+  `max_decompressed_bytes`, and the refusal of one past `max_file_bytes` named
+  `max_decompressed_bytes` while printing the other limit's value. Each limit
+  is now checked where it means something and named with its own value.
 
 ### What a pile of one-object documents costs, and what is deferred
 

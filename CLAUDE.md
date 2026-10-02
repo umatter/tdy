@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 1034 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 1048 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -991,8 +991,10 @@ Things that only become clear from reading several modules:
   is parsed whole even under a cap, like a workbook** (`engine::read_json_document`, used by
   `extract_json` for `lines = false`, `extract_json_record`, and every sniffer/draft reader
   of a document): a prefix of one is malformed JSON, and the cap applies to the parsed
-  records instead, setting `truncated` when it cut any. `[limits].max_file_bytes` is what
-  bounds it, and a document over it is refused by name in the probe as in the query. NDJSON
+  records instead, setting `truncated` when it cut any. `[limits].max_file_bytes` bounds the
+  read and `max_decompressed_bytes` a compressed document's decompression (`fileio::read_all`
+  takes both, and checks each where it means something), and a document over either is
+  refused by name in the probe as in the query. NDJSON
   keeps the prefix and the torn-line drop, its records being lines.
 - **Engine pipeline order matters:** extract (all strings) → transforms in spec order →
   projection + typed cast last. Rectangularization is lazy so `skip_rows` can remove title
