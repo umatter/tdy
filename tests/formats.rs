@@ -1706,3 +1706,20 @@ fn excel_days_honour_the_declared_separators() {
     let p = dir_file(&dir, "g.csv", "ts\n4.5000,5\n");
     assert!(spec_to_batch(&s, &p).is_err(), "a thousands point that does not group in threes");
 }
+
+/// Rounding the time of day must not carry a serial past the last date: the
+/// bound is checked after the carry.
+#[test]
+fn excel_days_refuse_a_carry_past_the_last_date() {
+    let dir = TempDir::new().unwrap();
+    for dtype in [DType::Date { format: "%s".into() }, DType::Timestamp { format: "%s".into(), timezone: None }] {
+        let p = dir_file(&dir, "c.csv", "ts,v\n2958465.9999999999,1\n");
+        let e = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), dtype), &p).expect_err("carried");
+        assert!(format!("{e:#}").contains("past 9999-12-31"), "{e:#}");
+    }
+    let p = dir_file(&dir, "l.csv", "ts,v\n2958465.5,1\n");
+    let ts = DType::Timestamp { format: "%s".into(), timezone: None };
+    let b = spec_to_batch(&epoch_spec(Some(EpochUnit::ExcelDays), ts), &p).unwrap();
+    let noon = chrono::NaiveDate::from_ymd_opt(9999, 12, 31).unwrap().and_hms_opt(12, 0, 0).unwrap();
+    assert_eq!(ts_micros(&b, 0), noon.and_utc().timestamp_micros());
+}

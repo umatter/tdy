@@ -183,13 +183,43 @@ impl Gap {
                  WITH (decimal_separator = '{}').",
                 if *separator == ',' { '.' } else { ',' }
             ),
-            Gap::AmbiguousFormat { column, source, formats, example } => format!(
-                "`{column}`: {source:?} parses under more than one format, and they disagree\n    \
-                 {}\n    \
-                 {example}\n    \
-                 Declare which convention these exports use: WITH (date_order = 'dmy').",
-                formats.iter().map(|f| format!("{f:?}")).collect::<Vec<_>>().join(" and ")
-            ),
+            Gap::AmbiguousFormat { column, source, formats, example } => {
+                // Name the orders actually in conflict: `dmy` is no help
+                // against a day-first/year-first conflict, nor once `mdy` is
+                // already declared.
+                let mut orders: Vec<&str> = Vec::new();
+                for o in formats.iter().filter_map(|f| field_order(f)) {
+                    let name = match o {
+                        DateOrder::Dmy => "dmy",
+                        DateOrder::Mdy => "mdy",
+                        DateOrder::Ymd => "ymd",
+                    };
+                    if !orders.contains(&name) {
+                        orders.push(name);
+                    }
+                }
+                let remedy = if orders.len() >= 2 {
+                    format!(
+                        "Declare which of these orders the exports use: {}.",
+                        orders
+                            .iter()
+                            .map(|o| format!("WITH (date_order = '{o}')"))
+                            .collect::<Vec<_>>()
+                            .join(" or ")
+                    )
+                } else {
+                    "Pin the format in the member's sidecar: these formats share a \
+                     day/month/year order, so no date_order separates them."
+                        .to_string()
+                };
+                format!(
+                    "`{column}`: {source:?} parses under more than one format, and they disagree\n    \
+                     {}\n    \
+                     {example}\n    \
+                     {remedy}",
+                    formats.iter().map(|f| format!("{f:?}")).collect::<Vec<_>>().join(" and ")
+                )
+            }
             Gap::Collides { column, other, source } => format!(
                 "`{column}` and `{other}` both bind {source:?} — the same column of the file, \
                  twice\n    tdy has no computed columns, so both would hold identical \
@@ -1978,7 +2008,15 @@ fn type_for(
             }
             _ => DType::Date { format: "%s".into() },
         };
-        let parse = ValueParsing { epoch: Some(unit), ..base };
+        // A declared decimal separator reaches a count as it reaches a
+        // number: `45000,5` under `decimal_separator = ','` is noon.
+        let thousands = ctx.decimal_separator.map(|d| if d == ',' { '.' } else { ',' });
+        let parse = ValueParsing {
+            epoch: Some(unit),
+            decimal_separator: ctx.decimal_separator,
+            thousands_separator: thousands,
+            ..base
+        };
         let (d, p) = check_one(&ctx, dtype, parse).map_err(untypable)?;
         let unit_name = serde_json::to_value(unit)
             .ok()

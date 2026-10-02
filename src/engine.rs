@@ -239,6 +239,11 @@ fn excel_serial_micros(v: &str) -> Result<i64> {
         let num: i128 = frac.parse().map_err(|_| past())?;
         (2 * num * DAY_MILLIS + den) / (2 * den)
     };
+    // Rounding can carry a whole day: 2958465.9999999999 is midnight after
+    // the last date, and past it.
+    if days == EXCEL_LAST_SERIAL && frac_millis >= DAY_MILLIS {
+        return Err(past());
+    }
     days.checked_sub(EXCEL_UNIX_SERIAL)
         .and_then(|d| d.checked_mul(DAY_MICROS))
         .and_then(|m| m.checked_add(frac_millis * 1_000))

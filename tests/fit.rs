@@ -1546,3 +1546,46 @@ fn a_bare_percent_s_is_epoch_seconds_for_review_and_conformance() {
     let (ok, text) = tdy_cli(&["query", &sql]);
     assert!(ok && text.contains("2023-11-14T22:13:20"), "{text}");
 }
+
+fn ts_strings(spec: &tdy::spec::ParseSpec, f: &Path, i: usize) -> Vec<String> {
+    let b = tdy::provider::spec_to_batch(spec, f).unwrap();
+    let a = b
+        .column(i)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::TimestampMicrosecondArray>()
+        .unwrap();
+    (0..a.len()).map(|r| a.value_as_datetime(r).unwrap().to_string()).collect()
+}
+
+/// A target's declared decimal comma reaches a declared epoch column as it
+/// reaches a numeric one: `45000,5` is noon.
+#[test]
+fn a_declared_excel_epoch_honours_the_declared_decimal_separator() {
+    let (_d, f, t) = fit_pair(
+        "Zeit;Betrag\n45000,5;10\n45001,25;20\n",
+        "CREATE TABLE s (zeit TIMESTAMP NOT NULL OPTIONS(matches = 'Zeit', epoch = 'excel_days'), \
+         betrag BIGINT NOT NULL OPTIONS(matches = 'Betrag')) WITH (files = '*.csv', decimal_separator = ',')",
+    );
+    let fitted = fit(&f, &t, Limits::default()).unwrap();
+    assert_eq!(ts_strings(&fitted.spec, &f, 0), ["2023-03-15 12:00:00", "2023-03-16 06:00:00"]);
+}
+
+/// An ambiguity names the orders actually in conflict, not always `dmy`:
+/// `13/02/14` is day-first and year-first at once under a declared pivot.
+#[test]
+fn an_ambiguous_date_names_the_orders_in_conflict() {
+    for order in ["", ", date_order = 'mdy'"] {
+        let (_d, f, t) = fit_pair(
+            "datum;betrag\n13/02/14;10\n15/03/16;20\n",
+            &format!(
+                "CREATE TABLE s (datum DATE NOT NULL OPTIONS(year_pivot = '30'), betrag BIGINT NOT NULL) \
+                 WITH (files = '*.csv'{order})"
+            ),
+        );
+        let text = gap_text(&f, &t);
+        assert!(
+            text.contains("Declare which of these orders the exports use: WITH (date_order = 'dmy') or WITH (date_order = 'ymd')."),
+            "{order}: {text}"
+        );
+    }
+}
