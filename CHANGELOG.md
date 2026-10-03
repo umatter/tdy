@@ -68,6 +68,51 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 - **The inference prompt is `infer-v6`**: the sidecar schema it carries gained
   `record`. Sidecars record the version in their provenance.
 
+### Fixed
+
+- **A JSON number keeps its value, and its written digits wherever a double
+  could not hold them.** tdy read JSON data
+  through serde_json, which holds a number as a 64-bit integer or a double, so
+  `{"id": 12345678901234567890123}` read as `1.2345678901234568e+22`, an
+  integer past u64 as its nearest double, and a thirty-digit amount lost its
+  tail — silently, on every JSON path (arrays, NDJSON on both executors, a
+  document read as one record, a column's `pointer`, the sniffer and
+  `tdy draft`). JSON data is now read by tdy's own reader, which keeps each
+  number's text: a number a double held exactly reads exactly as before
+  (`1e3` is still `1000.0`), one it did not reads as the file wrote it. Such
+  an identifier now fits a `DECIMAL(38, 0)` or `TEXT` column, and a long
+  amount lands exactly in `DECIMAL(p, s)`. A number past a double's range
+  (`1E400`) is read as written into `TEXT` where the whole document used to
+  be refused.
+- **A float64 column of 17-digit values is now correctly rounded.** serde_json
+  (as tdy builds it) read such a literal with two roundings and landed one
+  unit in the last place off for about one value in ten — `0.09743057599473337`
+  was served as `0.09743057599473336`. Those values now read as the nearest
+  double, so a float64 column written with 17 digits can change in its last
+  digit. Nothing else that a double held moves.
+- **The sniffer and `tdy draft` never type float64 for a literal no double
+  is**: one of more than 17 significant digits (trailing zeros not counted),
+  or an integer past 2^53 that no double equals (`9007199254740993`). Such a
+  column is `DECIMAL(38, s)` when every value fits and TEXT otherwise, with a
+  note naming the value and what a float64 would have read; an integer past
+  64 bits beside fractions is TEXT, as a column of such integers already was.
+  The whole-file type check applies the same rule to every value, so one far
+  past the sample widens the column too (`--quick` skips it, and says so). A
+  decimal chosen from the sample takes its scale from the sample, and a later
+  longer value is rounded half away from zero with its note, as for every
+  sniffed decimal. Within 17 digits float64 reads the nearest double, which is
+  what the type means: `0.12345678901234567` stays float64. A JSON pile whose
+  `v` was an identifier past 64 bits in one document and `0.5` in another
+  drafted `v DOUBLE` and served `1.2345678901234568e22`; it now drafts TEXT,
+  as its CSV twin did. Nor does a draft widen such a column back to DOUBLE
+  because another file in the pile holds ordinary floats: it measures every
+  value and drafts `DECIMAL(38, s)` at the widest scale when all fit (no
+  rounding declared), TEXT otherwise. A target that declares DOUBLE is
+  unchanged.
+- **A number outside a double's range is refused in a float64 column**, naming
+  the row: `1E400` read as `inf` and `1e-400` as `0` — in a CSV always, and in
+  JSON once the reader kept the literal. A zero written as a zero is a zero.
+
 ### What a pile of one-object documents costs, and what is deferred
 
 Measured on villagerdb's 7,443 item documents (release build): the first

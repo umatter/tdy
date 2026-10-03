@@ -54,7 +54,19 @@ struct DraftColumn {
     /// absent the pointer finds nothing and the cell is null, so no
     /// `if_missing` is needed — the comment says so instead of inviting one.
     null_where_absent: bool,
+    /// A value in the pile no double is (`numfmt::Shape::float_unsafe`), and
+    /// the file that holds it: such a column is never drafted DOUBLE.
+    no_double: Option<(String, String)>,
+    /// Every float64 or decimal sighting of the column, for measuring a
+    /// column with a value no double is.
+    numeric: Vec<NumericSighting>,
+    /// A DECIMAL whose scale the draft did not measure over every value: a
+    /// longer later value needs the rounding declared.
+    round_needed: bool,
 }
+
+/// (the file, when the spec reads it whole; the spec; the column's index).
+type NumericSighting = (Option<PathBuf>, std::rc::Rc<crate::spec::ParseSpec>, usize);
 
 /// The widest scale the sniffer gives money it recognises by shape alone
 /// (`sniff::guess_type`'s non-currency branch caps there). A DECIMAL wider
@@ -157,7 +169,7 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
                         &mut month_first,
                         &mut sniffed,
                         &mut files_ok,
-                        ColumnSighting { physical_file: &label, block: None },
+                        ColumnSighting { physical_file: &label, path: Some(f), block: None },
                         &spec,
                     );
                 }
@@ -298,7 +310,7 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
                         &mut month_first,
                         &mut sniffed,
                         &mut files_ok,
-                        ColumnSighting { physical_file: &label, block: None },
+                        ColumnSighting { physical_file: &label, path: None, block: None },
                         &spec,
                     );
                 }
@@ -330,6 +342,7 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
                             &mut files_ok,
                             ColumnSighting {
                                 physical_file: &label,
+                                path: None,
                                 block: Some((&prefix, w.ordinal, windows.len())),
                             },
                             &spec,
@@ -357,7 +370,7 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
             &mut month_first,
             &mut sniffed,
             &mut files_ok,
-            ColumnSighting { physical_file: &label, block: None },
+            ColumnSighting { physical_file: &label, path: Some(f), block: None },
             &spec,
         );
     }
@@ -396,7 +409,7 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
                 &mut month_first,
                 &mut sniffed,
                 &mut files_ok,
-                ColumnSighting { physical_file: &d.label, block: None },
+                ColumnSighting { physical_file: &d.label, path: Some(&d.path), block: None },
                 spec,
             );
         }
@@ -434,6 +447,7 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
         anyhow::bail!("{msg}");
     }
     let files_seen = files_ok.len();
+    settle_no_double(&mut columns, limits);
 
     let name = table_name(files);
     let globs = file_globs(files, base);
@@ -502,7 +516,7 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
             // The sniffer's scale is reproduced, not second-guessed; the
             // rounding a longer later value needs is declared beside it, in
             // the reviewed target, which is where a rounding is authorised.
-            if noisy_scale(&c.dtype).is_some() {
+            if (noisy_scale(&c.dtype).is_some() && c.no_double.is_none()) || c.round_needed {
                 options.push("round = 'half_away'".into());
             }
             if !options.is_empty() {
@@ -537,7 +551,13 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
                 notes.push(format!("only in {}", labels.join(", ")));
             }
         }
-        if let Some(scale) = noisy_scale(&c.dtype) {
+        if let (Some((file, value)), DType::Decimal { .. }) = (&c.no_double, &c.dtype) {
+            notes.push(format!(
+                "DECIMAL: {file} holds {value:?}, a value no double holds, which a float \
+                 column would read as another number{}",
+                if c.round_needed { "; rounding is declared for a longer later value" } else { "" }
+            ));
+        } else if let Some(scale) = noisy_scale(&c.dtype) {
             let from = if c.noisy_files.len() < c.files.len() {
                 format!(" (from {})", c.noisy_files.join(", "))
             } else {
@@ -578,6 +598,9 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
 /// and its file's total block count.
 struct ColumnSighting<'a> {
     physical_file: &'a str,
+    /// The file the spec reads whole, when it does — `None` for a block
+    /// framed from a scratch copy.
+    path: Option<&'a Path>,
     /// The block's label prefix (`file` or `book.xlsx#Sheet`), its ordinal
     /// and its file's total block count.
     block: Option<(&'a str, u32, usize)>,
@@ -601,7 +624,12 @@ fn record_columns(
 ) {
     *sniffed += 1;
     files_ok.insert(sighting.physical_file.to_string());
-    for c in &spec.columns {
+    let shared = std::rc::Rc::new(spec.clone());
+    for (idx, c) in spec.columns.iter().enumerate() {
+        let numeric: Option<NumericSighting> = matches!(c.dtype, DType::Float64 | DType::Decimal { .. })
+            .then(|| (sighting.path.map(Path::to_path_buf), shared.clone(), idx));
+        let no_double = crate::sniff::no_double_value(spec, &c.name)
+            .map(|v| (sighting.physical_file.to_string(), v));
         match &c.dtype {
             DType::Date { format } | DType::Timestamp { format, .. } => {
                 if format.starts_with("%d") {
@@ -633,6 +661,10 @@ fn record_columns(
                 if d.caveat.is_none() {
                     d.caveat = caveat;
                 }
+                d.numeric.extend(numeric);
+                if d.no_double.is_none() {
+                    d.no_double = no_double;
+                }
             }
             None => columns.push(DraftColumn {
                 name: c.name.clone(),
@@ -650,6 +682,9 @@ fn record_columns(
                 },
                 pointer: None,
                 null_where_absent: false,
+                no_double,
+                numeric: numeric.into_iter().collect(),
+                round_needed: false,
             }),
         }
     }
@@ -724,7 +759,7 @@ impl JsonLeaves {
         for (k, v) in entries {
             *self.key_files.entry(k.clone()).or_default() += 1;
             if let crate::jsondoc::Node::Object(_) = v {
-                let text = crate::engine::json_scalar(&v.to_value());
+                let text = v.cell();
                 self.object_tops.entry(k.clone()).or_default().push((label.to_string(), text));
             }
         }
@@ -814,6 +849,15 @@ impl JsonLeaves {
                         crate::sniff::guess_dtype_all(&values, &base, |a, b| merge(a, b, "the JSON documents").0)
                             .unwrap_or(DType::Utf8)
                     };
+                    let dtype = match exact_home(&values, &dtype) {
+                        Some((home, value)) => {
+                            if c.no_double.is_none() {
+                                c.no_double = Some(("the JSON documents".to_string(), value));
+                            }
+                            home
+                        }
+                        None => dtype,
+                    };
                     let (merged, conflict) = merge(&c.dtype, &dtype, "the JSON documents");
                     c.dtype = merged;
                     if !c.origins.contains(&leaf.path[0]) {
@@ -864,6 +908,20 @@ impl JsonLeaves {
                 caveats.extend(conflict);
                 d
             };
+            // The draft holds every value of a leaf: a column with one no
+            // double is takes its exact home from all of them.
+            let (dtype, no_double) = match exact_home(&values, &dtype) {
+                Some((home, value)) => {
+                    if home == DType::Utf8 {
+                        caveats.push(format!(
+                            "kept TEXT: {value:?}, a value no double holds, is among values that do \
+                             not fit DECIMAL(38, s) — settle it and narrow the type"
+                        ));
+                    }
+                    (home, Some(("the JSON documents".to_string(), value)))
+                }
+                None => (dtype, None),
+            };
             if let DType::Date { format } | DType::Timestamp { format, .. } = &dtype {
                 *day_first |= format.starts_with("%d");
                 *month_first |= format.starts_with("%m");
@@ -888,6 +946,9 @@ impl JsonLeaves {
                 noisy_files: Vec::new(),
                 pointer,
                 null_where_absent,
+                no_double,
+                numeric: Vec::new(),
+                round_needed: false,
             });
         }
         // A key that is an object in some documents and a column of the
@@ -930,8 +991,7 @@ fn walk(
 ) {
     use crate::jsondoc::Node;
     match v {
-        Node::Scalar(s) => found.push((path.clone(), crate::engine::json_scalar(s), false)),
-        Node::Array(_) if path.len() == 1 => found.push((path.clone(), crate::engine::json_scalar(&v.to_value()), true)),
+        Node::Array(_) if path.len() == 1 => found.push((path.clone(), v.cell(), true)),
         Node::Array(_) => {
             arrays.insert(path.join("/"));
         }
@@ -945,6 +1005,7 @@ fn walk(
                 path.pop();
             }
         }
+        scalar => found.push((path.clone(), scalar.cell(), false)),
     }
 }
 
@@ -1010,6 +1071,125 @@ fn merge(a: &DType, b: &DType, file: &str) -> (DType, Option<String>) {
                 sql_type(a)
             )),
         ),
+    }
+}
+
+/// A column's values measured for an exact home: whether any is a literal
+/// no double is, and whether a DECIMAL could hold them all.
+#[derive(Default)]
+struct Exact {
+    first: Option<String>,
+    max_int: usize,
+    max_frac: usize,
+    not_decimal: bool,
+}
+
+impl Exact {
+    fn observe(&mut self, v: &str, decimal: Option<char>, thousands: Option<char>) {
+        let t = v.trim();
+        if t.is_empty() || crate::sniff::is_na(t) {
+            return;
+        }
+        let Some(l) = crate::numfmt::shape(t, decimal, thousands) else {
+            self.not_decimal = true;
+            return;
+        };
+        self.max_int = self.max_int.max(l.int_digits);
+        self.max_frac = self.max_frac.max(l.frac_digits);
+        if l.exponent || l.past_i64 {
+            self.not_decimal = true;
+        }
+        if self.first.is_none() && l.float_unsafe() {
+            self.first = Some(t.to_string());
+        }
+    }
+
+    /// DECIMAL(38, widest scale) when every value fits, else TEXT.
+    fn home(&self) -> DType {
+        if !self.not_decimal && self.max_int + self.max_frac <= 38 {
+            DType::Decimal { precision: 38, scale: self.max_frac as i8 }
+        } else {
+            DType::Utf8
+        }
+    }
+}
+
+/// For a numeric column whose values the draft holds: its exact home and
+/// the value no double is, when one is among them; `None` otherwise (the
+/// typing stands).
+fn exact_home(values: &[&str], dtype: &DType) -> Option<(DType, String)> {
+    if !matches!(dtype, DType::Float64 | DType::Decimal { .. }) {
+        return None;
+    }
+    let mut ex = Exact::default();
+    for v in values {
+        ex.observe(v, None, None);
+    }
+    let first = ex.first.clone()?;
+    Some((ex.home(), first))
+}
+
+/// One column of a sniffed file, every value, as the cast would see it
+/// (trimmed, missing markers and `strip` applied), for [`Exact`].
+fn column_values(path: &Path, spec: &crate::spec::ParseSpec, idx: usize, limits: Limits) -> Result<Vec<String>> {
+    use datafusion::arrow::array::{Array, StringArray};
+    let mut s = spec.clone();
+    let mut col = s.columns[idx].clone();
+    col.dtype = DType::Utf8;
+    col.parse.thousands_separator = None;
+    col.parse.decimal_separator = None;
+    col.parse.negative = None;
+    s.columns = vec![col];
+    let mut out = Vec::new();
+    for b in crate::engine::execute_batches(&s, path, limits)? {
+        let Some(a) = b.column(0).as_any().downcast_ref::<StringArray>() else { continue };
+        out.extend((0..a.len()).filter(|&r| !a.is_null(r)).map(|r| a.value(r).to_string()));
+    }
+    Ok(out)
+}
+
+/// A column some file typed away from float64 for a value no double is
+/// must not be widened back to DOUBLE by another file's floats. Its exact
+/// home is measured over every value of every file that has it: DECIMAL at
+/// the widest scale when they all fit (no rounding needed), TEXT otherwise.
+/// Where a sighting cannot be read (a block framed from a scratch copy), a
+/// DECIMAL keeps the sniffed scale and declares the rounding.
+fn settle_no_double(columns: &mut [DraftColumn], limits: Limits) {
+    for c in columns.iter_mut() {
+        let Some((file, value)) = c.no_double.clone() else { continue };
+        if !matches!(c.dtype, DType::Float64 | DType::Decimal { .. }) || c.numeric.is_empty() {
+            continue;
+        }
+        let mut ex = Exact::default();
+        let mut measured = true;
+        for (path, spec, idx) in &c.numeric {
+            let parse = &spec.columns[*idx].parse;
+            match path.as_deref().map(|p| column_values(p, spec, *idx, limits)) {
+                Some(Ok(vals)) => {
+                    for v in &vals {
+                        ex.observe(v, parse.decimal_separator, parse.thousands_separator);
+                    }
+                }
+                _ => measured = false,
+            }
+        }
+        let widened = c.caveat.as_deref().is_some_and(|cv| cv.starts_with("widened to DOUBLE"));
+        if measured {
+            c.dtype = ex.home();
+        } else if c.dtype == DType::Float64 {
+            c.dtype = DType::Utf8;
+        } else {
+            c.round_needed = true;
+        }
+        if widened {
+            c.caveat = None;
+        }
+        if c.dtype == DType::Utf8 && c.caveat.is_none() {
+            c.caveat = Some(format!(
+                "kept TEXT: {file} holds {value:?}, a value no double holds, and not every file's \
+                 values fit DECIMAL(38, s) — settle it and narrow the type"
+            ));
+        }
     }
 }
 

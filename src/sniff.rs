@@ -24,6 +24,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use crate::config::Limits;
 use crate::detect;
 use crate::engine::{self, ExtractOpts, RawTable};
+use crate::jsondoc::Node;
 use crate::numfmt;
 use crate::sample::{FileSample, FormatGuess, CONTINUES_MARKER};
 use crate::spec::{
@@ -142,7 +143,9 @@ pub fn sniff_opts(
         res.spec.notes.push(
             "types were inferred from a sample and NOT checked against the whole file \
              (--quick): a value further in may not fit, and the query will say so when it \
-             reaches one. Re-run `tdy sniff` without --quick to check."
+             reaches one — except a literal no double holds (more than 17 significant digits, \
+             or an integer past 2^53 no double equals) in a float64 column, which parses and is \
+             read rounded without a word. Re-run `tdy sniff` without --quick to check."
                 .to_string(),
         );
     }
@@ -301,11 +304,45 @@ pub fn verify_types(
         ));
     }
 
+    // A float64 column whose literals parse but do not all come back from a
+    // double: widened, exactly as a parse failure widens it, to the exact
+    // home every value in the file has — DECIMAL at the widest scale any
+    // value has, or text. A column that also fails to parse is the failure
+    // below's to report.
+    for f in &v.inexact_floats {
+        if v.failing.iter().any(|(i, _)| *i == f.column) {
+            continue;
+        }
+        let Some(col) = spec.columns.get_mut(f.column) else { continue };
+        let why = format!(
+            "{:?} (row {}) would read back from a float64 as {}",
+            f.value, f.row, f.reads_as
+        );
+        match f.decimal_scale {
+            Some(scale) => {
+                col.dtype = DType::Decimal { precision: 38, scale };
+                spec.notes.push(format!(
+                    "column `{}`: read as decimal({scale}) — {why}; the scale is the widest \
+                     any value in the file has",
+                    col.name
+                ));
+            }
+            None => {
+                col.dtype = DType::Utf8;
+                col.parse = ValueParsing::default();
+                spec.notes.push(format!(
+                    "column `{}`: kept as text — {why}, and not every value fits decimal(38, s)",
+                    col.name
+                ));
+            }
+        }
+    }
+
     if v.failing.is_empty() {
         return;
     }
     let total = v.rows;
-    for (i, _why) in v.failing {
+    for (i, why) in v.failing {
         let Some(off) = v.offenders.iter().find(|o| o.column == i) else {
             continue;
         };
@@ -325,14 +362,21 @@ pub fn verify_types(
         let was = col.dtype.clone();
         col.dtype = DType::Utf8;
         col.parse = ValueParsing::default();
+        // Say what the cast said: a value outside a double's range is a
+        // number, just not one a float64 can hold.
+        let what = if was == DType::Float64 && why.contains("outside a double's range") {
+            "outside a double's range".to_string()
+        } else {
+            format!("not {}", type_word(&was))
+        };
         spec.notes.push(format!(
-            "column `{}`: kept as text — {} of {} values are not {}: {}. \
+            "column `{}`: kept as text — {} of {} values are {}: {}. \
              If those are strays rather than data, drop them with a \
              `drop_rows_matching` transform and narrow the type by hand.",
             col.name,
             count,
             total,
-            type_word(&was),
+            what,
             shown.join(", ")
         ));
     }
@@ -1035,10 +1079,10 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
     drop(bytes);
     let trimmed = text.trim_start();
 
-    let (lines, pointer, record) = match serde_json::from_str::<serde_json::Value>(&text) {
+    let (lines, pointer, record) = match Node::parse(&text) {
         Ok(doc) => match &doc {
-            serde_json::Value::Array(_) => (false, None, false),
-            serde_json::Value::Object(_) => {
+            Node::Array(_) => (false, None, false),
+            Node::Object(_) => {
                 // The records array may be nested — `{"data": {"items": [...]}}`
                 // is as common in API dumps as a top-level one.
                 let mut found = Vec::new();
@@ -1056,18 +1100,17 @@ fn sniff_json(path: &Path, limits: Limits) -> Result<SniffResult> {
                     // `{"ace": {...}, "bob": {...}}` is as likely a map of
                     // records keyed by name. Read (no value is wrong), never
                     // confidently.
-                    if let serde_json::Value::Object(map) = &doc {
-                        if map.len() >= 2 && map.values().all(serde_json::Value::is_object) {
-                            let keys: Vec<String> = map.keys().take(2).map(|k| format!("`{k}`")).collect();
-                            doubts.add(
-                                0.25,
-                                format!(
-                                    "every top-level value is an object — this may be a map of records \
-                                     keyed by {}, … rather than one record",
-                                    keys.join(", ")
-                                ),
-                            );
-                        }
+                    let map = doc.sorted_entries();
+                    if map.len() >= 2 && map.iter().all(|(_, v)| v.is_object()) {
+                        let keys: Vec<String> = map.iter().take(2).map(|(k, _)| format!("`{k}`")).collect();
+                        doubts.add(
+                            0.25,
+                            format!(
+                                "every top-level value is an object — this may be a map of records \
+                                 keyed by {}, … rather than one record",
+                                keys.join(", ")
+                            ),
+                        );
                     }
                     (false, None, true)
                 } else {
@@ -1130,13 +1173,13 @@ fn empty_array_message(pointer: &str) -> String {
 
 /// The first empty array in a document, by the same walk (and the same
 /// depth bound) [`find_record_arrays`] makes for non-empty ones.
-fn first_empty_array(v: &serde_json::Value, prefix: &mut String, depth: usize) -> Option<String> {
+fn first_empty_array(v: &Node, prefix: &mut String, depth: usize) -> Option<String> {
     if depth > 6 {
         return None;
     }
     match v {
-        serde_json::Value::Array(a) if a.is_empty() => Some(prefix.clone()),
-        serde_json::Value::Object(map) => map.iter().find_map(|(k, child)| {
+        Node::Array(a) if a.is_empty() => Some(prefix.clone()),
+        Node::Object(_) => v.sorted_entries().into_iter().find_map(|(k, child)| {
             let mark = prefix.len();
             prefix.push('/');
             prefix.push_str(&escape_pointer_token(k));
@@ -1149,14 +1192,14 @@ fn first_empty_array(v: &serde_json::Value, prefix: &mut String, depth: usize) -
 }
 
 /// Every empty array in a document, by the same bounded walk.
-pub(crate) fn empty_arrays(v: &serde_json::Value, prefix: &mut String, depth: usize, out: &mut Vec<String>) {
+pub(crate) fn empty_arrays(v: &Node, prefix: &mut String, depth: usize, out: &mut Vec<String>) {
     if depth > 6 || out.len() > 64 {
         return;
     }
     match v {
-        serde_json::Value::Array(a) if a.is_empty() => out.push(prefix.clone()),
-        serde_json::Value::Object(map) => {
-            for (k, child) in map {
+        Node::Array(a) if a.is_empty() => out.push(prefix.clone()),
+        Node::Object(_) => {
+            for (k, child) in v.sorted_entries() {
                 let mark = prefix.len();
                 prefix.push('/');
                 prefix.push_str(&escape_pointer_token(k));
@@ -1172,7 +1215,7 @@ pub(crate) fn empty_arrays(v: &serde_json::Value, prefix: &mut String, depth: us
 pub(crate) fn empty_arrays_in(path: &Path, limits: Limits) -> Vec<String> {
     let Ok(bytes) = crate::fileio::read_all(path, limits.max_file_bytes) else { return Vec::new() };
     let (text, _) = crate::sample::decode_text(&bytes, None);
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let Ok(doc) = Node::parse(&text) else { return Vec::new() };
     let mut out = Vec::new();
     empty_arrays(&doc, &mut String::new(), 0, &mut out);
     out
@@ -1185,7 +1228,7 @@ pub(crate) fn empty_arrays_in(path: &Path, limits: Limits) -> Vec<String> {
 pub(crate) fn empty_array_record_frame(path: &Path, limits: Limits) -> Option<(ParseSpec, String)> {
     let bytes = crate::fileio::read_all(path, limits.max_file_bytes).ok()?;
     let (text, _) = crate::sample::decode_text(&bytes, None);
-    let doc = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let doc = Node::parse(&text).ok()?;
     if !doc.is_object() {
         return None;
     }
@@ -1203,6 +1246,21 @@ pub(crate) fn empty_array_record_frame(path: &Path, limits: Limits) -> Option<(P
         notes: Vec::new(),
     };
     Some((spec, empty))
+}
+
+/// The words every note uses for a literal no double is (`numfmt::Shape::
+/// float_unsafe`): `"v" would read back from a float64 as …`. The draft
+/// finds such a column by them.
+pub(crate) const NO_DOUBLE: &str = "would read back from a float64 as";
+
+/// The value a note names as one no double is, for column `column`, if the
+/// sniff typed that column away from float64 for that reason.
+pub(crate) fn no_double_value(spec: &ParseSpec, column: &str) -> Option<String> {
+    let prefix = format!("column `{column}`: ");
+    let note = spec.notes.iter().find(|n| n.starts_with(&prefix) && n.contains(NO_DOUBLE))?;
+    let start = note.find('"')? + 1;
+    let len = note[start..].find('"')?;
+    Some(note[start..start + len].to_string())
 }
 
 /// What the sniffer says about a root object with no array in it.
@@ -1236,7 +1294,7 @@ pub(crate) fn json_record_pointers(path: &Path, limits: Limits) -> Vec<String> {
         return Vec::new();
     };
     let (text, _) = crate::sample::decode_text(&bytes, None);
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(doc) = Node::parse(&text) else {
         return Vec::new();
     };
     if !doc.is_object() {
@@ -1250,7 +1308,7 @@ pub(crate) fn json_record_pointers(path: &Path, limits: Limits) -> Vec<String> {
 
 /// Walk the document for arrays that could be the records array.
 fn find_record_arrays(
-    v: &serde_json::Value,
+    v: &Node,
     prefix: &mut String,
     out: &mut Vec<ArrayCandidate>,
     depth: usize,
@@ -1261,7 +1319,7 @@ fn find_record_arrays(
         return;
     }
     match v {
-        serde_json::Value::Array(a) if !a.is_empty() => {
+        Node::Array(a) if !a.is_empty() => {
             out.push(ArrayCandidate {
                 pointer: prefix.clone(),
                 len: a.len(),
@@ -1269,8 +1327,8 @@ fn find_record_arrays(
                 depth,
             });
         }
-        serde_json::Value::Object(map) => {
-            for (k, child) in map {
+        Node::Object(_) => {
+            for (k, child) in v.sorted_entries() {
                 let mark = prefix.len();
                 prefix.push('/');
                 prefix.push_str(&escape_pointer_token(k));
@@ -2391,6 +2449,48 @@ fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGues
                 note: n,
             };
         }
+        // A float64 column reads the nearest double, which is the type's
+        // nature — but not of a literal no double is: one of more than 17
+        // significant digits, or an integer past 2^53 that is not exactly a
+        // double. A column holding one is never float64. An integer past i64
+        // stays text, as a column of them does; anything else is exact in
+        // DECIMAL(38, s) when it fits.
+        let shapes: Vec<(&str, numfmt::Shape)> = sample
+            .iter()
+            .filter_map(|v| numfmt::shape(v, fmt.decimal, fmt.thousands).map(|l| (*v, l)))
+            .collect();
+        if let Some((v, _)) = shapes.iter().find(|(_, l)| l.past_i64) {
+            return text(
+                Some(format!(
+                    "kept as text: {v:?} is an integer past a 64-bit integer's range, which a \
+                     float64 column would round"
+                )),
+                0.0,
+            );
+        }
+        if let Some((v, _)) = shapes.iter().find(|(_, l)| l.float_unsafe()) {
+            let reads = numfmt::float_reads_as(v, fmt.decimal, fmt.thousands);
+            let widest = shapes.iter().map(|(_, l)| l.int_digits).max().unwrap_or(0);
+            if widest + max_scale <= 38 {
+                return TypeGuess {
+                    dtype: DType::Decimal { precision: 38, scale: max_scale as i8 },
+                    parse,
+                    penalty,
+                    note: Some(format!(
+                        "read as decimal({max_scale}): {v:?} would read back from a float64 as \
+                         {reads} — scale inferred from the first {TYPE_SAMPLE} rows; any later \
+                         value with more fractional digits is rounded half away from zero"
+                    )),
+                };
+            }
+            return text(
+                Some(format!(
+                    "kept as text: {v:?} would read back from a float64 as {reads}, and the \
+                     column does not fit decimal(38, s)"
+                )),
+                0.0,
+            );
+        }
         if fmt.thousands.is_none() && fmt.decimal.is_none() {
             parse.thousands_separator = None;
             parse.decimal_separator = None;
@@ -2432,6 +2532,26 @@ fn guess_type(values: &[&str], name: &str, currency_formatted: bool) -> TypeGues
     if sample.iter().any(|v| v.contains(['e', 'E']))
         && sample.iter().all(|v| v.trim().parse::<f64>().map(|f| f.is_finite()).unwrap_or(false))
     {
+        // In the cast's own words: a literal a double overflows or
+        // underflows is refused there, so it is not a float64 here.
+        if let Some(v) = sample.iter().find(|v| {
+            let x: f64 = v.trim().parse().unwrap_or(0.0);
+            x == 0.0 && v.split(['e', 'E']).next().is_some_and(|m| m.bytes().any(|b| matches!(b, b'1'..=b'9')))
+        }) {
+            return text(Some(format!("kept as text: {v:?} is outside a double's range")), 0.0);
+        }
+        // DECIMAL cannot parse an exponent, so a literal no double is has no
+        // exact home but text.
+        if let Some(v) = sample.iter().find(|v| numfmt::shape(v, None, None).is_some_and(|l| l.float_unsafe())) {
+            let reads = numfmt::float_reads_as(v, None, None);
+            return text(
+                Some(format!(
+                    "kept as text: {v:?} would read back from a float64 as {reads}, and a decimal \
+                     column cannot hold an exponent"
+                )),
+                0.0,
+            );
+        }
         return TypeGuess {
             dtype: DType::Float64,
             parse: with_na(ValueParsing::default()),
@@ -2740,6 +2860,85 @@ mod tests {
         let g = guess_type(&["1'234.50", "12'000.00"], "v", false);
         assert!(matches!(g.dtype, DType::Decimal { scale: 2, .. }));
         assert_eq!(g.parse.thousands_separator, Some('\''));
+    }
+
+    /// A double holds 17 significant digits. A column holding more, or an
+    /// integer past i64, is never typed float64: it would be read rounded.
+    #[test]
+    fn a_value_a_double_cannot_hold_is_never_typed_float64() {
+        // 19 significant digits: an exact decimal fits.
+        let g = guess_type(&["1234567.891234567891", "0.005", "-0.25"], "x", false);
+        assert_eq!(g.dtype, DType::Decimal { precision: 38, scale: 12 }, "{:?}", g.note);
+        let note = g.note.unwrap();
+        assert!(note.contains("1234567.891234567891") && note.contains("1234567.8912345679"), "{note}");
+        // An integer past i64 beside a fraction stays text, as an
+        // oversized integer column does.
+        let g = guess_type(&["12345678901234567890123", "0.5"], "v", false);
+        assert_eq!(g.dtype, DType::Utf8);
+        let note = g.note.unwrap();
+        assert!(note.contains("12345678901234567890123") && note.contains("64-bit"), "{note}");
+        // Too many digits for DECIMAL(38, s): text.
+        let forty = format!("{}.5", "9".repeat(39));
+        let g = guess_type(&[&forty, "0.25"], "v", false);
+        assert_eq!(g.dtype, DType::Utf8, "{:?}", g.note);
+        // Leading zeros and trailing fractional zeros do not count.
+        let g = guess_type(&["0.10", "1.50000000000000000000", "0.00000000000000000012345"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+    }
+
+    /// A literal no double is — more than 17 significant digits, or an
+    /// integer past 2^53 no double equals — keeps a column off float64.
+    /// Within 17 digits a double reads the nearest value, which is what the
+    /// type says.
+    #[test]
+    fn a_literal_no_double_is_keeps_a_column_off_float64() {
+        // 2^53 + 1, written as an integer: no double is it.
+        let g = guess_type(&["9007199254740993", "0.5"], "v", false);
+        assert_eq!(g.dtype, DType::Decimal { precision: 38, scale: 1 }, "{:?}", g.note);
+        assert!(g.note.as_deref().unwrap_or("").contains("9007199254740992"), "{:?}", g.note);
+        // ...while 2^53 and 2^54 are doubles.
+        for v in ["9007199254740992", "18014398509481984"] {
+            assert_eq!(guess_type(&[v, "0.5"], "v", false).dtype, DType::Float64, "{v}");
+        }
+        // 17 digits is float64's ordinary nature: the nearest double.
+        let g = guess_type(&["0.12345678901234567", "0.5"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        // Trailing zeros, fractional or not, are not digits a double lacks:
+        // 17 significant digits padded with zeros stays float64.
+        let g = guess_type(&["25.6277582291650760000", "244.4194267184877000000"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        // %.17g output: exactly the double its writer had.
+        let g = guess_type(&["43.789593000000004", "0.21560000000000001"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        // Exponent form a double cannot hold: DECIMAL cannot parse `e`.
+        let g = guess_type(&["1.2345678901234567891e5", "2.5"], "v", false);
+        assert_eq!(g.dtype, DType::Utf8, "{:?}", g.note);
+        assert!(g.note.as_deref().unwrap_or("").contains("1.2345678901234567891e5"), "{:?}", g.note);
+        // Machine-written shortest doubles (Python repr, JavaScript) stay.
+        let g = guess_type(&["0.15084917392450192", "53.58820043066892", "-35233.45", "1.7976931348623157e308"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        let g = guess_type(&["0.15084917392450192", "53.58820043066892", "-35233.45"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        let g = guess_type(&["1.5e-7", "2.5e10", "6.02214076e23"], "v", false);
+        assert_eq!(g.dtype, DType::Float64, "{:?}", g.note);
+        // Outside a double's range, in the cast's words.
+        let g = guess_type(&["1e-400", "2.5e3"], "v", false);
+        assert_eq!(g.dtype, DType::Utf8);
+        assert!(g.note.as_deref().unwrap_or("").contains("outside a double's range"), "{:?}", g.note);
+    }
+
+    /// i64's own bounds are in range; one past them is not.
+    #[test]
+    fn i64_bounds_beside_a_fraction_are_not_past_i64() {
+        for v in ["-9223372036854775808", "9223372036854775807"] {
+            let g = guess_type(&[v, "0.5"], "v", false);
+            assert!(!g.note.as_deref().unwrap_or("").contains("64-bit"), "{v}: {:?}", g.note);
+        }
+        for v in ["-9223372036854775809", "9223372036854775808"] {
+            let g = guess_type(&[v, "0.5"], "v", false);
+            assert_eq!(g.dtype, DType::Utf8, "{v}");
+            assert!(g.note.as_deref().unwrap_or("").contains("64-bit"), "{v}: {:?}", g.note);
+        }
     }
 
     #[test]
