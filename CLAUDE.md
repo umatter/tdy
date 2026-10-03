@@ -1236,7 +1236,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (318) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (327) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end

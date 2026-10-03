@@ -2,7 +2,26 @@
 
 Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
-## Unreleased
+## 0.4.0 — 2026-10-03
+
+### What you will notice upgrading from 0.3.1
+
+- **Nothing changes unless you ask or your data needs it.** A target that does
+  not declare `plans = 'lock'` writes and reads exactly the lock it did, and a
+  sidecar written by 0.3.1 stays fresh.
+- **JSON numbers are read from their written digits.** An identifier or amount
+  past a double's precision now arrives as written; a 17-significant-digit
+  double is parsed correctly rounded, so the last digit of some float values
+  moves toward the right answer; a float outside a double's range (`1e400`) is
+  refused naming the row, in JSON and in CSV, where it used to read as `inf`.
+- **A sniffed column is no longer typed `float64` when a value in it is more
+  than a double holds**, so `sniff` and `draft` may now say `decimal` or `text`
+  where they said `float64`. Over the 9,678 files of the corpus and the
+  fixtures that moved two.
+- **A JSON document over 4 MiB can be fitted**, and a compressed file is now
+  held to `max_decompressed_bytes` on the whole-read path too.
+- **A pile can keep its plans in the lock**, below: opt-in, and a lock that
+  holds plans is `lock_version = 2`, which 0.3.x cannot read.
 
 ### Added
 
@@ -88,9 +107,7 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   This build reads the version first and refuses an unknown one by number. A
   lock with no spec table is still version 1, byte for byte, so a target that
   does not declare `plans = 'lock'` writes and reads exactly the lock it did.
-  Version-2 locks written from this branch record `tool_version = "0.3.1"` —
-  the version that cannot read them; the release that carries this bumps the
-  version.
+  A version-2 lock records the tdy that wrote it: `tool_version = "0.4.0"` here.
 - **A refit proves conformance once per member**, not twice, and a member whose
   dry run read all of it is not read again for the magnitude check — a refit of
   the 7,443 items with sidecars is 26 s where it was 31 s.
