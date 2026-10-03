@@ -504,6 +504,7 @@ fn entry_status_text(status: &EntryStatus) -> String {
         EntryStatus::Drift(n) => format!("drift ({n})"),
         EntryStatus::Sheets(n) => format!("✓ {n} sheets"),
         EntryStatus::Regions(n) => format!("✓ {n} regions"),
+        EntryStatus::InLock => "✓ lock".into(),
     }
 }
 
@@ -1178,6 +1179,14 @@ fn draw_member(f: &mut Frame, area: Rect, block: Block<'static>, m: &MemberRepor
     }
 
     let mut lines = vec![Line::styled(status_word(m), status_style(m))];
+    // No sidecar to open: say where the plan is, and how to give this one
+    // member a plan of its own.
+    if m.in_lock {
+        lines.push(Line::styled(
+            "plan held in the lock — a sidecar for this member overrides it".to_string(),
+            Style::new().fg(DIM),
+        ));
+    }
     if let Some(review) = &m.review {
         lines.push(Line::raw(""));
         for l in review.lines() {

@@ -248,6 +248,22 @@ pub enum Verify {
     Head,
 }
 
+/// Where a member's plan is kept once `tdy fit` has proved it.
+///
+/// A fact about storage, not about meaning: the same plan proves the same
+/// thing wherever it is written down, so this is not part of
+/// `lockfile::target_hash` and switching it voids no proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlanStore {
+    /// One `<file>.tdy.toml` per member, beside it — what tdy always did.
+    #[default]
+    Sidecars,
+    /// One table of distinct plans in the lock, each member naming the one
+    /// it uses. A member that has a sidecar file still reads it: a
+    /// `manual` sidecar is how one member gets a different plan.
+    Lock,
+}
+
 /// A declared dataset: the columns, and where its members come from.
 #[derive(Debug, Clone)]
 pub struct Target {
@@ -292,6 +308,9 @@ pub struct Target {
     /// nothing downstream could recover — which is why an error message could
     /// always name a row and a query never could.
     pub provenance: bool,
+    /// Where a member's plan is kept: its sidecar (the default) or the lock.
+    /// Not part of `target_hash` — see [`PlanStore`].
+    pub plans: PlanStore,
 }
 
 impl Target {
@@ -486,6 +505,7 @@ impl Target {
             timezone: None,
             decimal_separator: None,
             provenance: false,
+            plans: PlanStore::default(),
         };
         // A target is hand-written and merge-conflict-prone. Two settings of
         // one option is a contradiction, and last-one-wins would resolve it
@@ -616,6 +636,19 @@ impl Target {
                     }
                 }
             }
+            "plans" => {
+                self.plans = match text.as_str() {
+                    "sidecars" => PlanStore::Sidecars,
+                    "lock" => PlanStore::Lock,
+                    other => {
+                        return Err(format!(
+                            "plans = {other:?} is not a place a plan can be kept; write \
+                             plans = 'sidecars' (a sidecar per member, the default) or \
+                             plans = 'lock' (one table of plans in the lock)"
+                        ))
+                    }
+                }
+            }
             "verify" => {
                 self.verify = match text.to_ascii_lowercase().as_str() {
                     "full" => Verify::Full,
@@ -626,7 +659,7 @@ impl Target {
             other => {
                 return Err(format!(
                     "unknown WITH option `{other}`. Known options: files, exclude, match, \
-                     date_order, verify, timezone, decimal_separator, provenance."
+                     date_order, verify, timezone, decimal_separator, provenance, plans."
                 ))
             }
         }
@@ -1322,5 +1355,28 @@ mod tests {
                 .expect_err(ddl);
             assert!(format!("{e:#}").contains(want), "{ddl}: {e:#}");
         }
+    }
+
+    /// `plans` says where a member's plan is kept. It is a fact about
+    /// storage, not meaning: switching it must void no proof, so it is not
+    /// part of `target_hash`. Anything else is refused, not widened.
+    #[test]
+    fn plans_parses_is_refused_otherwise_and_is_not_part_of_the_hash() {
+        assert_eq!(t(MIN).plans, PlanStore::Sidecars, "the default is what tdy always did");
+        let lock = t("CREATE TABLE s (a TEXT) WITH (files = 'x.csv', plans = 'lock')");
+        assert_eq!(lock.plans, PlanStore::Lock);
+        let side = t("CREATE TABLE s (a TEXT) WITH (files = 'x.csv', plans = 'sidecars')");
+        assert_eq!(side.plans, PlanStore::Sidecars);
+        assert_eq!(crate::lockfile::target_hash(&lock), crate::lockfile::target_hash(&t(MIN)));
+        assert_eq!(crate::lockfile::target_hash(&side), crate::lockfile::target_hash(&t(MIN)));
+        for bad in ["sidecar", "LOCKFILE", "", "both"] {
+            let e = Target::parse(&format!("CREATE TABLE s (a TEXT) WITH (files = 'x.csv', plans = '{bad}')"))
+                .expect_err(bad);
+            let msg = format!("{e:#}");
+            assert!(msg.contains("plans") && msg.contains("'sidecars'") && msg.contains("'lock'"), "{bad}: {msg}");
+        }
+        let twice = Target::parse("CREATE TABLE s (a TEXT) WITH (files = 'x.csv', plans = 'lock', plans = 'lock')")
+            .expect_err("twice");
+        assert!(format!("{twice:#}").contains("more than once"), "{twice:#}");
     }
 }

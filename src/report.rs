@@ -12,6 +12,7 @@
 //! the remedy), because for a machine caller the *failure* is the useful
 //! output — each problem is an edit it can make.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -20,9 +21,9 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::fit::{FitError, Gap};
 use crate::member::MemberRef;
-use crate::lockfile::{self, Lock, Member, LOCK_VERSION};
+use crate::lockfile::{self, Lock, Member};
 use crate::spec::{Extraction, InferenceMethod, ParseSpec, RowWindow};
-use crate::target::Target;
+use crate::target::{PlanStore, Target};
 
 /// The rows a block member is, as a person counts them — physical lines of
 /// a text file (1-based, inclusive), or the sheet's own A1 rows for a block
@@ -53,7 +54,7 @@ fn spec_window(spec: &ParseSpec) -> Option<RowWindow> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct PileReport {
     pub target: String,
     pub target_file: String,
@@ -77,6 +78,31 @@ pub struct PileReport {
     /// when this fit wrote a fresh one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub drift: Vec<String>,
+    /// For a `plans = 'lock'` target: how many members' plans the lock
+    /// holds (or, in a dry run, would hold), and how many distinct plans
+    /// they share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_plans: Option<LockPlans>,
+    /// What `--prune-sidecars` did, when it was asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pruned: Option<Pruned>,
+}
+
+/// Plans held in the lock, counted.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct LockPlans {
+    pub members: usize,
+    pub specs: usize,
+}
+
+/// `tdy fit --prune-sidecars`, counted: sidecars whose plan the lock now
+/// records identically and which were removed; and the ones kept, because
+/// a person wrote them or because the plan this fit proved differs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct Pruned {
+    pub moved: usize,
+    pub kept_manual: usize,
+    pub kept_differs: usize,
 }
 
 /// One declared column of the target, as the report carries it.
@@ -137,6 +163,11 @@ pub struct MemberReport {
     pub problems: Vec<Problem>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub proposals: Vec<ProposalReport>,
+    /// The member's plan is held in the lock's spec table (or, in a dry
+    /// run, would be): there is no sidecar to open, and writing one
+    /// overrides the lock's plan for this member.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub in_lock: bool,
 }
 
 impl MemberReport {
@@ -232,6 +263,10 @@ pub struct FitOpts<'a> {
     /// tree — and a fit *writes* (sidecars beside members, then the lock), so
     /// an unconfined fit would write outside the root, not just read.
     pub root: Option<&'a Path>,
+    /// `--prune-sidecars`: on a `plans = 'lock'` target, move each
+    /// tool-written sidecar whose plan this fit proves identically into the
+    /// lock, and delete the file — after the lock is written, never before.
+    pub prune_sidecars: bool,
 }
 
 fn problem_of_gap(g: &Gap) -> Problem {
@@ -717,7 +752,7 @@ fn is_dropped_note(n: &str) -> bool {
 /// or tdy's own written for a block that has since been renumbered? The
 /// prefixes are fixed so `render_pile_text` can find them.
 fn is_refusal_note(n: &str) -> bool {
-    n.starts_with("sidecar refused: ") || n.starts_with("sidecar window was ")
+    n.starts_with("sidecar refused: ") || n.starts_with("sidecar window was ") || n.starts_with("the lock's plan ")
 }
 
 /// The notes the CLI shows under a member. Most of a spec's notes are
@@ -806,23 +841,6 @@ fn merge_reason(base: Option<String>, extra: Option<String>) -> Option<String> {
     }
 }
 
-/// Was this member's judgement accepted — carried from the previous lock
-/// (same bytes, same reason), or named by `--accept` now?
-fn carry_over(
-    previous: Option<&Lock>,
-    unit: &MemberRef,
-    blake3: &str,
-    review: &Option<String>,
-    accepted_now: &[MemberRef],
-) -> bool {
-    let carried = previous
-        .and_then(|l| l.member(&unit.path, unit.sheet.as_deref(), unit.region))
-        .filter(|m| m.blake3 == blake3 && m.review == *review)
-        .map(|m| m.accepted)
-        .unwrap_or(false);
-    carried || accepted_now.contains(unit)
-}
-
 /// Fit every member the target's globs match; write sidecars and — if all of
 /// them fit — the lock. Returns the full report either way: a failed pile is
 /// an answer, not an absence of one.
@@ -837,8 +855,18 @@ pub async fn fit_pile(
     // How the directory disagrees with the lock as it stands *now*, before
     // this fit touches it: what a dry run is asked about, and what a failed
     // fit leaves in place.
-    let drift = match lockfile::Lock::load(target_path) {
-        Ok(Some(lock)) => lockfile::drift(&lock, &target, target_path)
+    if opts.prune_sidecars && target.plans != PlanStore::Lock {
+        anyhow::bail!(
+            "--prune-sidecars moves sidecars into the lock, and `{}` keeps its plans in \
+             sidecars. Declare plans = 'lock' in its WITH clause first.",
+            target.name
+        );
+    }
+    // Read once: the drift below and the carry-over further down both need
+    // it, and a lock holding thousands of members is not free to parse.
+    let loaded = lockfile::Lock::load(target_path);
+    let drift = match &loaded {
+        Ok(Some(lock)) => lockfile::drift(lock, &target, target_path)
             .map(|d| d.iter().map(|x| x.message()).collect())
             .unwrap_or_default(),
         _ => Vec::new(),
@@ -873,7 +901,7 @@ pub async fn fit_pile(
     // A previous lock's acceptances carry over for entries that have not
     // changed — drift is what expires them, so re-fitting an untouched
     // dataset must not ask the same question twice.
-    let previous = Lock::load(target_path)?;
+    let previous = loaded?;
     use crate::member::MemberRef;
 
     let units = expand_units(&rels, &target, &dir, limits, &excluded_files)?;
@@ -916,11 +944,26 @@ pub async fn fit_pile(
 
     let mut reports: Vec<MemberReport> = Vec::new();
     let mut lock_members: Vec<Member> = Vec::new();
-    // Every fitted member's spec and file, for the pile-level magnitude
-    // check once all of them are known: (index into `reports`, spec, path).
-    let mut fitted_specs: Vec<(usize, crate::spec::ParseSpec, PathBuf)> = Vec::new();
+    // Every fitted member, for the pile-level magnitude check once all of
+    // them are known.
+    let mut fitted_specs: Vec<FittedMember> = Vec::new();
     let mut failed = 0usize;
     let mut needs_review = 0usize;
+
+    // Where each member's plan is read from (`plans::Plans::plan_for`: its
+    // sidecar when the file exists, else the plan the previous lock holds
+    // for it), and the facts that are properties of a plan rather than of
+    // a member — conformance, the spec's own review reasons — computed once
+    // per distinct lock-held plan instead of once per member.
+    let plans = crate::plans::Plans::new(target_path, previous.as_ref());
+    let lock_mode = target.plans == PlanStore::Lock;
+    let mut conforms_by_id: HashMap<String, bool> = HashMap::new();
+    let mut reasons_by_id: HashMap<String, Vec<String>> = HashMap::new();
+    let mut held: Vec<HeldMember> = Vec::new();
+    let mut to_prune: Vec<PathBuf> = Vec::new();
+    let mut pruned = Pruned::default();
+    let mut sidecars_written: Vec<usize> = Vec::new();
+    let mut interner = Interner::default();
 
     let total = units.len();
     for (index, u) in units.iter().enumerate() {
@@ -931,6 +974,7 @@ pub async fn fit_pile(
         let name = unit.name();
         let p = dir.join(rel);
         let (rows, rows_sheet) = unit_rows(u);
+        let previous_entry = plans.entry(unit);
         crate::progress::emit(
             opts.progress.as_ref(),
             crate::progress::Event::MemberStarted {
@@ -944,30 +988,85 @@ pub async fn fit_pile(
         // once — a UI that missed an event would leave a spinner running
         // forever on a file that had in fact finished.
         'member: {
-        // A fresh sidecar that still conforms IS the plan, whoever wrote it.
-        // A hand-written one is a human assertion the planner must never
-        // overwrite (a contradiction is an error, not a replan); a
-        // tool-written one is reused because the acceptance machinery is
-        // about *that recorded plan* — replanning on every run would let a
-        // nondeterministic model quietly swap the frame out from under a
-        // review, and it would re-spend money answering a settled question.
-        // Either way it is re-proved: conformance and a dry run, every time.
-        let loaded = crate::sidecar::load_member(&p, sheet, region);
-        // A sidecar the loader refuses is a person's edit being discarded.
-        // Re-planning is the right thing to do — the split's own window is
-        // the one fact a sidecar cannot be trusted about — but doing it in
-        // silence leaves the member reading exactly as it did before, with
-        // nothing to say why the edit had no effect.
-        let mut refused: Option<String> = loaded
-            .as_ref()
-            .err()
-            .map(|e| {
-                let m = one_line(&format!("{e:#}"));
-                format!("sidecar refused: {}; re-planned", m.trim_end_matches('.'))
-            });
-        if let Ok(crate::sidecar::SidecarStatus::Fresh(sc)) = loaded {
-            let manual = sc.provenance.method == InferenceMethod::Manual;
-            let conforming = crate::conform::conforms(&sc.spec, &target).is_ok();
+        // A fresh plan that still conforms IS the plan, whoever wrote it and
+        // wherever it is kept. A hand-written one is a human assertion the
+        // planner must never overwrite (a contradiction is an error, not a
+        // replan); a tool-written one is reused because the acceptance
+        // machinery is about *that recorded plan* — replanning on every run
+        // would let a nondeterministic model quietly swap the frame out from
+        // under a review, and it would re-spend money answering a settled
+        // question. Either way it is re-proved: conformance and a dry run,
+        // every time.
+        let sidecar_file = crate::sidecar::sidecar_path_for(&p, sheet, region).exists();
+        let loaded = plans.plan_for(&p, unit);
+        // A plan the loader refuses is a person's edit (or a lock's) being
+        // discarded. Re-planning is the right thing to do — the split's own
+        // window is the one fact a sidecar cannot be trusted about — but
+        // doing it in silence leaves the member reading exactly as it did
+        // before, with nothing to say why the edit had no effect.
+        let mut refused: Option<String> = loaded.as_ref().err().map(|e| {
+            let m = one_line(&format!("{e:#}"));
+            let whose = if sidecar_file { "sidecar" } else { "the lock's plan" };
+            format!("{whose} refused: {}; re-planned", m.trim_end_matches('.'))
+        });
+        let loaded = loaded.ok().flatten();
+        // A lock-held plan is about the bytes the lock recorded; the hash is
+        // taken once here and is the member's fingerprint below.
+        let mut fingerprint: Option<(String, u64)> = None;
+        let mut fresh = None;
+        if let Some(plan) = &loaded {
+            if plan.edited() {
+                refused = Some(format!(
+                    "the lock's plan for this member no longer hashes to its id (the lock was \
+                     edited by hand){}; re-planned",
+                    previous.as_ref().map(crate::plans::written_by_note).unwrap_or_default()
+                ));
+            } else if let crate::plans::State::AsLocked { blake3, bytes } = &plan.state {
+                let fp = crate::sidecar::hash_file(&p)?;
+                if fp.0 == *blake3 && fp.1 == *bytes {
+                    fresh = loaded.clone();
+                }
+                fingerprint = Some(fp);
+            } else if plan.state == crate::plans::State::Fresh {
+                fresh = loaded.clone();
+            }
+        }
+        // `--prune-sidecars`: a tool-written sidecar is compared with the
+        // plan this fit proves for the member; only an identical one moves
+        // into the lock. A person's sidecar is never touched.
+        let mut pre_planned: Option<Result<crate::fit::Planned, FitError>> = None;
+        let mut prune_this: Option<PathBuf> = None;
+        if opts.prune_sidecars && sidecar_file {
+            match &loaded {
+                Some(plan) if plan.method == InferenceMethod::Manual => pruned.kept_manual += 1,
+                _ => {
+                    let planned = plan_member(u, &p, &target, cfg, opts.progress.as_ref()).await;
+                    let same = match (&planned, &loaded) {
+                        (Ok(pl), Some(plan)) => {
+                            crate::plans::spec_id(&pl.fitted.spec, pl.method, pl.model.as_deref()).ok()
+                                == crate::plans::spec_id(&plan.spec, plan.method, plan.model.as_deref()).ok()
+                        }
+                        _ => false,
+                    };
+                    if same {
+                        pruned.moved += 1;
+                        prune_this = Some(crate::sidecar::sidecar_path_for(&p, sheet, region));
+                        fresh = None;
+                    } else {
+                        pruned.kept_differs += 1;
+                    }
+                    pre_planned = Some(planned);
+                }
+            }
+        }
+        if let Some(plan) = fresh {
+            let manual = plan.method == InferenceMethod::Manual;
+            let conforming = match plan.lock_id() {
+                Some(id) => *conforms_by_id
+                    .entry(id.to_string())
+                    .or_insert_with(|| crate::conform::conforms(&plan.spec, &target).is_ok()),
+                None => crate::conform::conforms(&plan.spec, &target).is_ok(),
+            };
             // The sidecar names an ordinal (`load_member` proved that); only
             // the split knows which rows that block actually is. Blocks are
             // numbered among those that pass the gates, so a declaration
@@ -976,27 +1075,28 @@ pub async fn fit_pile(
             // read twice and another lost. Costs no I/O for text (the true
             // window is in hand) and one workbook open for a sheet block.
             let disagreement = window.and_then(|w| {
-                window_disagreement(&sc.spec, w, || {
+                window_disagreement(&plan.spec, w, || {
                     crate::fit::region_a1(&p, u.region_sheet.as_deref()?, w, limits).ok()
                 })
             });
-            // tdy's own sidecar is re-planned, saying so; a person's
+            // tdy's own plan is re-planned, saying so; a person's
             // (`manual`) is a contradiction they have to settle.
             if let (Some((was, now)), false) = (&disagreement, manual) {
                 refused = Some(format!("sidecar window was {was}, the split now gives {now}; re-planned"));
             } else if manual || conforming {
-                let mut spec = sc.spec;
+                let spec = plan.spec.clone();
+                let mut notes = plan.notes();
                 // The expansion note is a fact about *this* fit's discovery,
-                // not about the fit the sidecar was written in: a reused
-                // member of a workbook that has since gained or lost a
-                // fitting sheet would otherwise report a different sheet
-                // count from its own siblings.
-                spec.notes.retain(|n| !(n.starts_with("of ") && n.contains(" sheets, ")));
-                spec.notes.retain(|n| !(n.starts_with("table ") && n.ends_with("split at blank rows")));
-                spec.notes.retain(|n| !n.starts_with("one proper block in this file"));
-                spec.notes.retain(|n| !is_dropped_note(n));
-                spec.notes.retain(|n| !n.starts_with(LIKE_DATA_PREFIX));
-                spec.notes.retain(|n| !is_read_anyway_note(n));
+                // not about the fit the plan was written in: a reused member
+                // of a workbook that has since gained or lost a fitting sheet
+                // would otherwise report a different sheet count from its
+                // own siblings.
+                notes.retain(|n| !(n.starts_with("of ") && n.contains(" sheets, ")));
+                notes.retain(|n| !(n.starts_with("table ") && n.ends_with("split at blank rows")));
+                notes.retain(|n| !n.starts_with("one proper block in this file"));
+                notes.retain(|n| !is_dropped_note(n));
+                notes.retain(|n| !n.starts_with(LIKE_DATA_PREFIX));
+                notes.retain(|n| !is_read_anyway_note(n));
                 // The split's notes and its review reason are true of a spec
                 // that reads one block. A plain member may legitimately reuse
                 // a hand-written whole-file spec instead — and then those
@@ -1015,8 +1115,8 @@ pub async fn fit_pile(
                 } else {
                     (u.notes.clone(), u.review.clone())
                 };
-                spec.notes.extend(unit_notes);
-                let via = match sc.provenance.method {
+                notes.extend(unit_notes);
+                let via = match plan.method {
                     InferenceMethod::Manual => "manual",
                     InferenceMethod::Llm => "llm",
                     InferenceMethod::Heuristic => "existing",
@@ -1057,10 +1157,12 @@ pub async fn fit_pile(
                             long_form: None,
                         }],
                         proposals: Vec::new(),
+                        in_lock: false,
                     });
                     break 'member;
                 }
-                if let Err(m) = crate::conform::conforms(&spec, &target) {
+                if !conforming {
+                    let m = crate::conform::conforms(&spec, &target).err().unwrap_or_default();
                     failed += 1;
                     reports.push(MemberReport {
                         path: rel.clone(),
@@ -1090,10 +1192,21 @@ pub async fn fit_pile(
                             })
                             .collect(),
                         proposals: Vec::new(),
+                        in_lock: false,
                     });
                     break 'member;
                 }
-                if let Err(e) = crate::engine::dry_run(&spec, &p, limits) {
+                // The dry run (`engine::dry_run` is this preview of 200
+                // rows). When it read the whole member, its batch is what
+                // the magnitude pass below would read again: kept as the
+                // member's medians instead — for a pile of one-record
+                // documents, that pass was a second dry run of every member.
+                let dry = crate::engine::preview_whole(&spec, &p, limits, 200);
+                let medians = match &dry {
+                    Ok((batch, true)) => Some(crate::magnitude::medians(batch)),
+                    _ => None,
+                };
+                if let Err(e) = dry {
                     failed += 1;
                     reports.push(MemberReport {
                         path: rel.clone(),
@@ -1120,36 +1233,55 @@ pub async fn fit_pile(
                             long_form: None,
                         }],
                         proposals: Vec::new(),
+                        in_lock: false,
                     });
                     break 'member;
                 }
                 let review = {
-                    let mut rs = crate::fit::review_reasons_for(&spec, &target);
+                    let mut rs = match plan.lock_id() {
+                        Some(id) => reasons_by_id
+                            .entry(id.to_string())
+                            .or_insert_with(|| crate::fit::review_reasons_for(&spec, &target))
+                            .clone(),
+                        None => crate::fit::review_reasons_for(&spec, &target),
+                    };
                     // A model-framed plan's judgement is recorded in its
                     // provenance, not in the spec: reconstruct it, or the
                     // review gate would evaporate on the second `tdy fit`.
-                    if sc.provenance.method == InferenceMethod::Llm {
+                    if plan.method == InferenceMethod::Llm {
                         rs.push(crate::fit::llm_frame_reason(
                             &spec,
-                            sc.provenance.model.as_deref().unwrap_or("a model"),
+                            plan.model.as_deref().unwrap_or("a model"),
                         ));
                     }
                     // A record read beside an empty array is a judgement the
                     // file, not the spec, records — unless a person wrote it.
-                    if sc.provenance.method != InferenceMethod::Manual {
+                    if plan.method != InferenceMethod::Manual {
                         rs.extend(crate::fit::empty_array_reason(&spec, &p, limits));
                     }
                     (!rs.is_empty()).then(|| rs.join("; "))
                 };
                 let review = merge_reason(review, unit_review);
-                let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
-                let carried = previous
-                    .as_ref()
-                    .and_then(|l| l.member(rel, sheet, region))
-                    .filter(|m| m.blake3 == blake3 && m.review == review)
-                    .map(|m| m.accepted)
-                    .unwrap_or(false);
-                let is_accepted = carried || accepted_now.contains(unit);
+                let (blake3, bytes) = match fingerprint.take() {
+                    Some(fp) => fp,
+                    None => crate::sidecar::hash_file(&p)?,
+                };
+                // Where the plan is kept from now on. A lock-held plan stays
+                // in the lock under `plans = 'lock'`; under `plans =
+                // 'sidecars'` (the declaration was switched back) it is
+                // written out as the member's sidecar, so nothing is lost.
+                let keep_in_lock = plan.in_lock() && lock_mode;
+                let mut digest = plan.digest.clone();
+                if plan.in_lock() && !lock_mode && !opts.dry_run {
+                    let mut full = (*spec).clone();
+                    full.notes = plan.notes();
+                    crate::sidecar::save_member(&p, sheet, region, &full, provenance_of(plan.method, plan.model.clone()))?;
+                    digest = crate::plans::sidecar_digest(&p, sheet, region);
+                }
+                let identity =
+                    identity_for(previous_entry, plan.lock_id(), &spec, plan.method, plan.model.as_deref())?;
+                let is_accepted =
+                    carry(previous_entry, &blake3, &review, identity.as_deref()) || accepted_now.contains(unit);
                 let status = match (&review, is_accepted) {
                     (Some(_), false) => {
                         needs_review += 1;
@@ -1166,79 +1298,89 @@ pub async fn fit_pile(
                     rows_sheet: rows_sheet.clone(),
                     status,
                     via: Some(via.into()),
-                    sources: spec
-                        .columns
-                        .iter()
-                        .map(|c| SourceBinding {
-                            column: c.name.clone(),
-                            source: c.source_name().to_string(),
-                            pointer: c.pointer.clone(),
-                        })
-                        .collect(),
+                    sources: bindings(&spec),
                     review: review.clone(),
                     accepted: is_accepted,
-                    notes: spec.notes.clone(),
+                    notes: notes.clone(),
                     problems: Vec::new(),
                     proposals: Vec::new(),
+                    in_lock: keep_in_lock,
                 });
-                fitted_specs.push((reports.len() - 1, spec, p.clone()));
+                fitted_specs.push(FittedMember {
+                    report: reports.len() - 1,
+                    spec: spec.clone(),
+                    path: p.clone(),
+                    blake3: blake3.clone(),
+                    identity: identity.clone(),
+                    medians,
+                });
                 lock_members.push(Member {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
                     region,
                     blake3,
                     bytes,
-                    spec_digest: lockfile::spec_digest_for(&p, sheet, region),
+                    spec_digest: if keep_in_lock { String::new() } else { digest },
                     review,
                     accepted: is_accepted,
+                    spec: None,
+                    notes: Vec::new(),
+                    plan_check: None,
                 });
+                if keep_in_lock {
+                    held.push(HeldMember {
+                        member: lock_members.len() - 1,
+                        id: plan.lock_id().unwrap_or_default().to_string(),
+                        spec,
+                        method: plan.method,
+                        model: plan.model.clone(),
+                        notes,
+                    });
+                }
                 break 'member;
             }
         }
-        let planned = match window {
-            Some(w) => {
-                crate::fit::fit_region(&p, u.region_sheet.as_deref(), *w, &target, limits).map(|fitted| {
-                    crate::fit::Planned { fitted, method: InferenceMethod::Heuristic, model: None }
-                })
-            }
-            None => match sheet {
-                Some(s) => {
-                    crate::fit::fit_sheet(&p, s, &target, limits).map(|fitted| crate::fit::Planned {
-                        fitted,
-                        method: InferenceMethod::Heuristic,
-                        model: None,
-                    })
-                }
-                None => crate::fit::plan(&p, &target, cfg, opts.progress.as_ref()).await,
-            },
+        let planned = match pre_planned.take() {
+            Some(planned) => planned,
+            None => plan_member(u, &p, &target, cfg, opts.progress.as_ref()).await,
         };
         match planned {
             Ok(planned) => {
                 let (mut fitted, method, model) = (planned.fitted, planned.method, planned.model);
                 fitted.spec.notes.extend(unit_notes.iter().cloned());
                 fitted.review = merge_reason(fitted.review, u.review.clone());
-                if !opts.dry_run {
-                    crate::sidecar::save_member(
-                        &p,
-                        sheet,
-                        region,
-                        &fitted.spec,
-                        crate::sidecar::ProvenanceInfo {
-                            method,
-                            model: model.clone(),
-                            prompt_version: None,
-                            sampled_bytes: None,
-                        },
-                    )?;
+                // Under `plans = 'lock'` a member with no sidecar file gets
+                // none: its plan is recorded once in the lock. A member that
+                // has one keeps it (a refused, stale or contradicted
+                // tool-written sidecar is rewritten in place, as ever) —
+                // nothing is deleted without `--prune-sidecars`.
+                let in_lock = lock_mode && (!sidecar_file || prune_this.is_some());
+                if !opts.dry_run && !in_lock {
+                    crate::sidecar::save_member(&p, sheet, region, &fitted.spec, provenance_of(method, model.clone()))?;
+                    sidecars_written.push(fitted_specs.len());
                 }
-                let (blake3, bytes) = crate::sidecar::hash_file(&p)?;
-                let carried = previous
-                    .as_ref()
-                    .and_then(|l| l.member(rel, sheet, region))
-                    .filter(|m| m.blake3 == blake3 && m.review == fitted.review)
-                    .map(|m| m.accepted)
-                    .unwrap_or(false);
-                let is_accepted = carried || accepted_now.contains(unit);
+                let (blake3, bytes) = match fingerprint.take() {
+                    Some(fp) => fp,
+                    None => crate::sidecar::hash_file(&p)?,
+                };
+                // The plan, without its notes (they are this member's), and
+                // for a lock-held plan its id and the one copy every member
+                // with that plan shares.
+                let report_notes = fitted.spec.notes.clone();
+                let notes = std::mem::take(&mut fitted.spec.notes);
+                let (id, spec) = if in_lock {
+                    let (id, spec) = interner.intern(fitted.spec, method, model.as_deref())?;
+                    (Some(id), spec)
+                } else {
+                    (None, std::sync::Arc::new(fitted.spec))
+                };
+                let digest = match &id {
+                    Some(id) => id.clone(),
+                    None => crate::plans::sidecar_digest(&p, sheet, region),
+                };
+                let identity = identity_for(previous_entry, id.as_deref(), &spec, method, model.as_deref())?;
+                let is_accepted = carry(previous_entry, &blake3, &fitted.review, identity.as_deref())
+                    || accepted_now.contains(unit);
                 let status = match (&fitted.review, is_accepted) {
                     (Some(_), false) => {
                         needs_review += 1;
@@ -1250,7 +1392,7 @@ pub async fn fit_pile(
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
                     region,
-                    window: spec_window(&fitted.spec),
+                    window: spec_window(&spec),
                     rows,
                     rows_sheet: rows_sheet.clone(),
                     status,
@@ -1261,40 +1403,55 @@ pub async fn fit_pile(
                         }
                         .into(),
                     ),
-                    sources: fitted
-                        .spec
-                        .columns
-                        .iter()
-                        .map(|c| SourceBinding {
-                            column: c.name.clone(),
-                            source: c.source_name().to_string(),
-                            pointer: c.pointer.clone(),
-                        })
-                        .collect(),
+                    sources: bindings(&spec),
                     review: fitted.review.clone(),
                     accepted: is_accepted,
                     notes: {
                         // On the report, not in the spec: the refusal is a
-                        // fact about *this* fit, and the sidecar just written
-                        // is the plan that replaced the refused one.
-                        let mut ns = fitted.spec.notes.clone();
+                        // fact about *this* fit, and the plan just recorded
+                        // is the one that replaced the refused one.
+                        let mut ns = report_notes;
                         ns.extend(refused.clone());
                         ns
                     },
                     problems: Vec::new(),
                     proposals: Vec::new(),
+                    in_lock,
                 });
-                fitted_specs.push((reports.len() - 1, fitted.spec, p.clone()));
+                fitted_specs.push(FittedMember {
+                    report: reports.len() - 1,
+                    spec: spec.clone(),
+                    path: p.clone(),
+                    blake3: blake3.clone(),
+                    identity: identity.clone(),
+                    medians: None,
+                });
                 lock_members.push(Member {
                     path: rel.clone(),
                     sheet: unit.sheet.clone(),
                     region,
                     blake3,
                     bytes,
-                    spec_digest: lockfile::spec_digest_for(&p, sheet, region),
+                    spec_digest: if in_lock { String::new() } else { digest },
                     review: fitted.review.clone(),
                     accepted: is_accepted,
+                    spec: None,
+                    notes: Vec::new(),
+                    plan_check: None,
                 });
+                if let Some(id) = id {
+                    held.push(HeldMember {
+                        member: lock_members.len() - 1,
+                        id,
+                        spec,
+                        method,
+                        model,
+                        notes,
+                    });
+                    if let Some(sc) = prune_this.take() {
+                        to_prune.push(sc);
+                    }
+                }
             }
             Err(e) => {
                 failed += 1;
@@ -1322,6 +1479,7 @@ pub async fn fit_pile(
                     notes: refused.into_iter().collect(),
                     problems: problems_of_error(&e),
                     proposals,
+                    in_lock: false,
                 });
             }
         }
@@ -1345,22 +1503,24 @@ pub async fn fit_pile(
     // once.
     if fitted_specs.len() >= crate::magnitude::MIN_MEMBERS {
         let mut medians: Vec<crate::magnitude::Medians> = Vec::with_capacity(fitted_specs.len());
-        for (_, spec, p) in &fitted_specs {
-            medians.push(match crate::engine::preview(spec, p, limits, MAGNITUDE_ROWS) {
-                Ok(batch) => crate::magnitude::medians(&batch),
-                Err(_) => crate::magnitude::Medians::new(),
+        for f in &fitted_specs {
+            medians.push(match &f.medians {
+                Some(m) => m.clone(),
+                None => match crate::engine::preview(&f.spec, &f.path, limits, MAGNITUDE_ROWS) {
+                    Ok(batch) => crate::magnitude::medians(&batch),
+                    Err(_) => crate::magnitude::Medians::new(),
+                },
             });
         }
         for o in crate::magnitude::outliers(&medians, crate::magnitude::THRESHOLD) {
-            let (ri, _, p) = &fitted_specs[o.member];
-            let report = &mut reports[*ri];
+            let f = &fitted_specs[o.member];
+            let report = &mut reports[f.report];
             let unit = MemberRef { path: report.path.clone(), sheet: report.sheet.clone(), region: report.region };
             let review = match &report.review {
                 Some(r) => Some(format!("{r}; {}", o.reason())),
                 None => Some(o.reason()),
             };
-            let (blake3, _) = crate::sidecar::hash_file(p)?;
-            let is_accepted = carry_over(previous.as_ref(), &unit, &blake3, &review, &accepted_now);
+            let is_accepted = carry(plans.entry(&unit), &f.blake3, &review, f.identity.as_deref()) || accepted_now.contains(&unit);
             let lock_member = lock_members
                 .iter_mut()
                 .find(|m| m.path == unit.path && m.sheet == unit.sheet && m.region == unit.region)
@@ -1374,6 +1534,16 @@ pub async fn fit_pile(
         needs_review = reports.iter().filter(|r| r.status == MemberStatus::NeedsReview).count();
     }
 
+    // Lock-held plans, each recorded once. The id covers the provenance,
+    // so a plan a model framed and the identical one the sniffer found are
+    // two entries — neither misstates where it came from, and the review a
+    // model's frame needs keeps riding on it.
+    let specs = hold_plans(&mut lock_members, held);
+    let lock_plans = lock_mode.then(|| LockPlans {
+        members: lock_members.iter().filter(|m| m.spec.is_some()).count(),
+        specs: specs.len(),
+    });
+
     let fitted = lock_members.len();
     let mut lock_written = None;
     if failed == 0 && !opts.dry_run {
@@ -1381,15 +1551,36 @@ pub async fn fit_pile(
         // whole design refuses, and writing one here would make it the
         // default outcome of a bad afternoon.
         let lock = Lock {
-            lock_version: LOCK_VERSION,
+            lock_version: Lock::version_for(&specs),
             target: target.name.clone(),
             target_hash: lockfile::target_hash(&target),
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
             created_at: crate::sidecar::now_rfc3339(),
+            specs,
             members: lock_members,
         };
         let p = lock.save(target_path)?;
         lock_written = Some(p.display().to_string());
+        // Only now: the lock records every pruned plan, so deleting the
+        // sidecar it came from loses nothing.
+        for sc in &to_prune {
+            std::fs::remove_file(sc).with_context(|| format!("cannot remove {}", sc.display()))?;
+        }
+    }
+
+    // `plans = 'sidecars'` that just wrote a pile of identical sidecars:
+    // say once that the option exists. Through the progress channel, never
+    // into the pile text a script reads.
+    if !lock_mode && !opts.dry_run && sidecars_written.len() >= PLANS_HINT_AT {
+        if let Some(n) = largest_shared_plan(&fitted_specs, &sidecars_written) {
+            crate::progress::emit(
+                opts.progress.as_ref(),
+                crate::progress::Event::Note(format!(
+                    "note: {n} of the sidecars this fit wrote hold one plan. Declaring \
+                     plans = 'lock' in the target's WITH clause keeps it once, in the lock."
+                )),
+            );
+        }
     }
 
     Ok(PileReport {
@@ -1415,7 +1606,196 @@ pub async fn fit_pile(
         drift: if lock_written.is_some() { Vec::new() } else { drift },
         lock_written,
         dry_run: opts.dry_run,
+        lock_plans,
+        pruned: opts.prune_sidecars.then_some(pruned),
     })
+}
+
+/// How many sidecars of one plan a `plans = 'sidecars'` fit writes before
+/// it says the option exists; `tdy draft` uses the same number of files.
+pub const PLANS_HINT_AT: usize = 200;
+
+/// A fitted member, for the passes that follow the member loop.
+struct FittedMember {
+    report: usize,
+    spec: std::sync::Arc<ParseSpec>,
+    path: PathBuf,
+    blake3: String,
+    /// The identity of its plan, when the previous lock held it ([`carry`]).
+    identity: Option<String>,
+    /// Its typical values, when its dry run already read all of it.
+    medians: Option<crate::magnitude::Medians>,
+}
+
+/// One copy and one identity per distinct plan a fit records in the lock.
+///
+/// The identity is `plans::spec_id` — the sidecar serialiser's bytes, and
+/// computing it costs what serialising a sidecar costs. A plan already seen
+/// is recognised by a far cheaper serialisation of the same value: equal
+/// JSON is an equal spec, and an equal spec has the equal identity, so the
+/// identity is computed once per distinct plan rather than once per member,
+/// and every member of it shares one `Arc`.
+#[derive(Default)]
+struct Interner {
+    seen: HashMap<blake3::Hash, IdentifiedPlan>,
+}
+
+/// A plan's identity and its one shared copy.
+type IdentifiedPlan = (String, std::sync::Arc<ParseSpec>);
+
+impl Interner {
+    /// `spec` without notes.
+    fn intern(&mut self, spec: ParseSpec, method: InferenceMethod, model: Option<&str>) -> Result<IdentifiedPlan> {
+        let mut h = blake3::Hasher::new();
+        h.update(&serde_json::to_vec(&spec).context("serialising a plan")?);
+        h.update(format!("\x1f{method:?}\x1f{model:?}").as_bytes());
+        let key = h.finalize();
+        if let Some((id, shared)) = self.seen.get(&key) {
+            return Ok((id.clone(), shared.clone()));
+        }
+        let id = crate::plans::spec_id(&spec, method, model)?;
+        let shared = std::sync::Arc::new(spec);
+        self.seen.insert(key, (id.clone(), shared.clone()));
+        Ok((id, shared))
+    }
+}
+
+/// A member whose plan the lock is to hold.
+struct HeldMember {
+    /// Index into the lock's members.
+    member: usize,
+    id: String,
+    spec: std::sync::Arc<ParseSpec>,
+    method: InferenceMethod,
+    model: Option<String>,
+    /// The member's whole note list, in order.
+    notes: Vec<String>,
+}
+
+/// Record each distinct lock-held plan once and point its members at it.
+///
+/// The entry carries the notes every one of its members begins with; each
+/// member keeps only what follows them (`Member::notes`), so the whole list
+/// is the entry's notes then the member's, in order and losslessly. For
+/// villagerdb that is 121 binding notes stored once and one frame note per
+/// file. Every member of a group has the same provenance: the id covers it.
+fn hold_plans(members: &mut [Member], held: Vec<HeldMember>) -> Vec<lockfile::LockedSpec> {
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, Vec<HeldMember>> = HashMap::new();
+    for h in held {
+        match groups.get_mut(&h.id) {
+            Some(g) => g.push(h),
+            None => {
+                order.push(h.id.clone());
+                groups.insert(h.id.clone(), vec![h]);
+            }
+        }
+    }
+    let mut specs = Vec::with_capacity(order.len());
+    for id in order {
+        let group = groups.remove(&id).expect("every id has its group");
+        let mut shared: &[String] = &group[0].notes;
+        for h in &group[1..] {
+            let n = shared.iter().zip(&h.notes).take_while(|(a, b)| a == b).count();
+            shared = &shared[..n];
+        }
+        let mut spec = (*group[0].spec).clone();
+        spec.notes = shared.to_vec();
+        let keep = shared.len();
+        for h in &group {
+            let m = &mut members[h.member];
+            m.spec = Some(id.clone());
+            m.notes = h.notes[keep..].to_vec();
+            m.plan_check = Some(crate::plans::plan_check(&id, m));
+        }
+        specs.push(lockfile::LockedSpec {
+            id,
+            method: group[0].method,
+            tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            model: group[0].model.clone(),
+            prompt_version: None,
+            spec,
+        });
+    }
+    specs
+}
+
+/// Was this member's judgement accepted in the previous lock, about the
+/// same bytes, for the same reason — and, when the lock held its plan,
+/// about that same plan? A lock-held plan's id is what its acceptance was
+/// given to, so a different plan now (a sidecar written over it, a
+/// re-plan) asks again; the same plan written out as a sidecar (the target
+/// switched to `plans = 'sidecars'`) is the same plan and carries. A
+/// sidecar-held member is carried exactly as before.
+fn carry(previous: Option<&Member>, blake3: &str, review: &Option<String>, identity: Option<&str>) -> bool {
+    previous.is_some_and(|m| {
+        m.accepted
+            && m.blake3 == blake3
+            && m.review == *review
+            && m.spec.as_deref().is_none_or(|id| identity == Some(id))
+    })
+}
+
+/// The identity of the plan a member has now, for [`carry`] — computed
+/// only when the previous lock held the member's plan, the one case that
+/// compares it (it costs a serialisation of the spec).
+fn identity_for(
+    previous: Option<&Member>,
+    held_id: Option<&str>,
+    spec: &ParseSpec,
+    method: InferenceMethod,
+    model: Option<&str>,
+) -> Result<Option<String>> {
+    if previous.is_none_or(|m| m.spec.is_none()) {
+        return Ok(None);
+    }
+    Ok(Some(match held_id {
+        Some(id) => id.to_string(),
+        None => crate::plans::spec_id(spec, method, model)?,
+    }))
+}
+
+/// Declared column -> the file column that supplies it.
+fn bindings(spec: &ParseSpec) -> Vec<SourceBinding> {
+    spec.columns
+        .iter()
+        .map(|c| SourceBinding { column: c.name.clone(), source: c.source_name().to_string(), pointer: c.pointer.clone() })
+        .collect()
+}
+
+fn provenance_of(method: InferenceMethod, model: Option<String>) -> crate::sidecar::ProvenanceInfo {
+    crate::sidecar::ProvenanceInfo { method, model, prompt_version: None, sampled_bytes: None }
+}
+
+/// Plan one member afresh: a block of a split file, one sheet of a
+/// workbook, or the whole file (where a configured model may be asked for
+/// the frame).
+async fn plan_member(
+    u: &Unit,
+    p: &Path,
+    target: &Target,
+    cfg: &Config,
+    progress: Option<&crate::progress::Sink>,
+) -> Result<crate::fit::Planned, FitError> {
+    let heuristic = |fitted| crate::fit::Planned { fitted, method: InferenceMethod::Heuristic, model: None };
+    match (&u.window, u.member.sheet.as_deref()) {
+        (Some(w), _) => crate::fit::fit_region(p, u.region_sheet.as_deref(), *w, target, cfg.limits).map(heuristic),
+        (None, Some(s)) => crate::fit::fit_sheet(p, s, target, cfg.limits).map(heuristic),
+        (None, None) => crate::fit::plan(p, target, cfg, progress).await,
+    }
+}
+
+/// The size of the largest group of the written sidecars that hold one
+/// plan, when it reaches [`PLANS_HINT_AT`]. Compared by a fast serialisation
+/// with notes cleared — this only decides whether to mention an option.
+fn largest_shared_plan(fitted: &[FittedMember], written: &[usize]) -> Option<usize> {
+    let mut counts: HashMap<blake3::Hash, usize> = HashMap::new();
+    for &i in written {
+        let bare = ParseSpec { notes: Vec::new(), ..(*fitted[i].spec).clone() };
+        let Ok(bytes) = serde_json::to_vec(&bare) else { continue };
+        *counts.entry(blake3::hash(&bytes)).or_default() += 1;
+    }
+    counts.into_values().max().filter(|n| *n >= PLANS_HINT_AT)
 }
 
 /// The CLI's rendering of a pile report — line-compatible with what
@@ -1526,6 +1906,24 @@ pub fn render_pile_text(r: &PileReport) -> String {
             "{} member(s) need a human before they can join. \
              Nothing is wrong with them mechanically — that is the point.",
             r.needs_review
+        ));
+    }
+    if let Some(lp) = &r.lock_plans {
+        line(format!(
+            "plans: {} member(s) share {} plan(s), held in the lock{}",
+            lp.members,
+            lp.specs,
+            if r.lock_written.is_some() { "" } else { " (none written)" }
+        ));
+    }
+    if let Some(pr) = &r.pruned {
+        line(format!(
+            "--prune-sidecars: {} moved into the lock{}, {} kept (hand-written), {} kept (differs from \
+             the plan this fit proved)",
+            pr.moved,
+            if r.lock_written.is_some() { " and removed" } else { ", none removed" },
+            pr.kept_manual,
+            pr.kept_differs
         ));
     }
     if let Some(p) = &r.lock_written {

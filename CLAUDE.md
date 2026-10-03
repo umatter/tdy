@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 1048 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 1086 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -803,8 +803,9 @@ refit 0.9 s, count 0.6 s, under 60 MB. **7,443 items**: draft 1.4 s / 43 MB, fir
 1.4 GB, refit 32 s, `count(*)` 24 s / 1.1 GB, `--json fit --dry-run` 31 s, console `.ls` 17 s.
 None of that is quadratic: it is one 47 KB sidecar per member (121 columns, each typed one
 spelling out its whole NA vocabulary) — 335 MB of TOML parsed and fingerprints checked on
-every refit, query and listing (`.ls` takes as long with the target moved away). That is the
-shared-spec slice the design page defers, not something to optimise around here.
+every refit, query and listing (`.ls` takes as long with the target moved away). Those are
+the numbers with `plans = 'sidecars'`; **Plans in the lock** below is the slice that took
+them to 5 s, 6 s and 0.6 s.
 
 **JSON data is read by `src/jsondoc.rs`, not serde_json** (2026-10-02). serde_json holds a
 number as u64/i64/f64, so `12345678901234567890123` read as `1.2345678901234568e+22` and a
@@ -882,6 +883,91 @@ and every corpus JSON file sniffs byte-identically — of 8,136, one file's valu
 (`majorIncidents-2020-01-06.json`: 2,828 coordinates written with 17 significant digits,
 which a double's shortest rendering cut to 16 — and 320 of which serde_json's non-roundtrip
 parse also put one ULP off — now as written).
+
+**Plans in the lock (2026-10-02).** `docs/design/2026-10-02-plans-in-the-lock.md`. A target
+may declare `plans = 'lock'` (`'sidecars'` is the default and everything before it; any other
+value is refused). It is a fact about storage, not meaning, so it is **not** part of
+`target_hash`: switching voids no proof. `tdy fit` plans every member exactly as before — no
+"try the pile's plan first" shortcut, which would skip the elimination that refuses an
+ambiguous frame — and only where the result goes changes: a member with no sidecar file gets
+none; its `ParseSpec` is recorded once in the lock's `[[spec]]` table (`lockfile::LockedSpec`:
+`id`, method, model, tool and prompt version — no `created_at`, which is the lock's own, nor
+`sampled_bytes`, a fact about one file — and the spec flattened beside them, laid out as a
+sidecar's `[spec]`), and the member names it (`Member.spec`). `plans::spec_id` is blake3 over
+the sidecar serialiser's output with `notes` cleared, then the method and the model, written
+`b3:<hex>`; notes are per fit of one file and the only thing that differed across villagerdb's
+7,443 plans. The provenance is in the id because the review a model's frame needs is rebuilt
+from it: the same spec from the sniffer and from a model are two entries, and a provenance
+edited in the lock no longer hashes to the id (`a_known_plan_has_a_known_id` pins the toml
+printer; a mismatch in a lock another tdy wrote says so, `plans::written_by_note`). An entry carries
+the notes every one of its members begins with and each member keeps only the tail
+(`Member.notes`), so the whole list is lossless and in order — storing each member's 122
+notes would have been a 43 MB lock. `LockedSpec` deserialises **by hand**: `#[serde(flatten)]`
+swallows unknown keys, and an unknown key in an entry must be refused exactly as in a sidecar.
+`lock_version = 2` exactly when there is a spec table (`Lock::version_for`), so a lock without
+one is version 1 byte for byte; `Lock::load` reads the version alone first and refuses any
+other by number, refuses a version-1 lock carrying plans and a member naming a plan the lock
+does not hold. (0.3.1 does not get as far as the number: it fails on the unknown `spec`
+field, and on `plans` in the target before that.)
+
+The rule every caller asks — "what is this member's spec?" — is written once,
+`plans::Plans::plan_for`: **the member's sidecar file wins when it exists** (through
+`sidecar::load_member`, every old check intact; a refused one is an error, never a fall-back
+to the lock), else the plan its lock entry names — **and only if that plan reads the member's own sheet and
+block** (`reads_its_own_member`, the checks `load_member` makes of a sheet or region sidecar):
+a `spec =` line is text, and two swapped lines made one block read twice with exit 0 — and
+only if the member's `plan_check` (blake3 of the id, path, sheet, region and file blake3,
+`plans::plan_check`, written by `hold_plans`) matches: the sheet/block check alone left a plain
+member pointable at a sibling's conforming plan, read with the sibling's frame.
+`Plans::new` validates and identifies each
+distinct entry once and indexes the members; `report::fit_pile` (reuse), `lockfile::drift`
+(`SpecEdited`, via `Plans::current_digest`), `dataset::resolve`, `commands::check_text` and
+`main::check_json` (`commands::lock_held`), `provider::validate_quiet`, `profile`
+(`lock_frame`; `plans::find_holding_lock` and `resolve_held` for a caller handed a file and
+no target — locks beside the file and up to three directories above), the console's
+`.accept` and `.ls`, and the workbench go through it. `messy('file')` does not: it is a
+question about a file, not a member.
+
+Load-bearing details. A lock-held plan's freshness is `plans::State::AsLocked` — the bytes
+the lock recorded — so `dataset()`, which has just run `drift`, pays no second hash. An
+acceptance of a lock-held plan is tied to its **id** (`Member::recorded_digest`; its
+`spec_digest` stays empty), and `report::carry` carries it only while the identity of the plan
+the member has now (`identity_for`, computed only in that case) is that id — the same plan
+written out as a sidecar by a switch to `'sidecars'` carries, a different one asks again; a
+sidecar-held member carries exactly as before. A sidecar that appears beside a lock-held
+member after the fit is `Drift::SidecarOverrides` (one `exists()` per such member) until a
+pile fit records the member as sidecar-held; `tdy fit T FILE` says so when it writes one. `Plan::edited`: an entry whose content no
+longer hashes to its id was changed in the lock, which is derived state — `dataset()` refuses
+it (after conformance, so a non-conforming edit says "no longer produces"), and `fit`
+re-plans it with a note. Under `plans = 'lock'` a member that *has* a sidecar keeps it (a
+stale or refused tool-written one is rewritten in place, as ever): nothing is deleted except
+by `--prune-sidecars`, which plans the member afresh, moves it only when `spec_id` matches,
+counts moved / kept (manual) / kept (differs), deletes **after** `Lock::save`, and is refused
+on a sidecars target. Under `plans = 'sidecars'` a plan read from an old lock is written back
+out as a sidecar.
+`fit_pile` identifies a fresh plan through `Interner`: a JSON serialisation recognises a plan
+already seen (equal JSON, equal value, equal identity) so the TOML identity is computed and
+the spec held once per distinct plan — per member it cost what serialising a sidecar costs,
+30 s and 1 GB on the first fit. `.ls` reads the directory once (`Companions`); a file with no
+sidecar used to cost two directory scans, quadratic over a lock-held pile. The workbench
+watches the lock instead of sidecars that do not exist (`MemberReport.in_lock`), and the
+member view says the plan is in the lock and a sidecar overrides it. `tdy draft` writes
+`plans = 'lock'` at `report::PLANS_HINT_AT` (200) files, before `date_order` (whose own
+comment would swallow a comma); `fit` on a sidecars target that just wrote 200 sidecars of one
+plan says so once through `progress::Event::Note` — never into the pile text.
+
+Measured on villagerdb items (7,443 one-record documents, 121 columns), release build, the
+same build and machine, two runs each, `plans = 'sidecars'` → `plans = 'lock'`: `count(*)`
+over `dataset()` 23.7–24.0 s / 1.15 GB → **5.2–5.4 s / 78 MB** (what is left is building 121
+typed columns for one row 7,443 times — §6's next thing); refit 25.7–25.8 s / 1.44 GB →
+**6.0–6.1 s / 421 MB**; console `.ls` 16.8–17.4 s → **0.56 s**; first fit 95–114 s / 1.30 GB →
+**58.8–59.1 s / 407 MB**; draft 1.6–1.8 s either way. 348 MB of sidecars become a **2.8 MB
+lock** (one `[[spec]]`). The pre-slice binary (c17f6ec) on the same machine: first fit
+97–101 s, refit 31.4 s, `count(*)` 23.5–23.7 s, `.ls` 16.2 s — the sidecar path is no slower,
+and its refit is faster (conformance once per member, not twice; `engine::preview_whole`
+lets the magnitude pass reuse a dry run that read the whole member). Count 7,443, nh sell
+8,218,228 over 4,167, nl sell 6,193,900, softwood 154 under both storages, equal to a Python
+pass over the files. `tests/plans.rs` is the slice's suite.
 
 **tdy is scored on an external benchmark.** `scripts/download_pollock.sh` and
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,

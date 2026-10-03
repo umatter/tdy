@@ -820,6 +820,7 @@ mod tests {
                 file: None,
                 dry_run: true,
                 propose: true,
+                prune_sidecars: false,
             }
         );
     }

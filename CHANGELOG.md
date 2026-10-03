@@ -42,8 +42,60 @@ Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
   array at the same pointer keeps the draft it had, with a note naming
   `--records`.
 
+- **`plans = 'lock'`: a pile's plans kept once, in the lock.** A target may
+  declare `WITH (…, plans = 'lock')` (`'sidecars'` is the default and what tdy
+  always did; anything else is refused; it is not part of `target_hash`, so
+  switching voids no proof). `tdy fit` plans and proves every member exactly as
+  before but writes no sidecar for a member that has none: each distinct plan
+  is recorded once in the lock's `[[spec]]` table, keyed by the blake3 of its
+  canonical serialisation with notes cleared, and each member names its plan
+  and keeps only its own notes. A member's sidecar still wins when it exists —
+  a `manual` one gives one member its own plan and is never overwritten. A
+  refit re-proves each plan once, `dataset()` reads every member of a plan
+  through one shared copy and refuses a plan edited in the lock, and an
+  acceptance of a lock-held plan is tied to its id. On villagerdb's 7,443 item
+  documents a query drops from 24 s / 1.15 GB to 5.3 s / 78 MB, a refit from
+  26 s to 6 s, `.ls` from 17 s to 0.6 s, a first fit from about 100 s / 1.3 GB
+  to 59 s / 407 MB, and 348 MB of sidecars become a 2.8 MB lock.
+- **Each lock-held member carries `plan_check`**, a blake3 over its plan's id,
+  its path, sheet, region and its file's blake3, written when the fit proves
+  the plan for it. A `spec =` line pointed at another member's plan is
+  refused by name ("the lock's plan … was not recorded for member a.csv — the
+  lock was edited, or merged by hand; run `tdy fit T`"). A version-2 lock
+  written by this branch before the binding existed has none, and every
+  lock-held member of it is refused until `tdy fit` writes the lock again.
+- **`tdy fit TARGET --prune-sidecars`** (and `.fit … --prune-sidecars`): on a
+  `plans = 'lock'` target, moves each tool-written sidecar whose plan the fit
+  proves identically into the lock and removes it once the lock is written;
+  counts moved, kept (hand-written) and kept (differs). Refused on a sidecar
+  target.
+- **`tdy check --against`, `tdy validate`, `tdy profile`, `.accept`, `.ls` and
+  the workbench read a lock-held plan**, and say it is held in the lock.
+  `tdy validate --stamp` on such a member is refused: there is no sidecar.
+- **Hints.** `tdy draft` writes `plans = 'lock'` (with a comment line above the
+  `WITH`) for a pile of 200 files or more; `tdy fit` on a sidecar target that
+  has just written 200 or more sidecars holding one plan says so once, on
+  stderr.
+
 ### Changed
 
+- **A lock that holds plans is `lock_version = 2`, which tdy 0.3.x does not
+  read.** 0.3.1 fails on it before it gets to the version: `tdy query`, `tdy
+  check` and even `tdy fit` print "… is not a valid lock file: TOML parse error
+  at line 14, column 3 … unknown field `spec`, expected one of `lock_version`,
+  `target`, …", so going back to 0.3.x means removing the lock (and the
+  `plans` option, which 0.3.1 refuses first: "unknown WITH option `plans`").
+  This build reads the version first and refuses an unknown one by number. A
+  lock with no spec table is still version 1, byte for byte, so a target that
+  does not declare `plans = 'lock'` writes and reads exactly the lock it did.
+  Version-2 locks written from this branch record `tool_version = "0.3.1"` —
+  the version that cannot read them; the release that carries this bumps the
+  version.
+- **A refit proves conformance once per member**, not twice, and a member whose
+  dry run read all of it is not read again for the magnitude check — a refit of
+  the 7,443 items with sidecars is 26 s where it was 31 s.
+- **`.ls` reads a directory once.** A data file with no sidecar beside it cost
+  two more directory scans each.
 - **A root JSON object with no array in it is read** — `tdy sniff`,
   `messy()` and `tdy draft` read it as one record (note: "this document is one
   object and is read as one record") where they declined it with "this JSON
@@ -141,8 +193,8 @@ Measured on villagerdb's 7,443 item documents (release build): the first
 `dataset()` 24 s and 1.1 GB, because each member keeps its own sidecar — 47 KB
 for 121 columns — and each is parsed and fingerprinted on every refit, query
 and listing (`.ls` takes 17 s). 483 villager documents take 3 s to fit and
-0.6 s to query. Deferred, each its own slice: one spec shared across a pile's
-members; one row per element of an array inside a record (fan-out);
+0.6 s to query. One spec shared across a pile's members is `plans = 'lock'`,
+above. Still deferred, each its own slice: one row per element of an array inside a record (fan-out);
 `--accept` for many members at once (it is per member); and a partial lock —
 one malformed document still blocks the whole pile, by design.
 

@@ -98,6 +98,8 @@ fn pile_report(members: Vec<MemberReport>) -> PileReport {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     }
 }
 
@@ -127,6 +129,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         notes: vec![],
         problems: vec![],
         proposals: vec![],
+        in_lock: false,
     }
 }
 
@@ -412,6 +415,8 @@ fn the_pile_context_lists_members_with_status_words() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome {
@@ -457,6 +462,8 @@ fn a_dry_run_pile_report_marks_the_header() {
         dry_run: true,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome {
@@ -519,6 +526,8 @@ fn the_member_context_shows_gap_beside_raw_and_the_menu() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -572,6 +581,8 @@ fn the_confirm_overlay_shows_the_diff() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -724,6 +735,8 @@ fn pile_scrolls_past_the_first_member_with_page_down() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -771,6 +784,8 @@ fn member_raw_head_scrolls_with_page_down() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -1071,6 +1086,8 @@ fn every_context_renders_at_hostile_sizes() {
             dry_run: true,
             columns: vec![],
             drift: vec![],
+            lock_plans: None,
+            pruned: None,
         };
         w.apply(
             Outcome {
@@ -1243,6 +1260,8 @@ fn pile_status_hint_names_refit() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -1308,6 +1327,8 @@ fn member_status_hint_names_digit_shortcuts() {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     };
     w.apply(
         Outcome { echo: ".fit sales.tdy.sql".into(), text: String::new(), ok: true, payload: Payload::Fitted(report) },
@@ -2029,4 +2050,23 @@ fn the_profile_context_draws_columns_then_a_columns_shapes() {
     assert!(iso.contains("94") && iso.contains("94.0%") && iso.contains("2025-01-01"), "{iso}");
     let dotted = screen(&mut w, 140, 40).into_iter().find(|l| l.contains("99.99.9999")).unwrap();
     assert!(dotted.contains(" 6 ") && dotted.contains("6.0%") && dotted.contains("01.03.2025"), "{dotted}");
+}
+
+/// A member whose plan the lock holds has no sidecar to open: the member
+/// view says where its plan is, and that writing a sidecar overrides it.
+#[test]
+fn the_member_view_says_a_lock_held_plan_is_in_the_lock() {
+    let d = pile();
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    let mut m = member("2025-01.csv", MemberStatus::Fits);
+    m.in_lock = true;
+    member_with_raw(&mut w, &d, m, raw_of(&["Datum;Region;Betrag"]));
+    let lines = screen(&mut w, 120, 34);
+    let text = lines.join("\n");
+    assert!(text.contains("plan held in the lock — a sidecar for this member overrides it"), "{text}");
+
+    let mut w = Workbench::new(Browser::new(d.path()).unwrap(), vec![], 0.8);
+    member_with_raw(&mut w, &d, member("2025-01.csv", MemberStatus::Fits), raw_of(&["Datum;Region;Betrag"]));
+    let text = screen(&mut w, 120, 34).join("\n");
+    assert!(!text.contains("plan held in the lock"), "a sidecar-held member says nothing new:\n{text}");
 }

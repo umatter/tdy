@@ -129,6 +129,14 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
     }
 
     let dir = lockfile::target_dir(target_file);
+    // Each member's plan through the one function that says where it is
+    // kept: its sidecar when the file exists, else the lock's spec table.
+    // A lock-held plan is parsed, validated and identified once per
+    // distinct plan, proved against the target once, and handed to every
+    // member that names it as one shared `Arc` — 7,443 members of one plan
+    // hold one copy of it.
+    let plans = crate::plans::Plans::new(target_file, Some(&lock));
+    let mut proved: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut members = Vec::with_capacity(lock.members.len());
     for m in &lock.members {
         let path = match root {
@@ -142,41 +150,64 @@ pub fn resolve(target_file: &Path, limits: Limits, root: Option<&Path>) -> Resul
             })?,
             None => dir.join(&m.path),
         };
-        // The sidecar must be present *and* fresh: a stale one is a spec no
+        // The plan must be present *and* fresh: a stale one is a spec no
         // query would use, and this is the one place that cannot re-plan.
+        // A sidecar goes through `sidecar::load_member` exactly as before;
+        // a lock-held plan was recorded against bytes the drift check above
+        // has just compared.
         //
         // The sheet is composed into the sidecar's *name* (`<file>#<sheet>`),
         // never into a path, so a lock's `sheet` cannot walk out of the
         // confined directory whatever it says: the name always begins with
         // the member file's own, already-confined name.
-        let spec = match crate::sidecar::load_member(&path, m.sheet.as_deref(), m.region)? {
-            crate::sidecar::SidecarStatus::Fresh(sc) => sc.spec,
-            crate::sidecar::SidecarStatus::Stale(_) => anyhow::bail!(
+        let plan = match plans.plan_for_entry(&path, m)? {
+            Some(p) if p.state == crate::plans::State::Stale => anyhow::bail!(
                 "{} has changed since it was fitted — run `tdy fit {}`",
                 m.name(),
                 target_file.display()
             ),
-            crate::sidecar::SidecarStatus::Absent => anyhow::bail!(
+            Some(p) => p,
+            None => anyhow::bail!(
                 "{} is a member of `{}` but has no spec — run `tdy fit {}`",
                 m.name(),
                 target.name,
                 target_file.display()
             ),
         };
-        // Re-proved on every load, because a sidecar is hand-editable and
-        // therefore untrusted input. The check costs no I/O.
-        if let Err(mismatches) = conforms(&spec, &target) {
-            let mut msg = format!("{} no longer produces `{}`:", m.name(), target.name);
-            for x in &mismatches {
-                msg.push_str(&format!("\n  {}", x.message()));
+        // Re-proved on every load, because a sidecar and a lock are both
+        // hand-editable and therefore untrusted input. The check costs no
+        // I/O; for a lock-held plan it is a property of the plan, so it is
+        // paid once per plan.
+        let first = match plan.lock_id() {
+            Some(id) => proved.insert(id.to_string()),
+            None => true,
+        };
+        if first {
+            if let Err(mismatches) = conforms(&plan.spec, &target) {
+                let mut msg = format!("{} no longer produces `{}`:", m.name(), target.name);
+                for x in &mismatches {
+                    msg.push_str(&format!("\n  {}", x.message()));
+                }
+                anyhow::bail!("{msg}");
             }
-            anyhow::bail!("{msg}");
+            // The lock is derived state, never hand-edited: a plan whose
+            // content no longer hashes to its id was changed there, and a
+            // plan is changed by writing the member a sidecar (`method =
+            // "manual"`), where it is visible and reviewable.
+            if plan.edited() {
+                anyhow::bail!(
+                    "{}'s plan {} in {} was edited by hand: it no longer hashes to its id{}. \
+                     A member's plan is changed by writing it a sidecar (method = \"manual\"), \
+                     not by editing the lock — run `tdy fit {}` to rebuild it",
+                    m.name(),
+                    crate::plans::short_id(plan.lock_id().unwrap_or_default()),
+                    lockfile::lock_path(target_file).display(),
+                    crate::plans::written_by_note(&lock),
+                    target_file.display()
+                );
+            }
         }
-        members.push(ResolvedMember {
-            path,
-            rel: m.name(),
-            spec: Arc::new(spec),
-        });
+        members.push(ResolvedMember { path, rel: m.name(), spec: plan.spec });
     }
 
     let _ = limits;

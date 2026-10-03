@@ -67,6 +67,7 @@ fn member(path: &str, status: MemberStatus) -> MemberReport {
         notes: vec![],
         problems: vec![],
         proposals: vec![],
+        in_lock: false,
     }
 }
 
@@ -102,6 +103,8 @@ fn pile_report(target_file: &str, members: Vec<MemberReport>) -> PileReport {
         dry_run: false,
         columns: vec![],
         drift: vec![],
+        lock_plans: None,
+        pruned: None,
     }
 }
 
@@ -1863,6 +1866,31 @@ fn the_watched_files_are_the_target_and_the_members_sidecars() {
     assert!(watched.contains(&d.path().join("2025-01.csv.tdy.toml")));
     assert!(watched.contains(&d.path().join("2025.xlsx#Q1.tdy.toml")));
     assert!(watched.contains(&d.path().join("report.csv#2.tdy.toml")), "{watched:?}");
+}
+
+/// A member whose plan the lock holds has no sidecar to watch: the lock is
+/// watched instead, once, since it is where that plan would change.
+#[test]
+fn a_lock_held_member_watches_the_lock_not_a_sidecar() {
+    let d = pile();
+    let mut w = wb(&d);
+    w.begin(".fit sales.tdy.sql");
+    let mut a = member("2025-01.csv", MemberStatus::Fits);
+    a.in_lock = true;
+    let mut b = member("2025-02.csv", MemberStatus::Fits);
+    b.in_lock = true;
+    let c = member("2025-03.csv", MemberStatus::Fits);
+    w.apply(outcome(".fit sales.tdy.sql", "", Payload::Fitted(pile_report("sales.tdy.sql", vec![a, b, c]))), d.path());
+    let watched = w.watched_files();
+    assert_eq!(
+        watched,
+        vec![
+            d.path().join("sales.tdy.sql"),
+            d.path().join("sales.tdy.lock"),
+            d.path().join("2025-03.csv.tdy.toml"),
+        ],
+        "{watched:?}"
+    );
 }
 
 /// A change noticed on disk is named in the status line with the key that

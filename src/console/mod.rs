@@ -18,6 +18,7 @@ pub mod parse;
 pub mod line;
 pub mod repl;
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -103,6 +104,9 @@ pub enum EntryStatus {
     /// A file split into stacked regions: no plain sidecar, N region
     /// sidecars beside it, all fresh.
     Regions(usize),
+    /// No sidecar: a `plans = 'lock'` target beside it holds this member's
+    /// plan, recorded against the bytes on disk now.
+    InLock,
 }
 
 /// A table of results, as text — what `.sniff`'s preview, a `.fit` dry run
@@ -728,7 +732,10 @@ impl Session {
                 };
                 Outcome { echo, text, payload: Payload::Drafted { ddl, wrote }, ok: true }
             }
-            Command::Fit { target, file: Some(file), dry_run, propose } => {
+            Command::Fit { file: Some(_), prune_sidecars: true, .. } => {
+                bail!("--prune-sidecars applies to a whole pile; drop the FILE to fit every member")
+            }
+            Command::Fit { target, file: Some(file), dry_run, propose, .. } => {
                 let (t, f) = (self.resolve(&target)?, self.resolve(&file)?);
                 let out =
                     crate::commands::fit_one_text(&t, &f, &self.cfg, dry_run, propose, progress).await?;
@@ -743,9 +750,10 @@ impl Session {
                 }
                 Outcome { echo: String::new(), text, payload: Payload::Nothing, ok: out.ok }
             }
-            Command::Fit { target, file: None, dry_run, propose } => {
+            Command::Fit { target, file: None, dry_run, propose, prune_sidecars } => {
                 let t = self.resolve(&target)?;
-                self.fit_pile(&t, &[], dry_run, propose, progress).await?
+                let opts = PileFit { dry_run, propose, prune_sidecars };
+                self.fit_pile(&t, &[], opts, progress).await?
             }
             Command::Check { target, against } => {
                 let t = self.resolve(&target)?;
@@ -816,7 +824,7 @@ impl Session {
                     // members it has just expanded — so nothing here needs
                     // the lock, which step one already proved it can do
                     // without.
-                    let mut o = self.fit_pile(&t, &[PathBuf::from(&member)], false, false, progress).await?;
+                    let mut o = self.fit_pile(&t, &[PathBuf::from(&member)], PileFit::default(), progress).await?;
                     o.text = format!("accepted {member}\n\n{}", o.text);
                     return Ok(o);
                 }
@@ -863,9 +871,14 @@ impl Session {
                 // exist", not "outside").
                 let member_path = crate::fileio::confine(&dir.join(&mref.path), &self.root)
                     .with_context(|| member.clone())?;
-                // Step one: evidence only, nothing written.
-                let sc = match crate::sidecar::load_member(&member_path, mref.sheet.as_deref(), mref.region)? {
-                    crate::sidecar::SidecarStatus::Fresh(sc) => sc,
+                // Step one: evidence only, nothing written. The plan is the
+                // member's sidecar, or the one the lock holds for it.
+                let plans = crate::plans::Plans::new(&t, lock.as_ref());
+                let plan = match plans.plan_for(&member_path, &mref)? {
+                    Some(p) if p.is_fresh(&member_path)? => p,
+                    Some(p) if p.in_lock() => {
+                        bail!("{member} has changed since its plan was recorded in the lock; run `.fit {target}` first")
+                    }
                     _ => bail!("{member} has no fresh sidecar; run `.fit {target}` first"),
                 };
                 // A reason can live in the spec (a shift, a constant, a
@@ -876,8 +889,8 @@ impl Session {
                 // `fit` computes it; a target that no longer parses asks
                 // the plain question.
                 let mut reasons = match crate::target::Target::load(&t) {
-                    Ok(decl) => crate::fit::review_reasons_for(&sc.spec, &decl),
-                    Err(_) => crate::fit::review_reasons(&sc.spec),
+                    Ok(decl) => crate::fit::review_reasons_for(&plan.spec, &decl),
+                    Err(_) => crate::fit::review_reasons(&plan.spec),
                 };
                 if let Some(r) = lock.as_ref().and_then(|l| l.member(&mref.path, mref.sheet.as_deref(), mref.region)).and_then(|m| m.review.clone()) {
                     for part in r.split("; ") {
@@ -889,10 +902,13 @@ impl Session {
                 if reasons.is_empty() {
                     bail!("nothing to accept: {member} has no judgement waiting on review");
                 }
-                let model_framed = matches!(sc.provenance.method, crate::spec::InferenceMethod::Llm);
+                let model_framed = matches!(plan.method, crate::spec::InferenceMethod::Llm);
                 let rows =
-                    crate::evidence::for_spec(&sc.spec, &member_path, self.cfg.limits, &reasons.join("; "), model_framed)?;
+                    crate::evidence::for_spec(&plan.spec, &member_path, self.cfg.limits, &reasons.join("; "), model_framed)?;
                 let mut text = format!("evidence for {member} (nothing written):\n");
+                if let Some(id) = plan.lock_id() {
+                    let _ = writeln!(text, "  plan: held in the lock (spec {})", crate::plans::short_id(id));
+                }
                 for r in &reasons {
                     let _ = writeln!(text, "  review: {r}");
                 }
@@ -914,10 +930,10 @@ impl Session {
         &mut self,
         target: &Path,
         accept: &[PathBuf],
-        dry_run: bool,
-        propose: bool,
+        opts: PileFit,
         progress: Option<&progress::Sink>,
     ) -> Result<Outcome> {
+        let PileFit { dry_run, propose, prune_sidecars } = opts;
         let r = crate::report::fit_pile(
             target,
             &self.cfg,
@@ -927,6 +943,7 @@ impl Session {
                 propose,
                 progress: progress.cloned(),
                 root: Some(&self.root),
+                prune_sidecars,
             },
         )
         .await?;
@@ -1017,6 +1034,14 @@ impl Outcome {
     }
 }
 
+/// `.fit`'s switches for a whole pile; `Default` is a plain fit.
+#[derive(Default, Clone, Copy)]
+struct PileFit {
+    dry_run: bool,
+    propose: bool,
+    prune_sidecars: bool,
+}
+
 fn describe_command(c: &Command) -> String {
     format!("{c:?}")
 }
@@ -1070,18 +1095,23 @@ pub fn is_target(name: &str) -> bool {
 pub fn list_dir(dir: &Path) -> Result<Vec<Entry>> {
     let mut dirs = Vec::new();
     let mut files = Vec::new();
+    let mut names: Vec<(String, PathBuf)> = Vec::new();
     for e in std::fs::read_dir(dir).with_context(|| format!("cannot read {}", dir.display()))?.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
+        if !name.starts_with('.') {
+            names.push((name, e.path()));
         }
-        let path = e.path();
+    }
+    let companions = Companions::of(&names);
+    for (name, path) in names {
         if path.is_dir() {
             dirs.push(Entry { name: format!("{name}/"), kind: EntryKind::Dir, status: EntryStatus::None });
         } else if is_target(&name) {
-            files.push(Entry { name, kind: EntryKind::Target, status: target_status(&path) });
+            let status = target_status(&path, companions.lock_of(&name));
+            files.push(Entry { name, kind: EntryKind::Target, status });
         } else if is_data_file(&name) && !name.ends_with(".tdy.toml") {
-            files.push(Entry { name, kind: EntryKind::File, status: file_status(&path) });
+            let status = file_status(&path, &name, &companions);
+            files.push(Entry { name, kind: EntryKind::File, status });
         }
     }
     dirs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1090,8 +1120,71 @@ pub fn list_dir(dir: &Path) -> Result<Vec<Entry>> {
     Ok(dirs)
 }
 
-fn file_status(path: &Path) -> EntryStatus {
+/// What one directory listing knows about the files beside each data file,
+/// read once: which names have a sidecar, which have sheet or region
+/// sidecars, and which plans the locks of the targets here hold. A
+/// directory of 7,443 lock-held members used to cost two directory scans
+/// per file, looking for sidecars that do not exist.
+struct Companions {
+    sidecars: std::collections::HashSet<String>,
+    /// Names with at least one `<name>#….tdy.toml` beside them.
+    split: std::collections::HashSet<String>,
+    /// Each target's lock, by the target's file name.
+    locks: HashMap<String, crate::lockfile::Lock>,
+    /// Lock-held members of files in this directory, by file name: each
+    /// member's (sheet, region, recorded blake3, recorded bytes).
+    held: HashMap<String, Vec<HeldHere>>,
+}
+
+type HeldHere = (Option<String>, Option<u32>, String, u64);
+
+impl Companions {
+    fn of(names: &[(String, PathBuf)]) -> Companions {
+        let mut c = Companions {
+            sidecars: Default::default(),
+            split: Default::default(),
+            locks: HashMap::new(),
+            held: HashMap::new(),
+        };
+        for (name, path) in names {
+            if let Some(stem) = name.strip_suffix(".tdy.toml") {
+                c.sidecars.insert(stem.to_string());
+                for (i, _) in stem.match_indices('#') {
+                    c.split.insert(stem[..i].to_string());
+                }
+            } else if is_target(name) {
+                if let Ok(Some(lock)) = crate::lockfile::Lock::load(path) {
+                    for m in lock.members.iter().filter(|m| m.spec.is_some() && !m.path.contains('/')) {
+                        c.held.entry(m.path.clone()).or_default().push((
+                            m.sheet.clone(),
+                            m.region,
+                            m.blake3.clone(),
+                            m.bytes,
+                        ));
+                    }
+                    c.locks.insert(name.clone(), lock);
+                }
+            }
+        }
+        c
+    }
+
+    fn lock_of(&self, target: &str) -> Option<&crate::lockfile::Lock> {
+        self.locks.get(target)
+    }
+}
+
+fn file_status(path: &Path, name: &str, companions: &Companions) -> EntryStatus {
     use crate::sidecar::SidecarStatus;
+    if !companions.sidecars.contains(name) {
+        if let Some(held) = companions.held.get(name) {
+            if !companions.split.contains(name) {
+                return held_status(path, held);
+            }
+        } else if !companions.split.contains(name) {
+            return EntryStatus::None;
+        }
+    }
     match crate::sidecar::load(path) {
         Ok(SidecarStatus::Fresh(sc)) => {
             EntryStatus::Sniffed { confidence: sc.spec.confidence, method: method_label(&sc.provenance.method) }
@@ -1121,6 +1214,23 @@ fn file_status(path: &Path) -> EntryStatus {
             if all_fresh { EntryStatus::Regions(regions.len()) } else { EntryStatus::Stale }
         }
         Err(_) => EntryStatus::Stale, // unreadable sidecar: not something a query would use
+    }
+}
+
+/// A file whose members' plans a lock holds: fresh when the bytes on disk
+/// are the ones every member was planned against.
+fn held_status(path: &Path, held: &[HeldHere]) -> EntryStatus {
+    let Ok((blake3, bytes)) = crate::sidecar::hash_file(path) else { return EntryStatus::Stale };
+    if held.iter().any(|(_, _, b, n)| *b != blake3 || *n != bytes) {
+        return EntryStatus::Stale;
+    }
+    let sheets: std::collections::BTreeSet<&str> = held.iter().filter_map(|(s, _, _, _)| s.as_deref()).collect();
+    if !sheets.is_empty() {
+        EntryStatus::Sheets(sheets.len())
+    } else if held.iter().any(|(_, r, _, _)| r.is_some()) {
+        EntryStatus::Regions(held.len())
+    } else {
+        EntryStatus::InLock
     }
 }
 
@@ -1158,10 +1268,10 @@ pub fn method_label(m: &crate::spec::InferenceMethod) -> String {
     serde_json::to_string(m).unwrap_or_default().trim_matches('"').to_string()
 }
 
-fn target_status(path: &Path) -> EntryStatus {
+fn target_status(path: &Path, lock: Option<&crate::lockfile::Lock>) -> EntryStatus {
     let Ok(target) = crate::target::Target::load(path) else { return EntryStatus::NoLock };
-    match crate::lockfile::Lock::load(path) {
-        Ok(Some(lock)) => match crate::lockfile::drift(&lock, &target, path) {
+    match lock {
+        Some(lock) => match crate::lockfile::drift(lock, &target, path) {
             Ok(d) if d.is_empty() => EntryStatus::Locked,
             Ok(d) => EntryStatus::Drift(d.len()),
             Err(_) => EntryStatus::Drift(1),
@@ -1185,6 +1295,7 @@ pub fn render_listing(entries: &[Entry]) -> String {
             EntryStatus::Drift(n) => format!("target, drift ({n})"),
             EntryStatus::Sheets(n) => format!("sheet specs ({n})"),
             EntryStatus::Regions(n) => format!("region specs ({n})"),
+            EntryStatus::InLock => "plan in the lock".into(),
         };
         let _ = writeln!(s, "{:<width$}  {status}", e.name, width = width);
     }
@@ -1430,7 +1541,7 @@ overwrite an existing one). Everything else is a dot-command:
   .sniff FILE [--quick] [--force] [--no-llm] [--hint \"…\"]   infer the sidecar for one file
   .validate FILE [--stamp]                                  check a sidecar against its file
   .draft FILES… [--to NAME.tdy.sql] [--records]             draft a target from a pile
-  .fit TARGET [FILE] [--dry-run] [--propose]                plan every member onto a target
+  .fit TARGET [FILE] [--dry-run] [--propose] [--prune-sidecars]   plan every member onto a target
   .check TARGET [--against FILE…]                           the CI gate
   .accept TARGET MEMBER                                     show the evidence; again to accept
   .output [FILE] [--format parquet|csv] [--force]           route the next result to a file

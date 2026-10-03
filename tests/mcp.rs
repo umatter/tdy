@@ -353,6 +353,7 @@ fn a_lock_member_outside_the_root_is_refused_at_query_time() {
         target_hash: tdy::lockfile::target_hash(&target),
         tool_version: "test".into(),
         created_at: "2026-01-01T00:00:00Z".into(),
+        specs: Vec::new(),
         members: vec![tdy::lockfile::Member {
             path: "../loot/x.csv".into(),
             sheet: None,
@@ -362,6 +363,9 @@ fn a_lock_member_outside_the_root_is_refused_at_query_time() {
             spec_digest: String::new(),
             review: None,
             accepted: false,
+            spec: None,
+            notes: Vec::new(),
+            plan_check: None,
         }],
     };
     lock.save(&target_path).unwrap();

@@ -1604,7 +1604,8 @@ impl Workbench {
     /// launch line this one is *not* a dry run — `f` is the key that writes
     /// the lock for real.
     /// The files whose change means the pile on screen may be out of date:
-    /// the target, and every member's sidecar (a sheet or region member's
+    /// the target, its lock when the lock holds any member's plan, and
+    /// every other member's sidecar (a sheet or region member's
     /// under its own name — `report.csv#2.tdy.toml`, never the plain
     /// file's, which a region pile does not even have). Empty outside a
     /// pile. The runtime stats these once a
@@ -1615,7 +1616,14 @@ impl Workbench {
             _ => return Vec::new(),
         };
         let mut out = vec![target.clone()];
-        for m in &report.members {
+        // A member whose plan the lock holds has no sidecar to watch; the
+        // lock is where its plan would change, watched once for all of
+        // them (a stat per member per second is real work on a pile of
+        // thousands).
+        if report.members.iter().any(|m| m.in_lock) {
+            out.push(tdy::lockfile::lock_path(target));
+        }
+        for m in report.members.iter().filter(|m| !m.in_lock) {
             let file = member_preview_path(target, &m.path);
             out.push(tdy::sidecar::sidecar_path_for(&file, m.sheet.as_deref(), m.region));
         }

@@ -577,8 +577,22 @@ pub fn draft_target_opts(files: &[PathBuf], base: Option<&Path>, limits: Limits,
         }
         out.push('\n');
     }
-    out.push_str(")\nWITH (\n");
+    out.push_str(")\n");
+    // A pile this size usually shares one plan, and a sidecar per file is
+    // that plan written out once per file.
+    let lock_plans = files.len() >= crate::report::PLANS_HINT_AT;
+    if lock_plans {
+        out.push_str(&format!(
+            "-- {} files: plans = 'lock' keeps one copy of each distinct plan in the lock, not a sidecar per file\n",
+            files.len()
+        ));
+    }
+    out.push_str("WITH (\n");
     out.push_str(&format!("  files = '{}'", globs.join(", ")));
+    // Before `date_order`, whose own trailing comment would swallow a comma.
+    if lock_plans {
+        out.push_str(",\n  plans = 'lock'");
+    }
     match (day_first, month_first) {
         (true, false) => out.push_str(",\n  date_order = 'dmy'"),
         (false, true) => out.push_str(",\n  date_order = 'mdy'"),

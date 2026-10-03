@@ -182,9 +182,14 @@ pub fn resolve(path: &Path, root: Option<&Path>, limits: Limits) -> Result<(Path
     }
     let inside = |f: &Path| f.is_file() && root.is_none_or(|r| crate::fileio::confine(f, r).is_ok());
     let text = path.to_string_lossy().into_owned();
+    // Declared by a sidecar beside it, or — for a member of a `plans =
+    // 'lock'` target, which has none — by the lock that holds its plan.
     let declared = MemberRef::resolve(&text, |m| {
         let f = Path::new(&m.path);
-        inside(f) && crate::sidecar::declares_member(f, m.sheet.as_deref(), m.region)
+        inside(f)
+            && (crate::sidecar::declares_member(f, m.sheet.as_deref(), m.region)
+                || ((m.sheet.is_some() || m.region.is_some())
+                    && crate::plans::find_holding_lock(f, m.sheet.as_deref(), m.region).is_some()))
     });
     let split = match declared {
         Ok(Some(m)) => Some(m),
@@ -273,9 +278,17 @@ pub fn profile_member(
             if req.rows.is_some() {
                 bail!("{name} already names its block; drop --rows");
             }
-            match crate::sidecar::load_member(file, sheet.as_deref(), Some(r)) {
-                Ok(crate::sidecar::SidecarStatus::Fresh(sc)) => (sc.spec, "sidecar".to_string()),
-                other => {
+            let loaded = crate::sidecar::load_member(file, sheet.as_deref(), Some(r));
+            // No sidecar: a `plans = 'lock'` target's lock may hold the
+            // block's plan.
+            let held = match &loaded {
+                Ok(crate::sidecar::SidecarStatus::Absent) => lock_frame(file, sheet.as_deref(), Some(r)),
+                _ => None,
+            };
+            match (held, loaded) {
+                (Some(found), _) => found,
+                (None, Ok(crate::sidecar::SidecarStatus::Fresh(sc))) => (sc.spec, "sidecar".to_string()),
+                (None, other) => {
                     let why = match other {
                         Ok(crate::sidecar::SidecarStatus::Stale(_)) => " (its sidecar is stale)".to_string(),
                         Err(e) => format!(" (its sidecar was refused: {e:#})"),
@@ -306,7 +319,7 @@ pub fn profile_member(
                 *pointer = Some(want.clone());
                 source.push_str("; record array from --pointer");
             }
-            None if source != "sidecar" => {
+            None if source != "sidecar" && !source.starts_with(LOCK_FRAME) => {
                 let all = crate::sniff::json_record_pointers(file, limits);
                 if all.len() > 1 {
                     candidates = all;
@@ -379,7 +392,10 @@ pub fn frame_for(
     let why = match crate::sidecar::load_member(path, sheet, None) {
         Ok(crate::sidecar::SidecarStatus::Fresh(sc)) => return Ok((sc.spec, "sidecar".into())),
         Ok(crate::sidecar::SidecarStatus::Stale(_)) => "the sidecar is stale".to_string(),
-        Ok(crate::sidecar::SidecarStatus::Absent) => absent_why(path, sheet),
+        Ok(crate::sidecar::SidecarStatus::Absent) => match lock_frame(path, sheet, None) {
+            Some(found) => return Ok(found),
+            None => absent_why(path, sheet),
+        },
         Err(e) => format!("the sidecar was refused: {e:#}"),
     };
     let spec = match sheet {
@@ -394,6 +410,27 @@ pub fn frame_for(
         }
     };
     Ok((spec, format!("sniffed ({why}; heuristics only, not saved)")))
+}
+
+/// How a profile names a frame read from a lock: `the lock of items.tdy.sql`.
+const LOCK_FRAME: &str = "the lock of ";
+
+/// The plan a `plans = 'lock'` target's lock holds for this member, when it
+/// has no sidecar — fresh only: a plan recorded against other bytes is not
+/// the frame anything would read, so the sniffer's frame is used instead,
+/// as for a stale sidecar.
+fn lock_frame(path: &Path, sheet: Option<&str>, region: Option<u32>) -> Option<(ParseSpec, String)> {
+    let (target, lock) = crate::plans::find_holding_lock(path, sheet, region)?;
+    let plans = crate::plans::Plans::new(&target, Some(&lock));
+    let dir = crate::lockfile::target_dir(&target).canonicalize().ok()?;
+    let rel = path.canonicalize().ok()?.strip_prefix(&dir).ok()?.to_string_lossy().replace('\\', "/");
+    let m = MemberRef { path: rel, sheet: sheet.map(str::to_string), region };
+    let plan = plans.plan_for(path, &m).ok()??;
+    if !plan.is_fresh(path).ok()? {
+        return None;
+    }
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Some(((*plan.spec).clone(), format!("{LOCK_FRAME}{name}")))
 }
 
 /// "No sidecar", naming the member sidecars that do exist beside the file:

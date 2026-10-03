@@ -191,6 +191,11 @@ enum Command {
         /// type-compatible column is not necessarily the right one.
         #[arg(long)]
         propose: bool,
+        /// On a `plans = 'lock'` target: move each tool-written sidecar whose
+        /// plan this fit proves identically into the lock, and delete it. A
+        /// hand-written (`manual`) sidecar, or one that differs, is kept.
+        #[arg(long)]
+        prune_sidecars: bool,
     },
     /// Check sidecars against a declared target schema.
     ///
@@ -256,8 +261,44 @@ fn check_json(
 
     let mut out = Vec::new();
     let mut bad = 0usize;
+    let lock = tdy::lockfile::Lock::load(target_path).ok().flatten();
+    let plans = tdy::plans::Plans::new(target_path, lock.as_ref());
     for f in files {
         use tdy::sidecar::SidecarStatus;
+        let held = match tdy::commands::lock_held(target_path, &plans, f) {
+            Ok(h) => h,
+            Err(e) => {
+                bad += 1;
+                out.push(serde_json::json!({
+                    "path": f.display().to_string(),
+                    "verdict": "refused",
+                    "plan": "lock",
+                    "error": format!("{e:#}"),
+                }));
+                continue;
+            }
+        };
+        if let Some((file, plan)) = held {
+            let v = judge(&plan.spec, target, false);
+            let mismatches: Vec<String> = v.mismatches().iter().map(|m| m.message()).collect();
+            let verdict = if plan.edited() {
+                "edited".into()
+            } else if plan.is_fresh(&file)? {
+                v.label().to_ascii_lowercase()
+            } else {
+                "stale".into()
+            };
+            if verdict != "conforms" {
+                bad += 1;
+            }
+            out.push(serde_json::json!({
+                "path": f.display().to_string(),
+                "verdict": verdict,
+                "plan": "lock",
+                "mismatches": mismatches,
+            }));
+            continue;
+        }
         let entry = match tdy::sidecar::load(f) {
             Ok(SidecarStatus::Fresh(sc)) => {
                 let v = judge(&sc.spec, target, false);
@@ -308,14 +349,21 @@ fn check_json(
 /// The orchestration lives in `report::fit_pile`; this renders its report as
 /// text (or JSON with `--json`) and turns "any member failed" into a nonzero
 /// exit, because a gate that exits zero when it found a problem is not a gate.
+/// `tdy fit`'s switches for a whole pile.
+struct FitFlags {
+    dry_run: bool,
+    propose: bool,
+    prune_sidecars: bool,
+    json: bool,
+}
+
 async fn fit_dataset(
     target_path: &std::path::Path,
     cfg: &tdy::config::Config,
-    dry_run: bool,
     accept: &[PathBuf],
-    propose: bool,
-    json: bool,
+    flags: FitFlags,
 ) -> Result<()> {
+    let FitFlags { dry_run, propose, prune_sidecars, json } = flags;
     let r = tdy::report::fit_pile(
         target_path,
         cfg,
@@ -327,6 +375,7 @@ async fn fit_dataset(
             // is that a file is being sent to a model.
             progress: Some(tdy::progress::stderr_sink()),
             root: None,
+            prune_sidecars,
         },
     )
     .await;
@@ -402,7 +451,7 @@ async fn fit_command(
     match tdy::fit::plan(file, &target, cfg, Some(&tdy::progress::stderr_sink())).await {
         Ok(planned) => {
             let (fitted, method, model) = (planned.fitted, planned.method, planned.model);
-            let report = serde_json::json!({
+            let mut report = serde_json::json!({
                 "path": file.display().to_string(),
                 "status": if fitted.review.is_some() { "needs_review" } else { "fits" },
                 "via": match method {
@@ -417,6 +466,9 @@ async fn fit_command(
                 "notes": fitted.spec.notes,
                 "dry_run": dry_run,
             });
+            if !dry_run && target.plans == tdy::target::PlanStore::Lock {
+                report["note"] = serde_json::Value::String(tdy::commands::overrides_note(target_path));
+            }
             if !dry_run {
                 tdy::sidecar::save(
                     file,
@@ -639,12 +691,16 @@ async fn run() -> Result<()> {
             let opts = tdy::draft::DraftOpts { records };
             print!("{}", tdy::draft::draft_target_with(&files, cfg.limits, opts)?);
         }
-        Command::Fit { target, file, accept, dry_run, propose } => {
+        Command::Fit { target, file, accept, dry_run, propose, prune_sidecars } => {
             let cfg = config::load(&overrides)?;
             match file {
+                Some(_) if prune_sidecars => anyhow::bail!(
+                    "--prune-sidecars applies to a whole pile; drop the FILE to fit every member"
+                ),
                 Some(f) => fit_command(&target, &f, &cfg, dry_run, propose, cli.json).await?,
                 None => {
-                    fit_dataset(&target, &cfg, dry_run, &accept, propose, cli.json).await?
+                    let flags = FitFlags { dry_run, propose, prune_sidecars, json: cli.json };
+                    fit_dataset(&target, &cfg, &accept, flags).await?
                 }
             }
         }

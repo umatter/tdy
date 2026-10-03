@@ -967,6 +967,9 @@ fn a_hand_written_lock_over_two_sheets_reads_both_and_names_them() {
         spec_digest: tdy::lockfile::spec_digest_for(&book, Some(sheet), None),
         review: None,
         accepted: false,
+        spec: None,
+        notes: Vec::new(),
+        plan_check: None,
     };
     Lock {
         lock_version: LOCK_VERSION,
@@ -974,6 +977,7 @@ fn a_hand_written_lock_over_two_sheets_reads_both_and_names_them() {
         target_hash: tdy::lockfile::target_hash(&target),
         tool_version: "test".into(),
         created_at: "now".into(),
+        specs: Vec::new(),
         members: vec![member("Q1"), member("Q2")],
     }
     .save(&t)

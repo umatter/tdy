@@ -70,12 +70,20 @@ pub async fn sniff_text(path: &Path, cfg: &Config, opts: SniffCli<'_>) -> Result
 pub fn validate_text(path: &Path, cfg: &Config, restamp: bool) -> Result<String> {
     let (file, sheet, region) = sidecar::resolve_ref(path)?;
     let sc_path = sidecar::sidecar_path_for(&file, sheet.as_deref(), region);
+    // Checked before validating: a successful `--stamp` creates nothing, so
+    // the file's existence now is what it was.
+    let has_sidecar = sc_path.exists();
     let notes = provider::validate_quiet(path, cfg, restamp)?;
     let mut text = String::new();
     if restamp {
         writeln!(text, "re-fingerprinted {} (method = manual)", sc_path.display())?;
     }
-    writeln!(text, "{}: ok", sc_path.display())?;
+    if has_sidecar {
+        writeln!(text, "{}: ok", sc_path.display())?;
+    } else {
+        // A lock-held plan: the member, not a sidecar that does not exist.
+        writeln!(text, "{}: ok", path.display())?;
+    }
     for n in &notes {
         writeln!(text, "  note: {n}")?;
     }
@@ -136,9 +144,60 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
         return Ok(CheckOutcome { text, ok: true, bad: 0 });
     }
 
+    // A member of a `plans = 'lock'` target may have no sidecar at all: its
+    // plan is the one the lock holds, and that is the plan checked.
+    let lock = crate::lockfile::Lock::load(target_path).ok().flatten();
+    let plans = crate::plans::Plans::new(target_path, lock.as_ref());
     let mut bad = 0usize;
     for f in files {
         use crate::sidecar::SidecarStatus;
+        let held = match lock_held(target_path, &plans, f) {
+            Ok(h) => h,
+            // A lock plan refused for this member (edited, or not recorded
+            // for it): what `dataset()` would say, as a line, not an abort.
+            Err(e) => {
+                writeln!(text, "\n{}: REFUSED — {}", f.display(), one_line(&format!("{e:#}")))?;
+                bad += 1;
+                continue;
+            }
+        };
+        if let Some((file, plan)) = held {
+            let shown = f.display();
+            let verdict = judge(&plan.spec, &target, false);
+            if plan.edited() {
+                writeln!(
+                    text,
+                    "\n{shown}: EDITED — its plan in {} was edited by hand: it no longer hashes to \
+                     its id{}, and a query refuses it.\n  Run `tdy fit {}` to rebuild the lock; give \
+                     the member a sidecar (method = \"manual\") to change its plan.",
+                    plan.whereabouts(),
+                    plans.lock().map(crate::plans::written_by_note).unwrap_or_default(),
+                    target_path.display()
+                )?;
+                bad += 1;
+                continue;
+            }
+            if !plan.is_fresh(&file)? {
+                writeln!(
+                    text,
+                    "\n{shown}: STALE — the file has changed since its plan was recorded in {}, \
+                     so this is not the plan a query would use.\n  Run `tdy fit {}` to re-plan it, \
+                     then check again.",
+                    plan.whereabouts(),
+                    target_path.display()
+                )?;
+                bad += 1;
+            } else {
+                writeln!(text, "\n{shown}: {} — plan held in {}", verdict.label(), plan.whereabouts())?;
+                if !verdict.is_ok() {
+                    bad += 1;
+                }
+            }
+            for m in verdict.mismatches() {
+                writeln!(text, "  {}", m.message())?;
+            }
+            continue;
+        }
         // `--against book.xlsx#Q1` checks one sheet member's sidecar, which
         // is a file beside the workbook rather than a section of anything.
         let (file, sheet, region) = crate::sidecar::resolve_ref(f)?;
@@ -253,6 +312,43 @@ pub fn check_text(target_path: &Path, files: &[PathBuf], limits: Limits) -> Resu
     Ok(CheckOutcome { text, ok: bad == 0, bad })
 }
 
+/// The plan a target's lock holds for `f` — a data file, or a member
+/// reference (`book.xlsx#Q1`) — when the member has no sidecar of its own.
+/// `None` when it has one (the sidecar is the plan, and is checked as ever)
+/// or when the lock holds nothing for it.
+pub fn lock_held(
+    target_path: &Path,
+    plans: &crate::plans::Plans,
+    f: &Path,
+) -> Result<Option<(PathBuf, crate::plans::Plan)>> {
+    if plans.lock().is_none_or(|l| l.specs.is_empty()) {
+        return Ok(None);
+    }
+    let dir = crate::lockfile::target_dir(target_path);
+    let named = crate::member::relative_to_target(&f.to_string_lossy(), &dir);
+    let held = |m: &crate::member::MemberRef| plans.entry(m).is_some_and(|e| e.spec.is_some());
+    let Ok(Some(m)) = crate::member::MemberRef::resolve(&named, held) else { return Ok(None) };
+    let file = dir.join(&m.path);
+    if crate::sidecar::sidecar_path_for(&file, m.sheet.as_deref(), m.region).exists() {
+        return Ok(None);
+    }
+    Ok(plans.plan_for(&file, &m)?.map(|p| (file, p)))
+}
+
+/// What a sidecar written by `tdy fit T FILE` does to a `plans = 'lock'`
+/// pile: the sidecar wins, so it is drift until a pile fit records it.
+pub fn overrides_note(target_path: &Path) -> String {
+    format!(
+        "note: `{0}` keeps its plans in the lock; this sidecar overrides the lock's plan for this \
+         member until `tdy fit {0}` records it (a query refuses it as drift until then)",
+        target_path.display()
+    )
+}
+
+fn one_line(s: &str) -> String {
+    s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
 pub struct FitOneOutcome {
     pub text: String,
     pub ok: bool,
@@ -335,6 +431,9 @@ pub async fn fit_one_text(
                 },
             )?;
             writeln!(text, "\nwrote {}", path.display())?;
+            if target.plans == crate::target::PlanStore::Lock {
+                writeln!(text, "{}", overrides_note(target_path))?;
+            }
             Ok(FitOneOutcome { text, ok: true, wrote: Some(path), gaps: false })
         }
         Err(FitError::Gaps(gaps)) => {
