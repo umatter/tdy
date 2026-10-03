@@ -261,11 +261,11 @@ fn open_input(
         .with_context(|| format!("cannot stat {}", path.display()))?;
     if meta.len() > opts.limits.max_file_bytes {
         bail!(
-            "{} is {:.1} GB, above the {:.1} GB limit \
+            "{} is {}, above the {} limit \
              (raise [limits].max_file_bytes in the config if you really mean it)",
             path.display(),
-            meta.len() as f64 / 1e9,
-            opts.limits.max_file_bytes as f64 / 1e9
+            crate::fileio::human_bytes(meta.len()),
+            crate::fileio::human_bytes(opts.limits.max_file_bytes)
         );
     }
     let f = std::fs::File::open(path)

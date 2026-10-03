@@ -733,9 +733,9 @@ struct JsonLeaf {
 impl JsonLeaves {
     /// Read one document as one record and collect its leaves.
     fn read_document(&mut self, path: &Path, label: &str, limits: Limits) -> Result<()> {
-        let bytes = crate::fileio::read_all(path, limits.max_file_bytes)?;
-        let (text, _) = crate::sample::decode_text(&bytes, None);
+        let text = crate::engine::read_json_document(path, limits)?;
         let doc = crate::jsondoc::Node::parse(&text)?;
+        drop(text);
         let crate::jsondoc::Node::Object(entries) = &doc else {
             anyhow::bail!("expected one JSON object, found {}", doc.kind());
         };
