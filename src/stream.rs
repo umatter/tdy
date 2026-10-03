@@ -261,11 +261,11 @@ fn open_input(
         .with_context(|| format!("cannot stat {}", path.display()))?;
     if meta.len() > opts.limits.max_file_bytes {
         bail!(
-            "{} is {:.1} GB, above the {:.1} GB limit \
+            "{} is {}, above the {} limit \
              (raise [limits].max_file_bytes in the config if you really mean it)",
             path.display(),
-            meta.len() as f64 / 1e9,
-            opts.limits.max_file_bytes as f64 / 1e9
+            crate::fileio::human_bytes(meta.len()),
+            crate::fileio::human_bytes(opts.limits.max_file_bytes)
         );
     }
     let f = std::fs::File::open(path)
@@ -328,7 +328,14 @@ enum Source {
     /// NDJSON. `header` comes from [`discover_ndjson`]; a record's values are
     /// emitted in that order, with a missing key an empty string, exactly as
     /// the materialising path does it.
-    Ndjson { rdr: Box<dyn BufRead + Send>, buf: Vec<u8>, header: Vec<String>, line_no: usize },
+    Ndjson {
+        rdr: Box<dyn BufRead + Send>,
+        buf: Vec<u8>,
+        header: Vec<String>,
+        /// Key to column, so a wide record is placed in one pass.
+        index: std::collections::HashMap<String, usize>,
+        line_no: usize,
+    },
 }
 
 /// Read one line, without its terminator. `Ok(false)` at end of input.
@@ -388,8 +395,7 @@ fn header_of(extraction: &Extraction) -> Result<Option<Vec<String>>> {
 fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usize)> {
     let mut rdr = open_input(path, None, opts)?;
     let mut buf = Vec::with_capacity(4096);
-    let mut header: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut keys = crate::engine::JsonHeader::default();
     let mut records = 0usize;
     let mut objects = 0usize;
     let mut line_no = 0usize;
@@ -400,7 +406,7 @@ fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usiz
         if line.trim().is_empty() {
             continue;
         }
-        let parsed: serde_json::Value = match serde_json::from_str(line.as_ref()) {
+        let parsed = match crate::jsondoc::Node::parse(line.as_ref()) {
             Ok(v) => v,
             Err(e) => {
                 // "Truncated last line" is a different diagnosis from "broken
@@ -418,13 +424,9 @@ fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usiz
             }
         };
         records += 1;
-        if let serde_json::Value::Object(map) = &parsed {
+        if let crate::jsondoc::Node::Object(entries) = &parsed {
             objects += 1;
-            for k in map.keys() {
-                if seen.insert(k.clone()) {
-                    header.push(k.clone());
-                }
-            }
+            keys.add(entries);
         }
     }
 
@@ -437,9 +439,9 @@ fn discover_ndjson(path: &Path, opts: &ExtractOpts) -> Result<(Vec<String>, usiz
         );
     }
     if objects == 0 {
-        header = vec!["value".to_string()];
+        return Ok((vec!["value".to_string()], records));
     }
-    Ok((header, records))
+    Ok((keys.names, records))
 }
 
 /// Whether any further non-blank line exists. Consumes the rest of the input,
@@ -508,11 +510,13 @@ impl Source {
                     .map(|h| h.to_vec())
                     .ok_or_else(|| anyhow!("internal: NDJSON opened without a header"))?;
                 let names = header.clone();
+                let index = header.iter().enumerate().map(|(i, k)| (k.clone(), i)).collect();
                 (
                     Source::Ndjson {
                         rdr: input,
                         buf: Vec::with_capacity(4096),
                         header,
+                        index,
                         line_no: 0,
                     },
                     Some(names),
@@ -670,21 +674,26 @@ impl Source {
                 }
                 Ok(None)
             }
-            Source::Ndjson { rdr, buf, header, line_no } => {
+            Source::Ndjson { rdr, buf, header, index, line_no } => {
                 while read_line(rdr.as_mut(), buf)? {
                     *line_no += 1;
                     let line = text_of(buf);
                     if line.trim().is_empty() {
                         continue;
                     }
-                    let v: serde_json::Value = serde_json::from_str(line.as_ref())
+                    let v = crate::jsondoc::Node::parse(line.as_ref())
                         .map_err(|e| anyhow!("invalid JSON on line {}: {e}", line_no))?;
-                    return Ok(Some(match &v {
-                        serde_json::Value::Object(map) => header
-                            .iter()
-                            .map(|k| map.get(k).map(crate::engine::json_scalar).unwrap_or_default())
-                            .collect(),
-                        other => vec![crate::engine::json_scalar(other)],
+                    return Ok(Some(match v {
+                        crate::jsondoc::Node::Object(entries) => {
+                            let mut row = vec![String::new(); header.len()];
+                            for (k, v) in entries {
+                                if let Some(&i) = index.get(&k) {
+                                    row[i] = v.into_cell();
+                                }
+                            }
+                            row
+                        }
+                        other => vec![other.into_cell()],
                     }));
                 }
                 Ok(None)
@@ -941,6 +950,99 @@ pub struct Verification {
     /// `narrowed` so the caller can still say *why* the column was left as
     /// text instead of going silent.
     pub narrow_fractional: Vec<usize>,
+    /// Float64 columns holding a literal no double is — more than 17
+    /// significant digits, or an integer past 2^53 no double equals.
+    pub inexact_floats: Vec<InexactFloat>,
+}
+
+/// A float64 column the file proves is not one: its first literal no double
+/// is (more than 17 significant digits, or an integer past 2^53 that is not
+/// exactly a double), and the exact home every value in the file has, if any.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InexactFloat {
+    pub column: usize,
+    /// 1-based data row.
+    pub row: usize,
+    pub value: String,
+    /// What a float64 would read it as.
+    pub reads_as: String,
+    /// `Some(scale)` when every value fits DECIMAL(38, scale) — no exponent,
+    /// no integer past i64, integer digits plus the widest written fraction
+    /// at most 38; `None` means text.
+    pub decimal_scale: Option<i8>,
+}
+
+/// One float64 column's literals, audited as they stream past: the first
+/// no double is, and whether a DECIMAL could hold them
+/// all. Bounded: a few counters, whatever the file's length.
+#[derive(Debug, Clone)]
+struct FloatAudit {
+    decimal: Option<char>,
+    thousands: Option<char>,
+    first: Option<(usize, String, String)>,
+    max_int: usize,
+    max_frac: usize,
+    decimal_home: bool,
+}
+
+impl FloatAudit {
+    fn new(parse: &ValueParsing) -> Self {
+        FloatAudit {
+            decimal: parse.decimal_separator,
+            thousands: parse.thousands_separator,
+            first: None,
+            max_int: 0,
+            max_frac: 0,
+            decimal_home: true,
+        }
+    }
+
+    /// `row` is 1-based. Anything that is not a numeric literal (a missing
+    /// marker, a stray) is the parse's business, not this.
+    fn observe(&mut self, v: &str, row: usize) {
+        // The common case in one tight pass over the bytes: no exponent, at
+        // most 17 digits, and an integer only up to 15 (below 2^53) — a
+        // literal some double is, whatever its shape. Digits are counted
+        // with leading zeros, which can only overstate a DECIMAL's width.
+        let (mut int, mut frac, mut point, mut exp) = (0usize, 0usize, false, false);
+        let dec = self.decimal.unwrap_or('.');
+        for &c in v.as_bytes() {
+            match c {
+                b'0'..=b'9' if point => frac += 1,
+                b'0'..=b'9' => int += 1,
+                b'e' | b'E' => exp = true,
+                _ if char::from(c) == dec && self.thousands != Some(dec) => point = true,
+                _ => {}
+            }
+        }
+        if !exp && int + frac <= 17 && (point || int <= 15) {
+            self.max_int = self.max_int.max(int);
+            self.max_frac = self.max_frac.max(frac);
+            return;
+        }
+        let Some(l) = crate::numfmt::shape(v, self.decimal, self.thousands) else { return };
+        self.max_int = self.max_int.max(l.int_digits);
+        self.max_frac = self.max_frac.max(l.frac_digits);
+        if l.exponent || l.past_i64 {
+            self.decimal_home = false;
+        }
+        if self.first.is_none() && l.float_unsafe() {
+            let reads = crate::numfmt::float_reads_as(v, self.decimal, self.thousands);
+            self.first = Some((row, v.trim().to_string(), reads));
+        }
+    }
+
+    fn finish(self, column: usize) -> Option<InexactFloat> {
+        let (row, value, reads_as) = self.first?;
+        let fits = self.decimal_home && self.max_int + self.max_frac <= 38;
+        Some(InexactFloat { column, row, value, reads_as, decimal_scale: fits.then_some(self.max_frac as i8) })
+    }
+}
+
+fn finish_audits(audits: HashMap<usize, FloatAudit>) -> Vec<InexactFloat> {
+    let mut out: Vec<InexactFloat> = audits.into_iter().filter_map(|(i, a)| a.finish(i)).collect();
+    out.sort_by_key(|f| f.column);
+    out
 }
 
 /// Incrementally narrows one `Utf8` column whose probe was empty, from the
@@ -1059,6 +1161,26 @@ impl NarrowTracker {
 /// Feed one batch's raw string values for the narrow candidates into their
 /// trackers. `positions` maps a position in the *read* batch to the column's
 /// index in the original spec.
+/// Audit the raw twins of a batch's float64 columns; `row_base` is how many
+/// data rows came before it.
+fn observe_float_batch(
+    batch: &RecordBatch,
+    positions: &[(usize, usize)],
+    audits: &mut HashMap<usize, FloatAudit>,
+    row_base: usize,
+) {
+    use datafusion::arrow::array::{Array, StringArray};
+    for &(pos, orig) in positions {
+        let Some(arr) = batch.column(pos).as_any().downcast_ref::<StringArray>() else { continue };
+        let Some(audit) = audits.get_mut(&orig) else { continue };
+        for r in 0..arr.len() {
+            if !arr.is_null(r) {
+                audit.observe(arr.value(r), row_base + r + 1);
+            }
+        }
+    }
+}
+
 fn observe_narrow_batch(
     batch: &RecordBatch,
     positions: &[(usize, usize)],
@@ -1139,9 +1261,32 @@ pub fn verify(
     let mut trackers: HashMap<usize, NarrowTracker> =
         narrow_positions.iter().map(|&(_, orig)| (orig, NarrowTracker::new())).collect();
 
+    // A float64 column parses whether or not a double can be the number the
+    // file wrote, so the typed column cannot say; its raw literals can. Each
+    // is read a second time, as untouched text, beside the typed column, and
+    // scanned (numfmt::shape: bytes, no float arithmetic).
+    let mut float_positions: Vec<(usize, usize)> = Vec::new();
+    let mut audits: HashMap<usize, FloatAudit> = HashMap::new();
+    for (i, c) in spec.columns.iter().enumerate() {
+        if c.dtype != DType::Float64 {
+            continue;
+        }
+        float_positions.push((probe.columns.len(), i));
+        audits.insert(i, FloatAudit::new(&c.parse));
+        probe.columns.push(crate::spec::ColumnSpec {
+            name: format!("{}\u{1}raw", c.name),
+            source: Some(c.source_name().to_string()),
+            dtype: DType::Utf8,
+            nullable: true,
+            parse: ValueParsing::default(),
+            pointer: c.pointer.clone(),
+        });
+    }
+
     let mut rows = 0usize;
     let clean = if can_stream(&probe) {
         execute_with(&probe, path, limits, |b| {
+            observe_float_batch(&b, &float_positions, &mut audits, rows);
             rows += b.num_rows();
             observe_narrow_batch(&b, &narrow_positions, &mut trackers);
             Ok(())
@@ -1150,8 +1295,9 @@ pub fn verify(
     } else {
         match crate::engine::execute_batches(&probe, path, limits) {
             Ok(bs) => {
-                rows = bs.iter().map(|b| b.num_rows()).sum();
                 for b in &bs {
+                    observe_float_batch(b, &float_positions, &mut audits, rows);
+                    rows += b.num_rows();
                     observe_narrow_batch(b, &narrow_positions, &mut trackers);
                 }
                 true
@@ -1161,7 +1307,13 @@ pub fn verify(
     };
     if clean {
         let (narrowed, narrow_fractional) = resolve_trackers(trackers);
-        return Ok(Verification { rows, narrowed, narrow_fractional, ..Verification::default() });
+        return Ok(Verification {
+            rows,
+            narrowed,
+            narrow_fractional,
+            inexact_floats: finish_audits(audits),
+            ..Verification::default()
+        });
     }
     analyse(spec, path, limits, narrow)
 }
@@ -1245,6 +1397,13 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits, narrow: &[usize]) -> R
     let mut bad: Vec<Tally> = vec![Tally::default(); spec.columns.len()];
     let mut trackers: HashMap<usize, NarrowTracker> =
         narrow.iter().map(|&i| (i, NarrowTracker::new())).collect();
+    let mut audits: HashMap<usize, FloatAudit> = spec
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.dtype == DType::Float64)
+        .map(|(i, c)| (i, FloatAudit::new(&c.parse)))
+        .collect();
     let mut repeats = 0usize;
     let mut row_base = 0usize;
     // The header cell each column reads from, which is what a repeated header
@@ -1289,6 +1448,11 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits, narrow: &[usize]) -> R
             if let Some(tracker) = trackers.get_mut(&i) {
                 for v in &values {
                     tracker.observe(v);
+                }
+            }
+            if let Some(audit) = audits.get_mut(&i) {
+                for (r, v) in values.iter().enumerate() {
+                    audit.observe(v, row_base + r + 1);
                 }
             }
             if build_column_at(col, &values, row_base).is_ok() {
@@ -1344,6 +1508,7 @@ fn analyse(spec: &ParseSpec, path: &Path, limits: Limits, narrow: &[usize]) -> R
         repeated_header_rows: repeats,
         narrowed,
         narrow_fractional,
+        inexact_floats: finish_audits(audits),
     })
 }
 

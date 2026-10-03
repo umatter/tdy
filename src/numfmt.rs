@@ -351,6 +351,158 @@ pub fn frac_digits_with(v: &str, decimal: Option<char>, thousands: Option<char>)
     }
 }
 
+/// A numeric literal's shape under a convention, read by one scan of its
+/// bytes with no allocation and no float arithmetic — the sniffer, the draft
+/// and the whole-file verification ask it of every value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shape {
+    /// Integer digits, leading zeros not counted.
+    pub int_digits: usize,
+    /// Fractional digits as written, trailing zeros included (a DECIMAL's
+    /// scale must hold every written digit).
+    pub frac_digits: usize,
+    /// Significant digits of the mantissa: leading and trailing zeros not
+    /// counted, whether fractional or an integer's (`1.500` is 2, `12300` is 3).
+    pub significant: usize,
+    /// Written with an exponent.
+    pub exponent: bool,
+    /// Written as an integer (no point, no exponent) outside i64.
+    pub past_i64: bool,
+    /// Written as an integer that is not exactly a double (past 2^53 and
+    /// not representable: `9007199254740993`).
+    pub not_a_double: bool,
+}
+
+impl Shape {
+    /// Whether a float64 column would read this literal as another number
+    /// than the one written, beyond float64's ordinary nature: more than 17
+    /// significant digits, which no double carries, or an integer no double
+    /// is. Within 17 digits a double reads the nearest value, which is what
+    /// the type says — `0.12345678901234567` stays float64.
+    pub fn float_unsafe(&self) -> bool {
+        self.significant > 17 || self.not_a_double
+    }
+}
+
+/// [`Shape`] of `v`, or `None` for anything that is not an optional sign,
+/// digits with the convention's separators, and an optional `e`/`E`
+/// exponent with digits.
+pub fn shape(v: &str, decimal: Option<char>, thousands: Option<char>) -> Option<Shape> {
+    let b = v.trim().as_bytes();
+    let dec = match decimal {
+        Some(d) => Some(d),
+        None if thousands == Some('.') => None,
+        None => Some('.'),
+    };
+    // Separators beyond ASCII are not numeric shapes this scan reads.
+    let dec = match dec {
+        Some(c) if c.is_ascii() => Some(c as u8),
+        Some(_) => return None,
+        None => None,
+    };
+    let th = match thousands {
+        Some(c) if c.is_ascii() => Some(c as u8),
+        Some(_) => return None,
+        None => None,
+    };
+    let (negative, mut i) = match b.first() {
+        Some(b'-') => (true, 1),
+        Some(b'+') => (false, 1),
+        _ => (false, 0),
+    };
+    let mut int_written = 0usize;
+    let mut int_digits = 0usize;
+    let mut frac_digits = 0usize;
+    let mut point = false;
+    let mut significant = 0usize;
+    let mut started = false;
+    let mut pending_zeros = 0usize; // zeros after the last nonzero digit
+    let mut sig_value: u64 = 0; // the significant digits, while there are at most 17
+    let mut int_value: u64 = 0; // the integer part, while it fits
+    let mut int_overflow = false;
+    while i < b.len() {
+        let c = b[i];
+        i += 1;
+        if c.is_ascii_digit() {
+            let d = c - b'0';
+            if point {
+                frac_digits += 1;
+            } else {
+                int_written += 1;
+                if int_digits > 0 || d != 0 {
+                    int_digits += 1;
+                }
+                match int_value.checked_mul(10).and_then(|x| x.checked_add(u64::from(d))) {
+                    Some(x) => int_value = x,
+                    None => int_overflow = true,
+                }
+            }
+            if d == 0 {
+                if started {
+                    pending_zeros += 1;
+                }
+                continue;
+            }
+            if started {
+                significant += pending_zeros;
+            }
+            significant += 1;
+            if significant <= 17 {
+                for _ in 0..pending_zeros {
+                    sig_value *= 10;
+                }
+                sig_value = sig_value * 10 + u64::from(d);
+            }
+            pending_zeros = 0;
+            started = true;
+        } else if Some(c) == dec && !point {
+            point = true;
+        } else if Some(c) == th && !point {
+            // A thousands separator: grouping, not a digit.
+        } else if c == b'e' || c == b'E' {
+            i -= 1;
+            break;
+        } else {
+            return None;
+        }
+    }
+    if int_written == 0 {
+        return None;
+    }
+    let exponent = i < b.len();
+    if exponent {
+        let rest = &b[i + 1..];
+        let digits = rest.strip_prefix(b"+").or_else(|| rest.strip_prefix(b"-")).unwrap_or(rest);
+        if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+    }
+    let integer = !point && !exponent;
+    let past_i64 = integer
+        && (int_overflow || if negative { int_value > 1u64 << 63 } else { int_value > (1u64 << 63) - 1 });
+    // An integer is a double exactly when its odd part fits 53 bits: with d
+    // its significant digits and z the zeros after them, n = d * 10^z =
+    // (d >> t) * 5^z * 2^(t + z), t being d's trailing binary zeros.
+    let not_a_double = integer && significant <= 17 && started && {
+        let z = pending_zeros;
+        let m = u128::from(sig_value >> sig_value.trailing_zeros());
+        z > 22 || m * 5u128.pow(z as u32) >= 1u128 << 53
+    };
+    Some(Shape { int_digits, frac_digits, significant, exponent, past_i64, not_a_double })
+}
+
+/// What a float64 column would read `v` as, for a note. Off the hot path:
+/// asked only of a literal [`Shape::float_unsafe`] already flagged.
+pub fn float_reads_as(v: &str, decimal: Option<char>, thousands: Option<char>) -> String {
+    let t: String = v
+        .trim()
+        .chars()
+        .filter(|&c| Some(c) != thousands)
+        .map(|c| if Some(c) == decimal { '.' } else { c })
+        .collect();
+    t.parse::<f64>().map(|x| x.to_string()).unwrap_or(t)
+}
+
 /// Is every value plainly integral (no separators, no fraction)?
 pub fn all_integral(values: &[&str]) -> bool {
     values.iter().all(|v| {
@@ -363,6 +515,50 @@ pub fn all_integral(values: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shape_counts_digits_on_the_literal() {
+        let sig = |v: &str| shape(v, None, None).unwrap().significant;
+        // 2 + 16: eighteen, the trailing zeros not counted.
+        assert_eq!(sig("25.62775822916507630000"), 18);
+        assert_eq!(sig("25.6277582291650760000"), 17);
+        assert_eq!(sig("12300000000000000000000"), 3);
+        assert_eq!(sig("0.00012300"), 3);
+        assert_eq!(sig("1.2345678901234567891e5"), 20);
+        assert_eq!(sig("-0.0"), 0);
+        assert_eq!(sig("1.50000000000000000000"), 2);
+        assert_eq!(sig("10203"), 5);
+        assert_eq!(shape("1'234'567.891234567891", Some('.'), Some('\'')).unwrap().significant, 19);
+        assert_eq!(shape("1.234.567,5", Some(','), Some('.')).unwrap().significant, 8);
+        assert!(shape("1e", None, None).is_none());
+        assert!(shape("abc", None, None).is_none());
+        assert!(shape(".5", None, None).is_none());
+        assert!(shape("1.5e-7", None, None).unwrap().exponent);
+    }
+
+    #[test]
+    fn an_integer_is_a_double_only_when_its_odd_part_fits_53_bits() {
+        let nd = |v: &str| shape(v, None, None).unwrap().not_a_double;
+        assert!(nd("9007199254740993"));
+        assert!(!nd("9007199254740992"));
+        assert!(!nd("18014398509481984"));
+        assert!(nd("18014398509481985"));
+        assert!(!nd("-9007199254740992"));
+        assert!(!nd("100000000000000000000")); // 10^20 = 5^20 * 2^20, 5^20 < 2^53
+        assert!(nd("12300000000000000000000"));
+        assert!(!nd("0"));
+        assert!(!nd("9007199254740993.0"), "written with a point: (a) decides it");
+    }
+
+    #[test]
+    fn past_i64_takes_the_sign_into_account() {
+        let p = |v: &str| shape(v, None, None).unwrap().past_i64;
+        assert!(!p("-9223372036854775808"));
+        assert!(!p("9223372036854775807"));
+        assert!(p("-9223372036854775809"));
+        assert!(p("9223372036854775808"));
+        assert!(p("123456789012345678901234567890123456789012"));
+    }
 
     fn inf(vs: &[&str]) -> Option<NumericFormat> {
         infer(vs)

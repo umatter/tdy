@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 999 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 1086 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -805,13 +805,84 @@ None of that is quadratic: it is one 47 KB sidecar per member (121 columns, each
 spelling out its whole NA vocabulary) — 335 MB of TOML parsed and fingerprints checked on
 every refit, query and listing (`.ls` takes as long with the target moved away). Those are
 the numbers with `plans = 'sidecars'`; **Plans in the lock** below is the slice that took
-them to 5 s, 6 s and 0.6 s. Known limits:
-a JSON document over the 4 MiB probe cap cannot be fitted ("EOF while parsing a string at …
-column 4194304" — the probe reads a bounded prefix, which is no document); an integer past
-u64 or a decimal past f64's digits is rendered through f64 (`1e20`) on every JSON path, and
-serde_json's `arbitrary_precision`, which would keep the text, changes how every
-`serde_json::Value` number serialises through anything else (a `Value` written as TOML became a
-table), so it was tried and reverted.
+them to 5 s, 6 s and 0.6 s.
+
+**JSON data is read by `src/jsondoc.rs`, not serde_json** (2026-10-02). serde_json holds a
+number as u64/i64/f64, so `12345678901234567890123` read as `1.2345678901234568e+22` and a
+thirty-digit amount lost its tail, silently, on every JSON path; its `arbitrary_precision`
+feature keeps the text but changes how every `serde_json::Value` number serialises through
+anything else (a `Value` written as TOML became a table), so it was tried and reverted. The
+reader is a strict RFC 8259 recursive descent over a `&str` with serde_json's nesting limit
+(128), its refusal text, line and column, and its `is_eof` classification — the NDJSON
+truncated-last-line diagnosis rests on that — so every message reads as it did. Its `Node`
+keeps keys in document order and each number as its source text, rendered into a cell only
+when one is asked for (header discovery and the sniffer's walks never render), by
+**`jsondoc::render`'s rule**: if serde_json held the number exactly (u64/i64, or an f64 whose shortest rendering
+denotes the same real number — compared as normalised decimal digits, never as floats), the
+cell is serde_json's rendering (`1e3` → `1000.0`, `-0` → `-0.0`); otherwise it is the source
+text verbatim. That is not "nothing moves": a float64 column moves where serde_json was wrong.
+Built without `float_roundtrip`, serde_json reads a 17-digit literal as `significand as f64`
+then one multiply or divide by a power of ten — two roundings — and lands one ULP off for about
+one value in ten (10.6% of a random float column of 595k rows; `0.09743057599473337` read as
+`…336`). Such a literal is not exact by the rule, reaches the Float64 cast as written and is
+parsed correctly rounded: a correction, pinned by
+`json_numbers::a_seventeen_digit_double_is_correctly_rounded`. An integer written without
+fraction or exponent past u64/i64 is never exact, even when a double equals it
+(`100000000000000000000`, not `1e+20`). Every data path goes through it — the record and
+array extractions, NDJSON in `engine` and `stream`, `json_pointer_value`'s re-read of a nested
+cell (whose JSON text `Node::to_json` writes from the reader's tree, numbers verbatim, keys
+sorted and escapes as serde_json wrote them), the sniffer's walks and the draft's leaves. Two
+orders are kept on purpose: a record array's header and the sniffer's walks follow the
+**sorted** key order `serde_json::Value` gave them (`engine::JsonHeader`,
+`Node::sorted_entries`), because a header must not reorder because the reader changed; only a
+record's own header is in document order, as before. serde_json stays for tdy's own JSON
+(`--json`, MCP, the JSON Schema). `jsondoc`'s differential test reads every JSON fixture both
+ways and requires agreement but for inexact numbers. Typing did not change: an integer past
+i64 stays text or fits a declared `DECIMAL(38,0)`; a long decimal parses exactly into
+`DECIMAL(p,s)`, or is refused under the rounding rule. A plain literal (no `e`/`E`) that
+serde_json would print in exponent form keeps its written text too (`0.00000123`, not
+`1.23e-6`; `0.000000000000000001`, not `1e-18`), because a `DECIMAL` column refuses exponent
+form and main refused those values for that reason; a literal written with an exponent keeps
+serde_json's rendering as before. And **typing never chooses float64 for a literal no double
+is** — one predicate, `numfmt::shape(..).float_unsafe()`, a byte scan with no allocation and no
+float arithmetic, asked by the sniffer's sample (`sniff::guess_type`), the draft (which runs
+`guess_type` over every value) and the whole-file verification (`stream::verify`, which reads
+each float64 column a second time as raw text in the same pass). A literal is unsafe when (a) it
+carries more than 17 significant digits, counted on the mantissa's digits with leading and
+trailing zeros (fractional or an integer's) not counted, or (b) it is written as an integer that
+is not exactly a double (its odd part `d >> t * 5^z` reaches 2^53 — integer arithmetic:
+`9007199254740993` is unsafe, `9007199254740992` and `18014398509481984` are not). Within 17
+digits a double reads the nearest value, which is float64's nature, so `0.12345678901234567` and
+`%.17g` output (`43.789593000000004`) stay float64 — a round-trip test was tried first and moved
+127 real files for exactly such literals. A column holding an unsafe literal is `DECIMAL(38, s)`
+when every value fits (no exponent, no integer past i64, integer digits plus scale at most 38),
+TEXT otherwise, each with a note naming the value and what a float64 would read it as; an
+integer past i64 beside fractions is TEXT, as a column of such integers already was. The scale
+of a DECIMAL chosen from the sample is the sample's, and a later longer value is rounded
+half-away with its note, as for every sniffed decimal; one chosen by the whole-file pass is the
+widest scale any value in the file has. In a draft, a column some file typed away from float64
+for such a value is never widened back to DOUBLE by another file's floats (`merge` would):
+`draft::settle_no_double` measures every value of every file holding it as float or decimal —
+DECIMAL(38, widest scale) when all fit, with a comment naming the value and no rounding,
+TEXT with the "settle it" comment otherwise; rounding is declared only when a sighting could not
+be measured (a block framed from a scratch copy). It finds such a column by the sniff note's
+words (`sniff::NO_DOUBLE`, `no_double_value`). Float+decimal with no such value still widens to
+DOUBLE. `--quick` skips the whole-file pass and says so — including that such a literal past the
+sample is then read rounded without a word; a target
+that declares DOUBLE is the person's choice and `fit` does not audit it. Swept against main over
+9,678 files (every corpus csv/tsv/json/ndjson/jsonl and every fixture): one real file moved
+(`emissions.csv`, two columns written with 18 significant digits, `25.62775822916507630000` →
+`DECIMAL(38,20)`) and one fixture (`json_shapes_precision.ndjson`, three columns → DECIMAL).
+The whole-file pass costs 1.24× on a 114 MB CSV of four float columns (2.57 s → 3.18 s, best of
+three: a raw twin of each float column plus the scan) and nothing measurable on mixed files. Cost: the common
+decimal (≤15 significant digits written, a power of ten within ±22) is laid out directly,
+pinned against serde_json over random decimals, since there serde_json's parse is one exactly
+rounded operation; anything else asks serde_json. A 100 MB NDJSON `count(*)` went 4.5 s →
+5.0 s streaming (best of three, a loaded machine), the 7,443-item pile's 24 s did not move,
+and every corpus JSON file sniffs byte-identically — of 8,136, one file's values changed
+(`majorIncidents-2020-01-06.json`: 2,828 coordinates written with 17 significant digits,
+which a double's shortest rendering cut to 16 — and 320 of which serde_json's non-roundtrip
+parse also put one ULP off — now as written).
 
 **Plans in the lock (2026-10-02).** `docs/design/2026-10-02-plans-in-the-lock.md`. A target
 may declare `plans = 'lock'` (`'sidecars'` is the default and everything before it; any other
@@ -951,7 +1022,9 @@ way), ambiguous date orders drop confidence below the escalation threshold, lead
 and oversized integers stay text, money becomes `decimal`, and a decimal value with more
 fractional digits than the declared scale is refused unless the target column declares
 `round = 'half_away'` (`spec::Rounding`; a sniffed sidecar's unset `round` still means
-half-away, with its note).
+half-away, with its note), and a JSON number keeps its value, and its written digits wherever
+a double could not hold them or would print them in exponent form (`-0` is still `-0.0`, `1E+2`
+still `100.0`).
 
 ## Architecture
 
@@ -1000,7 +1073,15 @@ Things that only become clear from reading several modules:
   nothing left to promote a header from. A capped table sets `truncated`, and anything
   reasoning about the *end* of the data must not trust it — that is why `SkipRows{tail}` is
   skipped on a truncated table, and why Excel sniffing deliberately does *not* cap (calamine
-  materializes the sheet anyway, and the last row is where "Total" lives).
+  materializes the sheet anyway, and the last row is where "Total" lives). **A JSON document
+  is parsed whole even under a cap, like a workbook** (`engine::read_json_document`, used by
+  `extract_json` for `lines = false`, `extract_json_record`, and every sniffer/draft reader
+  of a document): a prefix of one is malformed JSON, and the cap applies to the parsed
+  records instead, setting `truncated` when it cut any. `[limits].max_file_bytes` bounds the
+  read and `max_decompressed_bytes` a compressed document's decompression (`fileio::read_all`
+  takes both, and checks each where it means something), and a document over either is
+  refused by name in the probe as in the query. NDJSON
+  keeps the prefix and the torn-line drop, its records being lines.
 - **Engine pipeline order matters:** extract (all strings) → transforms in spec order →
   projection + typed cast last. Rectangularization is lazy so `skip_rows` can remove title
   rows before the ragged policy applies. `promote_header` fills right only on rows *above*
@@ -1155,7 +1236,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (303) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (318) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end

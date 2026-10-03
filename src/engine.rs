@@ -97,20 +97,17 @@ pub(crate) fn json_pointer_value(raw: &str, ptr: &str, row: usize) -> Result<Str
     if t.is_empty() {
         return Ok(String::new());
     }
-    let v: serde_json::Value = serde_json::from_str(t)
+    let v = crate::jsondoc::Node::parse(t)
         .map_err(|e| anyhow!("row {row}: `pointer` needs a JSON value here, and {t:?} is not one: {e}"))?;
-    let found = if ptr.is_empty() { Some(&v) } else { v.pointer(ptr) };
-    match found {
-        None | Some(serde_json::Value::Null) => Ok(String::new()),
-        Some(serde_json::Value::String(s)) => Ok(s.clone()),
-        Some(serde_json::Value::Bool(b)) => Ok(b.to_string()),
-        Some(serde_json::Value::Number(n)) => Ok(n.to_string()),
-        Some(other) => bail!(
+    match v.pointer(ptr) {
+        None | Some(crate::jsondoc::Node::Null) => Ok(String::new()),
+        Some(other @ (crate::jsondoc::Node::Array(_) | crate::jsondoc::Node::Object(_))) => bail!(
             "row {row}: `pointer` {ptr:?} lands on {} — a column cannot hold one, and \
              leaving it as JSON text is the state a pointer exists to leave. Point at a \
              value inside it",
-            if other.is_array() { "an array" } else { "an object" }
+            other.kind()
         ),
+        Some(scalar) => Ok(scalar.cell()),
     }
 }
 
@@ -651,7 +648,7 @@ pub(crate) fn read_text_ex(
     opts: &ExtractOpts,
 ) -> Result<(String, bool)> {
     if opts.max_rows.is_none() {
-        let bytes = fileio::read_all(path, opts.limits.max_file_bytes)?;
+        let bytes = fileio::read_all(path, opts.limits.max_file_bytes, opts.limits.max_decompressed_bytes)?;
         let (text, used, had_errors) = crate::sample::decode_owned(bytes, encoding);
         warn_mojibake(path, encoding, &used, had_errors);
         return Ok((text, true));
@@ -998,15 +995,33 @@ fn extract_lines(
     Ok(RawTable::with_header(names, rows, truncated))
 }
 
+/// The whole text of a JSON *document* (an array of records, or one record),
+/// whatever the caller's row cap.
+///
+/// A capped read takes a 4 MiB prefix and drops the torn last line, which is
+/// right for anything whose records are lines (NDJSON included) and wrong for
+/// a document: it has no records until it is parsed whole, and a prefix of
+/// one is malformed JSON. So a document is read whole even under a cap, as a
+/// workbook is materialised whole — bounded, as every whole read is, by
+/// `[limits].max_file_bytes` (a compressed one by its decompressed copy, which
+/// is what is read), and a document over it is refused by name. The cap then
+/// applies to the parsed records. The bytes are decoded in place
+/// (`decode_owned`), so the text is the only copy of the document held.
+pub(crate) fn read_json_document(path: &Path, limits: Limits) -> Result<String> {
+    read_text(path, None, &ExtractOpts::full(limits))
+}
+
 fn extract_json(
     path: &Path,
     lines: bool,
     pointer: Option<&str>,
     opts: &ExtractOpts,
 ) -> Result<RawTable> {
-    let text = read_text(path, None, opts)?;
+    use crate::jsondoc::Node;
+    // NDJSON keeps the capped prefix; a document is read whole.
+    let text = if lines { read_text(path, None, opts)? } else { read_json_document(path, opts.limits)? };
     let mut truncated = false;
-    let records: Vec<serde_json::Value> = if lines {
+    let records: Vec<Node> = if lines {
         let mut out = Vec::new();
         for (i, l) in text.lines().enumerate() {
             if l.trim().is_empty() {
@@ -1016,7 +1031,7 @@ fn extract_json(
                 truncated = true;
                 break;
             }
-            let parsed: serde_json::Value = serde_json::from_str(l).map_err(|e| {
+            let parsed = Node::parse(l).map_err(|e| {
                 let last = text.lines().filter(|x| !x.trim().is_empty()).count() == i + 1;
                 if last && e.is_eof() {
                     anyhow!(
@@ -1033,17 +1048,15 @@ fn extract_json(
         }
         out
     } else {
-        let doc: serde_json::Value =
-            serde_json::from_str(&text).context("invalid JSON document")?;
+        let doc = Node::parse(&text).context("invalid JSON document")?;
+        // The tree owns its strings; the text is not needed beside it.
+        drop(text);
         let node = match pointer {
-            Some(p) => doc
-                .pointer(p)
-                .ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?
-                .clone(),
+            Some(p) => doc.into_pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,
             None => doc,
         };
         match node {
-            serde_json::Value::Array(mut a) => {
+            Node::Array(mut a) => {
                 if let Some(m) = opts.max_rows {
                     if a.len() > m {
                         a.truncate(m);
@@ -1055,23 +1068,17 @@ fn extract_json(
             other => bail!(
                 "expected a JSON array of records{}, found {}",
                 pointer.map(|p| format!(" at pointer {p:?}")).unwrap_or_default(),
-                json_kind(&other)
+                other.kind()
             ),
         }
     };
 
-    // Union of keys, first-seen order.
-    let mut header: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut keys = JsonHeader::default();
     let mut objects = 0usize;
     for rec in &records {
-        if let serde_json::Value::Object(map) = rec {
+        if let Node::Object(entries) = rec {
             objects += 1;
-            for k in map.keys() {
-                if seen.insert(k.clone()) {
-                    header.push(k.clone());
-                }
-            }
+            keys.add(entries);
         }
     }
 
@@ -1086,21 +1093,53 @@ fn extract_json(
         );
     }
     if objects == 0 {
-        header = vec!["value".to_string()];
+        keys = JsonHeader::default();
+        keys.names.push("value".to_string());
     }
 
     let rows: Vec<Vec<String>> = records
-        .iter()
+        .into_iter()
         .map(|rec| match rec {
-            serde_json::Value::Object(map) => header
-                .iter()
-                .map(|k| map.get(k).map(json_scalar).unwrap_or_default())
-                .collect(),
-            other => vec![json_scalar(other)],
+            Node::Object(entries) => keys.row(entries),
+            other => vec![other.into_cell()],
         })
         .collect();
 
-    Ok(RawTable::with_header(header, rows, truncated))
+    Ok(RawTable::with_header(keys.names, rows, truncated))
+}
+
+/// The header of a JSON record set: the union of every record's keys, in
+/// first-seen order — and within one record in key order, since that is the
+/// order `serde_json::Value` handed them over in before tdy had its own
+/// reader, and a header must not reorder because the reader changed.
+#[derive(Default)]
+pub(crate) struct JsonHeader {
+    pub(crate) names: Vec<String>,
+    index: std::collections::HashMap<String, usize>,
+}
+
+impl JsonHeader {
+    /// Add one record's keys.
+    pub(crate) fn add(&mut self, entries: &[(String, crate::jsondoc::Node)]) {
+        let mut new: Vec<&str> =
+            entries.iter().map(|(k, _)| k.as_str()).filter(|k| !self.index.contains_key(*k)).collect();
+        new.sort_unstable();
+        for k in new {
+            self.index.insert(k.to_string(), self.names.len());
+            self.names.push(k.to_string());
+        }
+    }
+
+    /// One record as a row under this header: a missing key is empty.
+    pub(crate) fn row(&self, entries: Vec<(String, crate::jsondoc::Node)>) -> Vec<String> {
+        let mut row = vec![String::new(); self.names.len()];
+        for (k, v) in entries {
+            if let Some(&i) = self.index.get(&k) {
+                row[i] = v.into_cell();
+            }
+        }
+        row
+    }
 }
 
 /// `record = true`: the object at `pointer` (the root when absent) is one
@@ -1109,12 +1148,14 @@ fn extract_json(
 /// record array. Anything but an object there is named and refused — a
 /// record is never coerced out of an array, a scalar or a null.
 fn extract_json_record(path: &Path, pointer: Option<&str>, opts: &ExtractOpts) -> Result<RawTable> {
-    let text = read_text(path, None, opts)?;
+    // One row whatever the cap, and never a prefix: see `read_json_document`.
+    let text = read_json_document(path, opts.limits)?;
     let doc = crate::jsondoc::Node::parse(&text).context("invalid JSON document")?;
+    drop(text);
     let at = |p: Option<&str>| p.map(|p| format!(" at pointer {p:?}")).unwrap_or_default();
     let node = match pointer {
-        Some(p) => doc.pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,
-        None => &doc,
+        Some(p) => doc.into_pointer(p).ok_or_else(|| anyhow!("JSON pointer {p:?} matched nothing"))?,
+        None => doc,
     };
     let crate::jsondoc::Node::Object(entries) = node else {
         bail!(
@@ -1129,30 +1170,8 @@ fn extract_json_record(path: &Path, pointer: Option<&str>, opts: &ExtractOpts) -
             }
         );
     };
-    let header: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
-    let row: Vec<String> = entries.iter().map(|(_, v)| json_scalar(&v.to_value())).collect();
+    let (header, row): (Vec<String>, Vec<String>) = entries.into_iter().map(|(k, v)| (k, v.into_cell())).unzip();
     Ok(RawTable::with_header(header, vec![row], false))
-}
-
-pub(crate) fn json_scalar(v: &serde_json::Value) -> String {
-    match v {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        nested => serde_json::to_string(nested).unwrap_or_default(),
-    }
-}
-
-fn json_kind(v: &serde_json::Value) -> &'static str {
-    match v {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "a boolean",
-        serde_json::Value::Number(_) => "a number",
-        serde_json::Value::String(_) => "a string",
-        serde_json::Value::Array(_) => "an array",
-        serde_json::Value::Object(_) => "an object",
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1891,7 +1910,14 @@ pub(crate) fn build_column_at(
                 {
                     bail!("{t:?} is not a number (add it to na_values if it means \"missing\")");
                 }
-                t.parse::<f64>().map_err(|e| anyhow!("{e}"))
+                let x = t.parse::<f64>().map_err(|e| anyhow!("{e}"))?;
+                // Digits a double cannot hold are not infinity, and not zero:
+                // either would be a plausible wrong number.
+                let mantissa = t.split(['e', 'E']).next().unwrap_or(t);
+                if !x.is_finite() || (x == 0.0 && mantissa.bytes().any(|b| matches!(b, b'1'..=b'9'))) {
+                    bail!("{t} is outside a double's range");
+                }
+                Ok(x)
             });
             (ArrowType::Float64, Arc::new(Float64Array::from(out)))
         }
@@ -3178,6 +3204,30 @@ mod tests {
         assert!(build_column_at(&col, &["NaN"], 0).is_err());
         assert!(build_column_at(&col, &["Infinity"], 0).is_err());
         assert!(build_column_at(&col, &["1.5"], 0).is_ok());
+    }
+
+    /// A literal outside a double's range is not infinity and not zero: both
+    /// would be a plausible wrong number. `inf`/`nan` as words are refused
+    /// above; these are digits that overflow or underflow.
+    #[test]
+    fn a_float_outside_a_doubles_range_is_refused_naming_the_row() {
+        let col = ColumnSpec {
+            name: "v".into(),
+            source: None,
+            dtype: DType::Float64,
+            nullable: true,
+            parse: ValueParsing::default(),
+            pointer: None,
+        };
+        for bad in ["1E400", "-1e400", "1e-400", "-2.5e-999", "0.000001e-330"] {
+            let err = build_column_at(&col, &["1.5", bad], 0).expect_err(bad);
+            let msg = format!("{err:#}");
+            assert!(msg.contains("row 2") && msg.contains(bad) && msg.contains("outside a double's range"), "{msg}");
+        }
+        for zero in ["0.0", "0e0", "-0.0", "0.000", "0", "0E-400"] {
+            assert!(build_column_at(&col, &[zero], 0).is_ok(), "{zero}");
+        }
+        assert!(build_column_at(&col, &["1.7976931348623157e308", "5e-324"], 0).is_ok());
     }
 
     #[test]

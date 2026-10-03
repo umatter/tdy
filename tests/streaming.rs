@@ -876,6 +876,31 @@ fn a_late_ndjson_key_still_becomes_a_column() {
     assert!(text.contains("here"), "the late key's value was lost:\n{text}");
 }
 
+/// A number serde_json could not hold exactly keeps the digits the file wrote,
+/// identically on both executors: a 25-digit integer and a 30-digit decimal,
+/// beside ordinary numbers that must read exactly as they always have.
+#[test]
+fn a_numbers_digits_survive_on_both_executors() {
+    let dir = TempDir::new().unwrap();
+    let mut body = String::new();
+    for i in 0..3 {
+        body.push_str(&format!(
+            "{{\"id\":123456789012345678901234{i},\"amount\":0.12345678901234567890123456789{i},\"n\":1.0,\"k\":1e3}}\n"
+        ));
+    }
+    let p = write(&dir, "big.ndjson", &body);
+    let s = ParseSpec {
+        extraction: Extraction::Json { lines: true, pointer: None, record: false },
+        transforms: vec![],
+        columns: vec![col("id", DType::Utf8), col("amount", DType::Utf8), col("n", DType::Utf8), col("k", DType::Utf8)],
+        confidence: Some(1.0),
+        notes: vec![],
+    };
+    assert_paths_agree(&s, &p, "long numbers");
+    let text = render(&stream::execute_batches(&s, &p, Limits::default()).unwrap());
+    assert!(text.contains("| 1234567890123456789012340 | 0.123456789012345678901234567890 | 1.0 | 1000.0 |"), "{text}");
+}
+
 /// A JSON *array* is one document: no record exists until it is parsed whole,
 /// so it must be declined rather than streamed badly. Same for a pointer,
 /// which only applies to the array form.
