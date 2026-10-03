@@ -772,7 +772,7 @@ impl<'a> Parser<'a> {
                     return Ok(());
                 }
                 // A leading surrogate: the trailing one must follow at once.
-                for want in [b'\\', b'u'] {
+                for want in *b"\\u" {
                     match self.src.get(self.pos) {
                         None => return Err(self.eof("EOF while parsing a string")),
                         Some(&b) if b == want => self.pos += 1,
