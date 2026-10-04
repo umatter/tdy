@@ -816,7 +816,7 @@ it reads:
 [[spec]]
 id = "b3:58337d0edfc91805a23fbb94e0cfc706e73a0948c11a85fe87165ea9caceffb6"
 method = "heuristic"
-tool_version = "0.3.1"
+tool_version = "0.4.0"
 notes = [
     '`month` <- "Datum"',
     '`region` <- "Region"',
