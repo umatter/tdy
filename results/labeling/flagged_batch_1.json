@@ -1,0 +1,187 @@
+[
+ {
+  "n": 92,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2016.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.4999999701976776,
+  "notes": [
+   "skipped 8 leading row(s) before the header",
+   "14 trailing row(s) starting at row 14 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 14) or drop_rows_matching to the sidecar",
+   "column `total_shipped_exported_6`: read as decimal(2) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.50):\n+--------------------------------+-----------------------+--------------------+--------------------+--------------------------+\n| barrels_31_gallons_2           | number_of_breweries_1 | total_barrels_3    | taxable_removals_4 | total_shipped_exported_6 |\n+--------------------------------+-----------------------+--------------------+--------------------+--------------------------+\n| 6,000,001 Barrels and Over     | 14                    | 131659359.17       | 119774531.97       | 5066076.38               |\n| 2,000,000 to 6,000,000 Barrels | 7                     | 26452765.43        | 25147830.590000004 | 898290.35                |\n| 1,000,001 to 1,999,999 Barrels | 4                     | 4999263.95         | 4994536.9          | 47250.18                 |\n| 500,001 to 1,000,000 Barrels   | 6                     | 4293996.9          | 4014943.39         | 4748.99                  |\n| 100,001 to 500,000 Barrels     | 45                    | 10469048.22        | 8618323.450000003  | 276289.46                |\n| 60,001 to 100,000 Barrels      | 38                    | 3052311.4800000004 | 2395062.26         | 48970.93                 |\n| 30,001 to 60,000 Barrels       | 53                    | 2329947.35         | 2069205.9399999995 | 85136.87                 |\n| 15,001 to 30,000 Barrels       | 75                    | 1577515.3899999997 | 1341223.9100000001 | 37302.60                 |\n| 7,501 to 15,000 Barrels        | 148                   | 1550640.4199999995 | 1351541.9599999997 | 11813.32                 |\n| 1,001 to 7,500 Barrels         | 935                   | 2461722.990000003  | 2282897.140000001  | 13608.25                 |"
+ },
+ {
+  "n": 93,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q2.xls",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.4999999701976776,
+  "notes": [
+   "workbook has 2 sheets; reading \"Data\"",
+   "skipped 6 leading row(s) before the header",
+   "dropped a trailing summary row",
+   "the first row is a full row of distinct labels but every column it heads holds the same kind of value it does, so it was read as data. If it is really a header, add promote_header to the sidecar."
+  ],
+  "preview": "preview (heuristic method, confidence 0.50):\n+---------------------------+----------------+-------------------+--------------------+--------------------+--------------------+--------------------+--------------------+\n| col_1                     | col_2          | col_3             | col_4              | col_5              | col_6              | col_7              | col_8              |\n+---------------------------+----------------+-------------------+--------------------+--------------------+--------------------+--------------------+--------------------+\n| ACT                       | 9802839749.33  | 0.0               | 395249672.15999997 | 22850757.9         | 337310726.75       | 9860067.49         | 25228120.02        |\n| Coast Professional Inc    | 8793580917.29  | 1150332499.04     | 257936122.58       | 40415254.83        | 182220617.9        | 10266358.969999999 | 25033890.880000003 |\n| ConServe                  | 9166244642.15  | 0.0               | 266533439.61       | 23070201.36        | 213984580.49       | 8050512.03         | 21428145.73        |\n| ERS                       | 3616101747.53  | 536403861.38      | 28076408.24        | 23102240.25        | 198433.03999999998 | 3459699.4299999997 | 1316035.52         |\n| FMS                       | 9463753829.81  | 0.0               | 266944520.01999998 | 27904065.2         | 206675754.63       | 8884938.32         | 23479761.87        |\n| GC Services               | 8946061306.91  | 0.0               | 254400314.88000003 | 25229550.990000002 | 195252725.32       | 9969790.24         | 23948248.330000002 |\n| Immediate Credit Recovery | 10391505176.07 | 649712370.0999999 | 231871820.54000002 | 41003534.70999999  | 156505480.65       | 11279530.780000001 | 23083274.4         |\n| National Recoveries Inc   | 8418472737.33  | 1336771155.23     | 185342672.04       | 49039414.35        | 108697597.84       | 9660345.98         | 17945313.87        |\n| Pioneer                   | 3566472320.04  | 536401548.88      | 27426180.439999998 | 22558336.14        | 2659.63            | 4828875.34         | 36309.33           |\n| Windham                   | 7351886005.04  | 0.0               | 199752528.37       | 17280438.96        | 152991205.36       | 8727488.01         | 20753396.04        |"
+ },
+ {
+  "n": 95,
+  "path": "90_supplemental/datascience_box/source/course-materials/application-exercises/ae-06-nobels-sales-dataimport/data-raw/sales.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "skipped 4 leading row(s) before the header"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+---------+---+\n| brand_1 | n |\n+---------+---+\n| 1234    | 8 |\n| 8721    | 2 |\n| 1822    | 3 |\n| Brand 2 | n |\n| 3333    | 1 |\n| 2156    | 3 |\n| 3987    | 6 |\n| 3216    | 5 |\n+---------+---+"
+ },
+ {
+  "n": 96,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h02w.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.19999992847442627,
+  "notes": [
+   "skipped 5 leading row(s) before the header",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "2 trailing row(s) starting at row 60 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 2) or drop_rows_matching to the sidecar",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.20):\n+-----------+--------+--------+--------+-------+--------+---------+---------+\n| col_1     | col_2  | col_3  | col_4  | col_5 | col_6  | col_7   | col_8   |\n+-----------+--------+--------+--------+-------+--------+---------+---------+\n|           |        | Lowest | Second | Third | Fourth | Highest | Top 5   |\n|           |        | fifth  | fifth  | fifth | fifth  | fifth   | percent |\n| 2019      | 100568 | 3.3    | 8.6    | 14.2  | 22.6   | 51.2    | 22.7    |\n| 2018      | 100528 | 3.3    | 8.6    | 14.3  | 22.4   | 51.4    | 23      |\n| 2017 (40) | 100113 | 3.3    | 8.4    | 14.2  | 22.6   | 51.6    | 22.9    |\n| 2017      | 100065 | 3.3    | 8.5    | 14.5  | 23     | 50.6    | 21.9    |\n| 2016      | 99400  | 3.4    | 8.6    | 14.4  | 22.9   | 50.8    | 22.2    |\n| 2015      | 99313  | 3.4    | 8.5    | 14.6  | 23.3   | 50.2    | 21.6    |\n| 2014      | 98679  | 3.3    | 8.5    | 14.5  | 23.1   | 50.6    | 21.7    |\n| 2013 (39) | 98807  | 3.3    | 8.5    | 14.6  | 23     | 50.6    | 21.6    |"
+ },
+ {
+  "n": 98,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h06ar.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.19999992847442627,
+  "notes": [
+   "skipped 4 leading row(s) before the header",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "2 trailing row(s) starting at row 250 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 2) or drop_rows_matching to the sidecar",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.20):\n+-----------------+--------------------+---------------+---------+-------------+---------+\n| col_1           | col_2              | col_3         | col_4   | col_5       | col_6   |\n+-----------------+--------------------+---------------+---------+-------------+---------+\n| Region and year | Number (thousands) | Median income |         | Mean income |         |\n|                 |                    | Current       | 2019    | Current     | 2019    |\n|                 |                    | dollars       | dollars | dollars     | dollars |\n| 2019            | 128451             | 68703         | 68703   | 98088       | 98088   |\n| 2018            | 128579             | 63179         | 64324   | 90021       | 91652   |\n| 2017 (40)       | 127669             | 61136         | 63761   | 87643       | 91406   |\n| 2017            | 127586             | 61372         | 64007   | 86220       | 89922   |\n| 2016            | 126224             | 59039         | 62898   | 83143       | 88578   |\n| 2015            | 125819             | 56516         | 60987   | 79263       | 85533   |\n| 2014            | 124587             | 53657         | 58001   | 75738       | 81870   |"
+ },
+ {
+  "n": 99,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h01ar.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.4999999701976776,
+  "notes": [
+   "skipped 6 leading row(s) before the header",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.50):\n+-----------+--------+-------+-------+-------+--------+--------+\n| col_1     | col_2  | col_3 | col_4 | col_5 | col_6  | col_7  |\n+-----------+--------+-------+-------+-------+--------+--------+\n| 2019      | 128451 | 28084 | 53503 | 86488 | 142501 | 270002 |\n| 2018      | 128579 | 25600 | 50000 | 79542 | 130000 | 248728 |\n| 2017 (40) | 127669 | 24822 | 47218 | 77150 | 126603 | 244088 |\n| 2017      | 127586 | 24638 | 47110 | 77552 | 126855 | 237034 |\n| 2016      | 126224 | 24002 | 45600 | 74869 | 121018 | 225251 |\n| 2015      | 125819 | 22800 | 43511 | 72001 | 117002 | 214462 |\n| 2014      | 124587 | 21432 | 41186 | 68212 | 112262 | 206568 |\n| 2013 (39) | 123931 | 21000 | 41035 | 67200 | 110232 | 205128 |\n| 2013 (38) | 122952 | 20900 | 40187 | 65501 | 105910 | 196000 |\n| 2012      | 122459 | 20599 | 39764 | 64582 | 104096 | 191156 |"
+ },
+ {
+  "n": 101,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h06w.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.19999992847442627,
+  "notes": [
+   "skipped 5 leading row(s) before the header",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "2 trailing row(s) starting at row 269 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 2) or drop_rows_matching to the sidecar",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.20):\n+-----------------+--------------------+---------------+---------+-------------+---------+\n| col_1           | col_2              | col_3         | col_4   | col_5       | col_6   |\n+-----------------+--------------------+---------------+---------+-------------+---------+\n| Region and year | Number (thousands) | Median income |         | Mean income |         |\n|                 |                    | Current       | 2019    | Current     | 2019    |\n|                 |                    | dollars       | dollars | dollars     | dollars |\n| 2019            | 100568             | 72204         | 72204   | 101732      | 101732  |\n| 2018            | 100528             | 66943         | 68156   | 93948       | 95650   |\n| 2017 (40)       | 100113             | 64833         | 67617   | 91519       | 95448   |\n| 2017            | 100065             | 65273         | 68076   | 89632       | 93480   |\n| 2016            | 99400              | 61858         | 65901   | 86344       | 91988   |\n| 2015            | 99313              | 60109         | 64864   | 82226       | 88731   |\n| 2014            | 98679              | 56866         | 61470   | 78890       | 85277   |"
+ },
+ {
+  "n": 107,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2019-2020/Schools.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.6499999761581421,
+  "notes": [
+   "skipped 217 leading row(s) before the header",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "column `col_92`: the probe (the sniffer's first ~500 rows) saw no values for this column, so it was kept as text; the whole file's values are all present and uniformly an integer, so it has been narrowed to that.",
+   "column `col_94`: the probe (the sniffer's first ~500 rows) saw no values for this column, so it was kept as text; the whole file's values are all present and uniformly an integer, so it has been narrowed to that."
+  ],
+  "preview": "preview (heuristic method, confidence 0.65):\n+--------+---------------------------------+-----------------+-------+------------+-------+-------+-------+-----------------------------------+--------+--------+--------+--------+-\n| col_1  | col_2                           | col_3           | col_4 | col_5      | col_6 | col_7 | col_8 | col_9                             | col_10 | col_11 | col_12 | col_13 | \n+--------+---------------------------------+-----------------+-------+------------+-------+-------+-------+-----------------------------------+--------+--------+--------+--------+-\n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | \n| 100830 | Auburn University at Montgomery | 7440 East Drive |       | Montgomery | AL    | 36117 | 5     | NCAA Division II without football |        | 1218   | 2270   | 3488   | "
+ },
+ {
+  "n": 108,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q1.xls",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.6499999761581421,
+  "notes": [
+   "workbook has 2 sheets; reading \"Data\"",
+   "skipped 6 leading row(s) before the header",
+   "dropped a trailing summary row",
+   "no header row detected; columns are named col_1, col_2, ..."
+  ],
+  "preview": "preview (heuristic method, confidence 0.65):\n+----------------------------------+---------------+---------------+--------------------+--------------------+--------------------+------------+--------------------+\n| col_1                            | col_2         | col_3         | col_4              | col_5              | col_6              | col_7      | col_8              |\n+----------------------------------+---------------+---------------+--------------------+--------------------+--------------------+------------+--------------------+\n| Account Control Technology, Inc. | 9902938838.2  |               | 354244940.08000004 | 23214939.85        | 298990491.34       | 9242945.91 | 22796562.98        |\n| Coast Professional, Inc.         | 6669729821.17 | 2197773371.27 | 246720674.02       | 18528100.32        | 197029071.70000002 | 7628977.12 | 23534524.880000003 |\n| ConServe                         | 9246384059.13 |               | 342507242.63       | 23468095.980000004 | 290768567.65999997 | 7721264.58 | 20549314.41        |\n| ERS                              | 49644116.9    | 3561790342.68 | 1375800.8599999999 | 913674.22          | 0.0                | 75046.88   | 387079.76          |\n| FMS Investment Corp              | 9526537828.78 |               | 275903684.46000004 | 24214027.03        | 223381849.8        | 8171570.44 | 20136237.189999998 |\n| GC Services LP                   | 9010965749.51 |               | 288028386.63       | 20977152.1         | 237950686.98999998 | 9857199.49 | 19243348.05        |\n| Immediate Credit Recovery, Inc.  | 8247514995.07 | 2197804897.92 | 225134710.58       | 24502702.85        | 171787934.85       | 8592884.33 | 20251188.55        |\n| National Recoveries, Inc.        | 6259911775.15 | 2197710584.32 | 163880487.77999997 | 25853144.970000003 | 115287154.53999999 | 7181203.23 | 15558985.04        |\n| Pioneer Credit Recovery, Inc     | 0.0           | 3561890485.42 | 1940380.1          | 1698413.12         | 0.0                | 238059.46  | 3907.52            |\n| Windham Professionals, Inc.      | 7423431410.47 | 0.0           | 265832488.09999996 | 17395610.27        | 220302869.20999998 | 8445603.51 | 19688405.11        |"
+ },
+ {
+  "n": 109,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-NationalTablesv2/Table1bManagersRace.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.19999992847442627,
+  "notes": [
+   "workbook has 2 sheets; reading \"Managers-Race\"",
+   "skipped 4 leading row(s) before the header",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "9 trailing row(s) starting at row 48 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 9) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.20):\n+----------------------------------------+---------------------------------+------------------------+--------------------+-------------------------+--------------------------------\n| col_1                                  | col_2                           | col_3                  | col_4              | col_5                   | col_6                          \n+----------------------------------------+---------------------------------+------------------------+--------------------+-------------------------+--------------------------------\n|                                        | Number of people in labor force | Percent of labor force | Number of managers | Percent of all managers | Number of managers             \n| Total                                  | 164629490                       | 1                      | 16210285           | 1                       | 19725                          \n| Hispanic                               | 28391970                        | 0.17245980656321053    | 1280013            | 0.079                   | 1727                           \n| Non-Hispanic white                     | 102331580                       | 0.6215871773641527     | 11912423           | 0.735                   | 14701                          \n| Non-Hispanic Black or African American | 19624785                        | 0.11920576927013501    | 1205282            | 0.074                   | 1625                           \n| Non-Hispanic Asian                     | 9553325                         | 0.058029244942689184   | 966127             | 0.06                    | 652                            \n| Non-Hispanic other                     | 4727835                         | 0.02871803223104196    | 846440             | 0.052                   | 1020                           \n|                                        |                                 |                        |                    |                         |                                \n|                                        |                                 |                        | Managers           |                         |                                \n| Race and Hispanic ethnicity            | U.S. labor force                |                        | All industries     |                         | Motion picture and video indust"
+ },
+ {
+  "n": 110,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q3.xls",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "workbook has 2 sheets; reading \"Data\"",
+   "skipped 4 leading row(s) before the header"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+---------------------------+---------------------+--------------+--------------------+---------------+--------------------+--------------------+--------------------+\n| agency_name               | at_start_of_quarter | added        | total              | consolidation | rehabilitation     | voluntary_payments | wage_garnishments  |\n+---------------------------+---------------------+--------------+--------------------+---------------+--------------------+--------------------+--------------------+\n| ACT                       | 9373746361.91       | 0.0          | 281255788.94       | 21002429.89   | 222045786.04       | 10099771.64        | 28107801.369999997 |\n| Coast Professional Inc    | 9538672453.99       | 735968349.7  | 204436496.62       | 38058826.92   | 129060792.75       | 12929745.04        | 24387131.91        |\n| ConServe                  | 8863493757.81       | 0.0          | 210697519.20999998 | 23801870.97   | 158215687.64       | 8410416.47         | 20269544.130000003 |\n| ERS                       | 3973485532.97       | 0.0          | 29324651.440000005 | 22984825.18   | 23797.35           | 5146791.630000001  | 1169237.28         |\n| FMS                       | 9170738235.1        | 0.0          | 225637550.54000002 | 22455269.09   | 171782945.49       | 8617002.85         | 22782333.110000003 |\n| GC Services               | 8648197357.19       | 0.0          | 224020617.06       | 21285172.22   | 166089432.17000002 | 9765266.34         | 26880746.33        |\n| Immediate Credit Recovery | 10664734556.48      | 293566428.69 | 210729278.88       | 40214880.82   | 131370690.82       | 13524772.91        | 25618934.33        |\n| National Recoveries Inc   | 9426363342.44       | 887958782.73 | 172214956.65       | 51348783.3    | 86425556.62        | 12422737.57        | 22017879.159999996 |\n| Pioneer                   | 3922285178.2        | 0.0          | 33678647.629999995 | 26016030.97   | 519715.97          | 7098507.21         | 44393.48           |\n| Windham                   | 7101055352.83       | 0.0          | 170695461.85999998 | 17347352.03   | 124933629.1        | 8645519.0          | 19768961.73        |"
+ },
+ {
+  "n": 111,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-08-04/Electricity_generation_statistics_2019.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.34999996423721313,
+  "notes": [
+   "workbook has 4 sheets; reading \"Table 1; Table A-M\"",
+   "skipped 7 leading row(s) before the header",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "475 trailing row(s) starting at row 1 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 475) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.35):\n+-------+-------+------------------------------+--------------------+--------------------+--------------------+-----------------------+------------------------+-------------------+\n| col_1 | col_2 | col_3                        | col_4              | col_5              | col_6              | col_7                 | col_8                  | col_9             |\n+-------+-------+------------------------------+--------------------+--------------------+--------------------+-----------------------+------------------------+-------------------+\n|       |       | Conventional thermal         | 1515894.276        | 1538378.6          | 1410491.285        | 0.014832382677326006  | -0.08313123635495201   | 1038202.939       |\n|       |       | Nuclear                      | 795629.205         | 785915.68          | 783936.0829999999  | -0.012208607902973956 | -0.0025188414614659704 | 606769.125        |\n|       |       | Hydro                        | 375033.953         | 326014.82300000003 | 363308.91000000003 | -0.130705845718454    | 0.11439383846666384    | 269210.171        |\n|       |       | of which: Pumped hydro power | 29529.277          | 29931.085          | 45515.162          | 0.013607105924063223  | 0.520665288278056      | 23470.387         |\n|       |       | Wind                         | 300219.10099999997 | 358002.716         | 375928.551         | 0.19247148102012357   | 0.05007178493025721    | 212301.671        |\n|       |       | Solar                        | 110385.655         | 118294.97899999999 | 122907.717         | 0.0716517377189998    | 0.03899352313169624    | 93340.92700000001 |\n|       |       | Geothermal                   | 6271.953           | 6292.49            | 6168.381           | 0.003274418669910295  | -0.019723352758605817  | 6271.953          |\n|       |       | Other                        | 4613.308           | 4554.304           | 7316.018           | -0.012789954626918454 | 0.6063964987844466     | 4357.308          |\n|       |       | 2. Imports                   | 382540.823         | 384736.129         | 395611.18500000006 | 0.005738749613136251  | 0.028266271816650868   | 266331.442        |\n|       |       | 3. Exports                   | 364151.076         | 374536.993         | 367478.067         | 0.028520901583166003  | -0.018847072871116977  | 256886.845        |"
+ },
+ {
+  "n": 112,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-03-14/Medicines_output_european_public_assessment_reports.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.6999999284744263,
+  "notes": [
+   "skipped 8 leading row(s) before the header",
+   "column `revision_date`: kept as text \u2014 41 of 1988 values are not a timestamp: \"2016-06-08\" (row 1765), \"2013-07-10\" (row 1829), \"2013-07-02\" (row 1830). If those are strays rather than data, drop them with a `drop_rows_matching` transform and narrow the type by hand."
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+----------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------------\n| category | medicine_name     | therapeutic_area                                                                                                                                   \n+----------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------------\n| Human    | Adcetris          | Lymphoma, Non-Hodgkin;  Hodgkin Disease                                                                                                            \n| Human    | Nityr             | Tyrosinemias                                                                                                                                       \n| Human    | Ebvallo           | Lymphoproliferative Disorders                                                                                                                      \n| Human    | Ronapreve         | COVID-19 virus infection                                                                                                                           \n| Human    | Cosentyx          | Arthritis, Psoriatic;  Psoriasis;  Spondylitis, Ankylosing                                                                                         \n| Human    | Caprelsa          | Thyroid Neoplasms                                                                                                                                  \n| Human    | Hukyndra          | Arthritis, Psoriatic;  Arthritis, Juvenile Rheumatoid;  Arthritis, Rheumatoid;  Colitis, Ulcerative;  Crohn Disease;  Hidradenitis Suppurativa;  Ps\n| Human    | Leflunomide medac | Arthritis, Rheumatoid                                                                                                                              \n| Human    | Circadin          | Sleep Initiation and Maintenance Disorders                                                                                                         \n| Human    | Omidria           | Lens Implantation, Intraocular;  Pain, Postoperative                                                                                               "
+ },
+ {
+  "n": 113,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-02.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.5999999642372131,
+  "notes": [
+   "skipped 8 leading row(s) before the header",
+   "the header row has blank cells: this may be a multi-row or merged header, which needs promote_header with rows > 1"
+  ],
+  "preview": "preview (heuristic method, confidence 0.60):\n+----------------------------------------+--------------+--------------+------------------------------+---------------+--------------------------+---------------------------------+\n| c_1_barrel_is_equivalent_to_31_gallons | col_2        | col_3        | col_4                        | current_month | prior_year_current_month | current_year_cumulative_to_date |\n+----------------------------------------+--------------+--------------+------------------------------+---------------+--------------------------+---------------------------------+\n| Manufacture                            | Production   | Production   | Production                   | 13073878      | 13466526                 | 26952188                        |\n| Of Beer (In                            |              |              |                              |               |                          |                                 |\n| Barrels)                               |              |              |                              |               |                          |                                 |\n|                                        | Removals     | Taxable*     | In bottles & cans            | 10362380      | 10148564                 | 21583633                        |\n|                                        |              |              | In kegs                      | 1064546       | 1118430                  | 2271954                         |\n|                                        |              |              | Tax Determined, Premises Use | 3886          | 4582                     | 8721                            |\n|                                        |              |              | TOTAL Taxable Removals       | 11430812      | 11271577                 | 23864308                        |\n|                                        |              | Tax Free     | For export                   | 442637        | 571341                   | 859756                          |\n|                                        |              |              | Consumed on brewery premises | 704           | 1002                     | 1992                            |\n|                                        |              |              | TOTAL Tax-Free Removals      | 443341        | 572343                   | 861747                          |"
+ }
+]

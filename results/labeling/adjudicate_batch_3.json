@@ -1,0 +1,146 @@
+[
+ {
+  "n": 25,
+  "idx": 119,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/tiger-pants.json",
+  "stratum": "json",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Correct",
+   "Wrong somewhere",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "Yes, the header is right",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.70\nnote: the document has 3 candidate record arrays; reading \"/games/nl/buyPrices\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 3600  |\n+----------+-------+",
+  "complaints": [
+   "This looks surprisingly good although since it's binary workbook file, I cannot see the original file.",
+   "columns are not correctly mentioned",
+   "missing a column prior_year_cumulative and text columns containing numbers are using a text data type instead of whole number"
+  ]
+ },
+ {
+  "n": 26,
+  "idx": 126,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/soulful-kk.json",
+  "stratum": "json",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Wrong somewhere",
+   "Correct"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.70\nnote: the document has 4 candidate record arrays; reading \"/games/nh/buyPrices\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 3200  |\n+----------+-------+",
+  "complaints": [
+   "I believe I also commented on that file already. In my opinion column number_of_dancers_choreographers_in_the_labor_force should be whole number and not text.",
+   "column name is different",
+   "looks correct to me"
+  ]
+ },
+ {
+  "n": 27,
+  "idx": 127,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/toy-hammer.json",
+  "stratum": "json",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Wrong somewhere",
+   "Correct"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "No, the header is wrong",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.70\nnote: the document has 2 candidate record arrays; reading \"/games/nl/buyPrices\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 10    |\n+----------+-------+",
+  "complaints": [
+   "The tool failed to promote a multi-row or merged header, causing header metadata and data descriptor rows to be misclassified as column names and data content. Additionally, numerical columns like current_year_cumulative_to_date were wrongly typed as text.",
+   "The header is wrong",
+   "All correct"
+  ]
+ },
+ {
+  "n": 28,
+  "idx": 132,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/aluminum-rug.json",
+  "stratum": "json",
+  "verdict": "WRONG",
+  "votes": "3/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Wrong somewhere",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.95\nnote: records read from the nested array at \"/games/nh/buyPrices\"\n\npreview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 1500  |\n+----------+-------+",
+  "complaints": [
+   "Raw file is \",\" separated but tool used \";\"",
+   "some of the type including columns are incorrect on the record id and site id ",
+   "Only 2 of 9 preamble rows skipped, so no header was found. Rows 1-7 of the preview the \"h\" header rows and the \"u\" units row are treated as data. The real header is multi-row and should read State/ Lost colonies/ Percent lost/ Added colonies/ Renovated colonies/ Percent renovated. Because of this col_4-col_10 are numbers as text. col_1 and col_2 are format metadata, not data. Only \"d\" rows are real. Also Colonies States in the title row signals an encoding mismatch."
+  ]
+ },
+ {
+  "n": 29,
+  "idx": 142,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/bouldercreek_09_2013.txt",
+  "stratum": "other",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "No, the header is wrong",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as delimited text, separator '\\t'; skipped {'op': 'skip_rows', 'head': 25, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: agency_cd: text, site_no: text, datetime: text, tz_cd: text, c_04_00060: text, c_04_00060_cd: text\ntdy's own confidence: 0.55\nnote: delimiter inference was ambiguous\nnote: skipped 25 leading non-tabular row(s)\nnote: nearly every column typed as text; the layout may be misread\n\npreview (heuristic method, confidence 0.55):\n+-----------+----------+------------------+-------+------------+---------------+\n| agency_cd | site_no  | datetime         | tz_cd | c_04_00060 | c_04_00060_cd |\n+-----------+----------+------------------+-------+------------+---------------+\n| 5s        | 15s      | 20d              | 6s    | 14n        | 10s           |\n| USGS      | 06730200 | 2013-09-01 00:00 | MDT   | 57         | A             |\n| USGS      | 06730200 | 2013-09-01 00:15 | MDT   | 57         | A             |\n| USGS      | 06730200 | 2013-09-01 00:30 | MDT   | 57         | A             |\n| USGS      | 06730200 | 2013-09-01 00:45 | MDT   | 57         | A             |\n| USGS      | 06730200 | 2013-09-01 01:00 | MDT   | 57         | A             |\n| USGS      | 06730200 | 2013-09-01 01:15 | MDT   | 57         | A             |\n| USGS      | 06730200 | 2013-09-01 01:30 | MDT   | 57         | A             |\n| USGS      | 06730200 | 2013-09-01 01:45 | MDT   | 57         | A             |\n| USGS      | 06730200 | 2013-09-01 02:00 | MDT   | 57         | A             |",
+  "complaints": [
+   "I think the header row should be the one starting with Manufacture. Also, I think that there must be some empty cells in the header row, otherwise we would not see so many leading empty cells in the rows below. Then as a consequence the types are difficult to judge since the columns are wrong.",
+   "all correct",
+   "missing prior_year_cumulative_to_date"
+  ]
+ },
+ {
+  "n": 30,
+  "idx": 145,
+  "path": "01_direct_fit/pandas_exercises/source/requirements.txt",
+  "stratum": "other",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Correct",
+   "Wrong somewhere",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "No, the header is wrong",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: numpy_1_22_0: text\ntdy's own confidence: 0.60\nnote: no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the ext\n\npreview (heuristic method, confidence 0.60):\n+-------------------+\n| numpy_1_22_0      |\n+-------------------+\n| matplotlib==2.0.2 |\n| seaborn==0.8.1    |\n| pandas==0.23.4    |\n+-------------------+",
+  "complaints": [
+   "All are correct",
+   "The tool incorrectly parsed plain text and generated invalid columns",
+   "The file is a license text file"
+  ]
+ }
+]

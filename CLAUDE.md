@@ -973,7 +973,7 @@ pass over the files. `tests/plans.rs` is the slice's suite.
 `scripts/run_pollock.py` run the Pollock data-loading benchmark (VLDB 2023,
 2,290 files each with one isolated deviation from RFC 4180) through Pollock's
 own metrics, so the numbers compare with the paper; it writes `results/pollock/`
-(gitignored, like all of `results/`). Last run (2026-09-07, after the
+(its summary and per-file rows are tracked, see `results/README.md`). Last run (2026-09-07, after the
 compression guard and the long-form change; identical to the run before them):
 2,287 of 2,290 load, record F1 0.991 (tying duckdbparse), cell precision 0.996
 against recall 0.942 — tdy emits more cells than the source and almost never a

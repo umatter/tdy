@@ -1,0 +1,171 @@
+[
+ {
+  "n": 114,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table3.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.4999999701976776,
+  "notes": [
+   "skipped 5 leading row(s) before the header",
+   "4 trailing row(s) starting at row 112 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 4) or drop_rows_matching to the sidecar",
+   "column `margin_of_error_2`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.50):\n+--------------------------------+-------------------------------------------+-----------------------+-------------------+\n| city                           | number_of_workers_who_commuted_by_bicycle | percentage_of_workers | margin_of_error_2 |\n+--------------------------------+-------------------------------------------+-----------------------+-------------------+\n| Albuquerque city, New Mexico   | 3379                                      | 1.3                   | 0.2               |\n| Anaheim city, California       | 1389                                      | 0.9                   | 0.2               |\n| Anchorage municipality, Alaska | 1708                                      | 1.1                   | 0.2               |\n| Arlington city, Texas          | 367                                       | 0.2                   | 0.1               |\n| Atlanta city, Georgia          | 1616                                      | 0.8                   | 0.2               |\n| Aurora city, Colorado          | 598                                       | 0.4                   | 0.1               |\n| Austin city, Texas             | 6251                                      | 1.5                   | 0.2               |\n| Bakersfield city, California   | 659                                       | 0.5                   | 0.2               |\n| Baltimore city, Maryland       | 2174                                      | 0.8                   | 0.1               |\n| Baton Rouge city, Louisiana    | 693                                       | 0.7                   | 0.2               |"
+ },
+ {
+  "n": 115,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-03.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.5999999642372131,
+  "notes": [
+   "skipped 7 leading row(s) before the header",
+   "the header row has blank cells: this may be a multi-row or merged header, which needs promote_header with rows > 1"
+  ],
+  "preview": "preview (heuristic method, confidence 0.60):\n+----------------------------------------+------------+------------+------------------------------+---------------+--------------------------+---------------------------------+----\n| c_1_barrel_is_equivalent_to_31_gallons | col_2      | col_3      | col_4                        | current_month | prior_year_current_month | current_year_cumulative_to_date | pri\n+----------------------------------------+------------+------------+------------------------------+---------------+--------------------------+---------------------------------+----\n| Manufacture                            | Production | Production | Production                   | 15904939      | 16168426                 | 41213054                        | 435\n| Of Beer (In                            |            |            |                              |               |                          |                                 |    \n| Barrels)                               |            |            |                              |               |                          |                                 |    \n|                                        | Removals   | Taxable*   | In bottles and cans          | 12242914      | 12412902                 | 32530852                        | 334\n|                                        |            |            | In kegs                      | 1387609       | 1554139                  | 3554988                         | 391\n|                                        |            |            | Tax Determined, Premises Use | 739765        | 697387                   | 747847                          | 707\n|                                        |            |            | TOTAL Taxable Removals       | 14370287      | 14664428                 | 36833686                        | 380\n|                                        |            | Tax Free   | For export                   | 420161        | 605640                   | 1186598                         | 175\n|                                        |            |            | For vessels and aircraft     | 0             | 10                       | 0                               | 10 \n|                                        |            |            | Consumed on brewery premises | 23721         | 25327                    | 25618                           | 274"
+ },
+ {
+  "n": 116,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-06.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.5999999642372131,
+  "notes": [
+   "skipped 7 leading row(s) before the header",
+   "the header row has blank cells: this may be a multi-row or merged header, which needs promote_header with rows > 1"
+  ],
+  "preview": "preview (heuristic method, confidence 0.60):\n+----------------------------------------+------------+------------+------------------------------+---------------+--------------------------+---------------------------------+----\n| c_1_barrel_is_equivalent_to_31_gallons | col_2      | col_3      | col_4                        | current_month | prior_year_current_month | current_year_cumulative_to_date | pri\n+----------------------------------------+------------+------------+------------------------------+---------------+--------------------------+---------------------------------+----\n| Manufacture                            | Production | Production | Production                   | 17857728      | 18298558                 | 93767821                        | 964\n| Of Beer (In                            |            |            |                              |               |                          |                                 |    \n| Barrels)                               |            |            |                              |               |                          |                                 |    \n|                                        | Removals   | Taxable*   | In bottles and cans          | 14169508      | 14745557                 | 74310018                        | 773\n|                                        |            |            | In kegs                      | 1498143       | 1624513                  | 8092585                         | 844\n|                                        |            |            | Tax Determined, Premises Use | 802638        | 672783                   | 1508633                         | 124\n|                                        |            |            | TOTAL Taxable Removals       | 16470288      | 17042853                 | 83911236                        | 870\n|                                        |            | Tax Free   | For export                   | 692704        | 539951                   | 3686804                         | 338\n|                                        |            |            | For vessels and aircraft     | 451           | 1                        | 694                             | 50 \n|                                        |            |            | Consumed on brewery premises | 28204         | 28210                    | 57584                           | 634"
+ },
+ {
+  "n": 117,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h08.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.1499999761581421,
+  "notes": [
+   "skipped 5 leading row(s) before the header",
+   "the header row has blank cells: this may be a multi-row or merged header, which needs promote_header with rows > 1",
+   "2 trailing row(s) starting at row 108 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 2) or drop_rows_matching to the sidecar",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.15):\n+----------------------+---------------+----------------+-----------------+------------------+-----------------+------------------+-----------------+------------------+------------\n| col_1                | median_income | standard_error | median_income_2 | standard_error_2 | median_income_3 | standard_error_3 | median_income_4 | standard_error_4 | median_inco\n+----------------------+---------------+----------------+-----------------+------------------+-----------------+------------------+-----------------+------------------+------------\n| United States        | 68703         | 550            | 63179           | 420              | 61136           | 322              | 61372           | 335              | 59039      \n| Alabama              | 56200         | 2512           | 49936           | 2423             | 50865           | 1094             | 51113           | 845              | 47221      \n| Alaska               | 78394         | 6685           | 68734           | 3390             | 77987           | 3718             | 72231           | 2719             | 75723      \n| Arizona              | 70674         | 3391           | 62283           | 2291             | 59700           | 2689             | 61125           | 2642             | 57100      \n| Arkansas             | 54539         | 2384           | 49781           | 2108             | 49751           | 2491             | 48829           | 2642             | 45907      \n| California           | 78105         | 1850           | 70489           | 1233             | 70038           | 1576             | 69759           | 1452             | 66637      \n| Colorado             | 72499         | 5221           | 73034           | 3562             | 74984           | 2661             | 74172           | 2982             | 70566      \n| Connecticut          | 87291         | 4630           | 72812           | 5119             | 74304           | 3453             | 72780           | 3509             | 75923      \n| Delaware             | 74194         | 3009           | 65012           | 3599             | 64961           | 5230             | 62318           | 3300             | 58046      \n| District of Columbia | 93111         | 3884           | 85750           | 2659             | 81282           | 1903             | 83382           | 3319             | 70982      "
+ },
+ {
+  "n": 118,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/bls-2017.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.4999999701976776,
+  "notes": [
+   "skipped 8 leading row(s) before the header",
+   "the first row is a full row of distinct labels but every column it heads holds the same kind of value it does, so it was read as data. If it is really a header, add promote_header to the sidecar."
+  ],
+  "preview": "preview (heuristic method, confidence 0.50):\n+------------------------------+-------+-------+-------+-------+-------+-------+-------+-------+--------+--------+--------+--------+\n| col_1                        | col_2 | col_3 | col_4 | col_5 | col_6 | col_7 | col_8 | col_9 | col_10 | col_11 | col_12 | col_13 |\n+------------------------------+-------+-------+-------+-------+-------+-------+-------+-------+--------+--------+--------+--------+\n| Agriculture and related      | 2454  | 1056  | 52    | 14    | 77    | 18    | 80    | 1001  | 11     | 30     | 24     | 90     |\n| Mining, quarrying, and       | 748   | 146   | 111   | 4     | 5     | 11    | 52    | 1     | 235    | 55     | 47     | 81     |\n| oil and gas extraction       |       |       |       |       |       |       |       |       |        |        |        |        |\n| Construction                 | 10692 | 1984  | 265   | 15    | 47    | 111   | 492   | 5     | 6769   | 612    | 161    | 232    |\n| Manufacturing                | 15408 | 2645  | 2255  | 36    | 215   | 608   | 1292  | 61    | 304    | 675    | 6078   | 1239   |\n| Durable goods                | 9698  | 1692  | 1624  | 25    | 89    | 296   | 823   | 5     | 234    | 434    | 3823   | 654    |\n| Nondurable goods             | 5710  | 952   | 630   | 12    | 126   | 312   | 469   | 56    | 71     | 241    | 2255   | 585    |\n| Wholesale and retail trade   | 20314 | 1497  | 1209  | 69    | 669   | 10129 | 3318  | 62    | 96     | 709    | 579    | 1977   |\n| Wholesale trade              | 3594  | 513   | 173   | 3     | 34    | 1304  | 542   | 52    | 22     | 126    | 122    | 701    |\n| Retail trade                 | 16720 | 984   | 1036  | 66    | 636   | 8824  | 2776  | 10    | 73     | 582    | 456    | 1276   |"
+ },
+ {
+  "n": 119,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-04.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.5999999642372131,
+  "notes": [
+   "skipped 7 leading row(s) before the header",
+   "the header row has blank cells: this may be a multi-row or merged header, which needs promote_header with rows > 1"
+  ],
+  "preview": "preview (heuristic method, confidence 0.60):\n+----------------------------------------+------------+------------+------------------------------+---------------+--------------------------+---------------------------------+----\n| c_1_barrel_is_equivalent_to_31_gallons | col_2      | col_3      | col_4                        | current_month | prior_year_current_month | current_year_cumulative_to_date | pri\n+----------------------------------------+------------+------------+------------------------------+---------------+--------------------------+---------------------------------+----\n| Manufacture                            | Production | Production | Production                   | 15505179      | 15666942                 | 56718232                        | 591\n| Of Beer (In                            |            |            |                              |               |                          |                                 |    \n| Barrels)                               |            |            |                              |               |                          |                                 |    \n|                                        | Removals   | Taxable*   | In bottles and cans          | 12912591      | 12819826                 | 45443443                        | 462\n|                                        |            |            | In kegs                      | 1284021       | 1302001                  | 4839008                         | 521\n|                                        |            |            | Tax Determined, Premises Use | 3656          | 4842                     | 751503                          | 712\n|                                        |            |            | TOTAL Taxable Removals       | 14200268      | 14126670                 | 51033954                        | 521\n|                                        |            | Tax Free   | For export                   | 451810        | 588410                   | 1638409                         | 233\n|                                        |            |            | For vessels and aircraft     | 5             | 0                        | 5                               | 10 \n|                                        |            |            | Consumed on brewery premises | 836           | 1123                     | 26454                           | 285"
+ },
+ {
+  "n": 120,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY17Q3.xls",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.19999992847442627,
+  "notes": [
+   "workbook has 2 sheets; reading \"Data\"",
+   "skipped 6 leading row(s) before the header",
+   "the first row is a full row of distinct labels but every column it heads holds the same kind of value it does, so it was read as data. If it is really a header, add promote_header to the sidecar.",
+   "4 trailing row(s) starting at row 18 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 4) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.20):\n+----------------------------------+-------------+-------+--------------------+--------------------+--------------------+-------------+--------------------+\n| col_1                            | col_2       | col_3 | col_4              | col_5              | col_6              | col_7       | col_8              |\n+----------------------------------+-------------+-------+--------------------+--------------------+--------------------+-------------+--------------------+\n| Account Control Technology, Inc. | 10659143750 | 0     | 354003254.82       | 45340705.43        | 286205663.16999996 | 10731526.97 | 11725359.25        |\n| Coast Professional, Inc.         | 7251296633  | 0     | 220700637.28999996 | 32858353.569999993 | 158553459.51999998 | 9940760.42  | 19348063.78        |\n| ConServe                         | 10025995146 | 0     | 340696147.53       | 43865140.3         | 266210313.58999997 | 11032983.7  | 19587709.939999998 |\n| FMS Investment Corp              | 10099213120 | 0     | 298568056.67       | 43495126.730000004 | 229250997.44       | 10153838.44 | 15668094.059999999 |\n| GC Services LP                   | 9637163492  | 0     | 271215320.03999996 | 38634011.97        | 208592999.45       | 11459152.07 | 12529156.55        |\n| Immediate Credit Recovery, Inc.  | 8692186733  | 0     | 203716143.06       | 40603876.629999995 | 134490825.74       | 10624654.59 | 17996786.1         |\n| National Recoveries, Inc.        | 6618175068  | 0     | 147275782.89       | 41932883.31        | 85234830.47        | 8129404.44  | 11978664.67        |\n| Windham Professionals, Inc.      | 8060771317  | 0     | 270484894.35       | 29380228.409999996 | 212223539.70000002 | 10661282.36 | 18219843.880000003 |\n| Action Financial Services        | 3764341364  | 0     | 84224394.62        | 23926724.36        | 52310716.91        | 4771198.07  | 3215755.28         |\n| Bass and Associates              | 1334701856  | 0     | 9490850.86         | 6975203.32         | 1403862.27         | 1087475.0   | 24310.27           |"
+ },
+ {
+  "n": 121,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/ice-clock.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.699999988079071,
+  "notes": [
+   "the document has 2 candidate record arrays; reading \"/games/nl/interiorThemes\". Set `pointer` in the sidecar to choose a different one."
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+------------+\n| value      |\n+------------+\n| Fairy Tale |\n+------------+"
+ },
+ {
+  "n": 123,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/gorgeous-closet.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.699999988079071,
+  "notes": [
+   "the document has 2 candidate record arrays; reading \"/games/nl/interiorThemes\". Set `pointer` in the sidecar to choose a different one."
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+--------+\n| value  |\n+--------+\n| Trendy |\n+--------+"
+ },
+ {
+  "n": 124,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/thick-glasses.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.699999988079071,
+  "notes": [
+   "the document has 3 candidate record arrays; reading \"/games/nl/buyPrices\". Set `pointer` in the sidecar to choose a different one."
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 320   |\n+----------+-------+"
+ },
+ {
+  "n": 125,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/dogtooth-dress.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.699999988079071,
+  "notes": [
+   "the document has 3 candidate record arrays; reading \"/games/nl/buyPrices\". Set `pointer` in the sidecar to choose a different one."
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 7200  |\n+----------+-------+"
+ },
+ {
+  "n": 128,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/three-ball-tee.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.699999988079071,
+  "notes": [
+   "the document has 4 candidate record arrays; reading \"/games/nh/buyPrices\". Set `pointer` in the sidecar to choose a different one."
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 560   |\n+----------+-------+"
+ },
+ {
+  "n": 129,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/neo-classic-knit.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.699999988079071,
+  "notes": [
+   "the document has 4 candidate record arrays; reading \"/games/ac/buyPrices\". Set `pointer` in the sidecar to choose a different one."
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 380   |\n+----------+-------+"
+ },
+ {
+  "n": 136,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/55-logan-film.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.19999998807907104,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "rows have differing field counts; short rows are padded with nulls",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.20):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| col_1                                                                                                                                                                             \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| Logan (2017)                                                                                                                                                                      \n| http://www.rogerebert.com/reviews/logan-2017                                                                                                                                      \n| Is \u201cLogan\u201d more powerful because of what the superhero genre has delivered over the last decade? Does it seem both groundbreaking and classic because it doesn\u2019t feel like a moder\n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   "
+ }
+]

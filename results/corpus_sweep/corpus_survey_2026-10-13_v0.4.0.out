@@ -1,0 +1,67 @@
+   Compiling tdy v0.4.0 (/home/umatter/tools/tdy)
+    Finished `release` profile [optimized] target(s) in 3m 10s
+     Running tests/corpus.rs (target/release/deps/corpus-142ea3a20aaa742f)
+
+running 3 tests
+test anything_read_confidently_is_reproducible has been running for over 60 seconds
+test no_real_world_file_makes_tdy_panic_or_hang has been running for over 60 seconds
+test survey_how_tdy_does_on_real_messy_data has been running for over 60 seconds
+
+thread 'no_real_world_file_makes_tdy_panic_or_hang' (1581189) panicked at tests/corpus.rs:173:9:
+corpus/90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2019-2020/Schools.xlsx took 31.205783613s — a single ordinary file should not
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test no_real_world_file_makes_tdy_panic_or_hang ... FAILED
+
+=== tdy on 9881 real files from 26 upstream repositories ===
+  read confidently    5009  (51%)
+  read, unsure        4868  (49%)   <- said so, which is the designed behaviour
+  declined               4  (0%)
+
+  by extension        read  unsure  declined
+    csv               1220     154         0
+    json              3693    4443         0
+    tsv                 12       2         0
+    txt                  1     131         0
+    xls                  2      15         0
+    xlsm                 0       1         0
+    xlsx                81     122         4
+
+  most common reasons tdy was unsure or refused:
+    1329x  the document has 3 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     605x  the document has 2 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     471x  the document has 2 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     428x  the document has 2 candidate record arrays; reading "/games/nl/interiorThemes". Set `point
+     420x  the document has 4 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     344x  the document has 4 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     170x  the document has 5 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     159x  the document has 4 candidate record arrays; reading "/games/ac/buyPrices". Set `pointer` i
+     120x  the document has 3 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+      94x  delimiter inference was ambiguous
+      67x  the document has 2 candidate record arrays; reading "/games/nh/sources". Set `pointer` in 
+      59x  no delimiter or column alignment was found
+      46x  skipped 2 leading non-tabular row(s)
+      43x  skipped 3 leading non-tabular row(s)
+      42x  the document has 5 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+
+  a sample of declined files (each is a bug or a future fixture):
+    corpus/90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/~$favourite-food.xlsx
+        cannot open workbook corpus/90_supplemental/datascience_box/source/course-materials/_slide
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-03-31/~$ttb_brewery_state_2008-2019.xlsx
+        cannot open workbook corpus/90_supplemental/tidytuesday/source/data/2020/2020-03-31/~$ttb_
+    corpus/90_supplemental/tidytuesday/source/data/2021/2021-02-09/~$h06ar.xlsx
+        cannot open workbook corpus/90_supplemental/tidytuesday/source/data/2021/2021-02-09/~$h06a
+    corpus/90_supplemental/tidytuesday/source/data/2021/2021-02-23/~$bls-2020.xlsx
+        cannot open workbook corpus/90_supplemental/tidytuesday/source/data/2021/2021-02-23/~$bls-
+test survey_how_tdy_does_on_real_messy_data ... ok
+5009 files read confidently and reproducibly
+test anything_read_confidently_is_reproducible ... ok
+
+failures:
+
+failures:
+    no_real_world_file_makes_tdy_panic_or_hang
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 930.33s
+
+error: test failed, to rerun pass `--test corpus`
+exit 101

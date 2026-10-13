@@ -36,5 +36,5 @@ Ready. Score tdy against it with:
   cargo build --release
   scripts/run_pollock.py --pollock $DEST --venv $VENV
 
-Writes results/pollock/pollock_summary.md (gitignored, like all of results/).
+Writes results/pollock/pollock_summary.md (tracked; see results/README.md).
 EOF

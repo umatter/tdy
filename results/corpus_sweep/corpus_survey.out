@@ -1,0 +1,100 @@
+   Compiling datafusion-common v46.0.1
+   Compiling datafusion-expr-common v46.0.1
+   Compiling datafusion-physical-expr-common v46.0.1
+   Compiling datafusion-functions-window-common v46.0.1
+   Compiling datafusion-functions-aggregate-common v46.0.1
+   Compiling datafusion-expr v46.0.1
+   Compiling datafusion-physical-expr v46.0.1
+   Compiling datafusion-execution v46.0.1
+   Compiling datafusion-sql v46.0.1
+   Compiling datafusion-functions v46.0.1
+   Compiling datafusion-physical-plan v46.0.1
+   Compiling datafusion-functions-aggregate v46.0.1
+   Compiling datafusion-optimizer v46.0.1
+   Compiling datafusion-catalog v46.0.1
+   Compiling datafusion-datasource v46.0.1
+   Compiling datafusion-catalog-listing v46.0.1
+   Compiling datafusion-functions-table v46.0.1
+   Compiling datafusion-physical-optimizer v46.0.1
+   Compiling datafusion-functions-nested v46.0.1
+   Compiling datafusion-functions-window v46.0.1
+   Compiling datafusion v46.0.1
+   Compiling tdy v0.1.0 (/home/umatter/tools/tdy)
+    Finished `release` profile [optimized] target(s) in 4m 18s
+     Running tests/corpus.rs (target/release/deps/corpus-80e366e8562d4511)
+
+running 3 tests
+test anything_read_confidently_is_reproducible has been running for over 60 seconds
+test no_real_world_file_makes_tdy_panic_or_hang has been running for over 60 seconds
+test survey_how_tdy_does_on_real_messy_data has been running for over 60 seconds
+
+slowest five of 9881 files:
+    13.09s  corpus/90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2019-2020/Schools.xlsx
+     8.27s  corpus/90_supplemental/tidytuesday/source/data/2022/2022-06-14/drought-fips.csv
+     7.23s  corpus/90_supplemental/tidytuesday/source/data/2023/2023-01-10/PFW_count_site_data_public_2021.csv
+     5.55s  corpus/90_supplemental/tidytuesday/source/data/2018/2018-07-31/week18_dallas_animals.xlsx
+     5.49s  corpus/90_supplemental/tidytuesday/source/data/2019/2019-01-22/incarceration_trends.csv
+test no_real_world_file_makes_tdy_panic_or_hang ... ok
+
+=== tdy on 9881 real files from 26 upstream repositories ===
+  read confidently    3875  (39%)
+  read, unsure        5012  (51%)   <- said so, which is the designed behaviour
+  declined             994  (10%)
+
+  by extension        read  unsure  declined
+    csv               1091     283         0
+    json              2702    4444       990
+    tsv                  9       5         0
+    txt                  1     131         0
+    xls                  2      15         0
+    xlsm                 0       1         0
+    xlsx                70     133         4
+
+  most common reasons tdy was unsure or refused:
+    1329x  the document has 3 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     990x  this JSON document contains no array of records; set `pointer` in the sidecar to the array
+     605x  the document has 2 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     471x  the document has 2 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     428x  the document has 2 candidate record arrays; reading "/games/nl/interiorThemes". Set `point
+     420x  the document has 4 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     344x  the document has 4 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     170x  the document has 5 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     159x  the document has 4 candidate record arrays; reading "/games/ac/buyPrices". Set `pointer` i
+     120x  the document has 3 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+      94x  delimiter inference was ambiguous
+      67x  the document has 2 candidate record arrays; reading "/games/nh/sources". Set `pointer` in 
+      64x  nearly every column typed as text; the layout may be misread
+      63x  the document has 2 candidate record arrays; reading "/result/filters". Set `pointer` in th
+      59x  no delimiter or column alignment was found
+
+  a sample of declined files (each is a bug or a future fixture):
+    corpus/90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/~$favourite-food.xlsx
+        cannot open workbook corpus/90_supplemental/datascience_box/source/course-materials/_slide
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-03-31/~$ttb_brewery_state_2008-2019.xlsx
+        cannot open workbook corpus/90_supplemental/tidytuesday/source/data/2020/2020-03-31/~$ttb_
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/acorn.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/agrias-butterfly-model.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/anchovy-model.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/angelfish-model.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/ant-model.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/aquarius-fragment.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/arapaima-model.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/aries-fragment.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/arowana-model.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+    corpus/90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/bagworm-model.json
+        this JSON document contains no array of records; set `pointer` in the sidecar to the array
+test survey_how_tdy_does_on_real_messy_data ... ok
+3875 files read confidently and reproducibly
+test anything_read_confidently_is_reproducible ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 597.32s
+

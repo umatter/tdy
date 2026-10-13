@@ -1,0 +1,2552 @@
+[
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/bls-2015.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 126
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 126
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/LifetimeEarnings.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 1,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 12
+  },
+  "new": {
+   "ok": true,
+   "skip": 1,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 12
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Cote D_ivoire.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 0,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1
+  },
+  "new": {
+   "ok": true,
+   "skip": 0,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-08-04/Electricity_generation_statistics_2019.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": false,
+   "conf": 0.34999996423721313,
+   "rows": 475
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": false,
+   "conf": 0.6499999761581421,
+   "rows": 475
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Ghana.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 29
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 29
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table2.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 182
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 182
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-05.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Luxembourg.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 0,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1
+  },
+  "new": {
+   "ok": true,
+   "skip": 0,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2016.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 27
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 27
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Cyprus.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 49
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 49
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2019.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 9,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 28
+  },
+  "new": {
+   "ok": true,
+   "skip": 9,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 28
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY16Q3.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 25
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 25
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2017.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 27
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 27
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h01a.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.04999995231628418,
+   "rows": 91
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.19999992847442627,
+   "rows": 91
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/bls-2016.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 126
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 126
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Ukraine.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 569
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 569
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY17Q1.xls",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 30
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 30
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-10.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2018.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 27
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 27
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h01w.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.04999995231628418,
+   "rows": 121
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.19999992847442627,
+   "rows": 121
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY17Q4.xls",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 20
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 20
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Malaysia.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 62
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 62
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q1.xls",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.6499999761581421,
+   "rows": 18
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.6499999761581421,
+   "rows": 18
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-04-16/global_mortality.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 6156
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 6156
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-01.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 16
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 16
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/United States of America.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 583
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 583
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-02-08/challenge.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.75,
+   "rows": 1006
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1006
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h08.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.1499999761581421,
+   "rows": 109
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 109
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h01b.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.04999995231628418,
+   "rows": 167
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.19999992847442627,
+   "rows": 167
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2011.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 26
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 26
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-12.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2eDesigners.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  },
+  "new": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Italy.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 143
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 143
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2aAllArtists.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  },
+  "new": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY17Q3.xls",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 21
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 21
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-04-02/us_avg_tuition.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 50
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 50
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2mWriters.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  },
+  "new": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2015.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 27
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 27
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h06a.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 235
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 235
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Maldives.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 8
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 8
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Australia.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 0,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1
+  },
+  "new": {
+   "ok": true,
+   "skip": 0,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-01-29/raw_datasets/pcconsp_1_.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 63
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 63
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Benin.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 0,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1
+  },
+  "new": {
+   "ok": true,
+   "skip": 0,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 1
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-10-27/Wind_Turbine_Database_FGP.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 6698
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 6698
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2017-2018/Schools.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 33,
+   "promoted": false,
+   "conf": 0.6499999761581421,
+   "rows": 17596
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 17628
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-10.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h06wnh.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 150
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 150
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/NIGERIA.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 354
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 354
+  }
+ },
+ {
+  "path": "02_messy_cleaning/librarycarpentry_openrefine/source/episodes/data/petitions-archive-list.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 4262
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 4262
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-11.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Turkey.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 98
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 98
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Philippines.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 711
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 711
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-01-29/raw_datasets/cheese_per_cap.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 69
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 69
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Thailand.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 135
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 135
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-03-05/raw_data/median-earnings-2016-final.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 569
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 569
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Hong Kong.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 558
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 558
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h01ar.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 115
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 115
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Netherlands.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 106
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 106
+  }
+ },
+ {
+  "path": "02_messy_cleaning/oxford_messy_data/source/data/occupational_health.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 114
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 114
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h03h.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.04999995231628418,
+   "rows": 104
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.19999992847442627,
+   "rows": 104
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-03.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h01h.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 105
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 105
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-12.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h06b.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 385
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 385
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2fActors.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  },
+  "new": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h06ar.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 251
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 251
+  }
+ },
+ {
+  "path": "02_messy_cleaning/oxford_messy_data/source/data/induction_retreat_2023_2024_feedback.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 22
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 22
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-09.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-07-17/week16_exercise.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 364
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 364
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-02-05/raw_source_data/State_and_US_SA.xls",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.3999999761581421,
+   "rows": 543
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.3999999761581421,
+   "rows": 543
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Bangladesh.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 26
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 26
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-03-05/raw_data/median-earnings-2013-final.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 568
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 568
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2015-2016/Schools.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 70,
+   "promoted": false,
+   "conf": 0.6499999761581421,
+   "rows": 17276
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 17345
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-06.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Latvia.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 133
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 133
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table1.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 1467
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 1467
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_state_2008-2019.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 9,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 60
+  },
+  "new": {
+   "ok": true,
+   "skip": 9,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 60
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/France.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 4
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 4
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2017-2018/InstLevel.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 2079
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 2079
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/WealthbyRaceoverLifetime.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 1,
+   "promoted": false,
+   "conf": 0.34999996423721313,
+   "rows": 12
+  },
+  "new": {
+   "ok": true,
+   "skip": 1,
+   "promoted": false,
+   "conf": 0.34999996423721313,
+   "rows": 12
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Cameroon.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 152
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 152
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-02.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 16
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 16
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2dFineArtists.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  },
+  "new": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Bhutan.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 5
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 5
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Slovenia.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.699999988079071,
+   "rows": 144
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.699999988079071,
+   "rows": 144
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Kenya.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 106
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 106
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-02.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-NationalTablesv2/Table1bManagersRace.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 56
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 56
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-08-31/S1File.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 953
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 953
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/Homeownership.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 1,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 45
+  },
+  "new": {
+   "ok": true,
+   "skip": 1,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 45
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/Default_Recoveries_PCA.xls",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 30
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 30
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table5.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 182
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 182
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h02b.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 84
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 84
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2hDancers.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  },
+  "new": {
+   "ok": true,
+   "skip": 3,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 55
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/China.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 622
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 622
+  }
+ },
+ {
+  "path": "90_supplemental/datascience_box/source/course-materials/application-exercises/ae-06-nobels-sales-dataimport/data-raw/sales.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 8
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 8
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table3.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 115
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 115
+  }
+ },
+ {
+  "path": "02_messy_cleaning/oxford_messy_data/source/data/ihtm_2025.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.75,
+   "rows": 18
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 18
+  }
+ },
+ {
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/favourite-food.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.75,
+   "rows": 5
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 5
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-11-30/data_dictionary.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.75,
+   "rows": 24
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 24
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Argentina.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 275
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 275
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Sri Lanka.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 90
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 90
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-NationalTablesv2/Table1aArtistProfile.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 2,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 40
+  },
+  "new": {
+   "ok": true,
+   "skip": 2,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 40
+  }
+ },
+ {
+  "path": "02_messy_cleaning/spreadsheet_ecology/source/episodes/data/survey_sorting_exercise.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 88
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 88
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/bls-2017.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 126
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 126
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-02-05/raw_source_data/historicalweeklydata.xls",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 2495
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 2495
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/ECUADOR.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 50
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 50
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-04-09/nfl_salary.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 800
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 800
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h02h.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 52
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.2999999523162842,
+   "rows": 52
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/South Africa.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 40
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 40
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-NationalTablesv2/Table1cManagersGender.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 41
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 41
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-04.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table6.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 115
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 115
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/IncomeDistribution.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 1,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 55
+  },
+  "new": {
+   "ok": true,
+   "skip": 1,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 55
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Ireland.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 12
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 12
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-02/tabn313.20.xls",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 32
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 32
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-08.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-09-14/Hot 100 Audio Features.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 3,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 29501
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 29503
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/India.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 209
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 209
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table4.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 1467
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 1467
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Japan.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 211
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 211
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h03a.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.04999995231628418,
+   "rows": 89
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": true,
+   "conf": 0.19999992847442627,
+   "rows": 89
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-07.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2014.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 26
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.4999999701976776,
+   "rows": 26
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q2.xls",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 18
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 18
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-08.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Vietnam.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 678
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 678
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h02w.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 61
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 61
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2016-2017/Schools.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 32,
+   "promoted": false,
+   "conf": 0.6499999761581421,
+   "rows": 17383
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 17414
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Bulgaria.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 37
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 37
+  }
+ },
+ {
+  "path": "02_messy_cleaning/oxford_messy_data/source/data/pop_death.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 1,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 86
+  },
+  "new": {
+   "ok": true,
+   "skip": 1,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 86
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-05-07/week6_coffee_chains.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.75,
+   "rows": 25600
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 25600
+  }
+ },
+ {
+  "path": "02_messy_cleaning/oxford_messy_data/source/data/vaccine.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 294
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 294
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Brazil.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 134
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 134
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/StudentLoans.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 1,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 28
+  },
+  "new": {
+   "ok": true,
+   "skip": 1,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 28
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Netherlands(1).xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 106
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 106
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Indonesia.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 636
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 636
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Montenegro.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 18
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 18
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY16Q1.xls",
+  "old": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 29
+  },
+  "new": {
+   "ok": true,
+   "skip": 6,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 29
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Portugal.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 60
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 60
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-06.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Rwanda.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 17
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 17
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Taiwan_ Republic of China (ROC).xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 11
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 11
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h02a.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 46
+  },
+  "new": {
+   "ok": true,
+   "skip": 5,
+   "promoted": false,
+   "conf": 0.19999992847442627,
+   "rows": 46
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Switzerland.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 263
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 263
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-01.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 16
+  },
+  "new": {
+   "ok": true,
+   "skip": 7,
+   "promoted": true,
+   "conf": 0.5999999642372131,
+   "rows": 16
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-04-27/CEO Dismissal 2021.03.18.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 9423
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 9423
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY16Q4.xls",
+  "old": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 30
+  },
+  "new": {
+   "ok": true,
+   "skip": 4,
+   "promoted": true,
+   "conf": 0.7999999523162842,
+   "rows": 30
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2018-2019/InstLevel.xlsx",
+  "old": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 2074
+  },
+  "new": {
+   "ok": true,
+   "skip": null,
+   "promoted": true,
+   "conf": 0.8999999761581421,
+   "rows": 2074
+  }
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/bls-2020.xlsx",
+  "old": {
+   "ok": true,
+   "skip": 8,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 126
+  },
+  "new": {
+   "ok": true,
+   "skip": 8,
+   "promoted": false,
+   "conf": 0.4999999701976776,
+   "rows": 126
+  }
+ }
+]

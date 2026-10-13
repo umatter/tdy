@@ -1,0 +1,180 @@
+[
+ {
+  "n": 2,
+  "path": "90_supplemental/tidytuesday/source/data/2025/2025-01-14/conf2024.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "column `description`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `yt_url`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+--------------------------------------------------------------------------------+-------------------+--------------------------------------------------------+---------------------\n| talk_title                                                                     | speaker_name      | track                                                  | description         \n+--------------------------------------------------------------------------------+-------------------+--------------------------------------------------------+---------------------\n| A future of data science                                                       | Allen Downey      | Keynote                                                | In the hype cycle of\n| Beyond Dashboards: Dynamic Data Storytelling with Python, R, and Quarto Emails | Sean Nguyen       | Automated Reporting With Quarto: Beyond Copy And Paste | In this talk, I\u2019ll c\n| Quarto, AI, and the Art of Getting Your Life Back                              | Tyler Morgan-Wall | Automated Reporting With Quarto: Beyond Copy And Paste | Tired of endless ser\n| Creating reproducible static reports                                           | Orla Doyle        | Automated Reporting With Quarto: Beyond Copy And Paste | This talk has also b\n| Quarto: A Multifaceted Publishing Powerhouse for Medical Researchers           | Joshua Cook       | Automated Reporting With Quarto: Beyond Copy And Paste | Traditional medical \n| Adequate Tables? No, We Want Great Tables.                                     | Richard Iannone   | Beautiful And Effective Tables                         | Tables are great, an\n|                                                                                |                   |                                                        |                     \n|                                                                                |                   |                                                        |  While we have made \n| Context is King                                                                | Shannon Pileggi   | Beautiful And Effective Tables                         | The quality of data \n| gtsummary: Streamlining Summary Tables for Research and Regulatory Submissions | Daniel Sjoberg    | Beautiful And Effective Tables                         | The gtsummary R pack"
+ },
+ {
+  "n": 10,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-07-21/raw_csv/cars-bis-open-data-animal-related-complaints-july-to-september-2017.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+-----------------+---------------+--------------------------+-------------------+\n| category_nature | category_type | category_reporting_level | location_suburb   |\n+-----------------+---------------+--------------------------+-------------------+\n| Animal          | Dog           | Defecating In Public     | STAFFORD          |\n| Animal          | Cat Trapping  |                          | MCDOWALL          |\n| Animal          | Dog           | Odour                    | CORINDA           |\n| Animal          | Dog           | Defecating In Public     | MOUNT GRAVATT     |\n| Animal          | Dog           | Fencing Issues           | EIGHT MILE PLAINS |\n| Animal          | Attack        | Attack On A Person       | CAMP HILL         |\n| Animal          | Dog           | Odour                    | ELLEN GROVE       |\n| Animal          | Attack        | Attack On An Animal      | BRACKEN RIDGE     |\n| Animal          | Other Animal  |                          | CARINA            |\n| Animal          | Cat           |                          | WYNNUM WEST       |"
+ },
+ {
+  "n": 12,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-17/hcny_p16a_t003.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.30000001192092896,
+  "notes": [
+   "delimiter inference was ambiguous",
+   "skipped 3 leading non-tabular row(s)",
+   "rows have differing field counts; short rows are padded with nulls",
+   "no header row detected; columns are named col_1, col_2, ..."
+  ],
+  "preview": "preview (heuristic method, confidence 0.30):\n+-------+-------+-------+----------+----------+-----------+----------+\n| col_1 | col_2 | col_3 | col_4    | col_5    | col_6     | col_7    |\n+-------+-------+-------+----------+----------+-----------+----------+\n| 3     | h     |       |          |          |           |          |\n| 3     | h     | Year  | January- | April-   | July-     | October- |\n| 3     | h     |       | March    | June     | September | December |\n| 3     | h     |       |          |          |           |          |\n| 3     | u     |       | (number) | (number) | (number)  | (number) |\n| 3     | d     | 2016  | 115950   | 47780    | 92610     | 129290   |\n| 3     | d     | 2017  | 84430    | 34750    |           |          |\n| 3     | c     |       |          |          |           |          |\n+-------+-------+-------+----------+----------+-----------+----------+"
+ },
+ {
+  "n": 27,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-26/mr-boston-flattened.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+----------------------+-----------------------+---------------+-----------------+---------------+------------------------+---------------+-------------------+---------------+-----\n| name                 | category              | measurement_1 | ingredient_1    | measurement_2 | ingredient_2           | measurement_3 | ingredient_3      | measurement_4 | ingr\n+----------------------+-----------------------+---------------+-----------------+---------------+------------------------+---------------+-------------------+---------------+-----\n| Gauguin              | Cocktail Classics     | 2 oz          | Light Rum       | 1 oz          | Passion Fruit Syrup    | 1 oz          | Lemon Juice       | 1 oz          | Lime\n| Fort Lauderdale      | Cocktail Classics     | 1 1/2 oz      | Light Rum       | 1/2 oz        | Sweet Vermouth         | 1/4 oz        | Juice of Orange   | 1/4 oz        | Juic\n| Apple Pie            | Cordials and Liqueurs | 3 oz          | Apple schnapps  | 1 oz          | Cinnamon schnapps      |               | Apple slice       |               |     \n| Cuban Cocktail No. 1 | Cocktail Classics     | 1/2 oz        | Juice of a Lime | 1/2 oz        | Powdered Sugar         | 2 oz          | Light Rum         |               |     \n| Cool Carlos          | Cocktail Classics     | 1 1/2 oz      | Dark rum        | 2 oz          | Cranberry Juice        | 2 oz          | Pineapple Juice   | 1 oz          | Oran\n| John Collins         | Whiskies              | 2 oz          | Bourbon whiskey | 1 oz          | Fresh lemon juice      | 1/2 oz        | Simple Syrup      | 1 oz          | Soda\n| Cherry Rum           | Cocktail Classics     | 1 1/4 oz      | Light Rum       | 1 1/2 oz      | cherry-flavored brandy | 1 oz          | Light cream       |               |     \n| Casa Blanca          | Cocktail Classics     | 2 oz          | Light Rum       | 1 1/2 oz      | Lime Juice             | 1 1/2 oz      | Triple Sec        | 1 1/2 oz      | Mara\n| Caribbean Champagne  | Cocktail Classics     | 1/2 oz        | Light Rum       | 1/2 oz        | Creme de banana        |               | Chilled Champagne |               |     \n| Amber Amour          | Cordials and Liqueurs | 1 1/2 oz      | Amaretto        | 1/4 oz        | Fresh lemon juice      | 1/4 oz        | Simple Syrup      |               | Soda"
+ },
+ {
+  "n": 48,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagers.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "column `id`: text column containing [\"nan\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `name`: text column containing [\"Nan\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `song`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+-------+----------+----------+--------+-----------+----------+-------------+--------------+----------+-------------------+---------------------------------------------------------\n| row_n | id       | name     | gender | species   | birthday | personality | song         | phrase   | full_id           | url                                                     \n+-------+----------+----------+--------+-----------+----------+-------------+--------------+----------+-------------------+---------------------------------------------------------\n| 2     | admiral  | Admiral  | male   | bird      | 1-27     | cranky      | Steep Hill   | aye aye  | villager-admiral  | https://villagerdb.com/images/villagers/thumb/admiral.98\n| 3     | agent-s  | Agent S  | female | squirrel  | 7-2      | peppy       | DJ K.K.      | sidekick | villager-agent-s  | https://villagerdb.com/images/villagers/thumb/agent-s.96\n| 4     | agnes    | Agnes    | female | pig       | 4-21     | uchi        | K.K. House   | snuffle  | villager-agnes    | https://villagerdb.com/images/villagers/thumb/agnes.9f51\n| 6     | al       | Al       | male   | gorilla   | 10-18    | lazy        | Steep Hill   | Ayyeeee  | villager-al       | https://villagerdb.com/images/villagers/thumb/al.1e17090\n| 7     | alfonso  | Alfonso  | male   | alligator | 6-9      | lazy        | Forest Life  | it'sa me | villager-alfonso  | https://villagerdb.com/images/villagers/thumb/alfonso.11\n| 8     | alice    | Alice    | female | koala     | 8-19     | normal      | Surfin' K.K. | guvnor   | villager-alice    | https://villagerdb.com/images/villagers/thumb/alice.7293\n| 9     | alli     | Alli     | female | alligator | 11-8     | snooty      | K.K. Chorale | graaagh  | villager-alli     | https://villagerdb.com/images/villagers/thumb/alli.9b3d1\n| 10    | amelia   | Amelia   | female | eagle     | 11-19    | snooty      | K.K. Condor  | eaglet   | villager-amelia   | https://villagerdb.com/images/villagers/thumb/amelia.a5b\n| 11    | anabelle | Anabelle | female | anteater  | 2-16     | peppy       | Aloha K.K.   | snorty   | villager-anabelle | https://villagerdb.com/images/villagers/thumb/anabelle.1\n| 13    | anchovy  | Anchovy  | male   | bird      | 3-4      | lazy        | K.K. Ragtime | chuurp   | villager-anchovy  | https://villagerdb.com/images/villagers/thumb/anchovy.48"
+ },
+ {
+  "n": 60,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-12/sulfur.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.699999988079071,
+  "notes": [
+   "column `year`: '.' could be a thousands separator or a decimal point here; read as a decimal separator. Check this. read as decimal(3) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+---------+-------+--------+\n| year    | neem  | wdc    |\n+---------+-------+--------+\n| 705.958 | 13.64 | 14.585 |\n| 705.875 | 14.4  | 12.817 |\n| 705.792 | 15.78 | 11.271 |\n| 705.708 | 17.42 | 9.8681 |\n| 705.625 | 18.29 | 8.7793 |\n| 705.542 | 18.36 | 8.5262 |\n| 705.458 | 17.83 | 8.5077 |\n| 705.375 | 16.8  | 9.1211 |\n| 705.292 | 15.63 | 10.294 |\n| 705.208 | 15.07 | 11.818 |"
+ },
+ {
+  "n": 62,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/BeeColonies-05-12-2016/hcny_p10_t012.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.4999999701976776,
+  "notes": [
+   "skipped 3 leading non-tabular row(s)",
+   "rows have differing field counts; short rows are padded with nulls",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.50):\n+-------+-------+------------+-----------+------------------+-------------+------------+-----------+-----------+\n| col_1 | col_2 | col_3      | col_4     | col_5            | col_6       | col_7      | col_8     | col_9     |\n+-------+-------+------------+-----------+------------------+-------------+------------+-----------+-----------+\n| 12    | h     |            |           |                  |             |            |           |           |\n| 12    | h     |            | Varroa    | Other pests      |             |            |           |           |\n| 12    | h     | State      | mites     | and parasites 1/ | Diseases 2/ | Pesticides | Other 3/  | Unknown   |\n| 12    | h     |            |           |                  |             |            |           |           |\n| 12    | u     |            | (percent) | (percent)        | (percent)   | (percent)  | (percent) | (percent) |\n| 12    | d     | Alabama    | 24.2      | 22.0             | 4.3         | 8.1        | 2.4       | 11.3      |\n| 12    | d     | Arizona    | 32.8      | 2.8              | (Z)         | 7.7        | 6.5       | 7.2       |\n| 12    | d     | Arkansas   | 57.5      | 7.0              | (Z)         | 0.5        | 1.9       | 8.1       |\n| 12    | d     | California | 38.5      | 15.2             | 9.0         | 12.6       | 8.4       | 4.3       |\n| 12    | d     | Colorado   | 3.5       | 4.7              | 0.6         | 0.3        | 3.0       | 0.2       |"
+ },
+ {
+  "n": 63,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-08-25/chopped-raw.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+--------+----------------+----------------+--------------------------------------+-------------------------------------------------------------------------------------------------\n| season | season_episode | series_episode | episode_name                         | episode_notes                                                                                   \n+--------+----------------+----------------+--------------------------------------+-------------------------------------------------------------------------------------------------\n| 1      | 1              | 1              | \"Octopus, Duck, Animal Crackers\"     | This is the first episode with only three official ingredients in a basket (dessert round). Ther\n| 1      | 2              | 2              | \"Tofu, Blueberries, Oysters\"         | This is the first of a few episodes with five official ingredients in a basket (entr\u00e9e round), a\n| 1      | 3              | 3              | \"Avocado, Tahini, Bran Flakes\"       |                                                                                                 \n| 1      | 4              | 4              | \"Banana, Collard Greens, Grits\"      | In the appetizer round, Chef Chuboda refused to use bananas in his dish, leading to his eliminat\n| 1      | 5              | 5              | \"Yucca, Watermelon, Tortillas\"       |                                                                                                 \n| 1      | 6              | 6              | \"Canned Peaches, Rice Cakes, Beets\"  |                                                                                                 \n| 1      | 7              | 7              | \"Quail, Arctic Char, Beer\"           | In the appetizer Melinda did not get her quail on 1 plate. As a result, she was eliminated.     \n| 1      | 8              | 8              | \"Coconut, Calamari, Donuts\"          | In the appetizer round, Chef LePape failed to get any food onto his plates. The judges allowed h\n| 1      | 9              | 9              | \"Mac & Cheese, Cola, Bacon\"          | Chef Lustberg has also competed on the ninth season of Hell's Kitchen (U.S. season 9).          \n| 1      | 10             | 10             | \"String Cheese, Jicama, Gingersnaps\" | This is the first episode to feature four male chefs.                                           "
+ },
+ {
+  "n": 71,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-16/hcny_p09_t010.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.4999999701976776,
+  "notes": [
+   "skipped 3 leading non-tabular row(s)",
+   "rows have differing field counts; short rows are padded with nulls",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.50):\n+-------+-------+------------+-----------+------------------+-------------+------------+-----------+-----------+\n| col_1 | col_2 | col_3      | col_4     | col_5            | col_6       | col_7      | col_8     | col_9     |\n+-------+-------+------------+-----------+------------------+-------------+------------+-----------+-----------+\n| 10    | h     |            |           |                  |             |            |           |           |\n| 10    | h     |            | Varroa    | Other pests      |             |            |           |           |\n| 10    | h     | State      | mites     | and parasites 1/ | Diseases 2/ | Pesticides | Other 3/  | Unknown   |\n| 10    | h     |            |           |                  |             |            |           |           |\n| 10    | u     |            | (percent) | (percent)        | (percent)   | (percent)  | (percent) | (percent) |\n| 10    | d     | Alabama    | 3.1       | 6.4              | 0.2         | 0.2        | 2.8       | 1.9       |\n| 10    | d     | Arizona    | 50.1      | 1.7              | 1.1         | 3.5        | 0.5       | 15.5      |\n| 10    | d     | Arkansas   | 38.1      | 9.7              | 0.1         | 8.2        | 8.5       | 0.6       |\n| 10    | d     | California | 37.3      | 12.7             | 6.2         | 11.7       | 10.5      | 7.3       |\n| 10    | d     | Colorado   | 47.6      | 24.4             | 21.2        | 19.7       | 8.4       | 1.8       |"
+ },
+ {
+  "n": 76,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-07-23/eliminations.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "column `place`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `gender`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `contestant`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `top_36`: text column containing [\"N/A\", \"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+--------+-------+--------+---------------------+--------+----------+----------+----------+--------+----------+----------+----------+------------+------------+------------+--------\n| season | place | gender | contestant          | top_36 | top_36_2 | top_36_3 | top_36_4 | top_32 | top_32_2 | top_32_3 | top_32_4 | top_30     | top_30_2   | top_30_3   | top_25 \n+--------+-------+--------+---------------------+--------+----------+----------+----------+--------+----------+----------+----------+------------+------------+------------+--------\n| 1      | 1     | Female | Kelly Clarkson      | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | N/A        | Safe (2nd) | N/A        | NA     \n| 1      | 2     | Male   | Justin Guarini      | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | N/A        | Safe (1st) | N/A        | NA     \n| 1      | 3     | Female | Nikki McKibbin      | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | N/A        | N/A        | Safe (2nd) | NA     \n| 1      | 4     | Female | Tamyra Gray         | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | Safe (1st) | N/A        | N/A        | NA     \n| 1      | 5     | Male   | R. J. Helton        | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | N/A        | N/A        | Wild Card  | NA     \n| 1      | 6     | Female | Christina Christian | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | N/A        | N/A        | Safe (1st) | NA     \n| 1      | 7     | Female | Ryan Starr          | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | Safe (2nd) | N/A        | N/A        | NA     \n| 1      | 8     | Male   | AJ Gil              | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | N/A        | Safe (3rd) | N/A        | NA     \n| 1      | 9\u201310  | Male   | EJay Day            | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | N/A        | N/A        | Safe (3rd) | NA     \n| 1      | 9\u201310  | Male   | Jim Verraros        | NA     | NA       | NA       | NA       | NA     | NA       | NA       | NA       | Safe (3rd) | N/A        | N/A        | NA     "
+ },
+ {
+  "n": 81,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-07-23/finalists.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "column `birthday`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `birthplace`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `hometown`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `description`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+---------------------+-----------+------------------------+--------------------------+---------------------------------------------------------------------------------------------\n| contestant          | birthday  | birthplace             | hometown                 | description                                                                                 \n+---------------------+-----------+------------------------+--------------------------+---------------------------------------------------------------------------------------------\n| Kelly Clarkson      | 24-Apr-82 | Fort Worth, Texas      | Burleson, Texas          | She performed Aretha Franklin's version of \"Respectand Vanessa Williams' \"Save The Best For \n| Justin Guarini      | 28-Oct-78 | Columbus, Georgia      | Doylestown, Pennsylvania | He performed  Oleta Adams' version of \"Get Herein the Hollywood rounds.                     \n| Nikki McKibbin      | 28-Sep-78 | Grand Prairie, Texas   | NA                       | She had previously been on Popstars and auditioned with Gloria Gaynor's \"I Will Surviveand W\n| Tamyra Gray         | 26-Jul-79 | Takoma Park, Maryland  | Atlanta, Georgia         | She had appeared on TV commercials and worked with other artists before auditioning for Idol\n| R. J. Helton        | 17-May-81 | Pasadena, Texas        | Cumming, Georgia         | J. Helton (born May 17, 1981, in Pasadena, Texas, 21 years old at the time of the show) is f\n| Christina Christian | 21-Jun-81 | Brooklyn, New York     | NA                       | .Christina Christian (born June 21, 1981, in Brooklyn, New York, 21 years old at the time of\n| Ryan Starr          | 21-Nov-82 | Sunland, California    | NA                       | Her audition song was Bill Withers' \"Lean On Me. She performed Bill Withers' \"Ain't No Sunsh\n| AJ Gil              | 5-Jul-84  | San Diego, California  | Tacoma, Washington       | NA                                                                                          \n| Jim Verraros        | 8-Feb-83  | Chicago, Illinois      | NA                       | He grew up with Deaf parents and is fluent in ASL (American Sign Language). He performed Dia\n| EJay Day            | 13-Sep-81 | Lawrenceville, Georgia | NA                       | He auditioned in Atlanta with Oleta Adams' \"Get Here.\"                                      "
+ },
+ {
+  "n": 85,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-03-30/allCategories.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.7999999523162842,
+  "notes": [
+   "column `specific`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.80):\n+-----------------+--------------------------------------+----------------------------------------------------------------------------------------+---------------------------------\n| brand           | product                              | url                                                                                    | imgsrc                          \n+-----------------+--------------------------------------+----------------------------------------------------------------------------------------+---------------------------------\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image\n| BECCA Cosmetics | Ultimate Coverage 24 Hour Foundation | https://www.ulta.com/ultimate-coverage-24-hour-foundation?productId=xlsImpprod18191081 | https://images.ulta.com/is/image"
+ },
+ {
+  "n": 87,
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-05-14/week7_starwars.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.699999988079071,
+  "notes": [
+   "no header row detected; columns are named col_1, col_2, ...",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.70):\n+--------------+--------------------------------------------------------------+-----------------------------------------------------------------------+-----------------------------\n| col_1        | col_2                                                        | col_3                                                                 | col_4                       \n+--------------+--------------------------------------------------------------+-----------------------------------------------------------------------+-----------------------------\n| RespondentID | Have you seen any of the 6 films in the Star Wars franchise? | Do you consider yourself to be a fan of the Star Wars film franchise? | Which of the following Star \n|              | Response                                                     | Response                                                              | Star Wars: Episode I  The Ph\n| 3292879998   | Yes                                                          | Yes                                                                   | Star Wars: Episode I  The Ph\n| 3292879538   | No                                                           |                                                                       |                             \n| 3292765271   | Yes                                                          | No                                                                    | Star Wars: Episode I  The Ph\n| 3292763116   | Yes                                                          | Yes                                                                   | Star Wars: Episode I  The Ph\n| 3292731220   | Yes                                                          | Yes                                                                   | Star Wars: Episode I  The Ph\n| 3292719380   | Yes                                                          | Yes                                                                   | Star Wars: Episode I  The Ph\n| 3292684787   | Yes                                                          | Yes                                                                   | Star Wars: Episode I  The Ph\n| 3292663732   | Yes                                                          | Yes                                                                   | Star Wars: Episode I  The Ph"
+ },
+ {
+  "n": 91,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY16Q2.xls",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.4999999701976776,
+  "notes": [
+   "workbook has 2 sheets; reading \"Data\"",
+   "skipped 6 leading row(s) before the header",
+   "the first row is a full row of distinct labels but every column it heads holds the same kind of value it does, so it was read as data. If it is really a header, add promote_header to the sidecar."
+  ],
+  "preview": "preview (heuristic method, confidence 0.50):\n+------------------------------------+------------+---------------+--------------------+-------------+--------------------+--------------------+--------------------+\n| col_1                              | col_2      | col_3         | col_4              | col_5       | col_6              | col_7              | col_8              |\n+------------------------------------+------------+---------------+--------------------+-------------+--------------------+--------------------+--------------------+\n| Account Control Technology, Inc.   | 7638576645 | 569165001.53  | 230188167.63000005 | 35431324.84 | 182463017.09000003 | 7070201.069999999  | 5223624.63         |\n| Action Financial Services          | 485695972  | 896865313.4   | 6036669.58         | 4690841.79  | 61733.54           | 1263712.8900000001 | 20381.36           |\n| Allied Interstate, Inc.            | 3507286825 |               | 97203758.19999999  | 9440426.4   | 74810677.08        | 3518194.3899999997 | 9434460.33         |\n| CBE Group                          | 2197872591 |               | 89187531.77999999  | 7573417.66  | 71187965.41        | 2872158.49         | 7553990.219999999  |\n| Central Research                   | 590184492  | 407272893.8   | 5514892.100000001  | 4658062.7   | 25184.75           | 822235.72          | 9408.93            |\n| Coast Professional, Inc.           | 1433484951 | 1545624684.75 | 39602696.400000006 | 10648554.8  | 20324298.96        | 3300330.49         | 5329512.15         |\n| Collection Technology Incorporated | 2844232344 |               | 67368389.23        | 8935899.54  | 50381901.6         | 2451823.3          | 5598764.790000001  |\n| Collecto, INC dba EOS-CCA          | 2167606707 |               | 77672876.36000001  | 6553919.41  | 56140523.63000001  | 2750483.04         | 12227950.280000001 |\n| ConServe                           | 6606944593 | 569191680.75  | 240189370.96       | 28092648.03 | 192213563.89       | 9823529.579999998  | 10059629.46        |\n| Credit Adjustments, Inc.           | 773331909  | 896857210.12  | 7985711.95         | 6742134.37  | 26831.58           | 1193367.0          | 23379.0            |"
+ }
+]

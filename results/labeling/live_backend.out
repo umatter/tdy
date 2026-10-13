@@ -1,0 +1,12 @@
+   Compiling tdy v0.1.0 (/home/umatter/tools/tdy)
+    Finished `test` profile [unoptimized] target(s) in 11.34s
+     Running tests/live_backend.rs (target/debug/deps/live_backend-4b397957d68401c3)
+
+running 3 tests
+test tier_two_matches_the_hand_written_reference_spec ... ok
+test a_real_model_can_propose_a_frame_that_the_gates_then_prove ... ok
+note: google/gemini-2.5-flash did not solve the fixed-width report — reported cleanly
+test a_spec_the_model_gets_wrong_is_never_written ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.81s
+

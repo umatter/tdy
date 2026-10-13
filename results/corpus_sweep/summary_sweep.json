@@ -1,0 +1,57 @@
+[
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2010.xlsx",
+  "conf": 0.19999992847442627,
+  "note": "a summary row (`Total`) sits above 14 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY17Q4.xls",
+  "conf": 0.0,
+  "note": "a summary row (`Total`) sits above 3 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q3.xls",
+  "conf": 0.4999999701976776,
+  "note": "a summary row (`Total`) sits above 2 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2012.xlsx",
+  "conf": 0.19999992847442627,
+  "note": "a summary row (`Total`) sits above 14 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_state_2008-2019.xlsx",
+  "conf": 0.0,
+  "note": "a summary row (`total`) sits above 7 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2008.xlsx",
+  "conf": 0.19999992847442627,
+  "note": "a summary row (`Total`) sits above 14 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2014.xlsx",
+  "conf": 0.19999992847442627,
+  "note": "a summary row (`Total`) sits above 14 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/pca-report-fy18q4.xls",
+  "conf": 0.4999999701976776,
+  "note": "a summary row (`Total`) sits above 2 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2015.xlsx",
+  "conf": 0.19999992847442627,
+  "note": "a summary row (`Total`) sits above 14 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2019.xlsx",
+  "conf": 0.19999992847442627,
+  "note": "a summary row (`Total`) sits above 14 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ },
+ {
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2017.xlsx",
+  "conf": 0.19999992847442627,
+  "note": "a summary row (`Total`) sits above 14 trailing non-data row(s) and was read as data, so any sum() over this file double-counts it; add drop_rows_matching to the sidecar to remove it"
+ }
+]

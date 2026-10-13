@@ -1,0 +1,63 @@
+   Compiling tdy v0.3.1 (/tmp/claude-1000/-home-umatter-tools-tdy/8850ca7b-adc5-440e-b8a9-cada88509432/scratchpad/wt-json)
+    Finished `release` profile [optimized] target(s) in 59.63s
+     Running tests/corpus.rs (target/release/deps/corpus-0ecc2348e4824923)
+
+running 3 tests
+test anything_read_confidently_is_reproducible has been running for over 60 seconds
+test no_real_world_file_makes_tdy_panic_or_hang has been running for over 60 seconds
+test survey_how_tdy_does_on_real_messy_data has been running for over 60 seconds
+
+slowest five of 9881 files:
+    14.38s  /home/umatter/tools/tdy/corpus/90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2019-2020/Schools.xlsx
+     9.40s  /home/umatter/tools/tdy/corpus/90_supplemental/tidytuesday/source/data/2022/2022-06-14/drought-fips.csv
+     6.87s  /home/umatter/tools/tdy/corpus/90_supplemental/tidytuesday/source/data/2023/2023-01-10/PFW_count_site_data_public_2021.csv
+     6.87s  /home/umatter/tools/tdy/corpus/90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2018-2019/Schools.xlsx
+     6.59s  /home/umatter/tools/tdy/corpus/90_supplemental/tidytuesday/source/data/2018/2018-07-31/week18_dallas_animals.xlsx
+test no_real_world_file_makes_tdy_panic_or_hang ... ok
+
+=== tdy on 9881 real files from 26 upstream repositories ===
+  read confidently    5009  (51%)
+  read, unsure        4868  (49%)   <- said so, which is the designed behaviour
+  declined               4  (0%)
+
+  by extension        read  unsure  declined
+    csv               1220     154         0
+    json              3693    4443         0
+    tsv                 12       2         0
+    txt                  1     131         0
+    xls                  2      15         0
+    xlsm                 0       1         0
+    xlsx                81     122         4
+
+  most common reasons tdy was unsure or refused:
+    1329x  the document has 3 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     605x  the document has 2 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     471x  the document has 2 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     428x  the document has 2 candidate record arrays; reading "/games/nl/interiorThemes". Set `point
+     420x  the document has 4 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+     344x  the document has 4 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     170x  the document has 5 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+     159x  the document has 4 candidate record arrays; reading "/games/ac/buyPrices". Set `pointer` i
+     120x  the document has 3 candidate record arrays; reading "/games/nh/buyPrices". Set `pointer` i
+      94x  delimiter inference was ambiguous
+      67x  the document has 2 candidate record arrays; reading "/games/nh/sources". Set `pointer` in 
+      59x  no delimiter or column alignment was found
+      46x  skipped 2 leading non-tabular row(s)
+      43x  skipped 3 leading non-tabular row(s)
+      42x  the document has 5 candidate record arrays; reading "/games/nl/buyPrices". Set `pointer` i
+
+  a sample of declined files (each is a bug or a future fixture):
+    90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/~$favourite-food.xlsx
+        cannot open workbook /home/umatter/tools/tdy/corpus/90_supplemental/datascience_box/source
+    90_supplemental/tidytuesday/source/data/2020/2020-03-31/~$ttb_brewery_state_2008-2019.xlsx
+        cannot open workbook /home/umatter/tools/tdy/corpus/90_supplemental/tidytuesday/source/dat
+    90_supplemental/tidytuesday/source/data/2021/2021-02-09/~$h06ar.xlsx
+        cannot open workbook /home/umatter/tools/tdy/corpus/90_supplemental/tidytuesday/source/dat
+    90_supplemental/tidytuesday/source/data/2021/2021-02-23/~$bls-2020.xlsx
+        cannot open workbook /home/umatter/tools/tdy/corpus/90_supplemental/tidytuesday/source/dat
+test survey_how_tdy_does_on_real_messy_data ... ok
+5009 files read confidently and reproducibly
+test anything_read_confidently_is_reproducible ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 749.88s
+

@@ -1,0 +1,125 @@
+[
+ {
+  "n": 41,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Maldives.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------------------+-------+-----+-------------+------------------+----------------------+\n| parentcofinal           | empty | pet | grand_total | number_of_events | number_of_volunteers |\n+-------------------------+-------+-----+-------------+------------------+----------------------+\n| Nestl\u00e9                  | 0     | 26  | 26          | 1                | 2                    |\n| Grand Total             | 0     | 26  | 26          | 1                | 2                    |\n| Mars, Incorporated      | 0     | 0   | 0           | 1                | 2                    |\n| Red Bull                | 0     | 0   | 0           | 1                | 2                    |\n| Reynolds American, Inc. | 0     | 0   | 0           | 1                | 2                    |\n| The Coca-Cola Company   | 0     | 0   | 0           | 1                | 2                    |\n| snicker                 | 0     | 0   | 0           | 1                | 2                    |\n| xl                      | 0     | 0   | 0           | 1                | 2                    |\n+-------------------------+-------+-----+-------------+------------------+----------------------+"
+ },
+ {
+  "n": 42,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-07-16/ewf_matches.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `note`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-----------------+-----------+------+-------------------------------+---------------------+--------------------------------------------+------------+------------+--------------+--\n| season_id       | season    | tier | division                      | match_id            | match_name                                 | date       | attendance | home_team_id | h\n+-----------------+-----------+------+-------------------------------+---------------------+--------------------------------------------+------------+------------+--------------+--\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-001-M | Chelsea Ladies vs Arsenal Ladies           | 2011-04-13 | 2510       | T-008-T      | C\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-002-M | Lincoln Ladies vs Doncaster Rovers Belles  | 2011-04-13 | 742        | T-016-T      | L\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-003-M | Birmingham City Ladies vs Bristol Academy  | 2011-04-14 | 602        | T-003-T      | B\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-004-M | Liverpool Ladies vs Everton Ladies         | 2011-04-14 | 835        | T-017-T      | L\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-005-M | Everton Ladies vs Doncaster Rovers Belles  | 2011-04-20 | 220        | T-013-T      | E\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-006-M | Liverpool Ladies vs Birmingham City Ladies | 2011-04-20 | 341        | T-017-T      | L\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-007-M | Arsenal Ladies vs Bristol Academy          | 2011-04-21 | 655        | T-001-T      | A\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-008-M | Chelsea Ladies vs Lincoln Ladies           | 2011-04-21 | 273        | T-008-T      | C\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-009-M | Bristol Academy vs Liverpool Ladies        | 2011-04-23 | 707        | T-006-T      | B\n| S-2011-2011-1-S | 2011-2011 | 1    | FA Women's Super League (WSL) | M-2011-2011-1-010-M | Birmingham City Ladies vs Lincoln Ladies   | 2011-04-24 | 446        | T-003-T      | B"
+ },
+ {
+  "n": 43,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-12-07/spiders.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `subspecies`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-----------+----------------------------------+---------------+-----------+----------------+------------+--------------+------+-------------+-----------------------------+\n| speciesid | species_lsid                     | family        | genus     | species        | subspecies | author       | year | parentheses | distribution                |\n+-----------+----------------------------------+---------------+-----------+----------------+------------+--------------+------+-------------+-----------------------------+\n| 1         | urn:lsid:nmbe.ch:spidersp:000896 | Actinopodidae | Actinopus | caraiba        | NA         | Simon        | 1889 | 1           | Venezuela                   |\n| 2         | urn:lsid:nmbe.ch:spidersp:000898 | Actinopodidae | Actinopus | crassipes      | NA         | Keyserling   | 1891 | 1           | Brazil, Paraguay, Argentina |\n| 3         | urn:lsid:nmbe.ch:spidersp:000899 | Actinopodidae | Actinopus | cucutaensis    | NA         | Mello-Leit\u00e3o | 1941 | 0           | Colombia, Venezuela, Brazil |\n| 4         | urn:lsid:nmbe.ch:spidersp:000900 | Actinopodidae | Actinopus | dubiomaculatus | NA         | Mello-Leit\u00e3o | 1923 | 0           | Brazil                      |\n| 5         | urn:lsid:nmbe.ch:spidersp:000901 | Actinopodidae | Actinopus | echinus        | NA         | Mello-Leit\u00e3o | 1949 | 0           | Brazil                      |\n| 6         | urn:lsid:nmbe.ch:spidersp:000902 | Actinopodidae | Actinopus | fractus        | NA         | Mello-Leit\u00e3o | 1920 | 0           | Brazil                      |\n| 7         | urn:lsid:nmbe.ch:spidersp:000903 | Actinopodidae | Actinopus | harti          | NA         | Pocock       | 1895 | 0           | Trinidad                    |\n| 8         | urn:lsid:nmbe.ch:spidersp:000904 | Actinopodidae | Actinopus | insignis       | NA         | Holmberg     | 1881 | 1           | Uruguay, Argentina          |\n| 9         | urn:lsid:nmbe.ch:spidersp:000905 | Actinopodidae | Actinopus | liodon         | NA         | Ausserer     | 1875 | 1           | Uruguay                     |\n| 10        | urn:lsid:nmbe.ch:spidersp:000906 | Actinopodidae | Actinopus | longipalpis    | NA         | C. L. Koch   | 1842 | 0           | Uruguay, Argentina          |"
+ },
+ {
+  "n": 44,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-06-07/corp_by_politician.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "dropped a trailing summary row",
+   "column `sum_of_amount`: read as decimal(2) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------------------+---------------+----------------------------+-------+\n| politician             | sum_of_amount | title                      | state |\n+------------------------+---------------+----------------------------+-------+\n| Greg Abbott            | 2219300.98    | Governor                   | TX    |\n| Kay Ivey               | 302537.52     | Governor                   | AL    |\n| Ken Paxton             | 192500.66     | Attorney General           | TX    |\n| Bill Lee               | 99250.00      | Governor                   | TN    |\n| Cameron Sexton         | 77600.00      | Speaker                    | TN    |\n| William Lamberth       | 48250.00      | Republican Leader          | TN    |\n| Juan Fernandez-Barquin | 42500.00      | Representative             | FL    |\n| Jeremy Faison          | 40700.00      | Caucus Chairman            | TN    |\n| Ron Gant               | 39350.00      | Assistant Reublican Leader | TN    |\n| Mark White             | 38350.00      | Representative             | TN    |"
+ },
+ {
+  "n": 45,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-08-25/top_producers.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-----------------+------------+\n| producer        | song_count |\n+-----------------+------------+\n| Dann Huff       | 59         |\n| Scott Hendricks | 31         |\n| Jay Joyce       | 28         |\n| Joey Moi        | 28         |\n| Ross Copperman  | 24         |\n| Shane McAnally  | 21         |\n| Michael Knox    | 14         |\n| Jeff Stevens    | 14         |\n| Zach Crowell    | 14         |\n| Byron Gallimore | 13         |"
+ },
+ {
+  "n": 46,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-04-14/rankings.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----+-------------------------+--------------------------------------+------+--------+--------+----+----+----+----+----+----+\n| id | title                   | artist                               | year | gender | points | n  | n1 | n2 | n3 | n4 | n5 |\n+----+-------------------------+--------------------------------------+------+--------+--------+----+----+----+----+----+----+\n| 1  | Juicy                   | The Notorious B.I.G.                 | 1994 | male   | 140    | 18 | 9  | 3  | 3  | 1  | 2  |\n| 2  | Fight The Power         | Public Enemy                         | 1989 | male   | 100    | 11 | 7  | 3  | 1  | 0  | 0  |\n| 3  | Shook Ones (Part II)    | Mobb Deep                            | 1995 | male   | 94     | 13 | 4  | 5  | 1  | 1  | 2  |\n| 4  | The Message             | Grandmaster Flash & The Furious Five | 1982 | male   | 90     | 14 | 5  | 3  | 1  | 0  | 5  |\n| 5  | Nuthin\u2019 But A \u2018G\u2019 Thang | Dr Dre ft. Snoop Doggy Dogg          | 1992 | male   | 84     | 14 | 2  | 4  | 2  | 4  | 2  |\n| 6  | C.R.E.A.M.              | Wu-Tang Clan                         | 1993 | male   | 62     | 10 | 3  | 1  | 1  | 4  | 1  |\n| 7  | 93 \u2019Til Infinity        | Souls of Mischief                    | 1993 | male   | 50     | 7  | 2  | 2  | 2  | 0  | 1  |\n| 8  | Passin\u2019 Me By           | The Pharcyde                         | 1992 | male   | 48     | 6  | 3  | 2  | 0  | 0  | 1  |\n| 9  | N.Y. State Of Mind      | Nas                                  | 1994 | male   | 46     | 7  | 1  | 3  | 1  | 1  | 1  |\n| 10 | Dear Mama               | 2Pac                                 | 1995 | male   | 42     | 6  | 2  | 1  | 1  | 2  | 0  |"
+ },
+ {
+  "n": 47,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/sales/01-sales.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+---------+------+-------+------+---+\n| month   | year | brand | item | n |\n+---------+------+-------+------+---+\n| January | 2019 | 1     | 1234 | 3 |\n| January | 2019 | 1     | 8721 | 9 |\n| January | 2019 | 1     | 1822 | 2 |\n| January | 2019 | 2     | 3333 | 1 |\n| January | 2019 | 2     | 2156 | 9 |\n| January | 2019 | 2     | 3987 | 6 |\n| January | 2019 | 2     | 3827 | 6 |\n+---------+------+-------+------+---+"
+ },
+ {
+  "n": 49,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/student_debt.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------+----------+-----------+---------------+\n| year | race     | loan_debt | loan_debt_pct |\n+------+----------+-----------+---------------+\n| 2016 | White    | 11108.41  | 0.3367511     |\n| 2016 | Black    | 14224.77  | 0.4183588     |\n| 2016 | Hispanic | 7493.999  | 0.2189689     |\n| 2013 | White    | 8363.605  | 0.2845555     |\n| 2013 | Black    | 10302.66  | 0.4122773     |\n| 2013 | Hispanic | 3177.41   | 0.1570289     |\n| 2010 | White    | 8041.989  | 0.2797834     |\n| 2010 | Black    | 9510.1    | 0.3212868     |\n| 2010 | Hispanic | 3089.166  | 0.1443476     |\n| 2007 | White    | 5263.567  | 0.1969195     |"
+ },
+ {
+  "n": 50,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-08-22/population.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `hst`: the probe (the sniffer's first ~500 rows) saw no values for this column, so it was kept as text; the whole file's values are all present and uniformly an integer, so it has been narrowed to that.",
+   "column `oip`: the probe (the sniffer's first ~500 rows) saw no values for this column, so it was kept as text; the whole file's values are all present and uniformly an integer, so it has been narrowed to that."
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------+--------------------------------------+-----+---------+-------------+-----+---------+----------+----------------+-------------------+--------+---------------+-----------+--\n| year | coo_name                             | coo | coo_iso | coa_name    | coa | coa_iso | refugees | asylum_seekers | returned_refugees | idps   | returned_idps | stateless | o\n+------+--------------------------------------+-----+---------+-------------+-----+---------+----------+----------------+-------------------+--------+---------------+-----------+--\n| 2010 | Afghanistan                          | AFG | AFG     | Afghanistan | AFG | AFG     | 0        | 0              | 0                 | 351907 | 3366          | 0         | 8\n| 2010 | Iran (Islamic Rep. of)               | IRN | IRN     | Afghanistan | AFG | AFG     | 30       | 21             | 0                 | 0      | 0             | 0         | 0\n| 2010 | Iraq                                 | IRQ | IRQ     | Afghanistan | AFG | AFG     | 6        | 0              | 0                 | 0      | 0             | 0         | 0\n| 2010 | Pakistan                             | PAK | PAK     | Afghanistan | AFG | AFG     | 6398     | 9              | 0                 | 0      | 0             | 0         | 0\n| 2010 | Egypt                                | ARE | EGY     | Albania     | ALB | ALB     | 5        | 0              | 0                 | 0      | 0             | 0         | 0\n| 2010 | China                                | CHI | CHN     | Albania     | ALB | ALB     | 6        | 0              | 0                 | 0      | 0             | 0         | 0\n| 2010 | Palestinian                          | GAZ | PSE     | Albania     | ALB | ALB     | 5        | 0              | 0                 | 0      | 0             | 0         | 0\n| 2010 | Iraq                                 | IRQ | IRQ     | Albania     | ALB | ALB     | 5        | 0              | 0                 | 0      | 0             | 0         | 0\n| 2010 | Serbia and Kosovo: S/RES/1244 (1999) | SRB | SRB     | Albania     | ALB | ALB     | 49       | 20             | 0                 | 0      | 0             | 0         | 0\n| 2010 | T\u00fcrkiye                              | TUR | TUR     | Albania     | ALB | ALB     | 5        | 0              | 0                 | 0      | 0             | 0         | 0"
+ },
+ {
+  "n": 51,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-04-28/grosses.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.8499999642372131,
+  "notes": [
+   "column `avg_ticket_price`: read as decimal(2) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero",
+   "column `potential_gross`: the probe (the sniffer's first ~500 rows) saw no values for this column; later values are fractional, and choosing between decimal and float needs the full type inference, so it was left as text. Set the dtype in the sidecar if you know it.",
+   "column `top_ticket_price`: the probe (the sniffer's first ~500 rows) saw no values for this column; later values are fractional, and choosing between decimal and float needs the full type inference, so it was left as text. Set the dtype in the sidecar if you know it.",
+   "column `weekly_gross_overall`: kept as text \u2014 at least 500 of 47524 values are not an integer: \"26330470.95\" (row 40667), \"26330470.95\" (row 40668), \"26330470.95\" (row 40669). If those are strays rather than data, drop them with a `drop_rows_matching` transform and narrow the type by hand."
+  ],
+  "preview": "preview (heuristic method, confidence 0.85):\n+-------------+-------------+----------------------+------------------------+------------------------------+--------------+-----------------+------------------+------------------+-\n| week_ending | week_number | weekly_gross_overall | show                   | theatre                      | weekly_gross | potential_gross | avg_ticket_price | top_ticket_price | \n+-------------+-------------+----------------------+------------------------+------------------------------+--------------+-----------------+------------------+------------------+-\n| 1985-06-09  | 1           | 3915937              | 42nd Street            | St. James Theatre            | 282368       | NA              | 30.42            | NA               | \n| 1985-06-09  | 1           | 3915937              | A Chorus Line          | Sam S. Shubert Theatre       | 222584       | NA              | 27.25            | NA               | \n| 1985-06-09  | 1           | 3915937              | Aren't We All?         | Brooks Atkinson Theatre      | 249272       | NA              | 33.75            | NA               | \n| 1985-06-09  | 1           | 3915937              | Arms and the Man       | Circle in the Square Theatre | 95688        | NA              | 20.87            | NA               | \n| 1985-06-09  | 1           | 3915937              | As Is                  | Lyceum Theatre               | 61059        | NA              | 20.78            | NA               | \n| 1985-06-09  | 1           | 3915937              | Big River              | Eugene O'Neill Theatre       | 255386       | NA              | 31.96            | NA               | \n| 1985-06-09  | 1           | 3915937              | Biloxi Blues           | Neil Simon Theatre           | 306839       | NA              | 28.33            | NA               | \n| 1985-06-09  | 1           | 3915937              | Brighton Beach Memoirs | 46th Street Theatre          | 107392       | NA              | 18.93            | NA               | \n| 1985-06-09  | 1           | 3915937              | Cats                   | Winter Garden Theatre        | 461880       | NA              | 38.35            | NA               | \n| 1985-06-09  | 1           | 3915937              | Doubles                | Ritz Theatre                 | 47452        | NA              | 17.52            | NA               | "
+ },
+ {
+  "n": 52,
+  "path": "01_direct_fit/ben519_datawrangling/source/Data/transactions.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+---------------+-----------------+--------+-----------+----------+\n| transactionid | transactiondate | userid | productid | quantity |\n+---------------+-----------------+--------+-----------+----------+\n| 1             | 2010-08-21      | 7      | 2         | 1        |\n| 2             | 2011-05-26      | 3      | 4         | 1        |\n| 3             | 2011-06-16      | 3      | 3         | 1        |\n| 4             | 2012-08-26      | 1      | 2         | 3        |\n| 5             | 2013-06-06      | 2      | 4         | 1        |\n| 6             | 2013-12-23      | 2      | 5         | 6        |\n| 7             | 2013-12-30      | 3      | 4         | 1        |\n| 8             | 2014-04-24      |        | 2         | 3        |\n| 9             | 2015-04-24      | 7      | 4         | 3        |\n| 10            | 2016-05-08      | 3      | 4         | 4        |"
+ },
+ {
+  "n": 53,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-12-27/tlFootnotes.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| footnote | text                                                                                                                                                                   \n+----------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| 1        | This chapter chronicles the period from the formation of the 40-Eridani system to the beginnings of life on the planet Vulcan about two billion years ago.             \n| 2        | The time and manner of Borg origins are entirely speculative. Both \"The Beginning\" (SNW 6) and \"Forgotten Light\" (SNW 7) each offer unique interpretations.            \n| 3        | This chapter chronicles the period from Surak's birth until his death sometime after 300 AD                                                                            \n| 4        | As a vision, this may be historically unreliable. The events contradict Spock's World regarding the death of Surak's father.                                           \n| 5        | This chapter chronicles the period from the Ahkh War (against the Orions) until the Sundering in 300 AD. The date given in the text as 22 BC was disregarded.          \n| 6        | The date of the Awakening is around 2000 years prior to \"The Savage Curtain\" (TOS), while T'Pol places Surak's death about 1,800 years prior to \"Awakening\" (ENT). Assu\n| 7        | This chapter chronicles the period from S'task's Declaration until the Sundering.                                                                                      \n| 8        | This chapter chronicles the journey of the Rihannsu Travelers until planetfall in 750.                                                                                 \n| 9        | These chapters chronicle the period beginning 25.86 real-time years after the Sundering until the subjugation of the Reman settlers in 753.                            \n| 10       | This chapter chronicles the period from the Settlement until the fall of the Ruling Queen in 846.                                                                      "
+ }
+]
