@@ -17,6 +17,37 @@ use std::collections::HashMap;
 /// One member's typical absolute value per numeric column.
 pub type Medians = HashMap<String, f64>;
 
+/// What one member gives the check: a typical value for every numeric column
+/// with enough values in it, and the count of every one with too few.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Profile {
+    pub medians: Medians,
+    /// Columns with at least one value but fewer than [`MIN_ROWS`].
+    pub short: HashMap<String, usize>,
+}
+
+/// How every note about a member the check could not judge begins, so the
+/// CLI can show it: an abstention said out loud is not a silent one.
+pub const UNCHECKED_PREFIX: &str = "unit not checked: ";
+
+/// A member and column the check had to leave alone, and why.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unchecked {
+    /// Index into the members handed to [`unchecked`].
+    pub member: usize,
+    pub column: String,
+    pub why: Why,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Why {
+    /// The member has this many values in the column, fewer than [`MIN_ROWS`].
+    FewValues(usize),
+    /// Only this many members have a typical value for the column, fewer
+    /// than [`MIN_MEMBERS`].
+    FewMembers(usize),
+}
+
 /// A member whose typical value is out of scale with the pile's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Outlier {
@@ -65,13 +96,38 @@ fn fmt(x: f64) -> String {
     if s.is_empty() || s == "-" { "0".to_string() } else { s.to_string() }
 }
 
+impl Unchecked {
+    /// The note under the member: which column, what was missing, and what
+    /// the check would have needed.
+    pub fn note(&self) -> String {
+        match self.why {
+            Why::FewValues(n) => format!(
+                "{UNCHECKED_PREFIX}`{}` has {n} value{} here; comparing its unit with the pile's takes {MIN_ROWS}",
+                self.column,
+                if n == 1 { "" } else { "s" }
+            ),
+            Why::FewMembers(n) => format!(
+                "{UNCHECKED_PREFIX}`{}` has a typical value in only {n} members; telling which one is in \
+                 another unit takes {MIN_MEMBERS}",
+                self.column
+            ),
+        }
+    }
+}
+
 /// The median absolute value of every numeric column of a typed batch,
 /// nulls ignored. A column with fewer than [`MIN_ROWS`] values has no typical
 /// value and is absent.
 pub fn medians(batch: &datafusion::arrow::record_batch::RecordBatch) -> Medians {
+    profile(batch).medians
+}
+
+/// A member's [`Profile`]: its typical values, and the numeric columns that
+/// hold some values but too few to have one.
+pub fn profile(batch: &datafusion::arrow::record_batch::RecordBatch) -> Profile {
     use datafusion::arrow::array::{Array, Decimal128Array, Float64Array, Int64Array};
     use datafusion::arrow::datatypes::DataType;
-    let mut out = Medians::new();
+    let mut out = Profile::default();
     for (i, field) in batch.schema().fields().iter().enumerate() {
         let col = batch.column(i);
         let mut vals: Vec<f64> = match field.data_type() {
@@ -91,11 +147,41 @@ pub fn medians(batch: &datafusion::arrow::record_batch::RecordBatch) -> Medians 
             _ => continue,
         };
         if vals.len() < MIN_ROWS {
+            if !vals.is_empty() {
+                out.short.insert(field.name().to_string(), vals.len());
+            }
             continue;
         }
         if let Some(m) = median(&mut vals) {
-            out.insert(field.name().to_string(), m);
+            out.medians.insert(field.name().to_string(), m);
         }
+    }
+    out
+}
+
+/// Every member and column [`outliers`] cannot judge, in member then column
+/// order: a column the member holds too few values in, and a column too few
+/// members have a typical value for. A column a member holds no value in is
+/// nothing that could be in the wrong unit, and is not named.
+pub fn unchecked(members: &[Profile]) -> Vec<Unchecked> {
+    let mut carrying: HashMap<&str, usize> = HashMap::new();
+    for m in members {
+        for column in m.medians.keys() {
+            *carrying.entry(column.as_str()).or_default() += 1;
+        }
+    }
+    let mut out = Vec::new();
+    for (member, m) in members.iter().enumerate() {
+        let mut found: Vec<(String, Why)> =
+            m.short.iter().map(|(c, n)| (c.clone(), Why::FewValues(*n))).collect();
+        for column in m.medians.keys() {
+            let n = carrying[column.as_str()];
+            if n < MIN_MEMBERS {
+                found.push((column.clone(), Why::FewMembers(n)));
+            }
+        }
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        out.extend(found.into_iter().map(|(column, why)| Unchecked { member, column, why }));
     }
     out
 }
@@ -222,6 +308,33 @@ mod tests {
             medians(&int_batch(vec![Some(100_000); 4])),
         ];
         assert!(outliers(&mixed, 10.0).is_empty(), "two contributing members judge nothing");
+    }
+
+    /// The check abstains in two ways and says which: a member with too few
+    /// values has no typical one, and a column too few members carry has no
+    /// odd one out. A column a member holds no value in is nothing to check.
+    #[test]
+    fn a_member_the_check_cannot_judge_is_named_with_the_reason() {
+        let rows = |v: i64, n: usize| profile(&int_batch(vec![Some(v); n]));
+        let un = unchecked(&[rows(100, 5), rows(100, 5), rows(100, 5), rows(10_000, 4)]);
+        assert_eq!(un.len(), 1, "{un:?}");
+        assert_eq!((un[0].member, un[0].column.as_str()), (3, "amount"));
+        let note = un[0].note();
+        assert!(note.starts_with(UNCHECKED_PREFIX) && note.contains("`amount` has 4 values here"), "{note}");
+
+        // Without the short member only two have a typical value, so the
+        // check judges nothing and all three say why.
+        let un = unchecked(&[rows(100, 5), rows(100, 5), rows(10_000, 4)]);
+        let whys: Vec<_> = un.iter().map(|u| (u.member, u.why.clone())).collect();
+        assert_eq!(whys, vec![(0, Why::FewMembers(2)), (1, Why::FewMembers(2)), (2, Why::FewValues(4))]);
+
+        let un = unchecked(&[rows(100, 5), rows(10_000, 5)]);
+        assert_eq!(un.iter().map(|u| u.member).collect::<Vec<_>>(), vec![0, 1], "with two, neither is judged");
+        assert!(un[0].note().contains("in only 2 members"), "{}", un[0].note());
+
+        assert!(unchecked(&[rows(100, 5), rows(100, 5), rows(100, 5)]).is_empty());
+        let empty = profile(&int_batch(vec![None; 3]));
+        assert!(unchecked(&[rows(100, 5), rows(100, 5), rows(100, 5), empty]).is_empty());
     }
 
     #[test]

@@ -13,7 +13,7 @@ what you need to change the code.
 
 ```bash
 cargo build --release
-cargo test --workspace --lib --tests     # 1086 tests (skips doc-tests; see note below)
+cargo test --workspace --lib --tests     # 1088 tests (skips doc-tests; see note below)
 cargo test --test regression            # one suite
 cargo test german_decimal_comma         # one test by name
 cargo test --test adversarial           # ~120s: sweeps every fixture for panics/hangs
@@ -480,7 +480,9 @@ one sheet's judgement and leaves its sibling alone. **The magnitude check** (`sr
 2026-09-07): with three members or more, each member's median absolute value per numeric column
 (a bounded typed head, `engine::preview`) against the median of those medians — a member counts for a column only with at least `MIN_ROWS` (5) non-null values in it, because a one-row file's "median" is that row and a pile of small files would be flagged on ordinary variation (0.3.1) — 10× above or
 below is a review reason recorded in the **lock, not the spec** — a fact about the pile — and the
-console's `.accept` reads both places. Medians, not totals, so a partial month is a non-event. **Swept against the corpus**
+console's `.accept` reads both places. Medians, not totals, so a partial month is a non-event. A
+member it cannot judge (under `MIN_ROWS` values, or fewer than `MIN_MEMBERS` members with a typical
+value) gets a `unit not checked:` note under it instead of silence, in piles of two or more. **Swept against the corpus**
 (`scripts/sweep_workbooks.py`, 2026-09-07): of 34 multi-sheet xlsx/xlsm workbooks, 18 stay a
 plain member and 16 expand into sheet members — the sixteen the draft slice had refused as
 `AmbiguousFrame` — with no refusal, error or timeout. Re-run it after touching discovery.
@@ -1236,7 +1238,7 @@ difference: everything under 64 MB takes the cached path and will not show it.
 
 ## Test layout
 
-- unit tests beside the code (327) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
+- unit tests beside the code (328) — `numfmt`, `sqlscan`, `detect`, `spec::validate`, casting,
   `xlguard`'s ODS geometry scan (which is pure-function over a string, so it is tested there
   rather than through a fixture)
 - `tests/e2e.rs` — the canonical messy-Excel fixture and SQL end to end
