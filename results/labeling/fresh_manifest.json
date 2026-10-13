@@ -1,0 +1,613 @@
+{
+ "seed": 20260904,
+ "strata": {
+  "csv": 90,
+  "excel": 30,
+  "json": 15,
+  "other": 15
+ },
+ "n": 150,
+ "disjoint_from": "label_sample_manifest.json",
+ "files": [
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-09-07/races.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2025/2025-01-14/conf2024.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-07-02/media_franchises.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-11-10/mobile-phone-subscriptions-vs-gdp-per-capita.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2024/2024-11-19/episode_metrics.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/surveys1979.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Vietnam.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-16/occupation.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d08-multi-df/data/scientists/works.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-07-21/raw_csv/cars-bis-open-data-animal-related-complaints-july-to-september-2017.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2023/2023-12-26/internal_calls.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-17/hcny_p16a_t003.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/function_surveys1988.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-04-09/grand_slam_timeline.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-06-28/UK Gender Pay Gap Data - 2019 to 2020.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/United Arab Emirates.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-06-15/tweets.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/surveys2001.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2020 BFFP National Data Results/Sri Lanka.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2023/2023-12-26/external_calls.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-05-03/wind.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-10-25/bakers.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-10-12/aquaculture-farmed-fish-production.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-04-12/death_fuel.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2018/2018-06-19/week12_mediacloud_trump.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-07-07/coffee_ratings.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-26/mr-boston-flattened.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-22/applicants.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-01-07/IDCJAC0009_009151_1800_Data.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2026/2026-08-18/demo_by_first_language.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2026/2026-01-13/africa.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-10-05/nurses.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-19/households.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-06-21/science.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-01-07/rainfall.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-06-01/challenges.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/surveys1998.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-09-07/qualifying.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-05-24/sevens.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2026/2026-08-18/demo_by_reasons.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Maldives.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2024/2024-07-16/ewf_matches.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-12-07/spiders.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-06-07/corp_by_politician.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2026/2026-08-25/top_producers.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-04-14/rankings.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/sales/01-sales.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagers.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/student_debt.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2023/2023-08-22/population.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-04-28/grosses.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "01_direct_fit/ben519_datawrangling/source/Data/transactions.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-12-27/tlFootnotes.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/lifetime_earn.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-08-04/country_totals.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2024/2024-11-05/democracy_data.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/earn.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2024/2024-09-03/stackoverflow_survey_questions.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-01-14/passwords.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-12/sulfur.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Kenya.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/BeeColonies-05-12-2016/hcny_p10_t012.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-08-25/chopped-raw.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2023/2023-12-05/life_expectancy.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/function_surveys1996.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2018/2018-10-02/us_births_2000-2014.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2024/2024-02-27/events.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-04-16/Economist_pensions.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-02-11/H2.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-02-11/H1.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-16/hcny_p09_t010.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-06-16/census.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d09-tidying/data/sales/customers.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Montenegro.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/df.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2024/2024-07-23/eliminations.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/commute.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Brazil.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-12-14/studio_album_tracks.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-09-07/constructor_results.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2024/2024-07-23/finalists.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2026/2026-03-10/pairwise_comparisons.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-08-06/bob-ross.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-06-07/fortune_agg.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-03-30/allCategories.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Bangladesh.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2018/2018-05-14/week7_starwars.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-05-11/broadband.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-01-29/milk_products_facts.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-06-16/slave_routes.csv",
+   "stratum": "csv"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY16Q2.xls",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2016.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q2.xls",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2018/2018-04-02/us_avg_tuition.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/datascience_box/source/course-materials/application-exercises/ae-06-nobels-sales-dataimport/data-raw/sales.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h02w.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2018/2018-04-09/nfl_salary.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h06ar.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h01ar.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Canada.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h06w.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Portugal.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-06-08/commercial.xls",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-08-31/S1File.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Hong Kong.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Colombia.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2019-2020/Schools.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q1.xls",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-NationalTablesv2/Table1bManagersRace.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY18Q3.xls",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-08-04/Electricity_generation_statistics_2019.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2023/2023-03-14/Medicines_output_european_public_assessment_reports.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-02.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table3.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-03.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-06.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h08.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/bls-2017.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-04.xlsx",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY17Q3.xls",
+   "stratum": "excel"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/ice-clock.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/cyds-poster.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/gorgeous-closet.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/thick-glasses.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/dogtooth-dress.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/villagers/buzz.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/vinyl-round-toed-pumps.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/three-ball-tee.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/neo-classic-knit.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/villagers/billy.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/tutus-photo.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/bamboo-drum.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/eds-poster.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/surgeonfish.json",
+   "stratum": "json"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/daisys-poster.json",
+   "stratum": "json"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/55-logan-film.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/59-baby-driver.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/7-all-about-eve.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/22-a-hard-day27s-night-film.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/100-battleship-potemkin.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/78-gone-with-the-wind-film.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/72-rosemary27s-baby-film.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/data_engineering_practice/source/Exercises/Exercise-2/requirements.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/data_engineering_practice/source/Exercises/Exercise-8/requirements.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/44-zootopia.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/8-inside-out-2015-film.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/data_engineering_practice/source/Exercises/Exercise-3/requirements.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/54-the-400-blows.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "04_pipeline_wrangling/dand_data_wrangling/source/3) Project 4 - WeRateDogs Twitter/image_predictions.txt",
+   "stratum": "other"
+  },
+  {
+   "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-20/README.txt",
+   "stratum": "other"
+  }
+ ]
+}

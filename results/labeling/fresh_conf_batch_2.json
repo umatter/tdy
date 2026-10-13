@@ -1,0 +1,135 @@
+[
+ {
+  "n": 29,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-01-07/IDCJAC0009_009151_1800_Data.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `bureau_of_meteorology_station_number`: kept as text: the leading zeros are part of the value",
+   "column `month`: kept as text: the leading zeros are part of the value",
+   "column `day`: kept as text: the leading zeros are part of the value",
+   "column `rainfall_amount_millimetres`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------------+--------------------------------------+------+-------+-----+-----------------------------+----------------------------------------------+---------+\n| product_code | bureau_of_meteorology_station_number | year | month | day | rainfall_amount_millimetres | period_over_which_rainfall_was_measured_days | quality |\n+--------------+--------------------------------------+------+-------+-----+-----------------------------+----------------------------------------------+---------+\n| IDCJAC0009   | 009151                               | 1967 | 01    | 01  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 02  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 03  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 04  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 05  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 06  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 07  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 08  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 09  |                             |                                              |         |\n| IDCJAC0009   | 009151                               | 1967 | 01    | 10  |                             |                                              |         |"
+ },
+ {
+  "n": 30,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-08-18/demo_by_first_language.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+----------+------+----------------------+-----------+\n| type     | language | band | percent              | year      |\n+----------+----------+------+----------------------+-----------+\n| Academic | Arabic   | <4   | 0.021293445306636252 | 2024-2025 |\n| Academic | Arabic   | 4    | 0.037102483939789724 | 2024-2025 |\n| Academic | Arabic   | 4.5  | 0.08149190045329094  | 2024-2025 |\n| Academic | Arabic   | 5    | 0.13799074506373848  | 2024-2025 |\n| Academic | Arabic   | 5.5  | 0.17022936403340286  | 2024-2025 |\n| Academic | Arabic   | 6    | 0.15888822566442287  | 2024-2025 |\n| Academic | Arabic   | 6.5  | 0.13594591240315115  | 2024-2025 |\n| Academic | Arabic   | 7    | 0.11427423215351609  | 2024-2025 |\n| Academic | Arabic   | 7.5  | 0.08553428640659075  | 2024-2025 |\n| Academic | Arabic   | 8    | 0.04757486392406934  | 2024-2025 |"
+ },
+ {
+  "n": 31,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-01-13/africa.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------+-------------+-----------------+-------------+\n| language   | family      | native_speakers | country     |\n+------------+-------------+-----------------+-------------+\n| \u01c2Kx\u02bcao\u01c1\u02bcae | Kx\u02bca        | 5000            | Namibia     |\n| \u01c2Kx\u02bcao\u01c1\u02bcae | Kx\u02bca        | 5000            | Botswana    |\n| Abon       | Niger\u2013Congo | 800             | Cameroon    |\n| Abron      | Niger\u2013Congo | 1393000         | Ghana       |\n| Abron      | Niger\u2013Congo | 1393000         | Ivory Coast |\n| Acheron    | Niger\u2013Congo | 20000           | Sudan       |\n| Adara      | Niger\u2013Congo | 300000          | Nigeria     |\n| Afar       | Afroasiatic | 2500000         | Ethiopia    |\n| Afar       | Afroasiatic | 2500000         | Djibouti    |\n| Afar       | Afroasiatic | 2500000         | Eritrea     |"
+ },
+ {
+  "n": 32,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-10-05/nurses.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `wage_salary_standard_error`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------------------+------+-------------------+-------------------------+-----------------+--------------------+-------------------+----------------------+---------------------\n| state                | year | total_employed_rn | employed_standard_error | hourly_wage_avg | hourly_wage_median | annual_salary_avg | annual_salary_median | wage_salary_standard\n+----------------------+------+-------------------+-------------------------+-----------------+--------------------+-------------------+----------------------+---------------------\n| Alabama              | 2020 | 48850             | 2.9                     | 28.96           | 28.19              | 60230             | 58630                | 0.8                 \n| Alaska               | 2020 | 6240              | 13.0                    | 45.81           | 45.23              | 95270             | 94070                | 1.4                 \n| Arizona              | 2020 | 55520             | 3.7                     | 38.64           | 37.98              | 80380             | 79010                | 0.9                 \n| Arkansas             | 2020 | 25300             | 4.2                     | 30.6            | 29.97              | 63640             | 62330                | 1.4                 \n| California           | 2020 | 307060            | 2.0                     | 57.96           | 56.93              | 120560            | 118410               | 1.0                 \n| Colorado             | 2020 | 52330             | 2.8                     | 37.43           | 36.78              | 77860             | 76500                | 0.7                 \n| Connecticut          | 2020 | 33400             | 6.5                     | 40.79           | 39.8               | 84850             | 82770                | 1.0                 \n| Delaware             | 2020 | 11410             | 11.4                    | 35.74           | 34.67              | 74330             | 72110                | 2.5                 \n| District of Columbia | 2020 | 10320             | 1.2                     | 43.29           | 43.0               | 90050             | 89440                | 1.5                 \n| Florida              | 2020 | 183130            | 2.2                     | 33.42           | 32.46              | 69510             | 67510                | 0.7                 "
+ },
+ {
+  "n": 33,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-19/households.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------------+------------+--------------------+----------------------+\n| county       | population | numberofhouseholds | averagehouseholdsize |\n+--------------+------------+--------------------+----------------------+\n| Kenya        | 47213282   | 12143913           | 3.9                  |\n| Mombasa      | 1190987    | 378422             | 3.1                  |\n| Kwale        | 858748     | 173176             | 5.0                  |\n| Kilifi       | 1440958    | 298472             | 4.8                  |\n| TanaRiver    | 314710     | 68242              | 4.6                  |\n| Lamu         | 141909     | 37963              | 3.7                  |\n| Taita/Taveta | 335747     | 96429              | 3.5                  |\n| Garissa      | 835482     | 141394             | 5.9                  |\n| Wajir        | 775302     | 127932             | 6.1                  |\n| Mandera      | 862079     | 125763             | 6.9                  |"
+ },
+ {
+  "n": 34,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-06-21/science.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `occupation_s`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `inventions_accomplishments`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `references`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------------------------+-------+-------+-------------------------------------------------+------------------------------------------------------------------------------------\n| name                       | birth | death | occupation_s                                    | inventions_accomplishments                                                         \n+----------------------------+-------+-------+-------------------------------------------------+------------------------------------------------------------------------------------\n| Amos, Harold               | 1918  | 2003  | Microbiologist                                  | First African-American department chair at Harvard Medical School                  \n| Alcorn, George Edward, Jr. | 1940  |       | Physicist; inventor                             | Invented a method of fabricating an imaging X-ray spectrometer                     \n| Andrews, James J.          | 1930  | 1998  | Mathematician                                   | Put forth the Andrews\u2013Curtis conjecture in group theory with Morton L. Curtis, stil\n| Alexander, Archie          | 1888  | 1958  | Civil engineer                                  | Responsible for the construction of many roads and bridges, including the Whitehurs\n| Bailey, Leonard C.         | 1825  | 1918  | Inventor                                        | Folding bed                                                                        \n| Ball, Alice Augusta        | 1892  | 1916  | Chemist                                         | Extracted chaulmoogra oil for the treatment of Hansen's disease (leprosy)          \n| Banneker, Benjamin         | 1731  | 1806  | Almanac author; surveyor; farmer                | Constructed wooden clock; astronomer; mathematician; assisted in the survey of the \n| Banyaga, Augustin          | 1947  |       | Mathematician                                   | Work on diffeomorphisms and symplectomorphisms                                     \n| Bashen, Janet              | 1957  |       | Inventor; entrepreneur; professional consultant | First African-American woman to receive a patent for a web-based software invention\n| Bath, Patricia             | 1942  | 2019  | Ophthalmologist                                 | First African-American female physician to receive a patent for a medical invention"
+ },
+ {
+  "n": 35,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-01-07/rainfall.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `station_code`: kept as text: the leading zeros are part of the value",
+   "column `month`: kept as text: the leading zeros are part of the value",
+   "column `day`: kept as text: the leading zeros are part of the value",
+   "column `lat`: read as decimal(2) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------------+-----------+------+-------+-----+----------+--------+---------+--------+--------+------------------------------------+\n| station_code | city_name | year | month | day | rainfall | period | quality | lat    | long   | station_name                       |\n+--------------+-----------+------+-------+-----+----------+--------+---------+--------+--------+------------------------------------+\n| 009151       | Perth     | 1967 | 01    | 01  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 02  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 03  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 04  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 05  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 06  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 07  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 08  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 09  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |\n| 009151       | Perth     | 1967 | 01    | 10  |          |        |         | -31.96 | 115.79 | Subiaco Wastewater Treatment Plant |"
+ },
+ {
+  "n": 36,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-06-01/challenges.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `winners`: text column containing [\"None\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `winning_tribe`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------------------------+--------+---------+------------------------+-----+----------------+---------+---------------+\n| season_name              | season | episode | title                  | day | challenge_type | winners | winning_tribe |\n+--------------------------+--------+---------+------------------------+-----+----------------+---------+---------------+\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Amber   | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Tyson   | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Sandra  | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Yul     | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Wendell | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Sophie  | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Kim     | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Nick    | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Sarah   | Dakal         |\n| Survivor: Winners at War | 40     | 1       | Greatest of the Greats | 2   | reward         | Tony    | Dakal         |"
+ },
+ {
+  "n": 37,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/surveys1998.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `hindfoot_length`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero",
+   "column `weight`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------+-----------+-------+-----+------+---------+------------+-----+-----------------+--------+\n| col_1 | record_id | month | day | year | site_id | species_id | sex | hindfoot_length | weight |\n+-------+-----------+-------+-----+------+---------+------------+-----+-----------------+--------+\n| 27413 | 27414     | 1     | 31  | 1998 | 12      | DM         | F   | 35.0            | 41.0   |\n| 27414 | 27415     | 1     | 31  | 1998 | 12      | DM         | M   | 36.0            | 43.0   |\n| 27415 | 27416     | 1     | 31  | 1998 | 12      | DM         | F   | 34.0            | 41.0   |\n| 27416 | 27417     | 1     | 31  | 1998 | 20      | PM         | F   | 20.0            | 21.0   |\n| 27417 | 27418     | 1     | 31  | 1998 | 19      | OT         | M   | 21.0            | 18.0   |\n| 27418 | 27419     | 1     | 31  | 1998 | 7       | PM         | M   | 22.0            | 22.0   |\n| 27419 | 27420     | 1     | 31  | 1998 | 18      | PM         | F   | 26.0            | 28.0   |\n| 27420 | 27421     | 1     | 31  | 1998 | 21      | PM         | M   | 21.0            | 20.0   |\n| 27421 | 27422     | 1     | 31  | 1998 | 18      | RM         | M   | 16.0            | 10.0   |\n| 27422 | 27423     | 1     | 31  | 1998 | 21      | PB         | M   | 27.0            | 32.0   |"
+ },
+ {
+  "n": 38,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-09-07/qualifying.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-----------+--------+----------+---------------+--------+----------+----------+----------+----------+\n| qualifyid | raceid | driverid | constructorid | number | position | q1       | q2       | q3       |\n+-----------+--------+----------+---------------+--------+----------+----------+----------+----------+\n| 1         | 18     | 1        | 1             | 22     | 1        | 1:26.572 | 1:25.187 | 1:26.714 |\n| 2         | 18     | 9        | 2             | 4      | 2        | 1:26.103 | 1:25.315 | 1:26.869 |\n| 3         | 18     | 5        | 1             | 23     | 3        | 1:25.664 | 1:25.452 | 1:27.079 |\n| 4         | 18     | 13       | 6             | 2      | 4        | 1:25.994 | 1:25.691 | 1:27.178 |\n| 5         | 18     | 2        | 2             | 3      | 5        | 1:25.960 | 1:25.518 | 1:27.236 |\n| 6         | 18     | 15       | 7             | 11     | 6        | 1:26.427 | 1:26.101 | 1:28.527 |\n| 7         | 18     | 3        | 3             | 7      | 7        | 1:26.295 | 1:26.059 | 1:28.687 |\n| 8         | 18     | 14       | 9             | 9      | 8        | 1:26.381 | 1:26.063 | 1:29.041 |\n| 9         | 18     | 10       | 7             | 12     | 9        | 1:26.919 | 1:26.164 | 1:29.593 |\n| 10        | 18     | 20       | 5             | 15     | 10       | 1:26.702 | 1:25.842 | \\N       |"
+ },
+ {
+  "n": 39,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-05-24/sevens.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `stage`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `notes`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------+------------+------------------------+---------+---------+-------------+-----------+------------------+--------+------------+------------+--------+--------+--------------\n| row_id | date       | team_1                 | score_1 | score_2 | team_2      | venue     | tournament       | stage  | t1_game_no | t2_game_no | series | margin | winner       \n+--------+------------+------------------------+---------+---------+-------------+-----------+------------------+--------+------------+------------+--------+--------+--------------\n|        | 1997-03-15 | New Zealand Wild Ducks | 54      | 0       | Japan       | Hong Kong | Hong Kong Sevens | Pool A | 1          | 1          | 1      | 54     | New Zealand W\n| 2      | 1997-03-15 | England                | 10      | 7       | Australia   | Hong Kong | Hong Kong Sevens | Pool A | 1          | 1          | 1      | 3      | England      \n| 3      | 1997-03-15 | Canada                 | 31      | 0       | Netherlands | Hong Kong | Hong Kong Sevens | Pool A | 1          | 1          | 1      | 31     | Canada       \n| 4      | 1997-03-15 | Hong Kong              | 12      | 5       | Fiji        | Hong Kong | Hong Kong Sevens | Pool B | 1          | 1          | 1      | 7      | Hong Kong    \n| 5      | 1997-03-15 | United States          | 26      | 5       | Scotland    | Hong Kong | Hong Kong Sevens | Pool B | 1          | 1          | 1      | 21     | United States\n| 6      | 1997-03-15 | Arabian Gulf           | 42      | 0       | Singapore   | Hong Kong | Hong Kong Sevens | Pool B | 1          | 1          | 1      | 42     | Arabian Gulf \n| 7      | 1997-03-15 | New Zealand Wild Ducks | 29      | 0       | Australia   | Hong Kong | Hong Kong Sevens | Pool A | 2          | 2          | 1      | 29     | New Zealand W\n| 8      | 1997-03-15 | England                | 29      | 0       | Netherlands | Hong Kong | Hong Kong Sevens | Pool A | 2          | 2          | 1      | 29     | England      \n| 9      | 1997-03-15 | Canada                 | 36      | 5       | Japan       | Hong Kong | Hong Kong Sevens | Pool A | 2          | 2          | 1      | 31     | Canada       \n| 10     | 1997-03-15 | United States          | 10      | 7       | Hong Kong   | Hong Kong | Hong Kong Sevens | Pool B | 2          | 2          | 1      | 3      | United States"
+ },
+ {
+  "n": 40,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-08-18/demo_by_reasons.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+----------------+------+-------------+-----------+\n| type     | reason         | band | percent     | year      |\n+----------+----------------+------+-------------+-----------+\n| Academic | For employment | <4   | 0.004236575 | 2024-2025 |\n| Academic | For employment | 4    | 0.009076371 | 2024-2025 |\n| Academic | For employment | 4.5  | 0.024998597 | 2024-2025 |\n| Academic | For employment | 5    | 0.063099714 | 2024-2025 |\n| Academic | For employment | 5.5  | 0.125610235 | 2024-2025 |\n| Academic | For employment | 6    | 0.183337074 | 2024-2025 |\n| Academic | For employment | 6.5  | 0.198277313 | 2024-2025 |\n| Academic | For employment | 7    | 0.177445149 | 2024-2025 |\n| Academic | For employment | 7.5  | 0.128247573 | 2024-2025 |\n| Academic | For employment | 8    | 0.068514674 | 2024-2025 |"
+ }
+]

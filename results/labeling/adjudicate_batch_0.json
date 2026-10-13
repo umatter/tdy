@@ -1,0 +1,193 @@
+[
+ {
+  "n": 1,
+  "idx": 6,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-02-08/airmen.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "Yes, the header is right",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: name: text, last_name: text, first_name: text, graduation_date: text, rank_at_graduation: text, class: text, graduated_from: text, pilot_type: text, military_hometown_of_record: text, state: text, aerial_victory_credits: text, number_of_aerial_victory_credits: decimal number, reported_lost: text, reported_lost_date: text (+2 more)\ntdy's own confidence: 0.80\nnote: column `graduation_date`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\nnote: column `rank_at_graduation`: text column containing [\"N/A\", \"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\nnote: column `class`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\n\npreview (heuristic method, confidence 0.80):\n+---------------------------+-----------+----------------+----------------------+--------------------+-----------+----------------+---------------+-----------------------------+---\n| name                      | last_name | first_name     | graduation_date      | rank_at_graduation | class     | graduated_from | pilot_type    | military_hometown_of_record | st\n+---------------------------+-----------+----------------+----------------------+--------------------+-----------+----------------+---------------+-----------------------------+---\n| Adams, John H., Jr.       | Adams     | John H., Jr.   | 1945-04-15T00:00:00Z | 2nd Lt             | SE-45-B   | TAAF           | Single engine | Kansas City                 | KS\n| Adams, Paul               | Adams     | Paul           | 1943-04-29T00:00:00Z | 2nd Lt             | SE-43-D   | TAAF           | Single engine | Greenville                  | SC\n| Adkins, Rutherford H.     | Adkins    | Rutherford H.  | 1944-10-16T00:00:00Z | 2nd Lt             | SE-44-I-1 | TAAF           | Single engine | Alexandria                  | VA\n| Adkins, Winston A.        | Adkins    | Winston A.     | 1944-02-08T00:00:00Z | 2nd Lt             | TE-44-B   | TAAF           | Twin engine   | Chicago                     | IL\n| Alexander, Halbert L.     | Alexander | Halbert L.     | 1944-11-20T00:00:00Z | 2nd Lt             | SE-44-I   | TAAF           | Single engine | Georgetown                  | IL\n| Alexander, Harvey R.      | Alexander | Harvey R.      | 1944-04-15T00:00:00Z | 2nd Lt             | TE-44-D   | TAAF           | Twin engine   | Georgetown                  | IL\n| Alexander, Robert R.      | Alexander | Robert R.      | 1943-06-30T00:00:00Z | 2nd Lt             | SE-43-F   | TAAF           | Single engine | Harrisburg                  | PA\n| Alexander, Walter G., III | Alexander | Walter G., III | 1945-06-27T00:00:00Z | 2nd Lt             | SE-45-D   | TAAF           | Single engine | Orange                      | NJ\n| Allen, Carl V.            | Allen     | Carl V.        | 1946-06-28T00:00:00Z | 2nd Lt             | SE-46-C   | TAAF           | Single engine | Bronx                       | NY\n| Allen, Clarence W.        | Allen     | Clarence W.    | 1943-03-25T00:00:00Z | 2nd Lt             | SE-43-C   | TAAF           | Single engine | Mobile                      | AL",
+  "complaints": [
+   "It has missing columns (the last ones)",
+   "NA"
+  ]
+ },
+ {
+  "n": 2,
+  "idx": 9,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/United Kingdom.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "The file itself is genuinely ambiguous",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "No, the header is wrong",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: parentcofinal: text, empty: whole number, ps: whole number, grand_total: whole number, number_of_events: whole number, number_of_volunteers: whole number\ntdy's own confidence: 0.95\n\npreview (heuristic method, confidence 0.95):\n+------------------------+-------+----+-------------+------------------+----------------------+\n| parentcofinal          | empty | ps | grand_total | number_of_events | number_of_volunteers |\n+------------------------+-------+----+-------------+------------------+----------------------+\n| Unbranded              | 0     | 3  | 3           | 1                | 21                   |\n| Grand Total            | 0     | 3  | 3           | 1                | 21                   |\n| Floralys (Lidl)        | 0     | 0  | 0           | 1                | 21                   |\n| KP Snacks / Intersnack | 0     | 0  | 0           | 1                | 21                   |\n| McDonald's Corporation | 0     | 0  | 0           | 1                | 21                   |\n| Midka                  | 0     | 0  | 0           | 1                | 21                   |\n| Nature Tots            | 0     | 0  | 0           | 1                | 21                   |\n| Peroni                 | 0     | 0  | 0           | 1                | 21                   |\n| Princes                | 0     | 0  | 0           | 1                | 21                   |\n| Vogue                  | 0     | 0  | 0           | 1                | 21                   |",
+  "complaints": [
+   "No header was detected. The actual header rows were left as data, and the columns were incorrectly named col_1\u2013col_9.",
+   "The rows apart from the header all look ambiguous and diffcult to interpret.",
+   "Rows 1\u20133 header  skipped as non-tabular text causing actual column names (State, mites and parasites 1/ Diseases 2/ Pesticides,to be missed"
+  ]
+ },
+ {
+  "n": 3,
+  "idx": 13,
+  "path": "90_supplemental/tidytuesday/source/data/2025/2025-09-02/frogID_data.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: occurrenceid: whole number, eventid: whole number, decimallatitude: float64, decimallongitude: float64, scientificname: text, eventdate: date (%Y-%m-%d), eventtime: text, timezone: text, coordinateuncertaintyinmeters: text, recordedby: whole number, stateprovince: text\ntdy's own confidence: 0.85\nnote: column `coordinateuncertaintyinmeters`: kept as text \u2014 at least 500 of 136621 values are not an integer: \"4.748854828134691\" (row 3180), \"4.770360843038518\" (row 3181), \"34.5562870\n\npreview (heuristic method, confidence 0.85):\n+--------------+---------+-----------------+------------------+--------------------------+------------+-----------+----------+-------------------------------+------------+---------\n| occurrenceid | eventid | decimallatitude | decimallongitude | scientificname           | eventdate  | eventtime | timezone | coordinateuncertaintyinmeters | recordedby | statepro\n+--------------+---------+-----------------+------------------+--------------------------+------------+-----------+----------+-------------------------------+------------+---------\n| 12832        | 525618  | -28.5           | 153.1            | Philoria loveridgei      | 2023-01-01 | 11:18:32  | GMT+1100 | 10000                         | 41480      | New Sout\n| 12833        | 526341  | -33.7           | 151.2            | Heleioporus australiacus | 2023-01-02 | 20:39:30  | GMT+1100 | 10000                         | 834983     | New Sout\n| 12834        | 526673  | -28.7           | 152.7            | Mixophyes iteratus       | 2023-01-02 | 21:30:07  | GMT+1100 | 10000                         | 804177     | New Sout\n| 12835        | 526673  | -28.7           | 152.7            | Mixophyes fasciolatus    | 2023-01-02 | 21:30:07  | GMT+1100 | 10000                         | 804177     | New Sout\n| 12836        | 526673  | -28.7           | 152.7            | Litoria latopalmata      | 2023-01-02 | 21:30:07  | GMT+1100 | 10000                         | 804177     | New Sout\n| 12837        | 527056  | -30.4           | 152.8            | Assa darlingtoni         | 2023-01-04 | 16:04:04  | GMT+1100 | 10000                         | 1818       | New Sout\n| 12838        | 527058  | -30.4           | 152.8            | Assa darlingtoni         | 2023-01-04 | 15:04:40  | GMT+1100 | 10000                         | 1818       | New Sout\n| 12839        | 528103  | -30.4           | 153.0            | Litoria nasuta           | 2023-01-06 | 20:25:39  | GMT+1100 | 10000                         | 813007     | New Sout\n| 12840        | 528103  | -30.4           | 153.0            | Mixophyes iteratus       | 2023-01-06 | 20:25:39  | GMT+1100 | 10000                         | 813007     | New Sout\n| 12841        | 528103  | -30.4           | 153.0            | Litoria gracilenta       | 2023-01-06 | 20:25:39  | GMT+1100 | 10000                         | 813007     | New Sout",
+  "complaints": [
+   "f anything was wrong or ambiguous: The recordedby column was parsed as a whole number instead of text (ID/code)",
+   "no it is good",
+   "The number_of_cats column should be an integer type, but it was misclassified as text."
+  ]
+ },
+ {
+  "n": 4,
+  "idx": 30,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/Portal_rodents_19772002_scinameUUIDs.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "Yes, the header is right",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as delimited text, separator ','; skipped {'op': 'skip_rows', 'head': 1, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: survey_id: text, recordid: whole number, mo: whole number, dy: whole number, yr: whole number, period: text, plot_id: text, plot: whole number, note1: whole number, stake: whole number, species: text, scientificname: text, locality: text, decimallatitude: float64 (+24 more)\ntdy's own confidence: 0.80\nnote: skipped 1 leading non-tabular row(s)\nnote: column `county`: text column containing [\"NULL\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\nnote: column `state`: text column containing [\"NULL\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\n\npreview (heuristic method, confidence 0.80):\n+--------------------------------------+----------+----+----+------+--------+--------------------------------------+------+-------+-------+---------+--------------------------+----\n| survey_id                            | recordid | mo | dy | yr   | period | plot_id                              | plot | note1 | stake | species | scientificname           | loc\n+--------------------------------------+----------+----+----+------+--------+--------------------------------------+------+-------+-------+---------+--------------------------+----\n| 491ec41b-0a80-4ce9-b754-2983c6f38e71 | 6545     | 9  | 18 | 1982 | 62     | 4dc16022-f28d-4b9d-9062-c7bc3ad43362 | 13   | 13    | 36    | AB      | Amphispiza bilineata     | Win\n| f280bade-4e9b-447d-afe0-9e6d45e6bfb0 | 5220     | 1  | 24 | 1982 | 54     | dcbbd373-c22e-46ef-ae8b-ad88f5cf7475 | 20   | 13    | 27    | AB      | Amphispiza bilineata     | Win\n| 2b1b4a8a-c3e9-4781-a5f9-18b081383876 | 18932    | 8  | 7  | 1991 | 162    | 1e87b11b-4795-4f41-bdff-2d5c4412be25 | 19   | 13    | 33    | AS      | Ammodramus savannarum    | FL;\n| e98e66c4-514b-45f7-9d95-336c05a72b21 | 20588    | 1  | 24 | 1993 | 179    | 91829d58-c12e-47e8-ae31-185f46be21d2 | 12   | 13    | 41    | AS      | Ammodramus savannarum    | Swa\n| 768cdd0d-93bc-4c74-9dcd-d1ed48b7501e | 7020     | 11 | 21 | 1982 | 63     | f24f2db6-eadd-4de9-9d2f-95aea376c013 | 24   | 13    | 72    | AH      | Ammospermophilis harrisi | Mus\n| 13851c71-013d-4989-bd49-7d7a65af7709 | 7645     | 4  | 16 | 1983 | 67     | f24f2db6-eadd-4de9-9d2f-95aea376c013 | 24   | 13    | 21    | AH      | Ammospermophilus harrisi | nea\n| c10df07b-ca12-450f-8240-94e146dea1d1 | 8641     | 11 | 13 | 1983 | 74     | 6a090985-a7ce-4c04-b146-9b401d1dd796 | 15   | 13    | 25    | AH      | Ammospermophilus harrisi | roa\n| 1bd57490-6747-4949-8f98-ad6faced7341 | 9495     | 8  | 26 | 1984 | 82     | aab65971-f64b-425e-9a78-17d7ec63423c | 9    | 13    | 21    | AH      | Ammospermophilus harrisi | 3.5\n| 723e792b-9f69-4d7a-84c6-d1c1ee66ea63 | 9583     | 9  | 30 | 1984 | 83     | 6a090985-a7ce-4c04-b146-9b401d1dd796 | 15   | 13    | 37    | AH      | Ammospermophilus harrisi | St.\n| b7202dd9-332a-41f0-a975-56c55f803164 | 9862     | 1  | 20 | 1985 | 86     | 4dc16022-f28d-4b9d-9062-c7bc3ad43362 | 13   | 13    | 11    | AH      | Ammospermophilus harrisi | Eag",
+  "complaints": [
+   "It has wrong data types and missing columns.",
+   "NA",
+   "There\u2019s columns missing"
+  ]
+ },
+ {
+  "n": 5,
+  "idx": 31,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Thailand.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "The file itself is genuinely ambiguous",
+   "Wrong somewhere",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "Yes, the header is right",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: parentcofinal: text, empty: whole number, hdpe: whole number, o: whole number, pvc: whole number, grand_total: whole number, number_of_events: whole number, number_of_volunteers: whole number\ntdy's own confidence: 0.95\n\npreview (heuristic method, confidence 0.95):\n+---------------+-------+------+---+-----+-------------+------------------+----------------------+\n| parentcofinal | empty | hdpe | o | pvc | grand_total | number_of_events | number_of_volunteers |\n+---------------+-------+------+---+-----+-------------+------------------+----------------------+\n| Grand Total   | 0     | 365  | 3 | 1   | 369         | 5                | 374                  |\n| Unbranded     | 0     | 361  | 0 | 0   | 361         | 5                | 374                  |\n| Haiter        | 0     | 4    | 0 | 0   | 4           | 5                | 374                  |\n| Closeup       | 0     | 0    | 2 | 0   | 2           | 5                | 374                  |\n| ChaCha        | 0     | 0    | 1 | 0   | 1           | 5                | 374                  |\n| PepsiCo       | 0     | 0    | 0 | 1   | 1           | 5                | 374                  |\n| siam brothers | 0     | 0    | 0 | 0   | 0           | 5                | 374                  |\n| Singha        | 0     | 0    | 0 | 0   | 0           | 5                | 374                  |\n| Unilever      | 0     | 0    | 0 | 0   | 0           | 5                | 374                  |\n| water hill    | 0     | 0    | 0 | 0   | 0           | 5                | 374                  |",
+  "complaints": [
+   "everything is correct",
+   "It left out most of the column names and some records are missing",
+   "The parser listed ; as the separator in the notes despite the file using commas (,)"
+  ]
+ },
+ {
+  "n": 6,
+  "idx": 35,
+  "path": "90_supplemental/datascience_box/source/course-materials/lab-instructions/lab-06/data/fisheries.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Wrong somewhere",
+   "Correct"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: country: text, capture: whole number, aquaculture: whole number, total: whole number\ntdy's own confidence: 0.95\n\npreview (heuristic method, confidence 0.95):\n+---------------------+---------+-------------+--------+\n| country             | capture | aquaculture | total  |\n+---------------------+---------+-------------+--------+\n| Afghanistan         | 1000    | 1200        | 2200   |\n| Albania             | 7886    | 950         | 8836   |\n| Algeria             | 95000   | 1361        | 96361  |\n| American Samoa      | 3047    | 20          | 3067   |\n| Andorra             | 0       | 0           | 0      |\n| Angola              | 486490  | 655         | 487145 |\n| Antigua and Barbuda | 3000    | 10          | 3010   |\n| Argentina           | 755226  | 3673        | 758899 |\n| Armenia             | 3758    | 16381       | 20139  |\n| Aruba               | 142     | 0           | 142    |",
+  "complaints": [
+   "The header row is wrong: the first data row (2018 | 100528 | 28211 | 52444 | 83125 | 133722 | 255299) was incorrectly used as the column headers. The actual column names are missing/unknown.",
+   "the type of columns are in a wrong format, the column c_2019 is date or numeric format, the others are numeric",
+   "All correct "
+  ]
+ },
+ {
+  "n": 7,
+  "idx": 37,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Continents/Asia.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Wrong somewhere",
+   "Correct"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: parentcofinal: text, empty: whole number, hdpe: whole number, ldpe: whole number, o: whole number, pet: whole number, pp: whole number, ps: whole number, pvc: whole number, pp_2: whole number, ps_2: whole number, grand_total: whole number, number_of_events: whole number, number_of_volunteers: whole number\ntdy's own confidence: 0.95\n\npreview (heuristic method, confidence 0.95):\n+------------------------------+-------+------+-------+--------+-------+------+------+-----+------+------+-------------+------------------+----------------------+\n| parentcofinal                | empty | hdpe | ldpe  | o      | pet   | pp   | ps   | pvc | pp_2 | ps_2 | grand_total | number_of_events | number_of_volunteers |\n+------------------------------+-------+------+-------+--------+-------+------+------+-----+------+------+-------------+------------------+----------------------+\n| Grand Total                  | 0     | 2677 | 15364 | 157403 | 20543 | 4734 | 3111 | 216 | 2    | 1    | 204051      | 169              | 51675                |\n| Unbranded                    | 0     | 1309 | 10207 | 134682 | 4177  | 2745 | 2266 | 144 | 0    | 0    | 155530      | 169              | 51675                |\n| The Coca-Cola Company        | 0     | 745  | 53    | 206    | 3895  | 148  | 43   | 0   | 0    | 0    | 5090        | 169              | 51675                |\n| Assorted                     | 0     | 0    | 0     | 0      | 3500  | 0    | 0    | 0   | 0    | 0    | 3500        | 169              | 51675                |\n| Nestl\u00e9                       | 0     | 116  | 99    | 1904   | 447   | 5    | 83   | 0   | 0    | 0    | 2654        | 169              | 51675                |\n| Unilever                     | 0     | 56   | 896   | 699    | 102   | 44   | 1    | 0   | 0    | 0    | 1798        | 169              | 51675                |\n| Universal Robina Corporation | 0     | 0    | 134   | 1154   | 350   | 48   | 13   | 0   | 0    | 0    | 1699        | 169              | 51675                |\n| PT Mayora Indah Tbk          | 0     | 0    | 108   | 681    | 203   | 27   | 0    | 0   | 0    | 0    | 1019        | 169              | 51675                |\n| Indofood                     | 0     | 3    | 393   | 94     | 33    | 96   | 77   | 0   | 0    | 0    | 696         | 169              | 51675                |\n| Kaya Industries, Inc.        | 0     | 0    | 0     | 690    | 0     | 0    | 0    | 0   | 0    | 0    | 690         | 169              | 51675                |",
+  "complaints": [
+   "I would argue if the year column should be text or whole number because of ambiguity like \"2017 (40)\". However, other columns should be whole numbers from what I see in the parse preview.",
+   "column type is wrong",
+   "looks correct, my reasoning is because the rows are not all just numbers so a text column is okay here"
+  ]
+ },
+ {
+  "n": 8,
+  "idx": 38,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-21/hcny_p04_t001.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as delimited text, separator ','; skipped {'op': 'skip_rows', 'head': 2, 'tail': 0} leading row(s)\ncolumns tdy found: col_1: whole number, col_2: text, col_3: text, col_4: text, col_5: text, col_6: text, col_7: text, col_8: text, col_9: text, col_10: text\ntdy's own confidence: 0.50\nnote: skipped 2 leading non-tabular row(s)\nnote: rows have differing field counts; short rows are padded with nulls\nnote: no header row detected; columns are named col_1, col_2, ...\n\npreview (heuristic method, confidence 0.50):\n+-------+-------+----------+----------+-------------+------------+------------+------------+-------------+--------------+\n| col_1 | col_2 | col_3    | col_4    | col_5       | col_6      | col_7      | col_8      | col_9       | col_10       |\n+-------+-------+----------+----------+-------------+------------+------------+------------+-------------+--------------+\n| 1     | h     |          |          |             |            |            |            |             |              |\n| 1     | h     |          |          | April-June  | April-June | April-June | April-June | April-June  | April-June   |\n| 1     | h     | State    | April 1  |             |            |            |            |             |              |\n| 1     | h     |          | colonies | Maximum     | Lost       | Percent    | Added      | Renovated   | Percent      |\n| 1     | h     |          |          | colonies 1/ | colonies   | lost 2/    | colonies   | colonies 3/ | renovated 4/ |\n| 1     | h     |          |          |             |            |            |            |             |              |\n| 1     | u     |          | (number) | (number)    | (number)   | (percent)  | (number)   | (number)    | (percent)    |\n| 1     | d     | Alabama  | 8500     | 8500        | 4100       | 48         | 4700       | 2600        | 31           |\n| 1     | d     | Arizona  | 26000    | 26000       | 1300       | 5          | 14500      | 4700        | 18           |\n| 1     | d     | Arkansas | 17000    | 17000       | 1800       | 11         | 4900       | 800         | 5            |",
+  "complaints": [
+   "If anything was wrong or ambiguous: The dob column was detected as text instead of a date type",
+   "It is well structured",
+   "The dob column should be a date type, but it was misclassified as text. Additionally, percentage columns like str_acc were misclassified as text due to formatted % signs."
+  ]
+ }
+]

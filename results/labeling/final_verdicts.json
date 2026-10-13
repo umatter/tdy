@@ -1,0 +1,1038 @@
+{
+ "0": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/surveys2002.csv"
+ },
+ "1": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/items.csv"
+ },
+ "2": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d11-data-classes/data/hotels.csv"
+ },
+ "3": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-21/hcny_p03_t005.csv"
+ },
+ "4": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-01-08/IMDb_Economist_tv_ratings.csv"
+ },
+ "5": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-08-17/computer.csv"
+ },
+ "6": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-02-08/airmen.csv"
+ },
+ "7": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-07-02/tt_urls.csv"
+ },
+ "8": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-07-21/animal_outcomes.csv"
+ },
+ "9": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/United Kingdom.csv"
+ },
+ "10": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-09-28/programs.csv"
+ },
+ "11": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-07-07/ufcstats_data.csv"
+ },
+ "12": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d11-data-classes/data/cat-lovers.csv"
+ },
+ "13": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.85,
+  "path": "90_supplemental/tidytuesday/source/data/2025/2025-09-02/frogID_data.csv"
+ },
+ "14": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.85,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-12-13/state_retail.csv"
+ },
+ "15": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.85,
+  "path": "90_supplemental/tidytuesday/source/data/2025/2025-06-17/api_origins.csv"
+ },
+ "16": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-02-26/regularite-mensuelle-tgv-aqst.csv"
+ },
+ "17": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2025/2025-02-04/simpsons_script_lines.csv"
+ },
+ "18": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2025/2025-03-25/report_words_clean.csv"
+ },
+ "19": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-11-28/drwho_episodes.csv"
+ },
+ "20": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-01-07/tmin.086338.daily.csv"
+ },
+ "21": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/datascience_box/source/course-materials/application-exercises/ae-07-brexit-story-dataviz/data/brexit.csv"
+ },
+ "22": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-12-21/starbucks.csv"
+ },
+ "23": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-04-16/Economist_corbyn.csv"
+ },
+ "24": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/datascience_box/source/course-materials/application-exercises/ae-06-nobels-sales-dataimport/data-raw/nobel.csv"
+ },
+ "25": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/pandas_problem_solving/source/datafiles/titanic.csv"
+ },
+ "26": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/BeeColonies-05-12-2016/hcny_p02_t001.csv"
+ },
+ "27": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/carpentries_python_ecology/source/sample_output/surveys_complete.csv"
+ },
+ "28": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "03_course_labs/cap3321c_python_wrangling/source/data/exams.csv"
+ },
+ "29": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-10-18/episodes.csv"
+ },
+ "30": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/Portal_rodents_19772002_scinameUUIDs.csv"
+ },
+ "31": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Thailand.csv"
+ },
+ "32": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-09-01/arable_land_pin.csv"
+ },
+ "33": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2020 BFFP National Data Results/United Kingdom of Great Britain _ Northern Ireland.csv"
+ },
+ "34": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-02-26/full_trains.csv"
+ },
+ "35": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/datascience_box/source/course-materials/lab-instructions/lab-06/data/fisheries.csv"
+ },
+ "36": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-05-28/planting_2020.csv"
+ },
+ "37": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Continents/Asia.csv"
+ },
+ "38": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-21/hcny_p04_t001.csv"
+ },
+ "39": {
+  "verdict": "wrong",
+  "agree": 1,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-12-14/lyrics.csv"
+ },
+ "40": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-12/artists.csv"
+ },
+ "41": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/datascience_box/source/course-materials/lab-instructions/lab-02/data/plastic-waste.csv"
+ },
+ "42": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-03-19/mutant_moneyball.csv"
+ },
+ "43": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-04-16/dogs.csv"
+ },
+ "44": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-12-24/global_holidays.csv"
+ },
+ "45": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-08-18/performance_by_nationality.csv"
+ },
+ "46": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.45,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-07-28/weather.csv"
+ },
+ "47": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-09-22/members.csv"
+ },
+ "48": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2020 BFFP National Data Results/Serbia.csv"
+ },
+ "49": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/lifetime_wealth.csv"
+ },
+ "50": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-07-21/raw_csv/animal-compliance-1st-quarter-2016-17.csv"
+ },
+ "51": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.55,
+  "path": "02_messy_cleaning/librarycarpentry_openrefine/source/episodes/data/doaj-article-sample.csv"
+ },
+ "52": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/surveys1996.csv"
+ },
+ "53": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-21/hcny_p11_t009.csv"
+ },
+ "54": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-02-05/mortgage.csv"
+ },
+ "55": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-06-30/comic_bechdel.csv"
+ },
+ "56": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/datascience_box/source/course-materials/hw-instructions/hw-07/data/bikeshare-day.csv"
+ },
+ "57": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-10-01/pizza_datafiniti.csv"
+ },
+ "58": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-10-24/patient_risk_profiles.csv"
+ },
+ "59": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-12-24/christmas_songs.csv"
+ },
+ "60": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "03_course_labs/dlab_r_data_wrangling/source/data/cal_region.csv"
+ },
+ "61": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-05-02/species.csv"
+ },
+ "62": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-01-30/groundhogs.csv"
+ },
+ "63": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/function_surveys1995.csv"
+ },
+ "64": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-03/game_goals.csv"
+ },
+ "65": {
+  "verdict": "wrong",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-09-08/friends_emotions.csv"
+ },
+ "66": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-06-04/cheese_details.csv"
+ },
+ "67": {
+  "verdict": "wrong",
+  "agree": 1,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-11-12/country_subdivisions.csv"
+ },
+ "68": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.85,
+  "path": "90_supplemental/tidytuesday/source/data/2025/2025-11-11/who_tb_data.csv"
+ },
+ "69": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-12-03/A64_traffic.csv"
+ },
+ "70": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d08-multi-df/data/students/survey.csv"
+ },
+ "71": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-09-24/individual_results_df.csv"
+ },
+ "72": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-04-16/pensions.csv"
+ },
+ "73": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-12-10/diseases.csv"
+ },
+ "74": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-01-07/tmax.009021.daily.csv"
+ },
+ "75": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-01-24/loadouts.csv"
+ },
+ "76": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-01-11/bee-18/hcny_p11_t013.csv"
+ },
+ "77": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-07-18/detectors.csv"
+ },
+ "78": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-05-17/eurovision.csv"
+ },
+ "79": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-09-12/all_countries.csv"
+ },
+ "80": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/United States of America.csv"
+ },
+ "81": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-06-16/scotland_names.csv"
+ },
+ "82": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-09-12/global_economic_activity.csv"
+ },
+ "83": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-09-19/cran_graph_nodes.csv"
+ },
+ "84": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-05-07/EDULIT_DS_06052019101747206.csv"
+ },
+ "85": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-10-15/orcas.csv"
+ },
+ "86": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-26/all_drinks.csv"
+ },
+ "87": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-02-04/games.csv"
+ },
+ "88": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "csv",
+  "conf": 0.85,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-05/Merged Costs (1.0) - Sheet1.csv"
+ },
+ "89": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "csv",
+  "conf": 0.95,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/movie_poster_urls.csv"
+ },
+ "90": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.65,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h01w.xlsx"
+ },
+ "91": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Luxembourg.xlsx"
+ },
+ "92": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/NIGERIA.xlsx"
+ },
+ "93": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_state_2008-2019.xlsx"
+ },
+ "94": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2eDesigners.xlsx"
+ },
+ "95": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.6,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-05.xlsx"
+ },
+ "96": {
+  "verdict": "wrong",
+  "agree": 1,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Cyprus.xlsx"
+ },
+ "97": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2017.xlsx"
+ },
+ "98": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/supplemental-table5.xlsx"
+ },
+ "99": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2016-2017/instLevel.xlsx"
+ },
+ "100": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Benin.xlsx"
+ },
+ "101": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-07-10/week15_beers.xlsx"
+ },
+ "102": {
+  "verdict": "wrong",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-04-16/global_mortality.xlsx"
+ },
+ "103": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2011.xlsx"
+ },
+ "104": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.45,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h17.xlsx"
+ },
+ "105": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.75,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/favourite-food.xlsx"
+ },
+ "106": {
+  "verdict": "correct",
+  "agree": 1,
+  "stratum": "excel",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2hDancers.xlsx"
+ },
+ "107": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.75,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-11-30/data_dictionary.xlsx"
+ },
+ "108": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/WealthbyRace.xlsx"
+ },
+ "109": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.6,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-12.xlsx"
+ },
+ "110": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Netherlands(1).xlsx"
+ },
+ "111": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "excel",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/bls-2020.xlsx"
+ },
+ "112": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.9,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/India.xlsx"
+ },
+ "113": {
+  "verdict": "ambiguous",
+  "agree": 1,
+  "stratum": "excel",
+  "conf": 0.6,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-01.xlsx"
+ },
+ "114": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-26/PCA_Report_FY16Q3.xlsx"
+ },
+ "115": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.65,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h03b.xlsx"
+ },
+ "116": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2fActors.xlsx"
+ },
+ "117": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.5,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h02b.xlsx"
+ },
+ "118": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "excel",
+  "conf": 0.8,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_brewery_size_2018.xlsx"
+ },
+ "119": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/tiger-pants.json"
+ },
+ "120": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/mama-polar-bear.json"
+ },
+ "121": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/billboard.json"
+ },
+ "122": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "json",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/cat-grass.json"
+ },
+ "123": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/datascience_box/source/_freeze/course-materials/slides/u2-d15-studies-confounding/u2-d15-studies-confounding/execute-results/html.json"
+ },
+ "124": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/gracie-bench.json"
+ },
+ "125": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "json",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/frozen-tree.json"
+ },
+ "126": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/soulful-kk.json"
+ },
+ "127": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/toy-hammer.json"
+ },
+ "128": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "json",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/magazine-rack.json"
+ },
+ "129": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/datascience_box/source/_freeze/course-materials/application-exercises/ae-05-hotels-datatypes/type-coercion/execute-results/html.json"
+ },
+ "130": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/book.json"
+ },
+ "131": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "json",
+  "conf": 0.7,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/checkerboard-tee.json"
+ },
+ "132": {
+  "verdict": "wrong",
+  "agree": 3,
+  "stratum": "json",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/aluminum-rug.json"
+ },
+ "133": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "other",
+  "conf": 0.25,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d22-iteration/libs/jquery/LICENSE.txt"
+ },
+ "134": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "other",
+  "conf": 0.4,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/83-hell-or-high-water-film.txt"
+ },
+ "135": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.4,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/9-the-godfather.txt"
+ },
+ "136": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-04-21/gdpr_violations.tsv"
+ },
+ "137": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.4,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/16-casablanca-film.txt"
+ },
+ "138": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-05-10/nyt_full.tsv"
+ },
+ "139": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.6,
+  "path": "00_catalog/SOLUTION_FILES.txt"
+ },
+ "140": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.95,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-12-24/christmas_lyrics.tsv"
+ },
+ "141": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.25,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d11-data-classes/libs/jquery/LICENSE.txt"
+ },
+ "142": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.55,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/bouldercreek_09_2013.txt"
+ },
+ "143": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "other",
+  "conf": 0.4,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/61-the-night-of-the-hunter-film.txt"
+ },
+ "144": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.4,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/67-the-dark-knight-film.txt"
+ },
+ "145": {
+  "verdict": "wrong",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.6,
+  "path": "01_direct_fit/pandas_exercises/source/requirements.txt"
+ },
+ "146": {
+  "verdict": "correct",
+  "agree": 3,
+  "stratum": "other",
+  "conf": 0.6,
+  "path": "90_supplemental/carpentries_r_ecology/source/.github/workflows/workflows-version.txt"
+ },
+ "147": {
+  "verdict": "correct",
+  "agree": 2,
+  "stratum": "other",
+  "conf": 0.3,
+  "path": "90_supplemental/tidy_data_python/source/LICENSE.txt"
+ }
+}

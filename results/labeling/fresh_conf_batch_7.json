@@ -1,0 +1,127 @@
+[
+ {
+  "n": 106,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Colombia.xlsx",
+  "stratum": "excel",
+  "ok": true,
+  "confidence": 0.8999999761581421,
+  "notes": [
+   "dropped a trailing summary row"
+  ],
+  "preview": "preview (heuristic method, confidence 0.90):\n+---------------+-----+-------------+------------------+----------------------+\n| parentcofinal | o   | grand_total | number_of_events | number_of_volunteers |\n+---------------+-----+-------------+------------------+----------------------+\n| Assorted      | 856 | 856         | 1                | 5253                 |\n+---------------+-----+-------------+------------------+----------------------+"
+ },
+ {
+  "n": 122,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/cyds-poster.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "records read from the nested array at \"/games/nh/buyPrices\""
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 1000  |\n+----------+-------+"
+ },
+ {
+  "n": 127,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/vinyl-round-toed-pumps.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "records read from the nested array at \"/games/nh/buyPrices\""
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 1500  |\n+----------+-------+"
+ },
+ {
+  "n": 131,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/tutus-photo.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "records read from the nested array at \"/games/nh/buyPrices\""
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 40    |\n+----------+-------+"
+ },
+ {
+  "n": 132,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/bamboo-drum.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "records read from the nested array at \"/games/nh/buyPrices\""
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 2880  |\n+----------+-------+"
+ },
+ {
+  "n": 133,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/eds-poster.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "records read from the nested array at \"/games/nh/buyPrices\""
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 1000  |\n+----------+-------+"
+ },
+ {
+  "n": 134,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/surgeonfish.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "records read from the nested array at \"/games/nl/sources\""
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------+\n| value       |\n+-------------+\n| In the sea. |\n+-------------+"
+ },
+ {
+  "n": 135,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/daisys-poster.json",
+  "stratum": "json",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "records read from the nested array at \"/games/nh/buyPrices\""
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 1000  |\n+----------+-------+"
+ },
+ {
+  "n": 137,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/59-baby-driver.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.0,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "rows have differing field counts; short rows are padded with nulls",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "5 trailing row(s) starting at row 5 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 5) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.00):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| col_1                                                                                                                                                                             \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| Baby Driver (2017)                                                                                                                                                                \n| http://www.rogerebert.com/reviews/baby-driver-2017                                                                                                                                \n| Baby is a young man who creates remixes of his life. He records conversations had around him (almost always around and not with him) on an old-fashioned mini-cassette recorder   \n| Yes                                                                                                                                                                               \n| Take the riveting first scene. Three criminals\u2014Buddy (Jon Hamm)                                                                                                                   \n| The last paragraph probably makes \u201cBaby Driver\u201d sound like a music video                                                                                                          \n| At its core                                                                                                                                                                       \n| It helps greatly that few people know how to assemble a cast like Edgar Wright. Elgort and James are engaging                                                                     \n| There\u2019s an energy that you can feel in the theater when a movie is really working. It\u2019s the guy next to you jumping a bit in his seat as a car takes a hard corner. It\u2019s the woman\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
+ },
+ {
+  "n": 138,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/7-all-about-eve.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.0,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "rows have differing field counts; short rows are padded with nulls",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "15 trailing row(s) starting at row 6 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 15) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.00):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| col_1                                                                                                                                                                             \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| All About Eve (1950)                                                                                                                                                              \n| http://www.rogerebert.com/reviews/great-movie-all-about-eve-1950                                                                                                                  \n| Growing older was a smart career move for Bette Davis                                                                                                                             \n| Davis' performance as a star growing older is always paired with another famous 1950 performance -- Gloria Swanson's aging silent star in \"Sunset Boulevard.\" Both were nominated \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n| The movie                                                                                                                                                                         \n| The movie creates Margo Channing as a particular person                                                                                                                           \n| Margo believes Eve's story of hard luck and adoration; no actor has much trouble believing others would want to devote their lives to them. Good                                  \n| Eve is a universal type. Margo plays at having an ego but is in love with her work -- a professional                                                                              "
+ },
+ {
+  "n": 149,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/3) Project 4 - WeRateDogs Twitter/image_predictions.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------------------+-------------------------------------------------+---------+------------------------+--------------------+--------+--------------------+----------------------\n| tweet_id           | jpg_url                                         | img_num | p1                     | p1_conf            | p1_dog | p2                 | p2_conf              \n+--------------------+-------------------------------------------------+---------+------------------------+--------------------+--------+--------------------+----------------------\n| 666020888022790149 | https://pbs.twimg.com/media/CT4udn0WwAA0aMy.jpg | 1       | Welsh_springer_spaniel | 0.465074           | true   | collie             | 0.156665             \n| 666029285002620928 | https://pbs.twimg.com/media/CT42GRgUYAA5iDo.jpg | 1       | redbone                | 0.506826           | true   | miniature_pinscher | 0.07419169999999999  \n| 666033412701032449 | https://pbs.twimg.com/media/CT4521TWwAEvMyu.jpg | 1       | German_shepherd        | 0.596461           | true   | malinois           | 0.13858399999999998  \n| 666044226329800704 | https://pbs.twimg.com/media/CT5Dr8HUEAA-lEu.jpg | 1       | Rhodesian_ridgeback    | 0.408143           | true   | redbone            | 0.360687             \n| 666049248165822465 | https://pbs.twimg.com/media/CT5IQmsXIAAKY4A.jpg | 1       | miniature_pinscher     | 0.560311           | true   | Rottweiler         | 0.243682             \n| 666050758794694657 | https://pbs.twimg.com/media/CT5Jof1WUAEuVxN.jpg | 1       | Bernese_mountain_dog   | 0.651137           | true   | English_springer   | 0.263788             \n| 666051853826850816 | https://pbs.twimg.com/media/CT5KoJ1WoAAJash.jpg | 1       | box_turtle             | 0.9330120000000001 | false  | mud_turtle         | 0.04588540000000001  \n| 666055525042405380 | https://pbs.twimg.com/media/CT5N9tpXIAAifs1.jpg | 1       | chow                   | 0.692517           | true   | Tibetan_mastiff    | 0.058279399999999995 \n| 666057090499244032 | https://pbs.twimg.com/media/CT5PY90WoAAQGLo.jpg | 1       | shopping_cart          | 0.962465           | false  | shopping_basket    | 0.014593799999999999 \n| 666058600524156928 | https://pbs.twimg.com/media/CT5Qw94XAAA_2dP.jpg | 1       | miniature_poodle       | 0.201493           | true   | komondor           | 0.192305             "
+ }
+]

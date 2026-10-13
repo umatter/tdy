@@ -1,0 +1,74 @@
+[
+ {
+  "n": 97,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/billboard.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.70\nnote: the document has 3 candidate record arrays; reading \"/games/nl/buyPrices\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| meow     | 3     |\n| meow     | 5     |\n+----------+-------+"
+ },
+ {
+  "n": 98,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/cat-grass.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.95\nnote: records read from the nested array at \"/games/nh/buyPrices\"\n\npreview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 570   |\n+----------+-------+"
+ },
+ {
+  "n": 99,
+  "path": "90_supplemental/datascience_box/source/_freeze/course-materials/slides/u2-d15-studies-confounding/u2-d15-studies-confounding/execute-results/html.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: value: text\ntdy's own confidence: 0.70\nnote: the document has 2 candidate record arrays; reading \"/result/filters\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+-------------------------+\n| value                   |\n+-------------------------+\n| rmarkdown/pagebreak.lua |\n+-------------------------+"
+ },
+ {
+  "n": 100,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/gracie-bench.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: value: text\ntdy's own confidence: 0.70\nnote: the document has 2 candidate record arrays; reading \"/games/nl/interiorThemes\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+--------+\n| value  |\n+--------+\n| Trendy |\n+--------+"
+ },
+ {
+  "n": 101,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/frozen-tree.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.95\nnote: records read from the nested array at \"/games/nh/buyPrices\"\n\npreview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 32800 |\n+----------+-------+"
+ },
+ {
+  "n": 102,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/magazine-rack.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.95\nnote: records read from the nested array at \"/games/nh/buyPrices\"\n\npreview (heuristic method, confidence 0.95):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 2760  |\n+----------+-------+"
+ },
+ {
+  "n": 103,
+  "path": "90_supplemental/datascience_box/source/_freeze/course-materials/application-exercises/ae-05-hotels-datatypes/type-coercion/execute-results/html.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: value: text\ntdy's own confidence: 0.70\nnote: the document has 2 candidate record arrays; reading \"/result/filters\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+-------------------------+\n| value                   |\n+-------------------------+\n| rmarkdown/pagebreak.lua |\n+-------------------------+"
+ },
+ {
+  "n": 104,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/book.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.70\nnote: the document has 3 candidate record arrays; reading \"/games/nh/buyPrices\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 290   |\n+----------+-------+"
+ },
+ {
+  "n": 105,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-05-05/villagerdb-master/data/items/checkerboard-tee.json",
+  "stratum": "json",
+  "tdy_output": "read as json\ncolumns tdy found: currency: text, value: whole number\ntdy's own confidence: 0.70\nnote: the document has 8 candidate record arrays; reading \"/games/ac/buyPrices\". Set `pointer` in the sidecar to choose a different one.\n\npreview (heuristic method, confidence 0.70):\n+----------+-------+\n| currency | value |\n+----------+-------+\n| bells    | 340   |\n+----------+-------+"
+ },
+ {
+  "n": 106,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d22-iteration/libs/jquery/LICENSE.txt",
+  "stratum": "other",
+  "tdy_output": "read as delimited text, separator ','; skipped {'op': 'skip_rows', 'head': 1, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: https_jquery_org: text, col_2: text, col_3: text, col_4: text, col_5: text, col_6: text\ntdy's own confidence: 0.25\nnote: no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the ext\nnote: skipped 1 leading non-tabular row(s)\nnote: rows have differing field counts; short rows are padded with nulls\n\npreview (heuristic method, confidence 0.25):\n+-----------------------------------------------------------------------+---------------------------------------------+-------------------------+-------+---------+-------+\n| https_jquery_org                                                      | col_2                                       | col_3                   | col_4 | col_5   | col_6 |\n+-----------------------------------------------------------------------+---------------------------------------------+-------------------------+-------+---------+-------+\n| This software consists of voluntary contributions made by many        |                                             |                         |       |         |       |\n| individuals. For exact contribution history                           | see the revision history                    |                         |       |         |       |\n| available at https://github.com/jquery/jquery                         |                                             |                         |       |         |       |\n| The following license applies to all parts of this software except as |                                             |                         |       |         |       |\n| documented below:                                                     |                                             |                         |       |         |       |\n| ====                                                                  |                                             |                         |       |         |       |\n| Permission is hereby granted                                          | free of charge                              | to any person obtaining |       |         |       |\n| a copy of this software and associated documentation files (the       |                                             |                         |       |         |       |\n| Software)                                                             | to deal in the Software without restriction | including               |       |         |       |\n| without limitation the rights to use                                  | copy                                        | modify                  | merge | publish |       |"
+ },
+ {
+  "n": 107,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/83-hell-or-high-water-film.txt",
+  "stratum": "other",
+  "tdy_output": "read as delimited text, separator ','; skipped {'op': 'skip_rows', 'head': 2, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: after_a_summer_filled_with_retreads: text, ripoffs_and_whatever_in_god_s_name_that_thing_with_kevin_spacey_as_the_talking_cat_was_supposed_to_be: text, most_moviegoers_are_at_the_point_where_they_are_desperate_for_something_that_doesn_t_look_like_it_will_actively_insult_their_intelligence_at_first_glance: text, hell_or_high_water_would_seem_to_be_just_the_candidate_it_is_written_by_taylor_sheridan: text, whose_first_produced_screenplay_became_last_year_s_largely_acclaimed_thriller_sicario: text, and_directed_by_david_mackenzie: text, the_british_filmmaker_behind_such_intriguing_works_as_young_adam: text, perfect_sense_and_starred_up_hell_or_high_water_even_features_a_cast_led_by_the_national_treasure_that_is_jeff_bridges_and_yet: text, while_moviegoers_desperate_to_see_anything_that_doesn_t_involve_a_superhero_may_be_willing_to_overlook_its_shortcomings: text, others_will_undoubtedly_be_disappointed_to_find_that_it_s_somewhat_less_than_the_sum_of_its_parts: text, col_11: text, col_12: text, col_13: text, col_14: text (+1 more)\ntdy's own confidence: 0.40\nnote: delimiter inference was ambiguous\nnote: skipped 2 leading non-tabular row(s)\nnote: rows have differing field counts; short rows are padded with nulls\n\npreview (heuristic method, confidence 0.40):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| after_a_summer_filled_with_retreads                                                                                                                                               \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| As the film opens                                                                                                                                                                 \n| While most of the police investigating the robberies indeed fail to give them much notice                                                                                         \n| The early scenes of \u201cHell or High Water\u201d are the best. After seeing so many meticulously choreographed bank heists that try their damnedest to outdo the likes of \u201cHeat           \n| Even though none of them are especially revelatory                                                                                                                                \n| It\u2019s frustrating that \u201cHell or High Water\u201d contains so many good things that just don\u2019t coalesce into a fully satisfying moviegoing experience. The story as a whole is a little t\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
+ },
+ {
+  "n": 108,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/9-the-godfather.txt",
+  "stratum": "other",
+  "tdy_output": "read as delimited text, separator ','; skipped {'op': 'skip_rows', 'head': 7, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: as_the_day_continues: text, there_are_two_more_scenes_in_the_godfather_s_darkened_study: text, intercut_with_scenes_from_the_wedding_outside_by_the_end_of_the_wedding_sequence: text, most_of_the_main_characters_will_have_been_introduced: text, and_we_will_know_essential_things_about_their_personalities_it_is_a_virtuoso_stretch_of_filmmaking_coppola_brings_his_large_cast_onstage_so_artfully_that_we_are_drawn_at_once_into_the_godfather_s_world: text, col_6: text, col_7: text, col_8: text, col_9: text, col_10: text, col_11: text, col_12: text, col_13: text\ntdy's own confidence: 0.40\nnote: delimiter inference was ambiguous\nnote: skipped 7 leading non-tabular row(s)\nnote: rows have differing field counts; short rows are padded with nulls\n\npreview (heuristic method, confidence 0.40):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| as_the_day_continues                                                                                                                                                              \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| The screenplay of \u201cThe Godfather\u201d follows no formulas except for the classic structure in which power passes between the generations. The writing is subtly constructed to set up \n| Now here is a trivia question: What is the name of Vito\u2019s wife? She exists in the movie as an insignificant shadow                                                                \n| The irony of the title is that it eventually comes to refer to the son                                                                                                            \n| After he shoots the corrupt cop                                                                                                                                                   \n| What is important is loyalty to the family. Much is said in the movie about trusting a man\u2019s word                                                                                 \n| Vito Corleone is the moral center of the film. He is old                                                                                                                          \n| My argument is taking this form because I want to point out how cleverly Coppola structures his film to create sympathy for his heroes. The Mafia is not a benevolent and protecti\n| Gordon Willis\u2019 cinematography is celebrated for its darkness; it is rich                                                                                                          \n| The Brando performance is justly famous and often imitated. We know all about his puffy cheeks                                                                                    \n| Pacino plays Michael close to his vest; he has learned from his father never to talk in front of outsiders                                                                        "
+ }
+]

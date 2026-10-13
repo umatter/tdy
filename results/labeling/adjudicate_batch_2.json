@@ -1,0 +1,192 @@
+[
+ {
+  "n": 17,
+  "idx": 77,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-07-18/detectors.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Correct",
+   "Wrong somewhere",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "Yes, the header is right",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: kind: text, pred_ai: float64, pred_class: text, detector: text, native: bool, name: text, model: text, document_id: whole number, prompt: text\ntdy's own confidence: 0.95\nnote: column `prompt`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\n\npreview (heuristic method, confidence 0.95):\n+-------+-------------+------------+---------------+--------+------------------------+-------+-------------+-------------------------+\n| kind  | pred_ai     | pred_class | detector      | native | name                   | model | document_id | prompt                  |\n+-------+-------------+------------+---------------+--------+------------------------+-------+-------------+-------------------------+\n| Human | 0.999994235 | AI         | Sapling       | false  | Real TOEFL             | Human | 497         | NA                      |\n| Human | 0.828144789 | AI         | Crossplag     | false  | Real TOEFL             | Human | 278         | NA                      |\n| Human | 0.000213746 | Human      | Crossplag     | true   | Real College Essays    | Human | 294         | NA                      |\n| AI    | 0.0         | Human      | ZeroGPT       |        | Fake CS224N - GPT3     | GPT3  | 671         | Plain                   |\n| AI    | 0.001784091 | Human      | OriginalityAI |        | Fake CS224N - GPT3, PE | GPT4  | 717         | Elevate using technical |\n| Human | 0.000178271 | Human      | HFOpenAI      | true   | Real CS224N            | Human | 855         | NA                      |\n| AI    | 0.991587579 | AI         | HFOpenAI      |        | Fake CS224N - GPT3     | GPT3  | 533         | Plain                   |\n| AI    | 0.022602066 | Human      | Crossplag     |        | Fake CS224N - GPT3, PE | GPT4  | 484         | Elevate using technical |\n| Human | 0.0         | Human      | ZeroGPT       | true   | Real CS224N            | Human | 781         | NA                      |\n| Human | 0.999999308 | AI         | Sapling       | false  | Real TOEFL             | Human | 460         | NA                      |",
+  "complaints": [
+   "nothing is ambiguous",
+   "The last 4 columns are missing.",
+   "The parser listed ; as the separator in the notes despite the file using commas (,)"
+  ]
+ },
+ {
+  "n": 18,
+  "idx": 85,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-10-15/orcas.csv",
+  "stratum": "csv",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "Yes, the header is right",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as delimited text, separator ','; used row(s) 1 as the header\ncolumns tdy found: year: whole number, date: date (%Y-%m-%d), encounter_sequence: text, encounter_number: whole number, begin_time: text, end_time: text, duration: text, vessel: text, observers: text, pods_or_ecotype: text, ids_encountered: text, location: text, begin_latitude: float64, begin_longitude: float64 (+5 more)\ntdy's own confidence: 0.95\nnote: column `encounter_sequence`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\nnote: column `begin_time`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\nnote: column `end_time`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value\n\npreview (heuristic method, confidence 0.95):\n+------+------------+--------------------+------------------+------------+----------+------------------------+------------------+---------------------------------------------------\n| year | date       | encounter_sequence | encounter_number | begin_time | end_time | duration               | vessel           | observers                                         \n+------+------------+--------------------+------------------+------------+----------+------------------------+------------------+---------------------------------------------------\n| 2024 | 2024-10-06 | 1                  | 100              | 10:48:00   | 12:21:00 | 5580s (~1.55 hours)    | Mike 1           | Mark Malleson,Joe Zelwietro                       \n|      |            |                    |                  |            |          |                        |                  |                                                   \n|      |            |                    |                  |            |          |                        |                  |                                                   \n|      |            |                    |                  |            |          |                        |                  |                                                   \n|      |            |                    |                  |            |          |                        |                  |                                                   \n|      |            |                    |                  |            |          |                        |                  |                                                   \n|      |            |                    |                  |            |          |                        |                  |                                                   \n| 2024 | 2024-09-16 | 1                  | 96               | 09:30:00   | 10:11:00 | 2460s (~41 minutes)    | Orcinus          | Dave Ellifrit, Michael Weiss,Charli Grimes        \n| 2024 | 2024-09-15 | 21                 | 95               | 02:15:00   | 05:00:00 | 9900s (~2.75 hours)    | KCB III, Orcinus | Dave Ellifrit, Michael Weiss,Michael, Charli Grime\n|      |            |                    |                  |            |          |                        |                  |                                                   ",
+  "complaints": [
+   "It has missing columns and a lot of missing data too.",
+   "NA"
+  ]
+ },
+ {
+  "n": 19,
+  "idx": 95,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2019-05.xlsx",
+  "stratum": "excel",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "Cannot tell from what is shown",
+   "header": "Yes, the header is right",
+   "types": "Cannot tell"
+  },
+  "tdy_output": "read as spreadsheet, sheet 'REPORT'; skipped {'op': 'skip_rows', 'head': 7, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: c_1_barrel_is_equivalent_to_31_gallons: text, col_2: text, col_3: text, col_4: text, current_month: whole number, prior_year_current_month: whole number, current_year_cumulative_to_date: text, prior_year_cumulative_to_date: text\ntdy's own confidence: 0.60\nnote: skipped 7 leading row(s) before the header\nnote: the header row has blank cells: this may be a multi-row or merged header, which needs promote_header with rows > 1\n\npreview (heuristic method, confidence 0.60):\n+----------------------------------------+------------+------------+------------------------------+---------------+--------------------------+---------------------------------+----\n| c_1_barrel_is_equivalent_to_31_gallons | col_2      | col_3      | col_4                        | current_month | prior_year_current_month | current_year_cumulative_to_date | pri\n+----------------------------------------+------------+------------+------------------------------+---------------+--------------------------+---------------------------------+----\n| Manufacture                            | Production | Production | Production                   | 15906023      | 16755737                 | 72624256                        | 759\n| Of Beer (In                            |            |            |                              |               |                          |                                 |    \n| Barrels)                               |            |            |                              |               |                          |                                 |    \n|                                        | Removals   | Taxable*   | In bottles and cans          | 13880744      | 13877555                 | 59324187                        | 601\n|                                        |            |            | In kegs                      | 1292050       | 1384703                  | 6131058                         | 659\n|                                        |            |            | Tax Determined, Premises Use | 2774          | 5744                     | 754277                          | 717\n|                                        |            |            | TOTAL Taxable Removals       | 15175568      | 15268002                 | 66209522                        | 674\n|                                        |            | Tax Free   | For export                   | 354177        | 654536                   | 1992586                         | 299\n|                                        |            |            | For vessels and aircraft     | 0             | 233                      | 5                               | 243\n|                                        |            |            | Consumed on brewery premises | 1002          | 1185                     | 27456                           | 297",
+  "complaints": [
+   "The whole file has incorrect formatting and unclear readings.",
+   "NA"
+  ]
+ },
+ {
+  "n": 20,
+  "idx": 96,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Cyprus.xlsx",
+  "stratum": "excel",
+  "verdict": "WRONG",
+  "votes": "1/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "The file itself is genuinely ambiguous"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "Yes, the header is right",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as spreadsheet, sheet 'Cyprus'; used row(s) 1 as the header\ncolumns tdy found: parentcofinal: text, empty: whole number, pet: whole number, grand_total: whole number, number_of_events: whole number, number_of_volunteers: whole number\ntdy's own confidence: 0.90\n\npreview (heuristic method, confidence 0.90):\n+------------------------+-------+-----+-------------+------------------+----------------------+\n| parentcofinal          | empty | pet | grand_total | number_of_events | number_of_volunteers |\n+------------------------+-------+-----+-------------+------------------+----------------------+\n| Grand Total            | 0     | 24  | 24          | 1                | 30                   |\n| AGROS WATER            | 0     | 24  | 24          | 1                | 30                   |\n| Plastic Bottle 1L      | 0     | 0   | 0           | 1                | 30                   |\n| LIFE CHAI              | 0     | 0   | 0           | 1                | 30                   |\n| LOUX                   | 0     | 0   | 0           | 1                | 30                   |\n| MANGO SUNISLAND        | 0     | 0   | 0           | 1                | 30                   |\n| MR BROWN               | 0     | 0   | 0           | 1                | 30                   |\n| McDonald's Corporation | 0     | 0   | 0           | 1                | 30                   |\n| Nestl\u00e9                 | 0     | 0   | 0           | 1                | 30                   |\n| OLD HOLBORN TOBACCO    | 0     | 0   | 0           | 1                | 30                   |",
+  "complaints": [
+   "It's missing the columns artist_country, country_emoji, running_order, total_points, rank, rank_ordinal, qualified, winner. As they don't have any data on the raw file, they should appear as NA fillings.",
+   "NA",
+   "There\u2019s columns missing and it\u2019s storing emojis as text"
+  ]
+ },
+ {
+  "n": 21,
+  "idx": 102,
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-04-16/global_mortality.xlsx",
+  "stratum": "excel",
+  "verdict": "WRONG",
+  "votes": "3/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Wrong somewhere",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "At least one type is wrong"
+  },
+  "tdy_output": "read as spreadsheet, sheet 'share-of-deaths-by-cause-2016 ('; used row(s) 1 as the header\ncolumns tdy found: country: text, country_code: text, year: whole number, cardiovascular_diseases: float64, cancers: float64, respiratory_diseases: float64, diabetes: float64, dementia: float64, lower_respiratory_infections: float64, neonatal_deaths: float64, diarrheal_diseases: float64, road_accidents: float64, liver_disease: float64, tuberculosis: float64 (+21 more)\ntdy's own confidence: 0.90\n\npreview (heuristic method, confidence 0.90):\n+-------------+--------------+------+-------------------------+------------------+----------------------+------------------+-------------------+------------------------------+-----\n| country     | country_code | year | cardiovascular_diseases | cancers          | respiratory_diseases | diabetes         | dementia          | lower_respiratory_infections | neon\n+-------------+--------------+------+-------------------------+------------------+----------------------+------------------+-------------------+------------------------------+-----\n| Afghanistan | AFG          | 1990 | 17.6103971236           | 4.02597540106    | 2.10662612944        | 3.83255475427    | 0.531428685366    | 10.8863616821                | 9.18\n| Afghanistan | AFG          | 1991 | 17.8018069475           | 4.05414508284    | 2.1341758712         | 3.82222784589    | 0.5324972706      | 10.3569675134999             | 8.93\n| Afghanistan | AFG          | 1992 | 18.3868334191           | 4.17395850133    | 2.20829776324        | 3.90012458748    | 0.540065691134    | 10.0955462479                | 8.84\n| Afghanistan | AFG          | 1993 | 18.9596459725           | 4.26923343813    | 2.28392311750999     | 3.97411296447    | 0.553813023587    | 9.87384134312                | 8.67\n| Afghanistan | AFG          | 1994 | 19.0895130477           | 4.25603353598    | 2.30772106064        | 3.96895379995999 | 0.55008703092     | 9.53024170913                | 8.38\n| Afghanistan | AFG          | 1995 | 19.856101048            | 4.39491559089999 | 2.41229295745        | 4.1059469888     | 0.568483883691    | 9.60287314105                | 8.42\n| Afghanistan | AFG          | 1996 | 20.406136053            | 4.48187941961    | 2.48655353289        | 4.20915370348    | 0.582752471305999 | 9.52416838943                | 8.49\n| Afghanistan | AFG          | 1997 | 20.3631047732           | 4.4458239874     | 2.49147907299        | 4.19232317883    | 0.582428526554    | 9.2873252525                 | 8.34\n| Afghanistan | AFG          | 1998 | 19.6235243794999        | 4.26336401232    | 2.40800531596        | 4.042126468      | 0.5610045709      | 8.64804555806                | 7.93\n| Afghanistan | AFG          | 1999 | 21.107986687            | 4.57292260993    | 2.59515408774999     | 4.33925845912    | 0.603473376464    | 8.93591533222                | 8.42",
+  "complaints": [
+   "If anything was wrong or ambiguous: The graduation_date column was detected as text instead of a date type",
+   "The headers are split properly but it can be structured much better",
+   "The tool failed to correctly handle quoted strings containing internal commas within the genre's column. As a result, it treated those commas as column separators, causing improper splitting, misaligned data and incorrect column structure across the table."
+  ]
+ },
+ {
+  "n": 22,
+  "idx": 104,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/h17.xlsx",
+  "stratum": "excel",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Correct",
+   "Wrong somewhere",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as spreadsheet, sheet 'h17'; skipped {'op': 'skip_rows', 'head': 5, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: col_1: text, col_2: text, total: text, under_15_000: text, c_15_000_to_24_999: text, c_25_000_to_34_999: text, c_35_000_to_49_999: text, c_50_000_to_74_999: text, c_75_000_to_99_999: text, c_100_000_to_149_999: text, c_150_000_to_199_999: text, c_200_000_and_over: text, estimate: text, margin_of_error: text (+2 more)\ntdy's own confidence: 0.45\nnote: skipped 5 leading row(s) before the header\nnote: the header row has blank cells: this may be a multi-row or merged header, which needs promote_header with rows > 1\nnote: nearly every column typed as text; the layout may be misread\n\npreview (heuristic method, confidence 0.45):\n+-----------+--------+-------+--------------+--------------------+--------------------+--------------------+--------------------+--------------------+----------------------+-------\n| col_1     | col_2  | total | under_15_000 | c_15_000_to_24_999 | c_25_000_to_34_999 | c_35_000_to_49_999 | c_50_000_to_74_999 | c_75_000_to_99_999 | c_100_000_to_149_999 | c_150_\n+-----------+--------+-------+--------------+--------------------+--------------------+--------------------+--------------------+--------------------+----------------------+-------\n| 2019      | 128451 | 100   | 9.1          | 8                  | 8.3                | 11.7               | 16.5               | 12.3               | 15.5                 | 8.3   \n| 2018      | 128579 | 100   | 10.1         | 8.8                | 8.7                | 12                 | 17                 | 12.5               | 15                   | 7.2   \n| 2017 (40) | 127669 | 100   | 10           | 9.1                | 9.2                | 12                 | 16.4               | 12.4               | 14.7                 | 7.3   \n| 2017      | 127586 | 100   | 10.1         | 9.1                | 9.2                | 11.9               | 16.3               | 12.6               | 14.8                 | 7.5   \n| 2016      | 126224 | 100   | 10.4         | 9                  | 9.2                | 12.3               | 16.7               | 12.2               | 15                   | 7.2   \n| 2015      | 125819 | 100   | 10.6         | 10                 | 9.6                | 12.1               | 16.1               | 12.4               | 14.9                 | 7.1   \n| 2014      | 124587 | 100   | 11.4         | 10.5               | 9.6                | 12.6               | 16.4               | 12.1               | 14                   | 6.6   \n| 2013 (39) | 123931 | 100   | 11.4         | 10.3               | 9.5                | 12.5               | 16.8               | 12                 | 13.9                 | 6.7   \n| 2013 (38) | 122952 | 100   | 11.3         | 10.4               | 9.7                | 13.1               | 17                 | 12.5               | 13.6                 | 6.3   \n| 2012      | 122459 | 100   | 11.4         | 10.6               | 10.1               | 12.5               | 17.4               | 12                 | 13.9                 | 6.3   ",
+  "complaints": [
+   "nothing",
+   "it jumbled up some of the column values and some of them didnt need to be float64",
+   "The c_cdr column is incorrectly typed as text. It should be numeric because it contains values such as 19, 26, and also decimal values like 9.3, 2.6, and 4.7."
+  ]
+ },
+ {
+  "n": 23,
+  "idx": 113,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-03-31/ttb_monthly_stats_2018-01.xlsx",
+  "stratum": "excel",
+  "verdict": "AMBIGUOUS",
+  "votes": "1/3",
+  "all_votes": [
+   "The file itself is genuinely ambiguous",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "Yes, columns are split correctly",
+   "header": "Yes, the header is right",
+   "types": "Cannot tell"
+  },
+  "tdy_output": "read as spreadsheet, sheet 'REPORT'; skipped {'op': 'skip_rows', 'head': 7, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: c_1_barrel_is_equivalent_to_31_gallons: text, col_2: text, col_3: text, col_4: text, current_month: whole number, prior_year_current_month: whole number, current_year_cumulative_to_date: text, prior_year_cumulative_to_date: text\ntdy's own confidence: 0.60\nnote: skipped 7 leading row(s) before the header\nnote: the header row has blank cells: this may be a multi-row or merged header, which needs promote_header with rows > 1\n\npreview (heuristic method, confidence 0.60):\n+----------------------------------------+--------------+--------------+------------------------------+---------------+--------------------------+---------------------------------+\n| c_1_barrel_is_equivalent_to_31_gallons | col_2        | col_3        | col_4                        | current_month | prior_year_current_month | current_year_cumulative_to_date |\n+----------------------------------------+--------------+--------------+------------------------------+---------------+--------------------------+---------------------------------+\n| Manufacture                            | Production   | Production   | Production                   | 13892411      | 14529804                 | 13892411                        |\n| Of Beer (In                            |              |              |                              |               |                          |                                 |\n| Barrels)                               |              |              |                              |               |                          |                                 |\n|                                        | Removals     | Taxable*     | In bottles and cans          | 10884988      | 11685307                 | 10884988                        |\n|                                        |              |              | In kegs                      | 1241826       | 1208585                  | 1241826                         |\n|                                        |              |              | Tax Determined, Premises Use | 5366          | 4504                     | 5366                            |\n|                                        |              |              | TOTAL Taxable Removals       | 12132180      | 12898396                 | 12132180                        |\n|                                        |              | Tax Free     | For export                   | 573974        | 539381                   | 573974                          |\n|                                        |              |              | Consumed on brewery premises | 1112          | 1696                     | 1112                            |\n|                                        |              |              | TOTAL Tax-Free Removals      | 575085        | 541077                   | 575085                          |",
+  "complaints": [
+   "In my opinion, we should have mapped entire JSON structure and not just the most inner part of the structure, that is sellPrice. Also, on the raw_head I cannot see the value part, so I don't know if whole number is correct type for this column.",
+   "all correct",
+   "if the file is supposed to be in text for numbers then it is correct otherwise the data types are somewhat wrong"
+  ]
+ },
+ {
+  "n": 24,
+  "idx": 116,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-27/ADP-31-artists-in-the-workforce-StateTables/Table2fActors.xlsx",
+  "stratum": "excel",
+  "verdict": "WRONG",
+  "votes": "2/3",
+  "all_votes": [
+   "Wrong somewhere",
+   "Correct",
+   "Wrong somewhere"
+  ],
+  "per_q": {
+   "structure": "No, the columns are wrong",
+   "header": "Yes, the header is right",
+   "types": "All types look right"
+  },
+  "tdy_output": "read as spreadsheet, sheet 'All-Races'; skipped {'op': 'skip_rows', 'head': 3, 'tail': 0} leading row(s); used row(s) 1 as the header\ncolumns tdy found: state: text, all_workers_in_the_labor_force: whole number, number_of_actors_in_the_labor_force: text, actors_as_a_share_of_labor_force: float64, location_quotient: float64\ntdy's own confidence: 0.80\nnote: workbook has 7 sheets; reading \"All-Races\"\nnote: skipped 3 leading row(s) before the header\n\npreview (heuristic method, confidence 0.80):\n+---------------+--------------------------------+-------------------------------------+----------------------------------+---------------------+\n| state         | all_workers_in_the_labor_force | number_of_actors_in_the_labor_force | actors_as_a_share_of_labor_force | location_quotient   |\n+---------------+--------------------------------+-------------------------------------+----------------------------------+---------------------+\n| United States | 164629490                      | 60545                               | 0.0003677652163048066            | 1.0                 |\n|               |                                |                                     |                                  |                     |\n| Alabama       | 2242785                        | 195                                 | 0.00008694547181294685           | 0.2364157020790291  |\n| Alaska        | 392340                         | 70                                  | 0.0001784166794107152            | 0.4851374504728639  |\n| Arizona       | 3346155                        | 635                                 | 0.00018977004950458063           | 0.5160086954697145  |\n| Arkansas      | 1378720                        | *                                   |                                  |                     |\n| California    | 19921545                       | 24140                               | 0.0012117534056721002            | 3.294910317640779   |\n| Colorado      | 3069630                        | 505                                 | 0.00016451494154018562           | 0.44733687213049095 |\n| Connecticut   | 1940825                        | 515                                 | 0.00026535107492947586           | 0.7215230347112296  |\n| Delaware      | 485535                         | 55                                  | 0.00011327710669673659           | 0.30801473786703    |",
+  "complaints": [
+   "The file was incorrectly split into multiple colums because delimiter was inferred incorrect, The first row was also incorrectly used as the header.",
+   "all correct",
+   "some words are cut out"
+  ]
+ }
+]

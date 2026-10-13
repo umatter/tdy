@@ -1,0 +1,119 @@
+[
+ {
+  "n": 69,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-02-11/H2.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------+----------+-----------------+------------------+-----------------------+-----------------------+----------------------+-------------------+--------+----------+-------\n| iscanceled | leadtime | arrivaldateyear | arrivaldatemonth | arrivaldateweeknumber | arrivaldatedayofmonth | staysinweekendnights | staysinweeknights | adults | children | babies\n+------------+----------+-----------------+------------------+-----------------------+-----------------------+----------------------+-------------------+--------+----------+-------\n| 0          | 6        | 2015            | July             | 27                    | 1                     | 0                    | 2                 | 1      | 0        | 0     \n| 1          | 88       | 2015            | July             | 27                    | 1                     | 0                    | 4                 | 2      | 0        | 0     \n| 1          | 65       | 2015            | July             | 27                    | 1                     | 0                    | 4                 | 1      | 0        | 0     \n| 1          | 92       | 2015            | July             | 27                    | 1                     | 2                    | 4                 | 2      | 0        | 0     \n| 1          | 100      | 2015            | July             | 27                    | 2                     | 0                    | 2                 | 2      | 0        | 0     \n| 1          | 79       | 2015            | July             | 27                    | 2                     | 0                    | 3                 | 2      | 0        | 0     \n| 0          | 3        | 2015            | July             | 27                    | 2                     | 0                    | 3                 | 1      | 0        | 0     \n| 1          | 63       | 2015            | July             | 27                    | 2                     | 1                    | 3                 | 1      | 0        | 0     \n| 1          | 62       | 2015            | July             | 27                    | 2                     | 2                    | 3                 | 2      | 0        | 0     \n| 1          | 62       | 2015            | July             | 27                    | 2                     | 2                    | 3                 | 2      | 0        | 0     "
+ },
+ {
+  "n": 70,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-02-11/H1.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `country`: text column containing [\"NULL\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------+----------+-----------------+------------------+-----------------------+-----------------------+----------------------+-------------------+--------+----------+-------\n| iscanceled | leadtime | arrivaldateyear | arrivaldatemonth | arrivaldateweeknumber | arrivaldatedayofmonth | staysinweekendnights | staysinweeknights | adults | children | babies\n+------------+----------+-----------------+------------------+-----------------------+-----------------------+----------------------+-------------------+--------+----------+-------\n| 0          | 342      | 2015            | July             | 27                    | 1                     | 0                    | 0                 | 2      | 0        | 0     \n| 0          | 737      | 2015            | July             | 27                    | 1                     | 0                    | 0                 | 2      | 0        | 0     \n| 0          | 7        | 2015            | July             | 27                    | 1                     | 0                    | 1                 | 1      | 0        | 0     \n| 0          | 13       | 2015            | July             | 27                    | 1                     | 0                    | 1                 | 1      | 0        | 0     \n| 0          | 14       | 2015            | July             | 27                    | 1                     | 0                    | 2                 | 2      | 0        | 0     \n| 0          | 14       | 2015            | July             | 27                    | 1                     | 0                    | 2                 | 2      | 0        | 0     \n| 0          | 0        | 2015            | July             | 27                    | 1                     | 0                    | 2                 | 2      | 0        | 0     \n| 0          | 9        | 2015            | July             | 27                    | 1                     | 0                    | 2                 | 2      | 0        | 0     \n| 1          | 85       | 2015            | July             | 27                    | 1                     | 0                    | 3                 | 2      | 0        | 0     \n| 1          | 75       | 2015            | July             | 27                    | 1                     | 0                    | 3                 | 2      | 0        | 0     "
+ },
+ {
+  "n": 72,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-06-16/census.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `division`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-----------+----------+------+----------+----------+---------+------------+--------------+\n| region    | division | year | total    | white    | black   | black_free | black_slaves |\n+-----------+----------+------+----------+----------+---------+------------+--------------+\n| USA Total | NA       | 1870 | 38558371 | 33589377 | 4880009 | 4880009    | 0            |\n| USA Total | NA       | 1860 | 31443321 | 26922537 | 4441830 | 488070     | 3953760      |\n| USA Total | NA       | 1850 | 23191876 | 19553068 | 3638808 | 434495     | 3204313      |\n| USA Total | NA       | 1840 | 17063353 | 14189705 | 2873648 | 386293     | 2487355      |\n| USA Total | NA       | 1830 | 12860702 | 10532060 | 2328642 | 619599     | 1709043      |\n| USA Total | NA       | 1820 | 9638453  | 7866797  | 1771656 | 233634     | 1538022      |\n| USA Total | NA       | 1810 | 7239881  | 5862073  | 1377808 | 186446     | 1191362      |\n| USA Total | NA       | 1800 | 5308483  | 4306446  | 1002037 | 108435     | 893602       |\n| USA Total | NA       | 1790 | 3929214  | 3172006  | 757208  | 59527      | 697681       |\n| Northeast | NA       | 1870 | 12298730 | 12117269 | 179738  | 179738     | 0            |"
+ },
+ {
+  "n": 73,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d09-tidying/data/sales/customers.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------+--------+--------------+--------+\n| customer_id | item_1 | item_2       | item_3 |\n+-------------+--------+--------------+--------+\n| 1           | bread  | milk         | banana |\n| 2           | milk   | toilet paper |        |\n+-------------+--------+--------------+--------+"
+ },
+ {
+  "n": 74,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Montenegro.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------------------+------+-----+------+-------------+------------------+----------------------+\n| parentcofinal           | hdpe | o   | pet  | grand_total | number_of_events | number_of_volunteers |\n+-------------------------+------+-----+------+-------------+------------------+----------------------+\n| Grand Total             | 53   | 909 | 3680 | 4642        | 1                | 563                  |\n| The Coca-Cola Company   | 0    | 0   | 1443 | 1443        | 1                | 563                  |\n| SUZA Group of Companies | 0    | 0   | 1125 | 1125        | 1                | 563                  |\n| Knjaz Milo\u0161 a.d.        | 0    | 0   | 713  | 713         | 1                | 563                  |\n| Trebjesa brewery        | 0    | 643 | 0    | 643         | 1                | 563                  |\n| Aqua Bianca             | 0    | 0   | 162  | 162         | 1                | 563                  |\n| Rauch                   | 0    | 0   | 109  | 109         | 1                | 563                  |\n| Loewenbrau Beer         | 0    | 83  | 0    | 83          | 1                | 563                  |\n| Molson Coors Europe     | 0    | 77  | 0    | 77          | 1                | 563                  |\n| Agrokor                 | 0    | 54  | 0    | 54          | 1                | 563                  |"
+ },
+ {
+  "n": 75,
+  "path": "90_supplemental/datascience_box/source/course-materials/_slides/u2-d12-data-import/data/df.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+---+---+\n| x | y |\n+---+---+\n| 1 | a |\n| 2 | b |\n| 3 | c |\n+---+---+"
+ },
+ {
+  "n": 77,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-11-05/commute.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `state_abb`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `state_region`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------------+----------------+-----------+------+-----+---------+-----+-----------+---------------+\n| city              | state          | city_size | mode | n   | percent | moe | state_abb | state_region  |\n+-------------------+----------------+-----------+------+-----+---------+-----+-----------+---------------+\n| Aberdeen city     | South Dakota   | Small     | Bike | 110 | 0.8     | 0.5 | SD        | North Central |\n| Acworth city      | Georgia        | Small     | Bike | 0   | 0.0     | 0.4 | GA        | South         |\n| Addison village   | Illinois       | Small     | Bike | 43  | 0.2     | 0.3 | IL        | North Central |\n| Adelanto city     | California     | Small     | Bike | 0   | 0.0     | 0.5 | CA        | West          |\n| Adrian city       | Michigan       | Small     | Bike | 121 | 1.5     | 1.0 | MI        | North Central |\n| Agawam Town city  | Massachusetts  | Small     | Bike | 0   | 0.0     | 0.2 | MA        | Northeast     |\n| Agoura Hills city | California     | Small     | Bike | 84  | 0.8     | 1.1 | CA        | West          |\n| Aiken city        | South Carolina | Small     | Bike | 23  | 0.2     | 0.3 | SC        | South         |\n| Alabaster city    | Alabama        | Small     | Bike | 0   | 0.0     | 0.2 | AL        | South         |\n| Alameda city      | California     | Small     | Bike | 576 | 1.5     | 0.4 | CA        | West          |"
+ },
+ {
+  "n": 78,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Brazil.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------------------+-------+------+------+-----+-----+----+-------------+------------------+----------------------+\n| parentcofinal          | empty | hdpe | o    | pet | pp  | ps | grand_total | number_of_events | number_of_volunteers |\n+------------------------+-------+------+------+-----+-----+----+-------------+------------------+----------------------+\n| Grand Total            | 0     | 35   | 3582 | 220 | 887 | 10 | 4734        | 3                | 419                  |\n| Unbranded              | 0     | 0    | 1550 | 0   | 562 | 0  | 2112        | 3                | 419                  |\n| Assorted               | 0     | 0    | 1745 | 0   | 0   | 0  | 1745        | 3                | 419                  |\n| Bebidas Grassi         | 0     | 0    | 190  | 190 | 0   | 0  | 380         | 3                | 419                  |\n| Grupo Arcor            | 0     | 0    | 0    | 0   | 42  | 0  | 42          | 3                | 419                  |\n| Mondelez International | 0     | 0    | 2    | 0   | 34  | 0  | 36          | 3                | 419                  |\n| Santa F\u00e9               | 0     | 0    | 0    | 0   | 33  | 0  | 33          | 3                | 419                  |\n| Nestl\u00e9                 | 0     | 1    | 0    | 0   | 29  | 0  | 30          | 3                | 419                  |\n| Riclan                 | 0     | 0    | 0    | 0   | 21  | 0  | 21          | 3                | 419                  |\n| Dori Alimentos As      | 0     | 0    | 0    | 0   | 21  | 0  | 21          | 3                | 419                  |"
+ },
+ {
+  "n": 79,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-12-14/studio_album_tracks.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------+------------------------+------------------------+--------------------+--------------------+--------------+--------+-----+----------+------+-------------+-----------\n| artist_name | artist_id              | album_id               | album_release_date | album_release_year | danceability | energy | key | loudness | mode | speechiness | acousticne\n+-------------+------------------------+------------------------+--------------------+--------------------+--------------+--------+-----+----------+------+-------------+-----------\n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.769        | 0.819  | 10  | -3.941   | 0    | 0.0431      | 0.0293    \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.829        | 0.764  | 5   | -3.776   | 0    | 0.0431      | 0.0287    \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.614        | 0.788  | 11  | -5.547   | 1    | 0.027       | 0.155     \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.736        | 0.779  | 8   | -5.163   | 1    | 0.0401      | 0.0172    \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.86         | 0.71   | 1   | -4.214   | 0    | 0.0356      | 0.00259   \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.798        | 0.751  | 5   | -4.569   | 0    | 0.0486      | 0.009     \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.671        | 0.75   | 1   | -2.83    | 1    | 0.0279      | 0.188     \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.571        | 0.481  | 0   | -5.745   | 1    | 0.0251      | 0.177     \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.709        | 0.872  | 7   | -2.316   | 0    | 0.0443      | 0.253     \n| Spice Girls | 0uq5PttqEjj3IH1bzwcrXF | 4jbWZmf7kRxCBD6tgVepYh | 2000-01-01         | 2000               | 0.536        | 0.539  | 11  | -5.37    | 1    | 0.0272      | 0.744     "
+ },
+ {
+  "n": 80,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-09-07/constructor_results.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.8499999642372131,
+  "notes": [
+   "column `points`: kept as text \u2014 16 of 11860 values are not an integer: \"1.5\" (row 3514), \"0.5\" (row 3515), \"5.5\" (row 3835). If those are strays rather than data, drop them with a `drop_rows_matching` transform and narrow the type by hand."
+  ],
+  "preview": "preview (heuristic method, confidence 0.85):\n+----------------------+--------+---------------+--------+--------+\n| constructorresultsid | raceid | constructorid | points | status |\n+----------------------+--------+---------------+--------+--------+\n| 1                    | 18     | 1             | 14     | \\N     |\n| 2                    | 18     | 2             | 8      | \\N     |\n| 3                    | 18     | 3             | 9      | \\N     |\n| 4                    | 18     | 4             | 5      | \\N     |\n| 5                    | 18     | 5             | 2      | \\N     |\n| 6                    | 18     | 6             | 1      | \\N     |\n| 7                    | 18     | 7             | 0      | \\N     |\n| 8                    | 18     | 8             | 0      | \\N     |\n| 9                    | 18     | 9             | 0      | \\N     |\n| 10                   | 18     | 10            | 0      | \\N     |"
+ },
+ {
+  "n": 82,
+  "path": "90_supplemental/tidytuesday/source/data/2026/2026-03-10/pairwise_comparisons.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------+---------+--------------------+-----------------------+-----------------------+\n| response_id | pair_id | term1              | term2                 | selected              |\n+-------------+---------+--------------------+-----------------------+-----------------------+\n| 5177        | 1       | Very Good Chance   | Remote Chance         | Very Good Chance      |\n| 5177        | 2       | Almost No Chance   | Realistic Possibility | Realistic Possibility |\n| 5177        | 3       | Could Happen       | Little Chance         | Could Happen          |\n| 5177        | 4       | Chances are Slight | Improbable            | Chances are Slight    |\n| 5177        | 5       | Probable           | Unlikely              | Probable              |\n| 5177        | 6       | Almost Certain     | Highly Likely         | Almost Certain        |\n| 5177        | 7       | Likely             | About Even            | Likely                |\n| 5177        | 8       | Better than Even   | Might Happen          | Better than Even      |\n| 5177        | 9       | May Happen         | Highly Unlikely       | May Happen            |\n| 5177        | 10      | Remote Chance      | Very Good Chance      | Very Good Chance      |"
+ },
+ {
+  "n": 83,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-08-06/bob-ross.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+---------+-----------------------+-------------+-----------------+------+-------+------+--------+----------+--------+-------+--------+--------------+--------+-------+--------+----\n| episode | title                 | apple_frame | aurora_borealis | barn | beach | boat | bridge | building | bushes | cabin | cactus | circle_frame | cirrus | cliff | clouds | con\n+---------+-----------------------+-------------+-----------------+------+-------+------+--------+----------+--------+-------+--------+--------------+--------+-------+--------+----\n| S01E01  | \"A WALK IN THE WOODS\" | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 1      | 0     | 0      | 0            | 0      | 0     | 0      | 0  \n| S01E02  | \"MT. MCKINLEY\"        | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 0      | 1     | 0      | 0            | 0      | 0     | 1      | 1  \n| S01E03  | \"EBONY SUNSET\"        | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 0      | 1     | 0      | 0            | 0      | 0     | 0      | 1  \n| S01E04  | \"WINTER MIST\"         | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 1      | 0     | 0      | 0            | 0      | 0     | 1      | 1  \n| S01E05  | \"QUIET STREAM\"        | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 0      | 0     | 0      | 0            | 0      | 0     | 0      | 0  \n| S01E06  | \"WINTER MOON\"         | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 0      | 1     | 0      | 0            | 0      | 0     | 0      | 1  \n| S01E07  | \"AUTUMN MOUNTAINS\"    | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 0      | 0     | 0      | 0            | 0      | 0     | 0      | 0  \n| S01E08  | \"PEACEFUL VALLEY\"     | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 1      | 0     | 0      | 0            | 0      | 0     | 0      | 1  \n| S01E09  | \"SEASCAPE\"            | 0           | 0               | 0    | 1     | 0    | 0      | 0        | 0      | 0     | 0      | 0            | 0      | 0     | 1      | 0  \n| S01E10  | \"MOUNTAIN LAKE\"       | 0           | 0               | 0    | 0     | 0    | 0      | 0        | 1      | 0     | 0      | 0            | 0      | 0     | 0      | 1  "
+ }
+]

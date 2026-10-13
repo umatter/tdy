@@ -24,5 +24,42 @@ __pycache__/
 /paper/
 /gap_reports/
 
+# The project's own run outputs behind the paper's numbers (the Pollock benchmark, the
+# corpus survey and sweeps, the labelling study). An allowlist: the evidence a reader needs
+# to check the paper is versioned, everything else stays out, including whatever a future
+# run writes until it is named here. gap_reports/ is left to the review suite's reports.
+/results/*
+!/results/README.md
+!/results/pollock/
+!/results/labeling/
+!/results/corpus_sweep/
+/results/*/*
+!/results/pollock/pollock_summary.md
+!/results/pollock/pollock_rows_text.csv
+!/results/pollock/pollock_rows_typed.csv
+!/results/pollock/pollock_confidence_text.csv
+!/results/pollock/pollock_confidence_typed.csv
+!/results/pollock/pollock_refused_text.txt
+!/results/pollock/pollock_refused_typed.txt
+# Labelling study: the sample, tdy's readings, the votes and the verdicts, never the
+# Prolific records (subs.json, annotator_stats.json, study.json, probe_*: participant ids).
+!/results/labeling/*.md
+!/results/labeling/*.py
+!/results/labeling/final_verdicts.json
+!/results/labeling/label_rows.jsonl
+!/results/labeling/label_refusals.jsonl
+!/results/labeling/label_sample_manifest.json
+!/results/labeling/fresh_manifest.json
+!/results/labeling/fresh_rows.jsonl
+!/results/labeling/adjudicate_batch_*.json
+!/results/labeling/flagged_batch_*.json
+!/results/labeling/fresh_conf_batch_*.json
+!/results/labeling/verify_batch_*.json
+!/results/labeling/live_backend.out
+!/results/corpus_sweep/*.out
+!/results/corpus_sweep/corpus_csv_confidence_*.tsv
+!/results/corpus_sweep/summary_sweep.json
+!/results/corpus_sweep/skip_sweep.json
+
 # subagent-driven-development scratch (ledgers, briefs, review packages)
 /.superpowers/

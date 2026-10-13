@@ -1,0 +1,160 @@
+[
+ {
+  "n": 137,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/59-baby-driver.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.0,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "rows have differing field counts; short rows are padded with nulls",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "5 trailing row(s) starting at row 5 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 5) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.00):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| col_1                                                                                                                                                                             \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| Baby Driver (2017)                                                                                                                                                                \n| http://www.rogerebert.com/reviews/baby-driver-2017                                                                                                                                \n| Baby is a young man who creates remixes of his life. He records conversations had around him (almost always around and not with him) on an old-fashioned mini-cassette recorder   \n| Yes                                                                                                                                                                               \n| Take the riveting first scene. Three criminals\u2014Buddy (Jon Hamm)                                                                                                                   \n| The last paragraph probably makes \u201cBaby Driver\u201d sound like a music video                                                                                                          \n| At its core                                                                                                                                                                       \n| It helps greatly that few people know how to assemble a cast like Edgar Wright. Elgort and James are engaging                                                                     \n| There\u2019s an energy that you can feel in the theater when a movie is really working. It\u2019s the guy next to you jumping a bit in his seat as a car takes a hard corner. It\u2019s the woman\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
+ },
+ {
+  "n": 138,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/7-all-about-eve.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.0,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "rows have differing field counts; short rows are padded with nulls",
+   "no header row detected; columns are named col_1, col_2, ...",
+   "15 trailing row(s) starting at row 6 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 15) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.00):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| col_1                                                                                                                                                                             \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| All About Eve (1950)                                                                                                                                                              \n| http://www.rogerebert.com/reviews/great-movie-all-about-eve-1950                                                                                                                  \n| Growing older was a smart career move for Bette Davis                                                                                                                             \n| Davis' performance as a star growing older is always paired with another famous 1950 performance -- Gloria Swanson's aging silent star in \"Sunset Boulevard.\" Both were nominated \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n| The movie                                                                                                                                                                         \n| The movie creates Margo Channing as a particular person                                                                                                                           \n| Margo believes Eve's story of hard luck and adoration; no actor has much trouble believing others would want to devote their lives to them. Good                                  \n| Eve is a universal type. Margo plays at having an ego but is in love with her work -- a professional                                                                              "
+ },
+ {
+  "n": 139,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/22-a-hard-day27s-night-film.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.3999999761581421,
+  "notes": [
+   "delimiter inference was ambiguous",
+   "skipped 4 leading non-tabular row(s)",
+   "rows have differing field counts; short rows are padded with nulls",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.40):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| it_was_clear_from_the_outset_that_a_hard_day_s_night_was_in_a_different_category_from_the_rock_musicals_that_had_starred_elvis_and_his_imitators_it_was_smart                     \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| Musically                                                                                                                                                                         \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n|                                                                                                                                                                                   \n| When Ringo grows thoughtful                                                                                                                                                       \n| When a film is strikingly original                                                                                                                                                \n| Movies were tamer in 1964. Big Hollywood productions used crews of 100 people and Mitchell cameras the size of motorcycles. Directors used the traditional grammar of master shot \n| That was the tradition Lester drew on. In 1959 he'd directed \"The Running                                                                                                         \n| In his opening sequence                                                                                                                                                           "
+ },
+ {
+  "n": 140,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/100-battleship-potemkin.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.3999999761581421,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "one all-text column: the first row cannot be told apart from the rest, so it was read as data. If it is a header, add promote_header to the sidecar."
+  ],
+  "preview": "preview (heuristic method, confidence 0.40):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| col_1                                                                                                                                                                             \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| Battleship Potemkin (1925)                                                                                                                                                        \n| http://www.rogerebert.com/reviews/great-movie-the-battleship-potemkin-1925                                                                                                        \n| The Battleship Potemkin\u201d has been so famous for so long that it is almost impossible to come to it with a fresh eye. It is one of the fundamental landmarks of cinema. Its famous \n|                                                                                                                                                                                   \n| Having said that, let me say that \u201cPotemkin,\u201d which I have seen many times and taught using a shot-by-shot approach, did come alive for me the other night, in an unexpected time \n|                                                                                                                                                                                   \n| It's not that anybody stood up and sang \u201cThe Internationale.\u201d The folding chairs for this classic exercise in Soviet propaganda were on loan from the local Catholic church. Some \n|                                                                                                                                                                                   \n| The movie was ordered up by the Russian revolutionary leadership for the 20th anniversary of the Potemkin uprising, which Lenin had hailed as the first proof that troops could be\n|                                                                                                                                                                                   "
+ },
+ {
+  "n": 141,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/78-gone-with-the-wind-film.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.3999999761581421,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "one all-text column: the first row cannot be told apart from the rest, so it was read as data. If it is a header, add promote_header to the sidecar."
+  ],
+  "preview": "preview (heuristic method, confidence 0.40):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| col_1                                                                                                                                                                             \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| Gone With the Wind (1939)                                                                                                                                                         \n| http://www.rogerebert.com/reviews/great-movie-gone-with-the-wind-1939                                                                                                             \n| Gone With the Wind\u201d presents a sentimental view of the Civil War, in which the \u201cOld South\u201d takes the place of Camelot and the war was fought not so much to defeat the Confederacy\n|                                                                                                                                                                                   \n| For the story it wanted to tell, it was the right film at the right time. Scarlett O'Hara is not a creature of the 1860s but of the 1930s: a free-spirited, willful modern woman. \n|                                                                                                                                                                                   \n| Scarlett's lusts and headstrong passions have little to do with myths of delicate Southern flowers, and everything to do with the sex symbols of the movies that shaped her creato\n|                                                                                                                                                                                   \n| Of course, she could not quite be allowed to get away with marrying three times, coveting sweet Melanie's husband Ashley, shooting a plundering Yankee, and banning her third husb\n|                                                                                                                                                                                   "
+ },
+ {
+  "n": 142,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/72-rosemary27s-baby-film.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.3999999761581421,
+  "notes": [
+   "delimiter inference was ambiguous",
+   "skipped 2 leading non-tabular row(s)",
+   "rows have differing field counts; short rows are padded with nulls",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.40):\n+---------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------\n| roman_polanski_s_rosemary_s_baby_is_a_brooding                                                          | macabre_film                                                            \n+---------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------\n| As everyone must have heard by now                                                                      | the movie is based on Ira Levin's novel about modern-day witches and dem\n| For this reason                                                                                         | the effectiveness of \"Rosemary's Baby\" is not at all diminished if you'v\n| Although I haven't read Levin's novel                                                                   | I'm informed that he works in the conventional suspense mode. We meet Ro\n| Polanski doesn't work this way. He gives the audience a great deal of information early in the story    | and by the time the movie's halfway over we're pretty sure what's going \n| This is why the movie is so good. The characters and the story transcend the plot. In most horror films | and indeed in most suspense films of the Alfred Hitchcock tradition     \n| A great deal of the credit for this achievement must go to Mia Farrow                                   | as Rosemary                                                             \n| And the interesting thing is how well they work together: Miss Farrow                                   | previously almost untried in the movies                                 \n| Polanski has also drawn a memorable performance from Sidney Blackmer                                    | as the explicably sinister old smoothy                                  \n| The best thing that can be said about the film                                                          | I think                                                                 \n| But Cary Grant in \"Suspicion\" was only a bounder and perhaps a murderer                                 | and we didn't even really believe that (since he was Cary Grant). Rosema"
+ },
+ {
+  "n": 143,
+  "path": "04_pipeline_wrangling/data_engineering_practice/source/Exercises/Exercise-2/requirements.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.3999999761581421,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "one all-text column: the first row cannot be told apart from the rest, so it was read as data. If it is a header, add promote_header to the sidecar."
+  ],
+  "preview": "preview (heuristic method, confidence 0.40):\n+------------------+\n| col_1            |\n+------------------+\n| requests==2.27.1 |\n| pandas==2.2.3    |\n+------------------+"
+ },
+ {
+  "n": 144,
+  "path": "04_pipeline_wrangling/data_engineering_practice/source/Exercises/Exercise-8/requirements.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.3999999761581421,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "one all-text column: the first row cannot be told apart from the rest, so it was read as data. If it is a header, add promote_header to the sidecar."
+  ],
+  "preview": "preview (heuristic method, confidence 0.40):\n+--------+\n| col_1  |\n+--------+\n| pytest |\n| duckdb |\n+--------+"
+ },
+ {
+  "n": 145,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/44-zootopia.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.09999996423721313,
+  "notes": [
+   "delimiter inference was ambiguous",
+   "skipped 5 leading non-tabular row(s)",
+   "rows have differing field counts; short rows are padded with nulls",
+   "2 trailing row(s) starting at row 2 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 2) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.10):\n+---------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------\n| but_this_turns_out_to_be_not_such_a_great_thing_once_you_get_deeper_into_the_movie_because_people_are_not_animals                                                   | i_dread_thin\n+---------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------\n| \u201cZootopia\u201d is constantly asking its characters to look past species stereotypes                                                                                     | and not use \n| It might seem weird that I\u2019m dwelling on this aspect of \u201cZootopia                                                                                                   | \u201d which is d\n| Still: is it too much to ask that a film that wears its noble intentions like a jangling neck collar be able to withstand scrutiny? If \"Zootopia\" were a bit vaguer | or perhaps d\n+---------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------"
+ },
+ {
+  "n": 146,
+  "path": "04_pipeline_wrangling/dand_data_wrangling/source/2) Rotten Tomatoes Movie Score/ebert_reviews/8-inside-out-2015-film.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.09999996423721313,
+  "notes": [
+   "delimiter inference was ambiguous",
+   "skipped 2 leading non-tabular row(s)",
+   "rows have differing field counts; short rows are padded with nulls",
+   "3 trailing row(s) starting at row 7 look like a legend or footnote block rather than data, and were read as rows; if so, add skip_rows (tail = 3) or drop_rows_matching to the sidecar"
+  ],
+  "preview": "preview (heuristic method, confidence 0.10):\n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| inside_out_a_comedy_adventure_set_inside_the_mind_of_an_11_year_old_girl                                                                                                          \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| The bulk of the film is set inside the brain of young Riley (Kaitlyn Dias)                                                                                                        \n| The heroine's memories are represented by softball-sized spheres that are color-coded by dominant emotion (joy                                                                    \n| The story kicks into gear when Riley attends her new school on the first day of fifth grade and flashes back to a memory that's color-coded as \"joyful                            \n| It's worth pointing out here that all these characters and locations                                                                                                              \n| The script draws clear connections between what happens to Riley in San Francisco (and what happened to her when she was little) and the figurative or metaphorical representation\n| Written by Meg LeFauve and Josh Cooley from a story by Ronnie del Carmen and Pete Docter                                                                                          \n| It's clear that the filmmakers have studied actual psychology                                                                                                                     \n| The film is even more remarkable for how it presents depression: so subtly but unmistakably that it never has to label it as depression. Riley is obviously depressed             \n| A wise friend told me years ago that we have no control over our emotions                                                                                                         \n+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
+ },
+ {
+  "n": 147,
+  "path": "04_pipeline_wrangling/data_engineering_practice/source/Exercises/Exercise-3/requirements.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.3999999761581421,
+  "notes": [
+   "no delimiter or column alignment was found: each line is being read as a single value. If this is a fixed-width report or a log format, pass a hint to the LLM tier or write the extraction by hand in the sidecar.",
+   "one all-text column: the first row cannot be told apart from the rest, so it was read as data. If it is a header, add promote_header to the sidecar."
+  ],
+  "preview": "preview (heuristic method, confidence 0.40):\n+---------------+\n| col_1         |\n+---------------+\n| boto3==1.21.2 |\n+---------------+"
+ },
+ {
+  "n": 150,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-09-20/README.txt",
+  "stratum": "other",
+  "ok": true,
+  "confidence": 0.3999999761581421,
+  "notes": [
+   "delimiter inference was ambiguous",
+   "skipped 6 leading non-tabular row(s)",
+   "rows have differing field counts; short rows are padded with nulls",
+   "nearly every column typed as text; the layout may be misread"
+  ],
+  "preview": "preview (heuristic method, confidence 0.40):\n+-----------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| waste_id  | id_of_wwtp_in_hydrowaste                                                                                                                                              \n+-----------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------\n| SOURCE    |                                                                                                                                                                       \n| ORG_ID    |                                                                                                                                                                       \n| WWTP_NAME | Name of the WWTP from national/regional dataset (empty if not reported)                                                                                               \n| COUNTRY   |                                                                                                                                                                       \n| CNTRY_ISO | Country ISO                                                                                                                                                           \n| LAT_WWTP  | Latitude of reported WWTP location                                                                                                                                    \n| LON_WWTP  | Longitude of reported WWTP location                                                                                                                                   \n| QUAL_LOC  | Quality indicator related to reported WWTP location (see SI of reference paper for more information): 1 = high (tests indicated >80% of reported WWTP locations in cou\n| LAT_OUT   |                                                                                                                                                                       \n| LON_OUT   |                                                                                                                                                                       "
+ }
+]

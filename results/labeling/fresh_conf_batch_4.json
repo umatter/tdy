@@ -1,0 +1,123 @@
+[
+ {
+  "n": 54,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-09/lifetime_earn.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------+-------------------+---------------+\n| gender | race              | lifetime_earn |\n+--------+-------------------+---------------+\n| Men    | White             | 2706000       |\n| Men    | Black             | 1780000       |\n| Men    | Hispanic any race | 2011000       |\n| Women  | White             | 1518000       |\n| Women  | Black             | 1260000       |\n| Women  | Hispanic any race | 1118000       |\n+--------+-------------------+---------------+"
+ },
+ {
+  "n": 55,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-08-04/country_totals.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `country_name`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+---------+--------------+----------------------------+-------+---------+-----------+-----------+\n| country | country_name | type                       | level | c_2016  | c_2017    | c_2018    |\n+---------+--------------+----------------------------+-------+---------+-----------+-----------+\n| BE      | Belgium      | Total net production       | Total | 82520.0 | 82948.5   | 69212.347 |\n| BE      | Belgium      | Imports                    | Total | 14648.0 | 14189.4   | 21635.908 |\n| BE      | Belgium      | Exports                    | Total | 8465.0  | 8167.8    | 4308.347  |\n| BE      | Belgium      | Energy absorbed by pumping | Total | 1475.0  | 1485.4    | 1347.901  |\n| BE      | Belgium      | Energy supplied            | Total | 87228.0 | 87484.7   | 85192.007 |\n| BG      | Bulgaria     | Total net production       | Total | 41221.0 | 41351.303 | 41705.0   |\n| BG      | Bulgaria     | Imports                    | Total | 4568.0  | 3705.423  | 2223.0    |\n| BG      | Bulgaria     | Exports                    | Total | 10940.0 | 9185.794  | 10030.0   |\n| BG      | Bulgaria     | Energy absorbed by pumping | Total | 918.0   | 949.527   | 425.0     |\n| BG      | Bulgaria     | Energy supplied            | Total | 33931.0 | 34921.405 | 33473.0   |"
+ },
+ {
+  "n": 56,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-11-05/democracy_data.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `monarch_name`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `president_name`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `colony_of`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `colony_administrated_by`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------------+--------------+------+-----------------------+--------------------+-------------+-----------------+---------------------+------------------------+------------------\n| country_name | country_code | year | regime_category_index | regime_category    | is_monarchy | is_commonwealth | monarch_name        | monarch_accession_year | monarch_birthyear\n+--------------+--------------+------+-----------------------+--------------------+-------------+-----------------+---------------------+------------------------+------------------\n| Afghanistan  | AFG          | 1950 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1951 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1952 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1953 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1954 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1955 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1956 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1957 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1958 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             \n| Afghanistan  | AFG          | 1959 | 5                     | Royal dictatorship | true        | false           | Mohammed Zahir Shah | 1933                   | 1914             "
+ },
+ {
+  "n": 57,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-02-23/earn.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------+-----------+---------------+-------------------+------+---------+-----------+--------------------+\n| sex        | race      | ethnic_origin | age               | year | quarter | n_persons | median_weekly_earn |\n+------------+-----------+---------------+-------------------+------+---------+-----------+--------------------+\n| Both Sexes | All Races | All Origins   | 16 years and over | 2010 | 1       | 96821000  | 754                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2010 | 2       | 99798000  | 740                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2010 | 3       | 101385000 | 740                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2010 | 4       | 100120000 | 752                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2011 | 1       | 98329000  | 755                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2011 | 2       | 100593000 | 753                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2011 | 3       | 101447000 | 753                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2011 | 4       | 101458000 | 764                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2012 | 1       | 100830000 | 769                |\n| Both Sexes | All Races | All Origins   | 16 years and over | 2012 | 2       | 102769000 | 771                |"
+ },
+ {
+  "n": 58,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-09-03/stackoverflow_survey_questions.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------\n| qname              | question                                                                                                                                                     \n+--------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------\n| main_branch        | Which of the following options best describes you today? For the purpose of this survey, a developer is \"someone who writes code\".*                          \n| age                | What is your age?*                                                                                                                                           \n| remote_work        | Which best describes your current work situation?                                                                                                            \n| ed_level           | Which of the following best describes the highest level of formal education that you\u2019ve completed? *                                                         \n| years_code         | Including any education, how many years have you been coding in total?                                                                                       \n| years_code_pro     | NOT including education, how many years have you coded professionally (as a part of your work)?                                                              \n| dev_type           | Which of the following describes your current job, the one you do most of the time? Please select only one.                                                  \n| org_size           | Approximately how many people are employed by the company or organization you currently work for?  This should only include your primary company, and not the\n| purchase_influence | What level of influence do you, personally, have over new technology purchases at your organization?                                                         \n| buildvs_buy        | When asked to provide a recommendation for solving a problem at work with a new tool or software, what has been your most recent choice of the following?    "
+ },
+ {
+  "n": 59,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-01-14/passwords.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------+----------+---------------------+-------+-----------+-------------------------+----------+----------+-----------+\n| rank | password | category            | value | time_unit | offline_crack_sec       | rank_alt | strength | font_size |\n+------+----------+---------------------+-------+-----------+-------------------------+----------+----------+-----------+\n| 1    | password | password-related    | 6.91  | years     | 2.17                    | 1        | 8        | 11        |\n| 2    | 123456   | simple-alphanumeric | 18.52 | minutes   | 0.000011100000000000002 | 2        | 4        | 8         |\n| 3    | 12345678 | simple-alphanumeric | 1.29  | days      | 0.00111                 | 3        | 4        | 8         |\n| 4    | 1234     | simple-alphanumeric | 11.11 | seconds   | 1.1099999999999999e-7   | 4        | 4        | 8         |\n| 5    | qwerty   | simple-alphanumeric | 3.72  | days      | 0.00321                 | 5        | 8        | 11        |\n| 6    | 12345    | simple-alphanumeric | 1.85  | minutes   | 1.11e-6                 | 6        | 4        | 8         |\n| 7    | dragon   | animal              | 3.72  | days      | 0.00321                 | 7        | 8        | 11        |\n| 8    | baseball | sport               | 6.91  | years     | 2.17                    | 8        | 4        | 8         |\n| 9    | football | sport               | 6.91  | years     | 2.17                    | 9        | 7        | 11        |\n| 10   | letmein  | password-related    | 3.19  | months    | 0.0835                  | 10       | 8        | 11        |"
+ },
+ {
+  "n": 61,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/Kenya.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------------------------+-------+------+------+-----+------+-----+----+-------------+------------------+----------------------+\n| parentcofinal                | empty | hdpe | ldpe | o   | pet  | pp  | ps | grand_total | number_of_events | number_of_volunteers |\n+------------------------------+-------+------+------+-----+------+-----+----+-------------+------------------+----------------------+\n| Grand Total                  | 0     | 215  | 135  | 105 | 8892 | 127 | 20 | 9494        | 5                | 1560                 |\n| Unbranded                    | 0     | 23   | 46   | 0   | 1848 | 12  | 19 | 1948        | 5                | 1560                 |\n| Maji Asili Company           | 0     | 0    | 0    | 0   | 680  | 0   | 0  | 680         | 5                | 1560                 |\n| P-E-T Active Products cc     | 0     | 0    | 0    | 0   | 590  | 0   | 0  | 590         | 5                | 1560                 |\n| Cool                         | 0     | 0    | 0    | 0   | 583  | 0   | 0  | 583         | 5                | 1560                 |\n| Nice And Lovely              | 0     | 0    | 0    | 0   | 568  | 0   | 0  | 568         | 5                | 1560                 |\n| Apple Punch                  | 0     | 0    | 0    | 0   | 560  | 0   | 0  | 560         | 5                | 1560                 |\n| Oral Rehydration             | 0     | 0    | 0    | 0   | 450  | 0   | 0  | 450         | 5                | 1560                 |\n| Kithiri Water                | 0     | 0    | 0    | 0   | 302  | 0   | 0  | 302         | 5                | 1560                 |\n| Rayyan Mineral Water Company | 0     | 0    | 0    | 0   | 296  | 0   | 0  | 296         | 5                | 1560                 |"
+ },
+ {
+  "n": 64,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-12-05/life_expectancy.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `code`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------+------+------+----------------+\n| entity      | code | year | lifeexpectancy |\n+-------------+------+------+----------------+\n| Afghanistan | AFG  | 1950 | 27.7275        |\n| Afghanistan | AFG  | 1951 | 27.9634        |\n| Afghanistan | AFG  | 1952 | 28.4456        |\n| Afghanistan | AFG  | 1953 | 28.9304        |\n| Afghanistan | AFG  | 1954 | 29.2258        |\n| Afghanistan | AFG  | 1955 | 29.9206        |\n| Afghanistan | AFG  | 1956 | 30.4078        |\n| Afghanistan | AFG  | 1957 | 30.9458        |\n| Afghanistan | AFG  | 1958 | 31.5066        |\n| Afghanistan | AFG  | 1959 | 32.0386        |"
+ },
+ {
+  "n": 65,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/function_surveys1996.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `wgt`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------+-----------+-------+-----+------+------+---------+-----+------+\n| col_1 | record_id | month | day | year | site | species | sex | wgt  |\n+-------+-----------+-------+-----+------+------+---------+-----+------+\n| 23214 | 23215     | 1     | 27  | 1996 | 21   | PF      | F   | 7.0  |\n| 23215 | 23216     | 1     | 27  | 1996 | 1    | DM      | M   | 27.0 |\n| 23216 | 23217     | 1     | 27  | 1996 | 17   | DM      | M   | 25.0 |\n| 23217 | 23218     | 1     | 27  | 1996 | 17   | DM      | M   | 25.0 |\n| 23218 | 23219     | 1     | 27  | 1996 | 24   | PL      | F   | 21.0 |\n| 23219 | 23220     | 1     | 27  | 1996 | 2    | DM      | F   | 47.0 |\n| 23220 | 23221     | 1     | 27  | 1996 | 18   | PF      | F   | 9.0  |\n| 23221 | 23222     | 1     | 27  | 1996 | 1    | DM      | M   | 27.0 |\n| 23222 | 23223     | 1     | 27  | 1996 | 2    | DO      | M   | 66.0 |\n| 23223 | 23224     | 1     | 27  | 1996 | 17   | DM      | F   | 49.0 |"
+ },
+ {
+  "n": 66,
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-10-02/us_births_2000-2014.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------+-------+---------------+-------------+--------+\n| year | month | date_of_month | day_of_week | births |\n+------+-------+---------------+-------------+--------+\n| 2000 | 1     | 1             | 6           | 9083   |\n| 2000 | 1     | 2             | 7           | 8006   |\n| 2000 | 1     | 3             | 1           | 11363  |\n| 2000 | 1     | 4             | 2           | 13032  |\n| 2000 | 1     | 5             | 3           | 12558  |\n| 2000 | 1     | 6             | 4           | 12466  |\n| 2000 | 1     | 7             | 5           | 12516  |\n| 2000 | 1     | 8             | 6           | 8934   |\n| 2000 | 1     | 9             | 7           | 7949   |\n| 2000 | 1     | 10            | 1           | 11668  |"
+ },
+ {
+  "n": 67,
+  "path": "90_supplemental/tidytuesday/source/data/2024/2024-02-27/events.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+\n| year | event                                                                                                                                                                    |\n+------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+\n| 888  | Odo, count of Paris, is crowned king of West Francia (France) by Archbishop Walter of Sens at Compi\u00e8gne.                                                                 |\n| 1504 | Christopher Columbus uses his knowledge of a lunar eclipse that night to convince Jamaican natives to provide him with supplies.                                         |\n| 1644 | Abel Tasman's second Pacific voyage begins as he leaves Batavia in command of three ships.                                                                               |\n| 1704 | In Queen Anne's War, French forces and Native Americans stage a raid on Deerfield, Massachusetts Bay Colony, killing 56 villagers and taking more than 100 captive.      |\n| 1712 | February 29 is followed by February 30 in Sweden, in a move to abolish the Swedish calendar for a return to the Julian calendar.                                         |\n| 1720 | Ulrika Eleonora, Queen of Sweden abdicates in favour of her husband, who becomes King Frederick I on March 24.                                                           |\n| 1768 | Polish nobles form the Bar Confederation.                                                                                                                                |\n| 1796 | The Jay Treaty between the United States and Great Britain comes into force, facilitating ten years of peaceful trade between the two nations.                           |\n| 1892 | St. Petersburg, Florida is incorporated.                                                                                                                                 |\n| 1908 | James Madison University is founded at Harrisonburg, Virginia in the United States as The State Normal and Industrial School for Women by the Virginia General Assembly. |"
+ },
+ {
+  "n": 68,
+  "path": "90_supplemental/tidytuesday/source/data/2019/2019-04-16/Economist_pensions.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `population_aged_65_years_and_over_as_of_total`: read as decimal(2) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------------+-----------------------------------------------+------------------------------------------------+\n| country        | population_aged_65_years_and_over_as_of_total | government_spending_on_pension_benefits_of_gdp |\n+----------------+-----------------------------------------------+------------------------------------------------+\n| Australia      | 15.04                                         | 5.2                                            |\n| Austria        | 18.76                                         | 13.86                                          |\n| Belgium        | 18.22                                         | 10.36                                          |\n| Brazil         | 7.84                                          | 12.0                                           |\n| Canada         | 16.14                                         | 4.31                                           |\n| Chile          | 11.00                                         | 3.25                                           |\n| Czech Republic | 18.08                                         | 9.09                                           |\n| Denmark        | 18.96                                         | 8.45                                           |\n| Estonia        | 18.76                                         | 6.99                                           |\n| Finland        | 20.48                                         | 11.45                                          |"
+ }
+]

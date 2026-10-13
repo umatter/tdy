@@ -1,0 +1,128 @@
+[
+ {
+  "n": 16,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2019 Brand Audit Appendix _ Results by Country/Countries/United Arab Emirates.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+---------------+---+-----+-------------+------------------+----------------------+\n| parentcofinal | o | pet | grand_total | number_of_events | number_of_volunteers |\n+---------------+---+-----+-------------+------------------+----------------------+\n| Grand Total   | 1 | 11  | 12          | 1                | 3                    |\n| Mai Dubai     | 0 | 11  | 11          | 1                | 3                    |\n| Alu can       | 1 | 0   | 1           | 1                | 3                    |\n+---------------+---+-----+-------------+------------------+----------------------+"
+ },
+ {
+  "n": 17,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-06-15/tweets.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `datetime`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `content`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `text`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `username`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+----------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------\n| datetime             | content                                                                                                                                                    \n+----------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------\n| 2021-05-07T11:42:29Z | @sqlsekou You co-hosted the #DuBoisChallenge. That had to be fun :)                                                                                        \n| 2021-05-06T16:14:46Z | #DuBoisChallenge submission by Coleton Wood. @DocKevinElder  #MISatGCSU @Ebonyteach @WeitzmanSchool @GeorgiaCollege                                        \n|                      | https://t.co/rjynPGftGp                                                                                                                                    \n| 2021-05-06T16:14:45Z | #DuBoisChallenge submission by Lucy Sillito #dataviz @michael_Nutter @drshaunharper @Opportunity1  https://t.co/byGCfaSUIN                                 \n| 2021-05-06T16:14:45Z | Was doing a @tableaupublic search for #DuBoisChallenge and came across some honorable mentions! @datadzif may be on a social media break but she submitted \n|                      | https://t.co/KG5UXf0wRZ                                                                                                                                    \n| 2021-04-30T18:48:18Z | @ClintSmithIII @TheCrashCourse This sounds awesome! Would love for W.E.B. DuBois and his data visualizations to get a cameo! Follow #DuBoisChallenge.      \n| 2021-04-30T14:41:53Z | @johnspacemuller Check out #DuBoisChallenge from a #TidyTuesday a few months back. Some really great stuff there on reproducing Du Bois' work.             \n| 2021-04-22T15:01:44Z | For #PortfolioDay, I have to thank @FlerlageKev, #DuboisChallenge, @HipsterVizNinja, #MakeOverMonday, &amp; the #DataFam for inspiration &amp; collaboratio\n| 2021-04-12T00:39:44Z | @zanmuny Hi Zanele! We'd like to congratulate you on your submission to the #DuBoisChallenge. Can you please drop me a DM for details!                     "
+ },
+ {
+  "n": 18,
+  "path": "90_supplemental/carpentries_python_ecology/source/episodes/data/yearly_files/surveys2001.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `hindfoot_length`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero",
+   "column `weight`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------+-----------+-------+-----+------+---------+------------+-----+-----------------+--------+\n| col_1 | record_id | month | day | year | site_id | species_id | sex | hindfoot_length | weight |\n+-------+-----------+-------+-----+------+---------+------------+-----+-----------------+--------+\n| 31710 | 31711     | 1     | 21  | 2001 | 1       | PB         | F   | 26.0            | 25.0   |\n| 31711 | 31712     | 1     | 21  | 2001 | 1       | DM         | M   | 37.0            | 43.0   |\n| 31712 | 31713     | 1     | 21  | 2001 | 1       | PB         | M   | 29.0            | 44.0   |\n| 31713 | 31714     | 1     | 21  | 2001 | 1       | DO         | M   | 34.0            | 53.0   |\n| 31714 | 31715     | 1     | 21  | 2001 | 2       | OT         | M   | 20.0            | 27.0   |\n| 31715 | 31716     | 1     | 21  | 2001 | 2       | RM         | M   | 17.0            | 11.0   |\n| 31716 | 31717     | 1     | 21  | 2001 | 2       | NL         | M   | 33.0            | 121.0  |\n| 31717 | 31718     | 1     | 21  | 2001 | 2       | DM         | F   | 34.0            | 44.0   |\n| 31718 | 31719     | 1     | 21  | 2001 | 2       | PB         | M   | 26.0            | 42.0   |\n| 31719 | 31720     | 1     | 21  | 2001 | 2       | PB         | M   | 27.0            | 41.0   |"
+ },
+ {
+  "n": 19,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-01-26/2020 BFFP National Data Results/Sri Lanka.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `parent_company`: text column containing [\"null\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `empty`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero",
+   "column `hdpe`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero",
+   "column `ldpe`: read as decimal(1) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-----------+--------------------------+-------+------+------+------+-----+-----+-----+-----+-------------+------------+------------+\n| country   | parent_company           | empty | hdpe | ldpe | o    | pet | pp  | ps  | pvc | grand_total | num_events | volunteers |\n+-----------+--------------------------+-------+------+------+------+-----+-----+-----+-----+-------------+------------+------------+\n| Sri Lanka | null                     | 0.0   | 0.0  | 0.0  | 15.0 | 7.0 | 0.0 | 0.0 | 0.0 | 22.0        | 1          | 40.0       |\n| Sri Lanka | British American Tobacco | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |\n| Sri Lanka | Imperial Brands          | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |\n| Sri Lanka | Mars, Incorporated       | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |\n| Sri Lanka | Mcdonald'S Corporation   | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |\n| Sri Lanka | Nestle                   | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |\n| Sri Lanka | P-E-T Active Products Cc | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |\n| Sri Lanka | Pepsico                  | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |\n| Sri Lanka | Perfetti Van Melle       | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |\n| Sri Lanka | The Coca-Cola Company    | 0.0   | 0.0  | 0.0  | 0.0  | 0.0 | 0.0 | 0.0 | 0.0 |             | 1          | 40.0       |"
+ },
+ {
+  "n": 20,
+  "path": "90_supplemental/tidytuesday/source/data/2023/2023-12-26/external_calls.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------------+------------+---------+----------+\n| package_from | package_to | n_total | n_unique |\n+--------------+------------+---------+----------+\n| A3           | base       | 243     | 37       |\n| A3           | graphics   | 7       | 2        |\n| A3           | stats      | 41      | 12       |\n| A3           | utils      | 21      | 1        |\n| AATtools     | base       | 1220    | 87       |\n| AATtools     | dplyr      | 33      | 4        |\n| AATtools     | foreach    | 2       | 1        |\n| AATtools     | graphics   | 2       | 2        |\n| AATtools     | magrittr   | 84      | 2        |\n| AATtools     | parallel   | 2       | 1        |"
+ },
+ {
+  "n": 21,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-05-03/wind.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------+--------------------+---------------+\n| date       | wind_mwh           | wind_capacity |\n+------------+--------------------+---------------+\n| 2009-01-28 | 54.09668671046146  | 50.4          |\n| 2009-01-30 | 62.32681833356965  | 98.9          |\n| 2009-02-02 | 52.53104562696034  | 99.0          |\n| 2009-02-05 | 93.79016784837751  | 150.0         |\n| 2009-02-05 | 96.54663777706939  | 51.0          |\n| 2009-02-05 | 96.54663777706939  | 49.5          |\n| 2009-02-19 | 93.8136456126697   | 49.5          |\n| 2009-03-17 | 116.48064700663471 | 8.0           |\n| 2009-03-17 | 119.008017803519   | 24.75         |\n| 2009-03-24 | 88.77998128142532  | 63.0          |"
+ },
+ {
+  "n": 22,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-10-25/bakers.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+--------+-----------+------------+------------------+----------------+------------------+-------------------+------------------+------------------+---------------+----------------\n| series | baker     | star_baker | technical_winner | technical_top3 | technical_bottom | technical_highest | technical_lowest | technical_median | series_winner | series_runner_u\n+--------+-----------+------------+------------------+----------------+------------------+-------------------+------------------+------------------+---------------+----------------\n| 1      | Annetha   | 0          | 0                | 1              | 1                | 2                 | 7                | 4.5              | 0             | 0              \n| 1      | David     | 0          | 0                | 1              | 3                | 3                 | 8                | 4.5              | 0             | 0              \n| 1      | Edd       | 0          | 2                | 4              | 1                | 1                 | 6                | 2.0              | 1             | 0              \n| 1      | Jasminder | 0          | 0                | 2              | 2                | 2                 | 5                | 3.0              | 0             | 0              \n| 1      | Jonathan  | 0          | 1                | 1              | 2                | 1                 | 9                | 6.0              | 0             | 0              \n| 1      | Lea       | 0          | 0                | 0              | 1                | 10                | 10               | 10.0             | 0             | 0              \n| 1      | Louise    | 0          | 0                | 0              | 1                | 4                 | 4                | 4.0              | 0             | 0              \n| 1      | Mark      | 0          | 0                | 0              | 0                |                   |                  |                  | 0             | 0              \n| 1      | Miranda   | 0          | 2                | 4              | 1                | 1                 | 8                | 3.0              | 0             | 0              \n| 1      | Ruth      | 0          | 0                | 2              | 2                | 2                 | 5                | 3.5              | 0             | 0              "
+ },
+ {
+  "n": 23,
+  "path": "90_supplemental/tidytuesday/source/data/2021/2021-10-12/aquaculture-farmed-fish-production.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------+------+------+------------------------------------+\n| entity      | code | year | aquaculture_production_metric_tons |\n+-------------+------+------+------------------------------------+\n| Afghanistan | AFG  | 1969 | 60.0                               |\n| Afghanistan | AFG  | 1970 | 60.0                               |\n| Afghanistan | AFG  | 1971 | 60.0                               |\n| Afghanistan | AFG  | 1972 | 60.0                               |\n| Afghanistan | AFG  | 1973 | 60.0                               |\n| Afghanistan | AFG  | 1974 | 60.0                               |\n| Afghanistan | AFG  | 1975 | 60.0                               |\n| Afghanistan | AFG  | 1976 | 170.0                              |\n| Afghanistan | AFG  | 1977 | 170.0                              |\n| Afghanistan | AFG  | 1978 | 170.0                              |"
+ },
+ {
+  "n": 24,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-04-12/death_fuel.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+-------------+----------+------+----------------------------------------------------------------------------------------------------+----------------------------------------------\n| entity      | code     | year | deaths_cause_all_causes_risk_household_air_pollution_from_solid_fuels_sex_both_age_all_ages_number | deaths_cause_all_causes_risk_household_air_po\n+-------------+----------+------+----------------------------------------------------------------------------------------------------+----------------------------------------------\n| Abkhazia    | OWID_ABK | 2015 |                                                                                                    |                                              \n| Afghanistan | AFG      | 1990 | 34372                                                                                              | 28168                                        \n| Afghanistan | AFG      | 1991 | 35392                                                                                              | 28168                                        \n| Afghanistan | AFG      | 1992 | 38065                                                                                              | 28168                                        \n| Afghanistan | AFG      | 1993 | 41154                                                                                              | 28168                                        \n| Afghanistan | AFG      | 1994 | 43153                                                                                              | 28168                                        \n| Afghanistan | AFG      | 1995 | 44024                                                                                              | 28168                                        \n| Afghanistan | AFG      | 1996 | 45005                                                                                              | 28168                                        \n| Afghanistan | AFG      | 1997 | 46017                                                                                              | 28168                                        \n| Afghanistan | AFG      | 1998 | 46055                                                                                              | 28168                                        "
+ },
+ {
+  "n": 25,
+  "path": "90_supplemental/tidytuesday/source/data/2018/2018-06-19/week12_mediacloud_trump.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------+-------------------+------------------------------------------------------+---------------+--------------------------------------------------+-------------+----------\n| date       | title_puerto_rico | title_puerto_rico_and_title_trump_or_title_president | title_florida | title_florida_and_title_trump_or_title_president | title_texas | title_tex\n+------------+-------------------+------------------------------------------------------+---------------+--------------------------------------------------+-------------+----------\n| 2017-08-20 | 0                 | 0                                                    | 18            | 2                                                | 12          | 0        \n| 2017-08-21 | 1                 | 0                                                    | 41            | 0                                                | 79          | 0        \n| 2017-08-22 | 0                 | 0                                                    | 30            | 0                                                | 39          | 0        \n| 2017-08-23 | 1                 | 0                                                    | 39            | 0                                                | 83          | 6        \n| 2017-08-24 | 8                 | 0                                                    | 75            | 1                                                | 143         | 3        \n| 2017-08-25 | 2                 | 0                                                    | 28            | 0                                                | 218         | 11       \n| 2017-08-26 | 0                 | 0                                                    | 13            | 0                                                | 212         | 3        \n| 2017-08-27 | 0                 | 0                                                    | 13            | 0                                                | 223         | 38       \n| 2017-08-28 | 6                 | 0                                                    | 40            | 1                                                | 289         | 41       \n| 2017-08-29 | 1                 | 0                                                    | 38            | 3                                                | 378         | 133      "
+ },
+ {
+  "n": 26,
+  "path": "90_supplemental/tidytuesday/source/data/2020/2020-07-07/coffee_ratings.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [
+   "column `total_cup_points`: read as decimal(2) \u2014 scale inferred from the first 500 rows; any later value with more fractional digits is rounded half away from zero",
+   "column `owner`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `farm_name`: text column containing [\"-\", \"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value",
+   "column `lot_number`: text column containing [\"NA\"]; add them to na_values by hand if they mean \"missing\" rather than a literal value"
+  ],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------------------+---------+-----------------------------+-------------------+------------------------------------------+------------+-------------------+------------+-----------\n| total_cup_points | species | owner                       | country_of_origin | farm_name                                | lot_number | mill              | ico_number | company   \n+------------------+---------+-----------------------------+-------------------+------------------------------------------+------------+-------------------+------------+-----------\n| 90.58            | Arabica | metad plc                   | Ethiopia          | metad plc                                | NA         | metad plc         | 2014/2015  | metad agri\n| 89.92            | Arabica | metad plc                   | Ethiopia          | metad plc                                | NA         | metad plc         | 2014/2015  | metad agri\n| 89.75            | Arabica | grounds for health admin    | Guatemala         | san marcos barrancas \"san cristobal cuch | NA         | NA                | NA         | NA        \n| 89.00            | Arabica | yidnekachew dabessa         | Ethiopia          | yidnekachew dabessa coffee plantation    | NA         | wolensu           | NA         | yidnekache\n| 88.83            | Arabica | metad plc                   | Ethiopia          | metad plc                                | NA         | metad plc         | 2014/2015  | metad agri\n| 88.83            | Arabica | ji-ae ahn                   | Brazil            | NA                                       | NA         | NA                | NA         | NA        \n| 88.75            | Arabica | hugo valdivia               | Peru              | NA                                       | NA         | hvc               | NA         | richmond i\n| 88.67            | Arabica | ethiopia commodity exchange | Ethiopia          | aolme                                    | NA         | c.p.w.e           | 010/0338   | NA        \n| 88.42            | Arabica | ethiopia commodity exchange | Ethiopia          | aolme                                    | NA         | c.p.w.e           | 010/0338   | NA        \n| 88.25            | Arabica | diamond enterprise plc      | Ethiopia          | tulla coffee farm                        | NA         | tulla coffee farm | 2014/15    | diamond en"
+ },
+ {
+  "n": 28,
+  "path": "90_supplemental/tidytuesday/source/data/2022/2022-03-22/applicants.csv",
+  "stratum": "csv",
+  "ok": true,
+  "confidence": 0.949999988079071,
+  "notes": [],
+  "preview": "preview (heuristic method, confidence 0.95):\n+------+-----+--------+\n| year | sex | n_all  |\n+------+-----+--------+\n| 1880 | F   | 97605  |\n| 1880 | M   | 118400 |\n| 1881 | F   | 98855  |\n| 1881 | M   | 108282 |\n| 1882 | F   | 115695 |\n| 1882 | M   | 122031 |\n| 1883 | F   | 120059 |\n| 1883 | M   | 112477 |\n| 1884 | F   | 137586 |\n| 1884 | M   | 122738 |"
+ }
+]
