@@ -1,0 +1,17 @@
+    Finished `release` profile [optimized] target(s) in 0.82s
+     Running tests/corpus.rs (target/release/deps/corpus-142ea3a20aaa742f)
+
+running 1 test
+test no_real_world_file_makes_tdy_panic_or_hang has been running for over 60 seconds
+
+slowest five of 9881 files:
+    14.33s  corpus/90_supplemental/tidytuesday/source/data/2022/2022-03-29/EADA_2019-2020/Schools.xlsx
+     8.36s  corpus/90_supplemental/tidytuesday/source/data/2022/2022-06-14/drought-fips.csv
+     7.71s  corpus/90_supplemental/tidytuesday/source/data/2019/2019-01-22/incarceration_trends.csv
+     6.94s  corpus/90_supplemental/tidytuesday/source/data/2023/2023-01-10/PFW_count_site_data_public_2021.csv
+     5.95s  corpus/90_supplemental/tidytuesday/source/data/2018/2018-07-31/week18_dallas_animals.xlsx
+test no_real_world_file_makes_tdy_panic_or_hang ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 311.33s
+
+exit 0
