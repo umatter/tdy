@@ -8,7 +8,7 @@
 # record and cell level.
 #
 # ~2.8 GB, gitignored, and nothing in CI touches it. `scripts/run_pollock.py`
-# is what reads it; see `gap_reports/pollock_summary.md` for the last result.
+# is what reads it; see `results/pollock/pollock_summary.md` for the last result.
 set -euo pipefail
 
 DEST="${1:-pollock}"
@@ -36,5 +36,5 @@ Ready. Score tdy against it with:
   cargo build --release
   scripts/run_pollock.py --pollock $DEST --venv $VENV
 
-Writes gap_reports/pollock_summary.md (gitignored, like every gap report).
+Writes results/pollock/pollock_summary.md (gitignored, like all of results/).
 EOF

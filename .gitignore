@@ -24,5 +24,10 @@ __pycache__/
 /paper/
 /gap_reports/
 
+# The project's own run outputs behind the paper's numbers (the Pollock benchmark, the
+# corpus survey and sweeps, the labelling study). Same rule as gap_reports/: regenerable
+# by scripts/, never versioned. gap_reports/ itself is left to the review suite's reports.
+/results/
+
 # subagent-driven-development scratch (ledgers, briefs, review packages)
 /.superpowers/
