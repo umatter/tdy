@@ -1425,6 +1425,10 @@ fn a_one_row_member_among_judged_ones_is_outside_the_check() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(!text.contains("REVIEW"), "{text}");
+    // ...but not silently: d.csv's two columns say they were not checked, and
+    // the three judged members say nothing.
+    assert_eq!(text.matches("unit not checked").count(), 2, "{text}");
+    assert!(text.contains("`price` has 1 value here"), "{text}");
 }
 
 /// Two members cannot say which is out of scale; the check needs three.
@@ -1436,6 +1440,29 @@ fn a_pile_of_two_is_not_judged_for_magnitude() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}");
     assert!(!text.contains("REVIEW"), "{text}");
+    assert_eq!(text.matches("unit not checked").count(), 2, "both members say so: {text}");
+    assert!(text.contains("`amount` has a typical value in only 2 members"), "{text}");
+}
+
+/// The worked example's own shape: four rows a month, so no member has the
+/// five values the check needs and a month in cents could join unremarked.
+/// Nothing waits on a person, since four values cannot say which unit a file
+/// is in, but fit says under every member that its unit was not checked.
+#[test]
+fn a_member_too_short_to_judge_says_its_unit_was_not_checked() {
+    let (dir, t) = cents_pile();
+    for m in ["2025-01.csv", "2025-02.csv", "2025-03.csv"] {
+        let p = dir.path().join(m);
+        let text = std::fs::read_to_string(&p).unwrap();
+        let header_and_four: Vec<&str> = text.lines().take(5).collect();
+        std::fs::write(&p, header_and_four.join("\n") + "\n").unwrap();
+    }
+    let out = tdy(&["fit", t.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!text.contains("REVIEW"), "a note, not a hold: {text}");
+    assert_eq!(text.matches("unit not checked").count(), 3, "one note per member: {text}");
+    assert!(text.contains("`amount` has 4 values here"), "{text}");
 }
 
 /// The two-line title over a table, which asks a person: a dropped run.

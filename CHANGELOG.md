@@ -2,6 +2,19 @@
 
 Notable changes to `tdy` and `tdy-tui`. The two crates are versioned together.
 
+## Unreleased
+
+### Changed
+
+- **A member the magnitude check cannot judge says so.** The check compares
+  a member's typical value with the pile's only from five values in the
+  member and three members carrying the column; below that it abstained in
+  silence, so in a pile of four-row monthly files a month in cents beside
+  months in francs joined with nothing said. `tdy fit` now notes, under every
+  member of a pile of two or more it could not check, which column and why
+  (`unit not checked: ...`). Nothing waits on a person: four values cannot
+  say which unit a file is in. A lone file has no pile and is not named.
+
 ## 0.4.0 — 2026-10-03
 
 ### What you will notice upgrading from 0.3.1

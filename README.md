@@ -941,7 +941,10 @@ of a bounded read) with the pile's, and a member ten times above or below
 waits on a person too — `` `amount`: this member's typical value (median
 130000) is 100× the pile's (median 1150) — a different unit? `` — accepted the
 same way, by name. A busy month is not ten times a normal one; a month in cents
-is a hundred. Re-fitting an untouched
+is a hundred. The check needs five values in a member and three members to
+compare: a member it cannot judge says so (`` unit not checked: `amount` has 4
+values here; comparing its unit with the pile's takes 5 ``) and joins, so a
+month in cents among four-row files is named rather than unremarked. Re-fitting an untouched
 dataset does not ask again; editing the file expires the acceptance, because it
 was about those bytes.
 

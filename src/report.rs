@@ -766,6 +766,7 @@ fn shown_notes(m: &MemberReport) -> impl Iterator<Item = &String> {
                 || is_read_anyway_note(n)
                 || is_refusal_note(n)
                 || n.starts_with(LIKE_DATA_PREFIX)
+                || n.starts_with(crate::magnitude::UNCHECKED_PREFIX)
         })
 }
 
@@ -1199,11 +1200,11 @@ pub async fn fit_pile(
                 // The dry run (`engine::dry_run` is this preview of 200
                 // rows). When it read the whole member, its batch is what
                 // the magnitude pass below would read again: kept as the
-                // member's medians instead — for a pile of one-record
+                // member's profile instead — for a pile of one-record
                 // documents, that pass was a second dry run of every member.
                 let dry = crate::engine::preview_whole(&spec, &p, limits, 200);
-                let medians = match &dry {
-                    Ok((batch, true)) => Some(crate::magnitude::medians(batch)),
+                let profile = match &dry {
+                    Ok((batch, true)) => Some(crate::magnitude::profile(batch)),
                     _ => None,
                 };
                 if let Err(e) = dry {
@@ -1312,7 +1313,7 @@ pub async fn fit_pile(
                     path: p.clone(),
                     blake3: blake3.clone(),
                     identity: identity.clone(),
-                    medians,
+                    profile,
                 });
                 lock_members.push(Member {
                     path: rel.clone(),
@@ -1424,7 +1425,7 @@ pub async fn fit_pile(
                     path: p.clone(),
                     blake3: blake3.clone(),
                     identity: identity.clone(),
-                    medians: None,
+                    profile: None,
                 });
                 lock_members.push(Member {
                     path: rel.clone(),
@@ -1500,18 +1501,25 @@ pub async fn fit_pile(
     // numeric column, against the pile's; an outlier gets a review reason
     // and waits, like a shift does, and the acceptance carries over on the
     // same terms — the reason is deterministic, so an unchanged pile asks
-    // once.
-    if fitted_specs.len() >= crate::magnitude::MIN_MEMBERS {
-        let mut medians: Vec<crate::magnitude::Medians> = Vec::with_capacity(fitted_specs.len());
+    // once. Where the check cannot judge (too few values in a member, too
+    // few members), the member says so: nothing waits, but a month in
+    // cents among four-row files does not join unremarked. A lone file has
+    // no pile to be out of scale with and is not named.
+    if fitted_specs.len() >= 2 {
+        let mut profiles: Vec<crate::magnitude::Profile> = Vec::with_capacity(fitted_specs.len());
         for f in &fitted_specs {
-            medians.push(match &f.medians {
+            profiles.push(match &f.profile {
                 Some(m) => m.clone(),
                 None => match crate::engine::preview(&f.spec, &f.path, limits, MAGNITUDE_ROWS) {
-                    Ok(batch) => crate::magnitude::medians(&batch),
-                    Err(_) => crate::magnitude::Medians::new(),
+                    Ok(batch) => crate::magnitude::profile(&batch),
+                    Err(_) => crate::magnitude::Profile::default(),
                 },
             });
         }
+        for u in crate::magnitude::unchecked(&profiles) {
+            reports[fitted_specs[u.member].report].notes.push(u.note());
+        }
+        let medians: Vec<crate::magnitude::Medians> = profiles.into_iter().map(|p| p.medians).collect();
         for o in crate::magnitude::outliers(&medians, crate::magnitude::THRESHOLD) {
             let f = &fitted_specs[o.member];
             let report = &mut reports[f.report];
@@ -1624,7 +1632,7 @@ struct FittedMember {
     /// The identity of its plan, when the previous lock held it ([`carry`]).
     identity: Option<String>,
     /// Its typical values, when its dry run already read all of it.
-    medians: Option<crate::magnitude::Medians>,
+    profile: Option<crate::magnitude::Profile>,
 }
 
 /// One copy and one identity per distinct plan a fit records in the lock.
